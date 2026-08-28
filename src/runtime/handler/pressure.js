@@ -12,7 +12,7 @@ import {
 	foldConnectionBackpressure, takeBackpressureDropWindow,
 	BACKPRESSURE_SAMPLE_CAP, BACKPRESSURE_SAMPLE_THRESHOLD_BYTES
 } from '../utils/backpressure.js';
-import { setIntervalTimer, wallEpoch } from '../runtime.js';
+import { setIntervalTimer, clearIntervalTimer, wallEpoch } from '../runtime.js';
 import {
 	counters, pressureListeners, pressureSnapshot, publishRateListeners,
 	topicPublishStats, wsConnections
@@ -116,12 +116,14 @@ export function samplePressureOnce(thresholds) {
 		sampleReadings.cpuThrottledRatio = os.cpuThrottle.throttledRatio;
 	}
 
-	const { topPublishers } = computeTopPublishers(topicPublishStats, interval, thresholds);
+	const { topPublishers, overThreshold } = computeTopPublishers(topicPublishStats, interval, thresholds);
 	topicPublishStats.clear();
 
 	const reason = computePressureReason(sampleReadings, thresholds);
 	const value = samplePressureValue(sampleReadings, thresholds, counters.leaseSaturationPeak);
-	counters.leaseSaturationPeak *= 0.5;
+	// Halved per tick with a floor: an asymptotic decay would keep a once-
+	// saturated worker reading a nonzero value for a thousand quiet ticks.
+	counters.leaseSaturationPeak = counters.leaseSaturationPeak < 0.002 ? 0 : counters.leaseSaturationPeak * 0.5;
 
 	const previousReason = pressureSnapshot.reason;
 	const transitioned = reason !== previousReason;
@@ -140,14 +142,20 @@ export function samplePressureOnce(thresholds) {
 	pressureSnapshot.droppedBytes = droppedBytes;
 	pressureSnapshot.topPublishers = topPublishers;
 
+	// Snapshot the listener sets before iterating: a Set iterator visits
+	// entries added during iteration, so a re-arming listener could spin the
+	// tick forever.
 	if (transitioned) {
-		for (const listener of pressureListeners) {
+		for (const listener of [...pressureListeners]) {
 			try { listener(pressureSnapshot); } catch { /* listener owns its errors */ }
 		}
 	}
-	if (publishRateListeners.size > 0 && topPublishers.length > 0) {
-		for (const listener of publishRateListeners) {
-			try { listener(topPublishers); } catch { /* listener owns its errors */ }
+	// The runaway-publisher alarm, not a firehose: listeners fire only when a
+	// topic crossed one of the configured per-topic thresholds, and receive
+	// exactly the offenders.
+	if (publishRateListeners.size > 0 && overThreshold.length > 0) {
+		for (const listener of [...publishRateListeners]) {
+			try { listener(overThreshold); } catch { /* listener owns its errors */ }
 		}
 	}
 }
@@ -165,4 +173,12 @@ export function startPressureSampler(pressureOptions) {
 	topicTrackingOn = thresholds.topicPublishRatePerSec !== false || thresholds.topicPublishBytesPerSec !== false;
 	samplerTimer = setIntervalTimer(() => samplePressureOnce(thresholds), thresholds.sampleIntervalMs);
 	if (typeof samplerTimer?.unref === 'function') samplerTimer.unref();
+}
+
+/** Stop the sampler (shutdown, test teardown). Safe when never started. */
+export function stopPressureSampler() {
+	if (samplerTimer !== null) {
+		clearIntervalTimer(samplerTimer);
+		samplerTimer = null;
+	}
 }

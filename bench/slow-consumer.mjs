@@ -41,14 +41,17 @@ function fail(message) {
 	process.exitCode = 1;
 }
 
-const payload = buildRuntime({
+let payload = null;
+let rt = null;
+let clients = [];
+try {
+payload = buildRuntime({
 	replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) },
 	wsHandlerSource: 'export function close() {}\n'
 });
-const rt = await bootRuntime(payload);
-const { platform } = rt.handler;
+rt = await bootRuntime(payload);
+var { platform } = rt.handler;
 
-const clients = [];
 for (let i = 0; i < N_CLIENTS; i++) {
 	const ws = new WebSocket(`ws://127.0.0.1:${rt.port}/ws`);
 	await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -73,8 +76,18 @@ for (let i = 0; i < PUBLISH_BURSTS; i++) {
 	platform.publish('firehose', 'tick', bigPayload);
 	if (i % 50 === 0) await new Promise((r) => setTimeout(r, 5));
 }
-await new Promise((r) => setTimeout(r, 1200));
-const overload = { ...platform.pressure };
+// The drop figure is window-scoped (each sample tick drains it), so the
+// overload reading ACCUMULATES across several ticks instead of trusting
+// whichever single tick this line happens to land after.
+const overload = { maxBufferedBytes: 0, backpressuredConnections: 0, droppedFrames: 0, value: 0 };
+for (let tick = 0; tick < 4; tick++) {
+	await new Promise((r) => setTimeout(r, 600));
+	const s = platform.pressure;
+	overload.maxBufferedBytes = Math.max(overload.maxBufferedBytes, s.maxBufferedBytes);
+	overload.backpressuredConnections = Math.max(overload.backpressuredConnections, s.backpressuredConnections);
+	overload.droppedFrames += s.droppedFrames;
+	overload.value = Math.max(overload.value, s.value);
+}
 console.log(`overload: maxBufferedBytes=${overload.maxBufferedBytes} backpressured=${overload.backpressuredConnections} dropped=${overload.droppedFrames} value=${overload.value.toFixed(3)}`);
 
 if (overload.maxBufferedBytes === 0) {
@@ -106,10 +119,11 @@ if (recovered === null) {
 	console.log(`recovery: clean snapshot after ${recovered}ms`);
 }
 
-for (const ws of clients) ws.terminate();
-await rt.handler.shutdown({ timeoutMs: 2000 });
-payload.cleanup();
-
 if (process.exitCode !== 1) {
 	console.log('SLOW-CONSUMER BENCH PASSED: backpressure observed, shed at the ceiling, recovered.');
+}
+} finally {
+	for (const ws of clients) { try { ws.terminate(); } catch { /* gone */ } }
+	if (rt) await rt.handler.shutdown({ timeoutMs: 2000 }).catch(() => {});
+	if (payload) payload.cleanup();
 }

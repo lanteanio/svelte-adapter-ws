@@ -389,6 +389,7 @@ export const platform = {
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
 		}
+		for (let i = 0; i < events.length; i++) notePublish(events[i].topic, events[i].env.length);
 		const slice = new Array(events.length);
 		for (let i = 0; i < events.length; i++) slice[i] = events[i].env;
 		const sharedBatchEnv = wrapBatchEnvelope(slice);

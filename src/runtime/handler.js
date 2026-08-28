@@ -26,6 +26,7 @@ import { staticCache } from './handler/state.js';
 import { handleRequest, installRealtimeRoutes } from './handler/request.js';
 import { start as lifecycleStart, shutdown as lifecycleShutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
+import { stopPressureSampler } from './handler/pressure.js';
 import { reconnect_dispersal_ms } from './handler/config.js';
 
 export { beginDrain, lifecycleState, isDraining, platform };
@@ -44,6 +45,7 @@ export async function shutdown(opts = {}) {
 			deadlineMs: budget
 		});
 	}
+	stopPressureSampler();
 	return lifecycleShutdown(opts);
 }
 

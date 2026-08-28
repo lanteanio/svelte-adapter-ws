@@ -7,6 +7,7 @@
 
 import https from 'node:https';
 import fs from 'node:fs';
+import path from 'node:path';
 import tls from 'node:tls';
 import { X509Certificate } from 'node:crypto';
 import {
@@ -74,54 +75,72 @@ function readOptional(file) {
  */
 export function createTlsServer(handleRequest) {
 	const pairs = certPairs();
+	if (!ssl_pfx && pairs.length === 0) {
+		throw new Error(
+			'[svelte-adapter-ws] SSL_CERT/SSL_KEY are set but name no usable file paths.'
+		);
+	}
+
+	// SNI contexts live in a Map consulted by ONE SNICallback: node's own
+	// addContext appends to a list whose FIRST regex match wins, so a
+	// hot-reloaded per-name cert appended behind the boot-time one would
+	// never be selected (and the list would grow per reload).
+	/** @type {Map<string, import('node:tls').SecureContext>} */
+	const sniContexts = new Map();
 
 	/** @type {import('node:tls').TlsOptions} */
 	const baseOptions = ssl_pfx
 		? { pfx: fs.readFileSync(ssl_pfx), passphrase: ssl_pfx_passphrase || undefined }
 		: { cert: fs.readFileSync(pairs[0].cert), key: fs.readFileSync(pairs[0].key) };
 
-	const server = https.createServer(baseOptions, handleRequest);
+	const server = https.createServer({
+		...baseOptions,
+		SNICallback: (servername, callback) => {
+			callback(null, sniContexts.get(servername.toLowerCase()));
+		}
+	}, handleRequest);
 
 	// Additional certificates: each pair beyond the first serves the SNI
 	// names its cert carries, or the next names from the SSL_SNI_HOSTS
 	// override list.
+	// SSL_SNI_HOSTS partitions per extra certificate with semicolon groups
+	// ('a.example,www.a.example;b.example'); group i overrides cert i+1's
+	// SANs. A cert beyond the named groups falls back to its own SANs.
+	const overrideGroups = ssl_sni_hosts.length > 0
+		? ssl_sni_hosts.join(',').split(';').map((group) => group.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+		: [];
 	/** @type {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} */
 	const sniPairs = [];
-	let overrideCursor = 0;
 	for (let i = 1; i < pairs.length; i++) {
 		const certPem = fs.readFileSync(pairs[i].cert);
-		let hosts;
-		if (ssl_sni_hosts.length > 0) {
-			hosts = ssl_sni_hosts.slice(overrideCursor);
-			overrideCursor = ssl_sni_hosts.length;
-		} else {
-			hosts = certHosts(certPem);
-		}
+		const override = overrideGroups[i - 1];
+		const hosts = override && override.length > 0 ? override : certHosts(certPem);
 		if (hosts.length === 0) {
 			throw new Error(
 				`[svelte-adapter-ws] certificate ${pairs[i].cert} carries no DNS subjectAltName and ` +
-				'SSL_SNI_HOSTS names none for it, so no SNI name would ever select it.'
+				'SSL_SNI_HOSTS names no group for it, so no SNI name would ever select it.'
 			);
 		}
 		sniPairs.push({ pair: pairs[i], hosts });
 		const context = tls.createSecureContext({ cert: certPem, key: fs.readFileSync(pairs[i].key) });
-		for (const host of hosts) server.addContext(host, context);
+		for (const host of hosts) sniContexts.set(host, context);
 	}
 
-	// OCSP stapling: hand the externally-maintained DER response to every
-	// handshake that asks. Re-read under the same debounce as the certs so a
-	// refreshed response staples without a restart.
-	let ocspResponse = ssl_ocsp_file ? readOptional(ssl_ocsp_file) : null;
+	// OCSP stapling: the externally-maintained DER response is read per
+	// handshake that asks (handshakes are rare, the read is cheap), with the
+	// last good bytes as fallback - so a refreshed response staples without a
+	// restart even when the certificate watch is disabled.
+	let lastGoodOcsp = ssl_ocsp_file ? readOptional(ssl_ocsp_file) : null;
 	if (ssl_ocsp_file) {
 		server.on('OCSPRequest', (_cert, _issuer, callback) => {
-			callback(null, ocspResponse);
+			const fresh = readOptional(ssl_ocsp_file);
+			if (fresh !== null) lastGoodOcsp = fresh;
+			callback(null, lastGoodOcsp);
 		});
 	}
 
 	if (ssl_watch) {
-		armHotReload(server, pairs, sniPairs, () => {
-			if (ssl_ocsp_file) ocspResponse = readOptional(ssl_ocsp_file);
-		});
+		armHotReload(server, pairs, sniPairs, sniContexts);
 	}
 
 	return server;
@@ -136,13 +155,17 @@ export function createTlsServer(handleRequest) {
  * @param {import('node:https').Server} server
  * @param {{ cert: string, key: string }[]} pairs
  * @param {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} sniPairs
- * @param {() => void} onReload
+ * @param {Map<string, import('node:tls').SecureContext>} sniContexts
  */
-function armHotReload(server, pairs, sniPairs, onReload) {
+function armHotReload(server, pairs, sniPairs, sniContexts) {
 	const watchedFiles = ssl_pfx
 		? [ssl_pfx]
 		: pairs.flatMap((p) => [p.cert, p.key]);
-	if (ssl_ocsp_file) watchedFiles.push(ssl_ocsp_file);
+	// Watch the containing DIRECTORIES, deduped: certbot renews by writing
+	// into archive/ and re-pointing the live/ symlink, and cert-manager swaps
+	// an atomic ..data symlink - neither touches the watched file's inode, so
+	// a per-file watch misses the canonical renewal shapes.
+	const watchedDirs = [...new Set(watchedFiles.map((file) => path.dirname(file)))];
 
 	/** @type {string | null} */
 	let servedFingerprint = null;
@@ -178,10 +201,9 @@ function armHotReload(server, pairs, sniPairs, onReload) {
 						cert: fs.readFileSync(pair.cert),
 						key: fs.readFileSync(pair.key)
 					});
-					for (const host of hosts) server.addContext(host, context);
+					for (const host of hosts) sniContexts.set(host, context);
 				}
 			}
-			onReload();
 			console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
 		} catch (err) {
 			// A renewal mid-write can present a torn pair; the next watcher
@@ -192,24 +214,34 @@ function armHotReload(server, pairs, sniPairs, onReload) {
 
 	/** @type {import('node:fs').FSWatcher[]} */
 	const watchers = [];
-	for (const file of watchedFiles) {
+	let warnedWatcherError = false;
+	/** @param {unknown} err @param {string} what */
+	const warnWatcher = (err, what) => {
+		if (warnedWatcherError) return;
+		warnedWatcherError = true;
+		console.warn(
+			`[svelte-adapter-ws] [tls] certificate watch ${what} (` +
+			(/** @type {any} */ (err)?.code || err) +
+			'); hot reload is off until restart - the served certificate stays on its current bytes.'
+		);
+	};
+	for (const dir of watchedDirs) {
 		try {
-			const watcher = fs.watch(file, { persistent: false }, () => {
+			const watcher = fs.watch(dir, { persistent: false }, () => {
 				if (debounce !== null) clearTimer(debounce);
 				debounce = setTimer(reload, ssl_reload_debounce_ms);
 				if (typeof debounce?.unref === 'function') debounce.unref();
 			});
-			// A watcher can error after arming (the watched file's directory
-			// removed, an EPERM on teardown); an unhandled watcher error would
-			// take the process down over a lost WATCH, not a lost cert.
-			watcher.on('error', () => {
+			// A watcher can error after arming (directory removed, EPERM on
+			// teardown); an unhandled watcher error would take the process
+			// down over a lost WATCH, not a lost cert.
+			watcher.on('error', (err) => {
+				warnWatcher(err, 'stopped');
 				try { watcher.close(); } catch { /* already closed */ }
 			});
 			watchers.push(watcher);
-		} catch {
-			// A file that cannot be watched (removed between boot and arm)
-			// still serves its boot-time content; the operator's next deploy
-			// restarts the process anyway.
+		} catch (err) {
+			warnWatcher(err, 'could not arm');
 		}
 	}
 	server.once('close', () => {
