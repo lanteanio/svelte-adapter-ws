@@ -1,3 +1,4 @@
+import net from 'node:net';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
@@ -30,6 +31,9 @@ export function upgrade({ headers, requestId }) {
 	if (headers['x-auth'] === 'no') return false;
 	if (headers['x-auth'] === 'boom') throw new Error('kaput');
 	if (headers['x-auth'] === 'slow') return new Promise(() => {});
+	if (headers['x-auth'] === 'park') {
+		return new Promise((resolve) => setTimeout(() => resolve({ user: 'parked' }), 300));
+	}
 	if (headers['x-auth'] === 'headers') {
 		return { __upgradeResponse: true, userData: { user: 'custom' }, headers: { 'x-custom-upgrade': 'yes' } };
 	}
@@ -336,6 +340,40 @@ describe('upgrade admission', () => {
 		});
 		await client.open();
 		expect(await upgraded).toBe('yes');
+		client.close();
+	});
+
+	it('survives a TCP reset while the admission hook is parked', async () => {
+		// Until ws takes ownership of the socket nothing else listens for its
+		// errors, so an RST landing mid-admission must be absorbed by the
+		// handler's own error listener - the runtime boots in-process here, so
+		// an uncaught ECONNRESET would take this test run down with it.
+		const socket = net.connect(rt.port, '127.0.0.1');
+		await new Promise((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		socket.write(
+			'GET /ws HTTP/1.1\r\n' +
+			`Host: 127.0.0.1:${rt.port}\r\n` +
+			'Upgrade: websocket\r\n' +
+			'Connection: Upgrade\r\n' +
+			`Sec-WebSocket-Key: ${Buffer.alloc(16, 7).toString('base64')}\r\n` +
+			'Sec-WebSocket-Version: 13\r\n' +
+			'x-auth: park\r\n' +
+			'\r\n'
+		);
+		// The RST arrives while the hook is still parked; the hook then
+		// resolves against a socket that no longer exists.
+		await new Promise((r) => setTimeout(r, 50));
+		socket.resetAndDestroy();
+		await new Promise((r) => setTimeout(r, 500));
+
+		const health = await fetch(rt.origin + '/healthz');
+		expect(health.status).toBe(200);
+		const client = connect();
+		await client.open();
+		await client.next((f) => f.type === 'welcome');
 		client.close();
 	});
 

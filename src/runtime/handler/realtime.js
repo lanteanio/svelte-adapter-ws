@@ -213,6 +213,15 @@ function refuseUpgrade(socket, status, text, extraHeader) {
  * @param {Buffer} head
  */
 export async function handleUpgrade(req, socket, head) {
+	// Own the socket's 'error' event for the whole admission window. Until
+	// wss.handleUpgrade hands the socket to ws, nothing is listening: a client
+	// that resets the TCP connection while the admission hook is parked makes
+	// node emit 'error' on an ownerless emitter, and one unauthenticated RST
+	// becomes an uncaught exception that takes the worker down. The listener
+	// is detached the moment ws takes ownership and installs its own.
+	const onSocketError = () => socket.destroy();
+	socket.on('error', onSocketError);
+
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	const pathname = q === -1 ? url : url.slice(0, q);
@@ -319,7 +328,14 @@ export async function handleUpgrade(req, socket, head) {
 		}
 	}
 
+	// A peer that vanished during admission has nothing left to accept or
+	// refuse; ws would notice on its own, but skipping the accept avoids
+	// tearing down a connection that never opened.
+	if (socket.destroyed) return;
+
 	wss.handleUpgrade(req, socket, head, (ws) => {
+		// ws owns the socket's error handling from here on.
+		socket.removeListener('error', onSocketError);
 		const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 		const merged = { remoteAddress, .../** @type {any} */ (userData) };
 		try {

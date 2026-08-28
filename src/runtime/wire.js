@@ -565,9 +565,9 @@ export function leaseReportedSaturation(raw) {
  *                       count, the same producer the sampler's own subscriberRatio
  *                       threshold reads.
  *
- * Both pairs are pinned in test/pressure-sampler-isolation.test.js, which drives
- * the SHIPPED sizer against the SHIPPED threshold rather than restating either.
- * A change to a producer's basis or to a threshold below must move with them.
+ * Both pairs are pinned in test/lease-grant.test.js, which drives the SHIPPED
+ * sizer against these thresholds rather than restating either. A change to a
+ * producer's basis or to a threshold below must move with them.
  *
  * @param {{ heapRatio: number, subscriberRatio: number, base?: number, floor?: number }} w
  *   `heapRatio` is the used fraction of the effective memory ceiling (0..1,
