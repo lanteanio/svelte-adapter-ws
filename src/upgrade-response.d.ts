@@ -9,7 +9,7 @@
  * build-time adapter and would pull build tooling into a runtime bundle):
  *
  * ```js
- * import { upgradeResponse } from 'svelte-adapter-uws/upgrade-response';
+ * import { upgradeResponse } from 'svelte-adapter-ws/upgrade-response';
  * ```
  *
  * Warning (Cloudflare): attaching `Set-Cookie` to the 101 response is rejected
@@ -22,7 +22,7 @@
  *
  * @example Custom non-cookie headers (safe):
  * ```js
- * import { upgradeResponse } from 'svelte-adapter-uws/upgrade-response';
+ * import { upgradeResponse } from 'svelte-adapter-ws/upgrade-response';
  *
  * export function upgrade({ cookies }) {
  *   const session = validateSession(cookies.session_id);
@@ -41,9 +41,9 @@
  * response on the wire; the accepted class is Node's own - tab, printable ASCII
  * and the high range - so a value this helper accepts is one Node and the
  * cookie serializer in this package accept too), or a value is not a string. Validating here rather than at write
- * time is what makes the failure useful: uWS refuses a non-string only after the
- * 101 status line has already been corked, so the client would otherwise be left
- * holding a half-written handshake instead of getting a clean refusal.
+ * time is what makes the failure useful: an invalid field would otherwise
+ * surface as a write error after the 101 status line is already on the wire,
+ * leaving the client a half-written handshake instead of a clean refusal.
  */
 export function upgradeResponse<UserData>(
 	userData: UserData,

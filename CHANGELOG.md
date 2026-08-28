@@ -10,23 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Typed public entry points: AdapterOptions/WebSocketOptions/Platform/
-  PressureSnapshot in index.d.ts, plus typed upgrade-response and connection
-  subpaths; the exports map carries types conditions and the publish gate
-  (publint + attw, ESM-only profile) passes clean.
+  PressureSnapshot/Attribution in index.d.ts, plus typed upgrade-response and
+  connection subpaths (resolving clean under `skipLibCheck: false`); the
+  exports map carries types conditions and the publish gate (publint + attw,
+  ESM-only profile) passes clean.
+
+- The operator error reference: docs/errors.md, generated from the runtime's
+  error catalog by `node scripts/render-error-docs.js`, so every stable
+  ADAPTER-ERR-* id's help link resolves to its cause, consequence and next
+  action.
 
 - The golden gate: an AST platform-surface parity test against the lead
   adapter (fails on a missing key AND on a missing oracle checkout), the wire
   revision pinned byte-identical to the lead protocol.schema.json, and a
   deterministic golden trace - the real built runtime platform under a seeded
   seam and virtual clock, every emitted frame pinned byte-for-byte against a
-  committed corpus under test/dst-goldens/.
+  committed corpus under test/dst-goldens/. A missing corpus fails loud
+  (UPDATE_GOLDENS=1 is the only write path), the corpus and conformance
+  vectors are pinned against line-ending smudge in .gitattributes, and CI
+  runs the whole suite with the lead checkout provided as the oracle.
 
 - First-class in-process TLS: PEM pairs with comma-separated multi-cert SNI
-  (per-name contexts from each cert SAN or the SSL_SNI_HOSTS override),
-  PKCS#12 bundles via SSL_PFX/SSL_PFX_PASSPHRASE, OCSP stapling from an
-  externally-maintained DER response (SSL_OCSP_FILE, hot-reloaded), and
-  certificate hot-reload on SSL_WATCH (default on) that applies
-  setSecureContext to new connections without re-binding the listener. The
+  (per-name contexts from each cert SAN, wildcard SANs matched one label
+  deep, or the SSL_SNI_HOSTS override), PKCS#12 bundles via
+  SSL_PFX/SSL_PFX_PASSPHRASE, OCSP stapling from an externally-maintained DER
+  response (SSL_OCSP_FILE, re-read per handshake, with the last good bytes
+  age-bounded to an OCSP validity window), and certificate hot-reload on
+  SSL_WATCH (default on) that applies setSecureContext to new connections
+  without re-binding the listener and re-derives the SNI name set from the
+  reloaded certificates, so a renewal that changes SANs serves the new names
+  and drops the old. The
   probe TLS section now runs unattended against committed test fixtures
   instead of being recorded as manual.
 
@@ -36,8 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `onPressure` transition callbacks, `onPublishRate` window callbacks,
   pressure-sized lease grants, `websocket.pressure` threshold overrides, and
   the slow-consumer bench (`npm run bench:slow-consumer`) that fails unless
-  flow control demonstrably engages and recovers. Hardening from an
-  adversarial review of the realtime lane: the origin gate now honors
+  flow control demonstrably engages and recovers. Realtime-lane hardening in
+  the same lane: the origin gate honors
   HOST_HEADER/PROTOCOL_HEADER/PORT_HEADER on both doors, the authenticate
   door checks origin before spending rate-limit budget, connection setup
   failures tear the socket down instead of leaking a half-registered
@@ -64,11 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RECONNECT_DISPERSAL_MS` dispersal window (default 5000ms; 0 closes without
   the advisory) and a 1001 close, close handshakes are awaited within the
   shutdown budget, and sockets that ignore the close frame are terminated -
-  after which the HTTP listener close can actually complete.
+  after which the HTTP listener close can actually complete. App cleanup
+  hooks run under a budget of the same length, concurrent shutdown calls
+  share one drain, and a second SIGTERM/SIGINT exits immediately.
 
 - The JSON realtime lane: WebSocket upgrades over `node:http` with async
   admission, origin policy, per-IP sliding-window rate limits, upgrade
-  timeout, and validated custom 101 headers; a socket facade that synthesizes
+  timeout, and validated custom 101 headers; the runtime owns the upgrade
+  socket's error event for the whole admission window, so a client that
+  resets mid-hook is a destroyed socket, never an uncaught exception; a socket facade that synthesizes
   the family tri-state send result from `bufferedAmount` plus the
   backpressure ceiling (shedding past it, optionally terminating the pinned
   consumer) and throws on closed sockets for the accessors sibling packages
@@ -93,12 +110,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public `@sveltejs/kit/node` primitives bundled in as `server/kit-node.js`)
   and the `node:http`/`node:https` runtime. Static and prerendered assets are
   served from an in-memory index with negotiated precompressed
-  representations, per-representation weak ETags, single byte ranges,
-  If-None-Match/If-Range preconditions, the dotfile refusal with the
-  `.well-known` carve-out, and the prerendered trailing-slash rules. SSR flows
+  representations (q-values honored, so `br;q=0` is a refusal and `*` an
+  offer), per-representation weak ETags, single byte ranges,
+  If-None-Match/If-Modified-Since/If-Range preconditions with Last-Modified
+  beside each ETag, the dotfile refusal with the `.well-known` carve-out, and
+  the prerendered trailing-slash rules. A name the raw fast path cannot hold
+  (spaces, non-ASCII) gets one decoded lookup, so every indexed file is
+  reachable; dot-segment paths still have no key to hit. SSR flows
   through `getRequest`/`setResponse` with concurrent-request dedup for
-  anonymous GET/HEAD, single-chunk dynamic compression (skipped for
-  credentialed requests as BREACH defense), a default
+  anonymous GET/HEAD (bodies buffer only up to the 512K share cap - a larger
+  render streams and is never shared), single-chunk dynamic compression
+  (skipped for credentialed requests as BREACH defense), a default
   `x-content-type-options: nosniff`, and a duplicate-header policy that
   refuses repeated singleton headers and keeps the last line of proxy identity
   headers. Health and readiness probes, readiness-gated SSR warmup,
@@ -114,8 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handling, message buffer lifetime, prototype patchability, shutdown drain,
   listen options, and the availability of the public `@sveltejs/kit/node`
   primitives - and writes a committed report so a Node or `ws` upgrade that
-  changes an observed behavior shows up as a diff. TLS is recorded as manual
-  because it needs certs.
+  changes an observed behavior shows up as a diff. The TLS section runs
+  unattended against committed test fixtures.
 
 - `protocol.schema.json`, vendored byte-identical from svelte-adapter-uws and
   held that way by `.gitattributes`, so the wire this adapter speaks is the wire
@@ -125,5 +147,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timer read under `src/` must go through the injectable runtime module, or the
   scan fails naming the raw call site.
 
-The package is not yet published to npm; the remaining lanes before the first
-release are listed under Current state in the README.
+The package is not yet published to npm; this section becomes 0.1.0 at the
+first cut.

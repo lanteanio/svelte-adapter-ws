@@ -11,3 +11,4 @@ coverage
 .DS_Store
 *.log
 source
+test/.tmp-adapt-*/

@@ -462,7 +462,21 @@ export default function (opts = {}) {
 					}),
 					commonjs({ strictRequires: true }),
 					json()
-				]
+				],
+				onwarn(warning, warn) {
+					// Rollup's default for an unresolved import is a warning and
+					// a bare specifier left in the bundle - which surfaces only
+					// at deploy time, on a machine with no devDependencies to
+					// fall back on. Refusing the build here is the loud version.
+					if (warning.code === 'UNRESOLVED_IMPORT') {
+						throw new Error(
+							`[adapter-ws] could not resolve ${JSON.stringify(warning.exporter)} ` +
+							`imported by ${JSON.stringify(warning.id)} - the server bundle must be ` +
+							'self-contained apart from its declared runtime dependencies.'
+						);
+					}
+					warn(warning);
+				}
 			});
 
 			try {

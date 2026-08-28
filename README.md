@@ -1,12 +1,5 @@
 # svelte-adapter-ws
 
-> **Status: under construction, functionally broad.** The HTTP half, the JSON
-> realtime lane, the 0x03 binary wire, the pressure sampler and the managed
-> drain are built and tested against the family contracts. Not yet published
-> to npm; the remaining lanes are listed under Current state. Family options
-> whose lanes have not shipped here refuse the build rather than silently
-> no-op'ing.
-
 A SvelteKit adapter on Node's own `http`/`https` server plus the
 [ws](https://github.com/websockets/ws) library: it follows
 [svelte-adapter-uws](https://github.com/lanteanio/svelte-adapter-uws) and is
@@ -38,6 +31,87 @@ The family, by tier:
 The suffix names the transport, like every member of the family: `uws` is
 uWebSockets.js, `ws` is the ws library, `bunserve` is `Bun.serve`.
 
+## Install
+
+```sh
+npm install svelte-adapter-ws
+```
+
+Install it as a regular dependency, not a devDependency. Unlike most SvelteKit
+adapters, the built server resolves the `ws` library at runtime through this
+package's dependency tree - a production install that prunes devDependencies
+would prune the WebSocket transport with it. Everything else the runtime needs
+(the `@sveltejs/kit/node` primitives included) is bundled into the build
+output.
+
+## Usage
+
+```js
+// svelte.config.js
+import adapter from 'svelte-adapter-ws';
+
+export default {
+	kit: {
+		adapter: adapter()
+	}
+};
+```
+
+That serves HTTP, static assets and SSR with zero configuration:
+`node build/index.js` listens on `0.0.0.0:3000`. Realtime is one option away:
+
+```js
+adapter({
+	websocket: {
+		handler: './src/lib/server/ws.js',
+		allowedOrigins: ['https://app.example.com']
+	}
+})
+```
+
+The handler module exports the family's hook set (`upgrade`, `open`,
+`message`, `close`, and the rest); every hook receives the same `platform`
+surface the lead adapter exposes - `publish`, `send`, `subscribe`,
+`platform.pressure` and the rest - so an app written against
+`svelte-adapter-uws` runs unchanged, and the
+[svelte-realtime](https://github.com/lanteanio/svelte-realtime) client stores
+connect to either. Family options whose lanes have not shipped here refuse
+the build loudly rather than silently no-op'ing.
+
+## Configuration
+
+Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
+`healthCheckPath`, `readinessCheckPath`, `staticHeaders`,
+`staticCacheControl`, `staticDotfiles`, `warmup`, and the `websocket` block
+(`handler`, `path`, `authPath`, `maxPayloadLength`, `idleTimeout`,
+`maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
+`allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `messageAdmission`,
+`pressure`, and the shared policy flags). The typed surface in
+`src/index.d.ts` is the reference.
+
+Runtime environment (prefix configurable via the `envPrefix` option):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HOST` / `PORT` | `0.0.0.0` / `3000` | Listen address. |
+| `ORIGIN` | - | The app's public origin (behind a TLS-terminating proxy). |
+| `PROTOCOL_HEADER` / `HOST_HEADER` / `PORT_HEADER` | - | Proxy identity headers when `ORIGIN` is not pinned. |
+| `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
+| `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
+| `BODY_SIZE_LIMIT` | `512K` | Request body cap (413 above it). |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds of grace for in-flight work at shutdown; `0` removes the HTTP budget (live WebSockets still drain within 30s - a socket never ends on its own). |
+| `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
+| `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
+| `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |
+| `SSL_SNI_HOSTS` | - | Per-cert SNI name override, semicolon-grouped. |
+| `SSL_PFX` / `SSL_PFX_PASSPHRASE` | - | PKCS#12 bundle instead of the PEM pair. |
+| `SSL_OCSP_FILE` | - | Externally-maintained DER OCSP response to staple. |
+| `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
+
+A second `SIGTERM`/`SIGINT` during a drain exits immediately - the operator's
+"now". `CLUSTER_WORKERS` and `PROXY_PROTOCOL` refuse the boot loudly rather
+than half-working (see Deployment).
+
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
 not give up is capability. In-process TLS is first class through `node:https`,
@@ -46,9 +120,9 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
 (APM agents, OpenTelemetry auto-instrumentation, `AsyncLocalStorage`,
 `--inspect`), none of which hooks a native addon.
 
-## Current state
+## What ships, mechanically
 
-1. **API probe** (done): `probe/ws-api-facts.mjs` empirically verifies every
+1. **API probe**: `probe/ws-api-facts.mjs` empirically verifies every
    `node:http` and `ws` behavior the adapter design relies on - send results and
    backpressure signals, closed-socket behavior, the upgrade flow, payload
    limits, compression, shutdown drain, listen options - and writes a committed
@@ -84,7 +158,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
      `createReadableStream`) are all present, which is what the HTTP half is
      built on - never adapter-node's private handler.
 
-2. **HTTP half** (done): a built SvelteKit app serves over `node:http` - or
+2. **HTTP half**: a built SvelteKit app serves over `node:http` - or
    `node:https` with first-class in-process TLS: a PEM pair (`SSL_CERT`/
    `SSL_KEY`, comma-separated lists for multiple certificates - the first
    pair is the default context, every further pair serves the SNI names its
@@ -100,7 +174,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    install needs no devDependencies. The in-memory static cache answers with
    negotiated precompressed representations (per-representation weak ETags),
    single byte ranges cut in the negotiated representation's coordinates,
-   If-None-Match/If-Range preconditions, the dotfile refusal with its
+   If-None-Match/If-Modified-Since/If-Range preconditions, the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
    single-chunk dynamic compression with the BREACH-defense credential skip, a
@@ -111,7 +185,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    resolution and a managed drain of in-flight requests are in. `PROXY_PROTOCOL`
    and `CLUSTER_WORKERS` refuse the boot loudly rather than half-working.
 
-3. **JSON realtime** (done): the upgrade path with async admission, origin
+3. **JSON realtime**: the upgrade path with async admission, origin
    policy, per-IP rate limiting, upgrade timeout and validated custom 101
    headers; the socket facade that synthesizes the family tri-state send
    result (0 enqueued / 1 sent / 2 dropped) from `bufferedAmount` plus the
@@ -140,7 +214,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    and a 1001 close, and whatever ignores the close frame past the budget is
    terminated.
 
-4. **Binary wire** (done): the `0x03` frame fan-out for capability-advertising
+4. **Binary wire**: the `0x03` frame fan-out for capability-advertising
    subscribers with the `wire-id` announce ordered on the same socket before
    the first frame, per-connection topic ids (monotonic from 1, never
    reclaimed), per-connection codec state attached once per capability and
@@ -154,7 +228,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    (`test-vectors/binary.json`), varints decoded with division so shared ids
    above 2^32 survive. Seq values ride both representations from one stamp.
 
-5. **Pressure** (done): the 1 Hz sampler behind `platform.pressure` mutates
+5. **Pressure**: the 1 Hz sampler behind `platform.pressure` mutates
    one stable snapshot in place - publish rate, subscriber ratio, the
    memory-wall ratio (distance to the nearest of the V8 heap limit and the
    cgroup limit, never arena fullness), the bounded `bufferedAmount` walk
@@ -169,7 +243,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `maxBackpressure` ceiling, and recover to a clean snapshot - a zero stub
    fails the bench.
 
-6. **Golden gate** (done): the platform-surface parity site reads both
+6. **Golden gate**: the platform-surface parity site reads both
    adapters' platform object literals by AST and fails when a key the lead
    carries is missing here - and it fails loudly when the lead checkout is
    absent, because a gate that skips is not a gate (`UWS_SRC` names the

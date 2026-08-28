@@ -173,4 +173,34 @@ export interface Platform {
 	requestId?: string;
 }
 
+/**
+ * Server-resolved connection attribution, returned by the handler module's
+ * `attribution(user)` export and read back through the `./connection`
+ * subpath's {@link import('./connection.js').attribution} helper.
+ */
+export interface Attribution {
+	/** The tenant (organization, workspace) this connection belongs to. */
+	readonly tenantId?: string;
+	/** The principal (user, service identity) inside that tenant. */
+	readonly principalId?: string;
+	/** An application-defined entitlement label (a billing or quota class). */
+	readonly entitlement?: string;
+}
+
+/**
+ * Build-time option validation helpers. Exported so build tooling and tests
+ * can validate an options object the way `adapter()` will; not part of the
+ * documented app-facing API.
+ * @internal
+ */
+export const KNOWN_ADAPTER_OPTION_KEYS: Set<string>;
+/** @internal */
+export const KNOWN_WEBSOCKET_OPTION_KEYS: Set<string>;
+/** @internal */
+export function unknownAdapterOptionKeys(opts: Record<string, unknown> | null | undefined): string[];
+/** @internal */
+export function serializeWsOptions(websocket: Record<string, unknown>): Record<string, unknown>;
+/** @internal */
+export function renderRefusedDotfileWarning(refused: string[]): string;
+
 export default function adapter(options?: AdapterOptions): Adapter;
