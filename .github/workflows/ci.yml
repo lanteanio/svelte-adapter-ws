@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: API probe (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      # The adapter is built against measured behavior, not documented
+      # behavior. Re-running the probe here catches a Node or ws upgrade that
+      # changes an observed fact, on a platform that is not the dev machine -
+      # reusePort in particular answers differently per OS.
+      # The report it writes is not diffed here: it stamps a generation time and
+      # the running Node and ws versions, so a diff is guaranteed and would gate
+      # on noise. Drift is caught by reading the report a run produces, which is
+      # why this job runs it at all rather than trusting the committed copy.
+      - name: Run the API probe
+        run: npm run probe
+
+  determinism:
+    name: Determinism seam scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The ratchet: every clock/rng/timer read under src/ goes through the
+      # runtime seam, or this fails naming the raw call site. It runs from the
+      # first commit so the rule is never retrofitted onto a grown tree.
+      - name: Determinism seam scan
+        run: node scripts/check-determinism.js

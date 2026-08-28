@@ -1,0 +1,13 @@
+node_modules
+build
+build-*/
+big.bin
+big.txt
+.svelte-kit
+package-lock.json
+coverage
+.env
+.env.*
+.DS_Store
+*.log
+source

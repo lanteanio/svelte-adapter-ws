@@ -1,0 +1,307 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lantean-protocol:revision-1",
+  "title": "The Lantean protocol, revision 1",
+  "description": "JSON Schema for every CORE-OWNED control frame and the data-event envelope of the Lantean protocol (PROTOCOL.md). Additional properties are permitted everywhere: the protocol is forward-compatible and a peer ignores fields it does not recognize (PROTOCOL.md section 10). The same rule holds at the frame level: an unrecognized application control frame passes through to the application handler, and higher layers define their own frames that way (svelte-realtime ships its companion schema as svelte-realtime/protocol.schema.json). A validator for mixed ecosystem traffic accepts a frame when it matches the core schema OR a composed layer schema. A core frame is one of the definitions in $defs; correlate control frames by their `type` const. The x-webtransport annotation carries the non-JSON carriage constants from PROTOCOL.md sections 14.7 and 15; that binding is a freeze candidate (see the Meta section's Additive additions), so these constants are provisional until its wire-status line reads frozen. Record size splits into two obligations because nothing on that carriage negotiates a size: maximumSenderMessageBytes is what a sender may emit unnegotiated, and defaultReceiverMessageBytes is what a receiver accepts absent configuration, which a deployment SHOULD move in step with its WebSocket limit in either direction (receiverMessageBytesConfigurable), so one deployment does not accept a message on one carriage and refuse it on the other. innerControlFrameCeilingBytes restates the core section 1.2 constant, which is not stream-specific but does keep applying after deframing, and only client-to-server as in that section. minimumPendingBytes is a floor on the send-queue bound, which must also cover the largest record this endpoint may itself emit. maximumLengthPrefixBytes caps the prefix parse at 5 groups, so no length above 34359738367 is expressible and a receiver decides on the complete prefix rather than a partial value. Each record carries one kind byte between the length prefix and the message bytes (recordKindBytes), restating the WebSocket text/binary opcode the byte stream itself discards; recordKinds registers the values, and both an unregistered kind and an invalid-UTF-8 text record are structural rejections with the named stream errors rather than pass-through, because a record whose type is unknown cannot be delivered anywhere safely. Neither the prefix nor the kind byte counts toward pending-byte accounting.",
+  "x-webtransport": {
+    "connectCapabilityQueryKey": "lantean-cap",
+    "connectCapabilities": {
+      "game.fanout:1": "compact-datagram-fanout",
+      "lantean.reliable:1": "reliable-bidirectional-stream"
+    },
+    "reliableStream": {
+      "opener": "client",
+      "bidirectionalStreamCount": 1,
+      "unidirectionalStreamCount": 0,
+      "lengthPrefix": "canonical-unsigned-leb128",
+      "recordKindBytes": 1,
+      "recordKinds": { "text": 0, "binary": 1 },
+      "unknownRecordKindError": "PROTOCOL_ERROR",
+      "invalidTextUtf8Error": "PROTOCOL_ERROR",
+      "minimumMessageBytes": 1,
+      "maximumLengthPrefixBytes": 5,
+      "maximumSenderMessageBytes": 1048576,
+      "defaultReceiverMessageBytes": 1048576,
+      "receiverMessageBytesConfigurable": true,
+      "minimumPendingBytes": 1048576,
+      "pendingByteAccounting": "message-bytes-excluding-length-prefix-and-kind",
+      "innerControlFrameCeilingBytes": 8192,
+      "firstServerFrame": "welcome",
+      "innerMessage": "websocket-message-bytes"
+    },
+    "streamErrors": {
+      "STREAM_LIMIT": 1,
+      "RECORD_TOO_LARGE": 2,
+      "PROTOCOL_ERROR": 3,
+      "SLOW_CONSUMER": 4
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/lease-ok" },
+    { "$ref": "#/$defs/subscribe" },
+    { "$ref": "#/$defs/subscribe-batch" },
+    { "$ref": "#/$defs/unsubscribe" },
+    { "$ref": "#/$defs/subscribed" },
+    { "$ref": "#/$defs/subscribe-denied" },
+    { "$ref": "#/$defs/batch" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/reply" },
+    { "$ref": "#/$defs/wire-id" },
+    { "$ref": "#/$defs/resume" },
+    { "$ref": "#/$defs/resumed" },
+    { "$ref": "#/$defs/lease" },
+    { "$ref": "#/$defs/request-n" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/ingress-ok" },
+    { "$ref": "#/$defs/ingress-bind" },
+    { "$ref": "#/$defs/ingress-bound" },
+    { "$ref": "#/$defs/reconnect" },
+    { "$ref": "#/$defs/game" },
+    { "$ref": "#/$defs/game-denied" },
+    { "$ref": "#/$defs/message-overloaded" },
+    { "$ref": "#/$defs/data-event" }
+  ],
+  "$defs": {
+    "ref": {
+      "description": "Client-allocated correlation id: a number or a string.",
+      "type": ["integer", "string"]
+    },
+    "recover-one": {
+      "type": "object",
+      "properties": {
+        "offset": { "type": "integer" },
+        "epoch": { "type": "integer", "description": "Opaque per-process generation token, compared for equality only. Never a timestamp: do not interpret, render as a date, or store in a time-typed column. It changes when the server's seq space resets, which is the only fact a client reads from it." }
+      },
+      "required": ["offset"]
+    },
+    "welcome": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "welcome" },
+        "sessionId": { "type": "string" }
+      },
+      "required": ["type", "sessionId"]
+    },
+    "reconnect": {
+      "description": "Server -> client drain advisory: the node is draining/restarting and asks the client to reconnect on a jittered schedule in [afterMs, afterMs+windowMs), so a fleet does not stampede the replacement. Additive and unknown-type-safe (an old client ignores it).",
+      "type": "object",
+      "properties": {
+        "type": { "const": "reconnect" },
+        "windowMs": { "type": "integer", "exclusiveMinimum": 0 },
+        "afterMs": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["type", "windowMs"]
+    },
+    "hello": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "hello" },
+        "caps": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["type", "caps"]
+    },
+    "lease-ok": {
+      "type": "object",
+      "properties": { "type": { "const": "lease-ok" } },
+      "required": ["type"]
+    },
+    "subscribe": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribe" },
+        "topic": { "type": "string" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "recover": { "$ref": "#/$defs/recover-one" }
+      },
+      "required": ["type", "topic"]
+    },
+    "subscribe-batch": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribe-batch" },
+        "topics": { "type": "array", "items": { "type": "string" } },
+        "ref": { "$ref": "#/$defs/ref" },
+        "recover": { "type": "object" }
+      },
+      "required": ["type", "topics"]
+    },
+    "unsubscribe": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "unsubscribe" },
+        "topic": { "type": "string" }
+      },
+      "required": ["type", "topic"]
+    },
+    "subscribed": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribed" },
+        "topic": { "type": "string" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "epoch": { "type": "integer", "description": "Opaque per-process generation token, compared for equality only. Never a timestamp: do not interpret, render as a date, or store in a time-typed column. A reconnecting client compares it to the one it last saw; a different value means the server's seq space reset and the client must re-read rather than trust its old offsets." }
+      },
+      "required": ["type", "topic", "ref", "epoch"]
+    },
+    "subscribe-denied": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribe-denied" },
+        "topic": { "type": "string" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "reason": { "type": "string" }
+      },
+      "required": ["type", "topic", "ref", "reason"]
+    },
+    "batch": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "batch" },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/data-event" } }
+      },
+      "required": ["type", "events"]
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "request" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "event": { "type": "string" },
+        "data": {}
+      },
+      "required": ["type", "ref", "event"]
+    },
+    "reply": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "reply" },
+        "ref": { "$ref": "#/$defs/ref" },
+        "data": {},
+        "error": { "type": "string" }
+      },
+      "required": ["type", "ref"]
+    },
+    "wire-id": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "wire-id" },
+        "topic": { "type": "string" },
+        "id": { "type": "integer" }
+      },
+      "required": ["type", "topic", "id"]
+    },
+    "resume": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "resume" },
+        "sessionId": { "type": "string" },
+        "lastSeenSeqs": { "type": "object" },
+        "lastSeenEpochs": { "type": "object" }
+      },
+      "required": ["type", "sessionId", "lastSeenSeqs"]
+    },
+    "resumed": {
+      "type": "object",
+      "properties": { "type": { "const": "resumed" } },
+      "required": ["type"]
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "lease" },
+        "count": { "type": "integer" },
+        "ttlMs": { "type": "integer" }
+      },
+      "required": ["type", "count", "ttlMs"]
+    },
+    "request-n": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "request-n" },
+        "n": { "type": "integer" },
+        "queued": { "type": "integer", "description": "The sender's permit-starved backlog at request time: how many sends are waiting because the current window is spent or expired. Optional and additive; absent or zero claims no backlog. Advisory and untrusted: a server clamps any use of it and never requires it for a grant decision." }
+      },
+      "required": ["type", "n"]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "error" },
+        "code": { "type": "string" },
+        "limit": { "type": "integer" },
+        "size": { "type": "integer" }
+      },
+      "required": ["type", "code"]
+    },
+    "ingress-ok": {
+      "type": "object",
+      "properties": { "type": { "const": "ingress-ok" } },
+      "required": ["type"]
+    },
+    "ingress-bind": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "ingress-bind" },
+        "id": { "type": "integer" },
+        "kind": { "type": "string" },
+        "target": {}
+      },
+      "required": ["type", "id", "kind", "target"]
+    },
+    "ingress-bound": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "ingress-bound" },
+        "id": { "type": "integer" }
+      },
+      "required": ["type", "id"]
+    },
+    "game": {
+      "description": "Client -> server client-driven relay publish (the `game` lane, PROTOCOL.md section 3.10). Carries NO topic: the server derives it from the connection's publish grant. `event` is a string; `data` is any JSON value; `id` is an optional client-chosen input id echoed on the fan-out.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "game" },
+        "event": { "type": "string" },
+        "data": {},
+        "id": { "$ref": "#/$defs/ref" }
+      },
+      "required": ["type", "event"]
+    },
+    "game-denied": {
+      "description": "Server -> the sender of a rejected `game` frame (PROTOCOL.md section 3.10). `FORBIDDEN`: no publish grant. `INVALID`: granted but a malformed frame (non-string event). `id` is echoed when the rejected frame carried one.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "game-denied" },
+        "reason": { "enum": ["FORBIDDEN", "INVALID"] },
+        "id": { "$ref": "#/$defs/ref" }
+      },
+      "required": ["type", "reason"]
+    },
+    "message-overloaded": {
+      "description": "Server -> client response for an application message shed by established-message admission (PROTOCOL.md section 3.11). Rate overflow includes retryAfterMs; concurrency/queue overflow does not imply the message was retained.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "message-overloaded" },
+        "reason": { "enum": ["rate_limit", "concurrency_limit", "queue_full"] },
+        "scope": { "enum": ["connection", "global"] },
+        "retryAfterMs": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["type", "reason", "scope"]
+    },
+    "data-event": {
+      "description": "The published-event carrier. No `type` field: identified by `topic` + `event`. `id` appears only on the fan-out of a `game`-lane frame (section 3.10), echoing the sender's input id.",
+      "type": "object",
+      "properties": {
+        "topic": { "type": "string" },
+        "event": { "type": "string" },
+        "data": {},
+        "seq": { "type": "integer" },
+        "j": { "type": "number" },
+        "id": { "$ref": "#/$defs/ref" }
+      },
+      "required": ["topic", "event"]
+    }
+  }
+}

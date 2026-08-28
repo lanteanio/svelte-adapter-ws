@@ -1,0 +1,405 @@
+import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib';
+import { getRequest, setResponse } from '../kit-node-bridge.js';
+import { server } from '../_init.js';
+import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { resolveRequestId } from '../utils/request-id.js';
+import { randomUuid } from '../runtime.js';
+import { send400, send413, send500 } from './http-helpers.js';
+import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
+import { platform } from './platform.js';
+import { isDedupBufferable } from './ssr-dedup.js';
+
+/* global ENV_PREFIX */
+
+// Maximum number of in-flight dedup keys tracked simultaneously.
+const MAX_SSR_DEDUP = 500;
+
+// Maximum response body size (bytes) that may be shared across waiters.
+// Responses larger than this are not shared - each waiter makes its own call.
+const MAX_SSR_DEDUP_BODY = 512 * 1024;
+
+/**
+ * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array }} SharedResponse
+ */
+
+/**
+ * In-flight SSR dedup map. Key is "<METHOD>\0<ORIGIN>\0<URL>".
+ * Value is a Promise that resolves to a SharedResponse (shareable) or null (not shareable).
+ * @type {Map<string, Promise<SharedResponse | null>>}
+ */
+const ssrInflight = new Map();
+
+// Dynamic response compression: only compress text content types above a threshold.
+// Static files use build-time precompression and are never affected by this.
+const COMPRESS_MIN_SIZE = 1024;
+
+// BREACH defense: dynamic compression of credentialed responses turns the
+// response length into a side channel that leaks any secret reflected
+// alongside attacker-influenced input (CSRF tokens, session IDs, API keys in
+// the page body). Compression is skipped on every request that carries a
+// `Cookie` or `Authorization` header. The family opt-in
+// (`websocket.compressCredentialedResponses`) arrives with the websocket
+// option surface; until then credentialed responses are never compressed.
+const COMPRESS_CREDENTIALED = false;
+
+const COMPRESSIBLE_TYPES = new Set([
+	'text/html', 'text/css', 'text/plain', 'text/xml', 'text/javascript',
+	'text/csv', 'text/markdown',
+	'application/json', 'application/xml', 'application/javascript',
+	'application/xhtml+xml', 'application/ld+json', 'application/manifest+json',
+	'application/rss+xml', 'application/atom+xml',
+	'image/svg+xml'
+]);
+
+/**
+ * Default-fill `x-content-type-options: nosniff` when the response did not
+ * already set one - the header is safe in every legitimate scenario (it tells
+ * the browser not to MIME-sniff away the server's declared content-type) and
+ * closes a known MIME-confusion vector for any SSR response whose author
+ * forgets to set the header explicitly. Apps that want a different policy
+ * just include their own header on the Response - the default-fill only fires
+ * when the response is silent on the matter.
+ *
+ * Other header defaults (Referrer-Policy, X-Frame-Options, CSP) are
+ * intentionally NOT defaulted here. CSP needs app-specific care for
+ * inline-hydration / iframe shapes; X-Frame-Options breaks legitimate embeds;
+ * Referrer-Policy choices vary by app. Those are app-level decisions and the
+ * right tier is `hooks.server.js`.
+ *
+ * @param {Response} response
+ * @returns {Response}
+ */
+function ensureNosniff(response) {
+	if (response.headers.has('x-content-type-options')) return response;
+	try {
+		response.headers.set('x-content-type-options', 'nosniff');
+		return response;
+	} catch {
+		// Immutable headers (a Response passed through fetch) - rebuild.
+		const headers = new Headers(response.headers);
+		headers.set('x-content-type-options', 'nosniff');
+		return new Response(response.body, {
+			status: response.status,
+			statusText: response.statusText,
+			headers
+		});
+	}
+}
+
+/**
+ * Compress a small, finite SSR response body when the client negotiated a
+ * coding, mirroring the family policy: only single-chunk bodies (the common
+ * SSR shape) are compressed, so a streaming response is never buffered and an
+ * SSE stream is never parked. Returns a Response ready for setResponse - the
+ * input Response's body is consumed either way.
+ *
+ * @param {Response} response
+ * @param {string} acceptEncoding - '' suppresses compression (BREACH defense)
+ * @returns {Promise<Response>}
+ */
+async function maybeCompress(response, acceptEncoding) {
+	if (!response.body || !acceptEncoding || response.headers.has('content-encoding')) {
+		return response;
+	}
+	const ctRaw = response.headers.get('content-type') || '';
+	const semi = ctRaw.indexOf(';');
+	const ct = semi === -1 ? ctRaw : ctRaw.slice(0, semi).trimEnd();
+	if (!COMPRESSIBLE_TYPES.has(ct)) return response;
+	const useBr = acceptEncoding.includes('br');
+	const useGz = !useBr && acceptEncoding.includes('gzip');
+	if (!useBr && !useGz) return response;
+
+	// Read ahead one chunk to see whether this is a single-chunk body. A body
+	// that keeps streaming is reassembled around the chunks already read and
+	// passed through untouched - compression never buffers an unbounded body.
+	const reader = response.body.getReader();
+	const first = await reader.read();
+	if (first.done) {
+		return new Response(null, response);
+	}
+	const second = await reader.read();
+	if (!second.done) {
+		const replay = new ReadableStream({
+			start(controller) {
+				controller.enqueue(first.value);
+				controller.enqueue(second.value);
+			},
+			async pull(controller) {
+				const { done, value } = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
+			}
+		});
+		return new Response(replay, response);
+	}
+
+	let body = first.value;
+	if (body.byteLength < COMPRESS_MIN_SIZE) {
+		return new Response(body, response);
+	}
+	const compressed = useBr
+		? brotliCompressSync(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+		: gzipSync(body, { level: 6 });
+	if (compressed.byteLength >= body.byteLength) {
+		return new Response(body, response);
+	}
+	const headers = new Headers(response.headers);
+	headers.set('content-encoding', useBr ? 'br' : 'gzip');
+	headers.set('content-length', String(compressed.byteLength));
+	headers.append('vary', 'Accept-Encoding');
+	return new Response(compressed, {
+		status: response.status,
+		statusText: response.statusText,
+		headers
+	});
+}
+
+/**
+ * Write a Response through the public setResponse primitive, with the
+ * default-nosniff fill and the single-chunk compression pass applied first.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {Response} response
+ * @param {{ aborted: boolean }} state
+ * @param {string} [acceptEncoding]
+ */
+async function writeResponse(res, response, state, acceptEncoding) {
+	if (state.aborted) return;
+	const finalResponse = await maybeCompress(ensureNosniff(response), acceptEncoding || '');
+	if (state.aborted) return;
+	await setResponse(res, finalResponse);
+}
+
+/**
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {Record<string, string>} headers - policy-collected header bag (also
+ *   installed as req.headers by the caller, so SvelteKit sees the same values)
+ * @param {string} remoteAddress - effective client-facing socket address
+ * @param {{ aborted: boolean }} state
+ * @param {string} [directAddress] - direct socket peer; decides ADDRESS_HEADER trust
+ */
+export async function handleSSR(req, res, headers, remoteAddress, state, directAddress = remoteAddress) {
+	const requestId = resolveRequestId(headers['x-request-id']) || randomUuid();
+	try {
+		const base_origin = origin || get_origin(headers);
+
+		/** @type {Request} */
+		let request;
+		try {
+			request = await getRequest({
+				base: base_origin,
+				request: req,
+				bodySizeLimit: body_size_limit === Infinity ? undefined : body_size_limit
+			});
+		} catch (err) {
+			const status = /** @type {{ status?: number }} */ (err)?.status;
+			if (status === 413) send413(res);
+			else send400(res);
+			return;
+		}
+
+		// Branch at definition time on the module-level constant address_header.
+		// In the common case (no proxy), the closure captures only remoteAddress
+		// and V8 sees a trivially-inlinable one-liner. When address_header IS set,
+		// the closure captures the full set of proxy variables.
+		const getClientAddress = address_header
+			? () => {
+				// Trusted-proxy gate: a header claim from a peer outside
+				// TRUSTED_PROXIES is ignored, not an error - the request is a
+				// direct client, and its socket address IS its address.
+				if (trusted_proxies && !trusted_proxies.match(directAddress)) {
+					warnUntrustedClaim(directAddress, `${address_header} header`);
+					return remoteAddress;
+				}
+				if (!(address_header in headers)) {
+					throw new Error(
+						`Address header was specified with ${ENV_PREFIX + 'ADDRESS_HEADER'}=${address_header} but is absent from request`
+					);
+				}
+
+				const value = headers[address_header] || '';
+
+				if (address_header === 'x-forwarded-for') {
+					// Reject absurdly long XFF headers (max ~8KB)
+					if (value.length > 8192) {
+						throw new Error('X-Forwarded-For header too large');
+					}
+					const addresses = value.split(',');
+
+					if (xff_depth > addresses.length) {
+						throw new Error(
+							`${ENV_PREFIX + 'XFF_DEPTH'} is ${xff_depth}, but only found ${addresses.length} addresses`
+						);
+					}
+					return addresses[addresses.length - xff_depth].trim();
+				}
+
+				return value;
+			}
+			: () => remoteAddress;
+
+		// Per-request platform: same surface as the shared platform plus a unique
+		// requestId for structured logging. Object.create keeps live getters and
+		// sibling-installed keys intact via the prototype chain - a flat spread
+		// would freeze them to their snapshot value at clone time.
+		const requestPlatform = Object.create(platform);
+		requestPlatform.requestId = requestId;
+
+		const method = request.method;
+
+		// Dedup: for anonymous GET/HEAD requests that arrive concurrently for the
+		// same URL, only the first (the leader) calls server.respond(). Subsequent
+		// requests (waiters) await the leader's promise and reconstruct a Response
+		// from the shared buffer. This prevents redundant SSR work during traffic
+		// spikes on public pages.
+		//
+		// Dedup is skipped for:
+		//   - Non-GET/HEAD methods (mutations must not be coalesced)
+		//   - Authenticated requests (cookie or authorization header present)
+		//   - When the dedup map is at capacity (safety valve)
+		const isCredentialedRequest = !!(headers.cookie || headers.authorization);
+		const canDedup =
+			(method === 'GET' || method === 'HEAD') &&
+			!isCredentialedRequest &&
+			ssrInflight.size < MAX_SSR_DEDUP;
+		// BREACH defense: suppress the accept-encoding signal for credentialed
+		// requests so writeResponse() leaves the body uncompressed.
+		const respAcceptEncoding = (isCredentialedRequest && !COMPRESS_CREDENTIALED)
+			? ''
+			: headers['accept-encoding'];
+
+		if (canDedup) {
+			// Include base_origin so virtual-hosting deployments (one instance
+			// behind multiple `Host` aliases) keep per-tenant dedup buckets -
+			// SvelteKit consults `request.url`'s host when rendering, so the
+			// response IS host-dependent.
+			const url = request.url.slice(base_origin.length);
+			const dedupKey = method + '\0' + base_origin + '\0' + url;
+			const existing = ssrInflight.get(dedupKey);
+
+			if (existing) {
+				// Waiter: await the leader's result
+				const shared = await existing;
+				if (state.aborted) return;
+				if (shared) {
+					// Reconstruct a fresh Response from the shared buffer (zero-copy view)
+					await writeResponse(
+						res,
+						new Response(shared.body, {
+							status: shared.status,
+							statusText: shared.statusText,
+							headers: shared.headers
+						}),
+						state,
+						respAcceptEncoding
+					);
+					return;
+				}
+				// Leader marked this non-shareable - fall through to our own call
+			} else {
+				// Leader: register the promise before any await so waiters attach to it
+				let resolveShared;
+				const sharedPromise = /** @type {Promise<SharedResponse | null>} */ (
+					new Promise((r) => { resolveShared = r; })
+				);
+				ssrInflight.set(dedupKey, sharedPromise);
+				// Always remove when settled, even on throw
+				sharedPromise.finally(() => ssrInflight.delete(dedupKey));
+
+				try {
+					const response = await server.respond(request, { platform: requestPlatform, getClientAddress });
+					if (state.aborted) { resolveShared(null); return; }
+
+					// Responses with Set-Cookie must not be shared (they're personalized).
+					// Responses that declare Vary on anything other than Accept-Encoding
+					// are personalized by some other request header (Accept-Language,
+					// geo, feature flags, tenant, etc.) - sharing would serve the
+					// leader's content to waiters that may legitimately differ.
+					if (response.headers.has('set-cookie') || !response.body) {
+						resolveShared(null);
+						await writeResponse(res, response, state, respAcceptEncoding);
+						return;
+					}
+					const varyHeader = response.headers.get('vary');
+					if (varyHeader) {
+						const personalized = varyHeader.toLowerCase().split(',').some(
+							(p) => { const t = p.trim(); return t !== '' && t !== 'accept-encoding'; }
+						);
+						if (personalized) {
+							resolveShared(null);
+							await writeResponse(res, response, state, respAcceptEncoding);
+							return;
+						}
+					}
+
+					// A never-ending SSE stream (see isDedupBufferable) must not be
+					// buffered: arrayBuffer() on it would await forever, parking this
+					// leader and every concurrent waiter on the same promise.
+					// writeResponse chunk-streams it instead. Every other (finite)
+					// render is buffered and shared below.
+					if (!isDedupBufferable(response)) {
+						resolveShared(null);
+						await writeResponse(res, response, state, respAcceptEncoding);
+						return;
+					}
+
+					// Buffer the body. Responses above the size cap are not shared.
+					const ab = await response.arrayBuffer();
+					if (state.aborted) { resolveShared(null); return; }
+
+					const shared = ab.byteLength <= MAX_SSR_DEDUP_BODY
+						? /** @type {SharedResponse} */ ({
+							status: response.status,
+							statusText: response.statusText,
+							headers: /** @type {[string, string][]} */ ([...response.headers]),
+							body: new Uint8Array(ab)
+						})
+						: null;
+
+					resolveShared(shared);
+
+					// Serve the leader's own response from the same buffer
+					await writeResponse(
+						res,
+						new Response(ab, {
+							status: response.status,
+							statusText: response.statusText,
+							headers: response.headers
+						}),
+						state,
+						respAcceptEncoding
+					);
+				} catch (err) {
+					resolveShared(null);
+					throw err;
+				}
+				return;
+			}
+		}
+
+		// Normal (non-dedup) path
+		const response = await server.respond(request, { platform: requestPlatform, getClientAddress });
+		if (state.aborted) return;
+		await writeResponse(res, response, state, respAcceptEncoding);
+	} catch (err) {
+		if (state.aborted) return;
+		emitOperationalEvent({
+			source: 'svelte-adapter-ws',
+			component: 'runtime.ssr',
+			event: 'runtime.ssr.failed',
+			severity: 'error',
+			dataClass: 'pseudonymous',
+			message: 'SvelteKit request handling failed.',
+			attributes: { requestId, error: diagnosticError(err) }
+		});
+		// Once any byte of the real response has reached the wire, no error
+		// response can be delivered - writing a 500 into it would be a second
+		// response. The event above is the failure's record; send500 guards on
+		// headersSent itself.
+		send500(res, requestId);
+	}
+}

@@ -1,0 +1,5 @@
+# Byte-identical vendored copy of the uws protocol schema: the parity test
+# hashes the working-tree file against the hash recorded from the uws commit,
+# so line-ending normalization on checkout would fail the gate on every fresh
+# clone.
+protocol.schema.json -text

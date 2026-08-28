@@ -1,0 +1,124 @@
+# svelte-adapter-ws
+
+> **Status: under construction.** The HTTP half is built and tested: a built
+> SvelteKit app serves over `node:http` through the public `@sveltejs/kit/node`
+> primitives, with the full static/prerendered semantics below. The realtime
+> half is not built yet - the `websocket` option refuses the build rather than
+> silently no-op'ing. For realtime apps, use
+> [svelte-adapter-uws](https://github.com/lanteanio/svelte-adapter-uws) today;
+> watch this one.
+
+A SvelteKit adapter on Node's own `http`/`https` server plus the
+[ws](https://github.com/websockets/ws) library: it follows
+[svelte-adapter-uws](https://github.com/lanteanio/svelte-adapter-uws) and is
+meant to work with the same ecosystem around it -
+[svelte-realtime](https://github.com/lanteanio/svelte-realtime) for the client
+stores and
+[svelte-adapter-uws-extensions](https://github.com/lanteanio/svelte-adapter-uws-extensions)
+for clustering, presence and cursors. Same `platform.*` surface, same plugins,
+same client. The adapter swap is one line in `svelte.config.js`; app code is
+unchanged.
+
+## Why this exists
+
+`svelte-adapter-uws` rides uWebSockets.js, a native N-API addon. It installs
+from a `github:` URL and needs a prebuild for the host platform, and some teams
+will not take a native dependency into their deployment no matter how
+straightforward it is in practice. This adapter is for them: the same realtime
+DX on nothing but Node core and a pure-JS WebSocket library, at the cost of peak
+throughput.
+
+The family, by tier:
+
+| package | transport | tier |
+|---|---|---|
+| `svelte-adapter-uws` | uWebSockets.js on Node | maximum performance |
+| `svelte-adapter-ws` (this repo) | node:http + ws | maximum portability |
+| `svelte-adapter-bunserve` | Bun.serve | Bun, natively |
+
+The suffix names the transport, like every member of the family: `uws` is
+uWebSockets.js, `ws` is the ws library, `bunserve` is `Bun.serve`.
+
+What the portability tier gives up is throughput, not features: peak HTTP and
+socket rate, idle-connection density, and large-topic JSON fan-out. What it does
+not give up is capability. In-process TLS is first class through `node:https`,
+and it is a superset of what the native tier offers - SNI, multiple certs, PFX,
+OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
+(APM agents, OpenTelemetry auto-instrumentation, `AsyncLocalStorage`,
+`--inspect`), none of which hooks a native addon.
+
+## Current state
+
+1. **API probe** (done): `probe/ws-api-facts.mjs` empirically verifies every
+   `node:http` and `ws` behavior the adapter design relies on - send results and
+   backpressure signals, closed-socket behavior, the upgrade flow, payload
+   limits, compression, shutdown drain, listen options - and writes a committed
+   facts report. The adapter is built against what these libraries were measured
+   to do, not against what their documentation says. Run it with `npm run probe`
+   after any Node or `ws` upgrade and review the diff.
+
+   What the first run established, and what each fact costs:
+
+   - `send()` returns nothing and never throws, on an open or a closed socket.
+     The uWS-shaped tri-state return has to be synthesized by the facade from
+     `bufferedAmount` plus the send callback, which does report
+     `WebSocket is not open: readyState 3 (CLOSED)` for a dead socket.
+   - Nothing on a `ws` socket throws when it is closed - not `send`, not `ping`,
+     not `close`. The throw-on-closed contract that drives dead-connection
+     cleanup in the extensions package is entirely facade work here.
+   - There is no native pub/sub: none of `subscribe`, `unsubscribe`, `publish`,
+     `isSubscribed`, `getTopics`, `cork` or `getBufferedAmount` exists on a
+     socket, and `WebSocketServer` has no `publish`. Topic fan-out is a JS
+     registry walk.
+   - `bufferedAmount` is in bytes and grows under a slow consumer; the send
+     callback fires once the peer drains, which is the drain signal the
+     backpressure pump needs.
+   - The handshake survives an `await` before `handleUpgrade`, so async
+     admission before completing the upgrade works; destroying the socket
+     mid-upgrade refuses the client cleanly.
+   - `http.close()` does not call back while a WebSocket is open, and live
+     sockets keep working after it. A managed drain is required equipment.
+   - `server.listen({ reusePort: true })` is `ENOTSUP` on Windows, so the
+     single-host multi-core story cannot assume it; `node:cluster` is the
+     portable path.
+   - The public `@sveltejs/kit/node` primitives (`getRequest`, `setResponse`,
+     `createReadableStream`) are all present, which is what the HTTP half is
+     built on - never adapter-node's private handler.
+
+2. **HTTP half** (done): a built SvelteKit app serves over `node:http` (or
+   `node:https` with `SSL_CERT`/`SSL_KEY`) through the public
+   `@sveltejs/kit/node` primitives - `getRequest`, `setResponse`,
+   `createReadableStream` - bundled into the build output so a production
+   install needs no devDependencies. The in-memory static cache answers with
+   negotiated precompressed representations (per-representation weak ETags),
+   single byte ranges cut in the negotiated representation's coordinates,
+   If-None-Match/If-Range preconditions, the dotfile refusal with its
+   `.well-known` carve-out, and the prerendered trailing-slash alias and 308
+   rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
+   single-chunk dynamic compression with the BREACH-defense credential skip, a
+   default `x-content-type-options: nosniff` fill, and the family
+   duplicate-header policy (repeated singleton headers are refused, proxy
+   identity headers keep their last line). Health and readiness probes,
+   readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
+   resolution and a managed drain of in-flight requests are in. `PROXY_PROTOCOL`
+   and `CLUSTER_WORKERS` refuse the boot loudly rather than half-working.
+
+3. **JSON realtime** (not started): the upgrade path, the socket facade, and the
+   `platform` object with publish/send/subscribe/unsubscribe/sendTo/connections/
+   subscribers over a JS topic registry.
+
+4. **Binary wire** (not started): the `0x03` frame fan-out, per-connection topic
+   ids, per-connection codec state, resume and seq stamping.
+
+5. **Pressure and protection parity** (not started): real `bufferedAmount`-driven
+   backpressure with a drain pump, and a `platform.pressure` snapshot with the
+   shape flow control actually consumes. A zero stub silently disables flow
+   control, so this lane ships with a slow-consumer bench that proves engagement.
+
+6. **Golden gate** (not started): the transport-independent DST goldens
+   reproduced under this backend, and the `PLATFORM_KEYS` parity site added.
+   Same trace, same wire revision, or it does not ship.
+
+## License
+
+MIT
