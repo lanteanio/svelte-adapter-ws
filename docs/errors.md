@@ -317,16 +317,142 @@ Severity: fatal
 Log line begins:
 
 ```
-[svelte-adapter-ws] CLUSTER_WORKERS is not supported by this adapter.
+[svelte-adapter-ws] Invalid CLUSTER_WORKERS value: '
 ```
 
-**Cause.** CLUSTER_WORKERS is set, but this adapter ships no in-process supervisor: multi-core runs one process per core under the platform process manager, with cross-instance fan-out through the extensions relay.
+**Cause.** CLUSTER_WORKERS is set to something other than a positive integer or 'auto'.
 
-**Consequence.** The process exits before listening; the service never comes up. Refusing beats silently running one worker where the deployment expected N.
+**Consequence.** The cluster primary exits with status 1 before spawning any worker; the service never comes up.
 
 **Automatic recovery.** None. Startup configuration is validated once, at boot.
 
-**What to do.** Unset CLUSTER_WORKERS and run one process per core under your process manager (systemd template units, PM2, container replicas) behind a load balancer.
+**What to do.** Set CLUSTER_WORKERS to a positive integer or 'auto' (or unset it) and restart.
+
+## ADAPTER-ERR-CLUSTER-CONFIG-COMPUTE
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] websocket.workers.compute (
+```
+
+**Cause.** websocket.workers.compute is greater than or equal to the total worker count, which would leave no I/O worker to listen.
+
+**Consequence.** The cluster primary exits with status 1 before spawning any worker; the service never comes up.
+
+**Automatic recovery.** None. Startup configuration is validated once, at boot.
+
+**What to do.** Lower websocket.workers.compute or raise CLUSTER_WORKERS so at least one I/O worker remains.
+
+## ADAPTER-ERR-CLUSTER-CONFIG-MODE
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] Invalid CLUSTER_MODE: '
+```
+
+**Cause.** CLUSTER_MODE is set to an unknown value.
+
+**Consequence.** The cluster primary exits with status 1 before spawning any worker; the service never comes up.
+
+**Automatic recovery.** None. Startup configuration is validated once, at boot.
+
+**What to do.** Use 'reuseport' (Linux), or unset CLUSTER_MODE - reuseport is also the default and the only mode this runtime has.
+
+## ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] CLUSTER_WORKERS requires Linux (SO_REUSEPORT accept distribution is not available on 
+```
+
+**Cause.** CLUSTER_WORKERS is set on a platform other than Linux. Every io worker binds the shared port itself with SO_REUSEPORT and the kernel distributes accepted connections across the listeners; off Linux the bind fails outright (Windows, macOS) or the kernel routes every accept to one listener.
+
+**Consequence.** The cluster primary exits with status 1 before spawning any worker; the service never comes up. Refusing beats booting a fleet whose extra workers can never take traffic.
+
+**Automatic recovery.** None. Startup configuration is validated once, at boot.
+
+**What to do.** Deploy on Linux to keep the in-process cluster, or unset CLUSTER_WORKERS and run one process per core under your process manager behind a load balancer.
+
+## ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] CLUSTER_MODE=acceptor is not available on this runtime: moving an accepted socket between threads needs a native transport. 
+```
+
+**Cause.** CLUSTER_MODE=acceptor asks one thread to accept connections and hand the live sockets to the other workers. Node core cannot transfer socket ownership across worker threads, so this runtime has no acceptor to offer.
+
+**Consequence.** The cluster primary exits with status 1 before spawning any worker; the service never comes up.
+
+**Automatic recovery.** None. Startup configuration is validated once, at boot.
+
+**What to do.** Unset CLUSTER_MODE to use reuseport (the default, Linux), or deploy the native-transport family adapter where acceptor mode exists.
+
+## ADAPTER-ERR-CLUSTER-WORKER-ERROR
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] cluster.worker-error: A worker thread reported an error.
+```
+
+**Cause.** A worker thread emitted an error event to the primary, which usually means it threw outside a request or failed during startup.
+
+**Consequence.** That worker is unhealthy. Its connections are lost when it exits, and cluster capacity drops until it is replaced.
+
+**Automatic recovery.** The supervisor replaces an exiting worker; the error itself is reported, not retried. Under a startup or import fault every replacement hits the same error, each attempt is charged against the slot's restart budget, and an exhausted slot takes the whole service down - the outcome ADAPTER-ERR-WORKER-RESTART-LIMIT documents from the other end.
+
+**What to do.** Read the attached error attribute. A repeating worker error at startup usually means a configuration or import fault that every replacement will hit as well.
+
+## ADAPTER-ERR-WORKER-RESTART-LIMIT
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] Worker restart limit reached for 
+```
+
+**Cause.** A worker slot crashed and was respawned repeatedly without ever reaching stable uptime, exhausting its restart budget.
+
+**Consequence.** The primary exits with status 1 (its worker threads die with the process) and the whole service goes down until an orchestrator respawns it.
+
+**Automatic recovery.** None inside the process. An orchestrator respawn, where one is configured, is the recovery path.
+
+**What to do.** Read the failing worker crash output above this line: the restart limit is the symptom and the repeated worker crash is the fault. A loop this fast is usually a boot-time error, not load.
+
+## ADAPTER-ERR-WORKER-EXIT-FORCED
+
+Severity: error
+
+Log line begins:
+
+```
+[primary] worker 
+```
+
+**Cause.** A worker was asked to exit and had not done so within the exit grace period, so the primary terminated that worker thread in place. A wedged event loop cannot process the exit request; terminating just the thread is safe here because a plain Node worker holds no native socket handles.
+
+**Consequence.** Only the wedged worker dies: its connections drop and those clients reconnect onto a sibling. The slot respawns under the restart budget, so a worker that wedges on every boot eventually exhausts it (see ADAPTER-ERR-WORKER-RESTART-LIMIT).
+
+**Automatic recovery.** Yes - the exit fires the normal restart path and a replacement occupies the same slot.
+
+**What to do.** Find why the worker would not exit. A blocked event loop is the usual cause - a synchronous hook, an unbounded loop, or a native call that does not return - and it will happen again at the next exit request. Most exit requests print their reason above this line; the one that does not is the shutdown budget expiring, where the request went to every worker at once.
 
 ## ADAPTER-ERR-RELAY-SPILL-QUARANTINE
 
@@ -345,6 +471,132 @@ Log line begins:
 **Automatic recovery.** The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is terminated in place and its slot respawned - the mechanism ADAPTER-ERR-WORKER-EXIT-FORCED documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.
 
 **What to do.** Read the reason on the line. An AGE spill means that worker stopped draining its ring - a blocked event loop is the usual cause, and it is the worker's own thread to profile, not the primary's. A BYTES spill can mean either: a peer merely behind on a ceiling sized too close to the largest relayed frame, where raising CLUSTER_RELAY_MAX_PENDING_KB to a few times that frame is the fix, or sustained fan-out the relay is undersized for, where a wider ceiling only delays the next spill. The droppedBytes on the line tells you which.
+
+## ADAPTER-ERR-RELAY-SPILL-OVERFLOW
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] cluster-relay.up-spill-overflow: This worker could not hand its relay backlog to the primary within its spill ceiling and is exiting to be replaced.
+```
+
+**Cause.** The worker queued more relay bytes, or held them longer, than its spill ceiling allows while waiting on the primary.
+
+**Consequence.** The worker exits deliberately rather than growing an unbounded queue. Connections on it drop and those clients reconnect to whichever workers are still up.
+
+**Automatic recovery.** Within the slot restart budget. The worker exits and the supervisor respawns it, but a slot that keeps exiting without reaching stable uptime exhausts that budget and the primary then exits the whole process (see ADAPTER-ERR-WORKER-RESTART-LIMIT). A blocked primary - the usual cause here - starves every worker at once, so repeated occurrences are the shape that reaches exhaustion rather than a series each worker recovers from.
+
+**What to do.** Read the reason, droppedBytes, and pendingAgeMs attributes. A blocked or slow primary is the usual cause; if the backlog is legitimate peak traffic, raise the relay ring pending ceilings. Check whether siblings are reporting this too - a process-wide cause will not resolve by replacing one worker.
+
+## ADAPTER-ERR-RELAY-FRAME-OVERSIZED
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] cluster-relay.frame-oversized: A worker sent a relay frame larger than this process will reassemble; its relay stream was stopped.
+```
+
+**Cause.** A worker declared a relay frame above the reassembly ceiling, which is four times the configured relay frame ceiling. Either the ceiling is set far below real payloads, or the stream is corrupt.
+
+**Consequence.** That worker relay stream is stopped, so its cross-worker publishes no longer reach this process. Local delivery on the sending worker continues, which is what makes the split silent.
+
+**Automatic recovery.** None for the stopped stream itself. The sending worker is expected to retire through its own spill overflow and be replaced, which is the path that actually restores its relay.
+
+**What to do.** Compare the declaredBytes and maxFrameBytes attributes. If the payload is legitimate, raise the relay frame ceiling; otherwise treat the stream as corrupt and replace the worker.
+
+## ADAPTER-ERR-RELAY-FRAME-REFUSED
+
+Severity: warn
+
+Log line begins:
+
+```
+[svelte-adapter-ws] cluster-relay.frame-refused: A publish was too large for the cluster relay and was not sent to other workers. Local subscribers received it.
+```
+
+**Cause.** A publish exceeded the configured relay frame ceiling for cross-worker delivery.
+
+**Consequence.** Subscribers on this worker received the message and subscribers on every other worker did not. Clients therefore disagree about state depending on which worker they landed on.
+
+**Automatic recovery.** None. The refused publish is not retried or fragmented.
+
+**What to do.** Reduce the payload size, or raise the relay frame ceiling to cover it. Treat repeated occurrences as a correctness problem rather than a capacity warning, because the split is invisible to clients.
+
+## ADAPTER-ERR-TLS-PRIMARY-BOOT-READ
+
+Severity: error
+
+Log line begins:
+
+```
+[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)
+```
+
+**Cause.** The cluster primary could not read or parse the boot certificate while arming the hot-reload watch.
+
+**Consequence.** Primary-side expiry observability starts blind: no baseline identity or expiry is recorded, so a later reload failure is reported without the number that says how urgent it is. Workers gate on their own certificate reads and keep serving; the reload broadcast stays armed.
+
+**Automatic recovery.** The next reload that reads cleanly records identity and expiry.
+
+**What to do.** Verify the certificate path and PEM contents on the primary host.
+
+## ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ
+
+Severity: error
+
+Log line begins:
+
+```
+[tls] renewed certificate unreadable on the primary (workers gate on their own reads)
+```
+
+**Cause.** A certificate change was seen on disk but the renewed material was unreadable or incomplete when the primary read it.
+
+**Consequence.** The reload broadcast still goes out and every worker gates on its OWN read, so a primary-local failure (a read racing the renewal writer at the primary debounce instant) can leave the workers correctly swapped while only the primary is blind. What certainly failed is the primary side: no renewed identity or expiry is recorded, the primary enters the degraded TLS state with its expiry sentinel armed, and READINESS PROBES STAY GREEN. When the renewal itself is broken, every worker read fails the same way and the fleet keeps the previous certificate.
+
+**Automatic recovery.** Every certificate change broadcasts again; the next change the primary reads cleanly records identity and expiry and clears the degraded state.
+
+**What to do.** Check whether the workers actually swapped (compare the served certificate against the renewal on disk) before assuming the fleet is stale, then fix the certificate material or the primary-host read.
+
+## ADAPTER-ERR-TLS-PRIMARY-WATCH
+
+Severity: error
+
+Log line begins:
+
+```
+[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)
+```
+
+**Cause.** The filesystem watch on the certificate directory could not start on the cluster primary, commonly a not-yet-mounted secret volume or a mistyped path.
+
+**Consequence.** Cluster-wide certificate hot reload is off for the process lifetime: with no watcher on the primary, no worker is ever told to reload, so the whole fleet serves its current certificate until it expires. The primary enters the degraded TLS state; readiness probes stay green throughout.
+
+**Automatic recovery.** None. The watch is not retried, so this does not resolve without a restart.
+
+**What to do.** Fix the path or permissions and restart the primary. Until then, treat certificate renewal as requiring a restart and alert on certificate expiry independently.
+
+## ADAPTER-ERR-TLS-DEGRADED-EXPIRY
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] [tls] certificate hot-reload is DEGRADED (
+```
+
+**Cause.** TLS hot-reload is in the degraded state on the cluster primary and the recorded certificate expiry is inside the alert window.
+
+**Consequence.** The figure is the last certificate the primary read cleanly, not necessarily what the workers serve - after a primary-local reload-read failure this alarm can count down against a certificate the fleet already replaced. When the renewal itself is broken the countdown is real: handshakes fail at the printed expiry while readiness probes stay green.
+
+**Automatic recovery.** The alert re-checks hourly while degraded. A reload that succeeds clears the degraded state and silences it.
+
+**What to do.** Verify the served certificate against the renewal on disk first (see ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ). If the fleet is genuinely stale, fix the certificate files now and restart the instance if the reload cannot be repaired before the printed expiry.
 
 ## ADAPTER-ERR-SHUTDOWN-LISTENER-THREW
 

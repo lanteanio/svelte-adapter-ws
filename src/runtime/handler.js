@@ -13,6 +13,7 @@
 import './_init.js';
 import http from 'node:http';
 import path from 'node:path';
+import { workerData } from 'node:worker_threads';
 import { env } from './env.js';
 import { monotonicNow } from './runtime.js';
 import { base } from 'MANIFEST';
@@ -161,15 +162,25 @@ export { realtime };
 
 /**
  * Bind and boot: listen, run the app's init hook, warm the SSR path, commit
- * readiness.
+ * readiness. The init hook receives `workerData.app` - the value the app's
+ * primaryInit returned in cluster mode, replayed identically to every worker
+ * and respawn; null single-process and when no primaryInit is configured.
+ *
  * @param {string} host
  * @param {number} port
+ * @param {{ listen?: boolean, reusePort?: boolean }} [opts] - `listen: false`
+ *   boots the full app without binding (a cluster compute worker);
+ *   `reusePort: true` binds with SO_REUSEPORT (a cluster io worker).
  * @returns {Promise<void>}
  */
-export async function start(host, port) {
+export async function start(host, port, opts = {}) {
 	return lifecycleStart(server, host, port, {
 		warmupPaths: WARMUP_PATHS,
-		beforeReady: realtime ? () => /** @type {NonNullable<typeof realtime>} */ (realtime).fireInitOnce() : undefined
+		listen: opts.listen,
+		reusePort: opts.reusePort,
+		beforeReady: realtime
+			? () => /** @type {NonNullable<typeof realtime>} */ (realtime).fireInitOnce(workerData?.app ?? null)
+			: undefined
 	});
 }
 

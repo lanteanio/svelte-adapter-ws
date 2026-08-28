@@ -140,7 +140,11 @@ describe('cluster sequence authority policy', () => {
 	});
 
 	it('guards every production sequence-stamping entry point before mutation', () => {
+		const indexSource = readFileSync(new URL('../src/runtime/index.js', import.meta.url), 'utf8');
 		const source = readFileSync(new URL('../src/runtime/handler/platform.js', import.meta.url), 'utf8');
+		// The primary threads the resolved worker count into workerData, which
+		// is what arms the multi-worker policy in every worker.
+		expect(indexSource).toContain('totalWorkers: num');
 		const publish = source.slice(source.indexOf('function publish('), source.indexOf('\nfunction send('));
 		const wireAt = source.indexOf('\tpublishWire(');
 		const wire = source.slice(wireAt, source.indexOf('\n\t/**', wireAt));

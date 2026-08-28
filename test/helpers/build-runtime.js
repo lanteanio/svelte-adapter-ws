@@ -222,6 +222,8 @@ export function buildRuntime(options = {}) {
 		STATIC_HEADERS: JSON.stringify(null),
 		STATIC_CACHE_CONTROL: JSON.stringify(null),
 		STATIC_DOTFILES: JSON.stringify(false),
+		PRIMARY_INIT: './server/primary-init.js',
+		WORKERS_CONFIG: JSON.stringify({ compute: 0 }),
 		...options.replace
 	};
 
@@ -241,6 +243,9 @@ export function buildRuntime(options = {}) {
 	mkdirSync(path.join(dir, 'server'), { recursive: true });
 	writeFileSync(path.join(dir, 'server', 'index.js'), options.serverSource ?? FIXTURE_SERVER);
 	writeFileSync(path.join(dir, 'server', 'ws-handler.js'), options.wsHandlerSource ?? '// No WebSocket handler configured\n');
+	// The primaryInit stub adapt() writes when the option is absent; a cluster
+	// test overrides with primaryInitSource.
+	writeFileSync(path.join(dir, 'server', 'primary-init.js'), options.primaryInitSource ?? 'export default null;\n');
 	writeFileSync(
 		path.join(dir, 'server', 'manifest.js'),
 		options.manifestSource ??
