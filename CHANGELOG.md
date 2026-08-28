@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The in-process cluster: `CLUSTER_WORKERS=<n|auto>` runs a supervising
+  primary thread with one worker thread per slot on Linux, io workers
+  binding the shared port themselves via SO_REUSEPORT and compute workers
+  (`websocket.workers.compute`) booting the app without a socket.
+  `websocket.primaryInit` runs once in the primary and its return value
+  (SharedArrayBuffers included) replays as `workerData.app` to every worker
+  and respawn. Cross-worker publish fan-out rides one shared-memory ring per
+  direction per worker (`CLUSTER_RELAY_RING_KB`, encode-once with the primary
+  forwarding bytes verbatim) with postMessage as the fallback/control lane,
+  bounded by per-peer spill ceilings (`CLUSTER_RELAY_MAX_PENDING_KB/_MS`,
+  quarantine-and-replace) and a sender-side frame ceiling
+  (`CLUSTER_RELAY_MAX_FRAME_KB`). The primary heartbeats the fleet with a
+  separate boot deadline (`WORKER_BOOT_TIMEOUT_MS`), escalates wedged workers
+  through the clean-exit protocol and terminates only the stuck thread,
+  respawns crashed slots under per-slot exponential backoff with a
+  stable-uptime budget reset, owns the TLS cert-directory watch (workers swap
+  contexts on its broadcast; single-process keeps its own watch), and drains
+  readiness fleet-wide ahead of the shutdown delay. Invalid configurations -
+  bad worker count, compute >= total, unknown or acceptor mode, a non-Linux
+  host - refuse before any worker spawns, through the error catalog. In a
+  multi-worker topology, sequenced publishes require an external authority
+  (`{ seq: <n>, relay: false }`) or `{ seq: false }`, batches vet their
+  options and entry seqs atomically before stamping, and the game lane
+  refuses topologies where sockets can land on more than one io worker.
+  systemd `Type=notify` readiness/watchdog integration and the low
+  file-descriptor-limit boot advisory ride along on every mode.
+
 - Typed public entry points: AdapterOptions/WebSocketOptions/Platform/
   PressureSnapshot/Attribution in index.d.ts, plus typed upgrade-response and
   connection subpaths (resolving clean under `skipLibCheck: false`); the

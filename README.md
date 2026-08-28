@@ -86,8 +86,8 @@ Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 (`handler`, `path`, `authPath`, `maxPayloadLength`, `idleTimeout`,
 `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `messageAdmission`,
-`pressure`, and the shared policy flags). The typed surface in
-`src/index.d.ts` is the reference.
+`pressure`, `primaryInit`, `workers`, and the shared policy flags). The typed
+surface in `src/index.d.ts` is the reference.
 
 Runtime environment (prefix configurable via the `envPrefix` option):
 
@@ -107,10 +107,16 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `SSL_PFX` / `SSL_PFX_PASSPHRASE` | - | PKCS#12 bundle instead of the PEM pair. |
 | `SSL_OCSP_FILE` | - | Externally-maintained DER OCSP response to staple. |
 | `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
+| `CLUSTER_WORKERS` | - | In-process cluster: worker-thread count or `auto` (Linux; see Deployment). |
+| `CLUSTER_MODE` | `reuseport` | The one mode this runtime has; `acceptor` refuses with the reason. |
+| `CLUSTER_RELAY_RING_KB` | `256` | Shared-memory relay ring per direction per worker; `0` = postMessage only. |
+| `CLUSTER_RELAY_MAX_PENDING_KB` / `_MAX_PENDING_MS` | `4096` / `5000` | Per-peer relay spill ceilings; a worker past them is quarantined and replaced. |
+| `CLUSTER_RELAY_MAX_FRAME_KB` | pending KB | Sender-side ceiling on one relayed envelope; `0` disables. |
+| `WORKER_BOOT_TIMEOUT_MS` | `60000` | Boot deadline for a worker that stops acking liveness mid-init; `0` disables. |
 
 A second `SIGTERM`/`SIGINT` during a drain exits immediately - the operator's
-"now". `CLUSTER_WORKERS` and `PROXY_PROTOCOL` refuse the boot loudly rather
-than half-working (see Deployment).
+"now". `PROXY_PROTOCOL` refuses the boot loudly rather than half-working, and
+so does every invalid cluster configuration (see Deployment).
 
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
@@ -151,9 +157,9 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
      mid-upgrade refuses the client cleanly.
    - `http.close()` does not call back while a WebSocket is open, and live
      sockets keep working after it. A managed drain is required equipment.
-   - `server.listen({ reusePort: true })` is `ENOTSUP` on Windows, so the
-     single-host multi-core story cannot assume it; `node:cluster` is the
-     portable path.
+   - `server.listen({ reusePort: true })` is `ENOTSUP` on Windows, which is
+     why the in-process cluster requires Linux and refuses everywhere else
+     instead of booting workers whose binds fail.
    - The public `@sveltejs/kit/node` primitives (`getRequest`, `setResponse`,
      `createReadableStream`) are all present, which is what the HTTP half is
      built on - never adapter-node's private handler.
@@ -182,8 +188,8 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    duplicate-header policy (repeated singleton headers are refused, proxy
    identity headers keep their last line). Health and readiness probes,
    readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
-   resolution and a managed drain of in-flight requests are in. `PROXY_PROTOCOL`
-   and `CLUSTER_WORKERS` refuse the boot loudly rather than half-working.
+   resolution and a managed drain of in-flight requests are in.
+   `PROXY_PROTOCOL` refuses the boot loudly rather than half-working.
 
 3. **JSON realtime**: the upgrade path with async admission, origin
    policy, per-IP rate limiting, upgrade timeout and validated custom 101
@@ -205,8 +211,8 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `authenticate` preflight endpoint with CSRF defense and rate limiting is
    in; app hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). The `websocket.*`
-   options whose lanes have not shipped here (admin, metrics, workers,
-   admission ceilings, egress, posture) refuse the build loudly.
+   options whose lanes have not shipped here (admin, metrics, admission
+   ceilings, egress, posture) refuse the build loudly.
    Graceful shutdown drains live sockets itself (`http.close()` never
    completes while one is open): new upgrades are refused the moment drain
    begins, every client gets the reconnect advisory with the
@@ -243,7 +249,31 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `maxBackpressure` ceiling, and recover to a clean snapshot - a zero stub
    fails the bench.
 
-6. **Golden gate**: the platform-surface parity site reads both
+6. **In-process cluster**: `CLUSTER_WORKERS=<n|auto>` turns the process
+   entry into a primary that runs the app's `websocket.primaryInit` once
+   (its return value - SharedArrayBuffers included - replays as
+   `workerData.app` to every worker and respawn) and spawns one worker
+   thread per slot. Each io worker binds the shared port itself with
+   SO_REUSEPORT and the kernel distributes accepts; `websocket.workers`
+   `{ compute }` slots boot the full app without a listen socket for
+   app-driven shared-memory work. Cross-worker publish fan-out rides two
+   SharedArrayBuffer rings per worker (encode once, primary forwards bytes
+   verbatim, only receivers decode) with postMessage as the fallback and
+   control lane; per-peer spill ceilings quarantine a worker that stops
+   draining, and a sender-side frame ceiling refuses the pathological
+   publish at its source. The primary heartbeats the fleet, escalates a
+   wedged worker through the clean-exit protocol (terminating just that
+   thread after the grace), respawns crashed slots under per-slot
+   exponential backoff with a stable-uptime budget reset, owns the TLS
+   cert-directory watch (workers swap their own contexts on its
+   broadcast), and drains readiness fleet-wide before the shutdown delay.
+   Every invalid configuration refuses before a worker spawns, through
+   the error catalog. In a multi-worker topology sequenced publishes
+   require an explicit external authority (`{ seq: <n>, relay: false }`)
+   or `{ seq: false }` - per-worker counters cannot preserve one
+   monotonic topic sequence, and the refusal says so at the publish site.
+
+7. **Golden gate**: the platform-surface parity site reads both
    adapters' platform object literals by AST and fails when a key the lead
    carries is missing here - and it fails loudly when the lead checkout is
    absent, because a gate that skips is not a gate (`UWS_SRC` names the
@@ -258,18 +288,28 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
 
 ## Deployment
 
-One process serves one core well; scale out by running one instance per core
-under the platform process manager (systemd template units, PM2, container
-replicas) behind a load balancer, with
+One process serves one core well. On a multi-core Linux host, set
+`CLUSTER_WORKERS=<n|auto>` and the built server runs the family's in-process
+cluster: a primary thread supervises one worker thread per slot, every io
+worker binds the shared port itself with SO_REUSEPORT so the kernel
+distributes accepts (no acceptor bottleneck, no single point of failure), and
+publishes fan out across workers over shared-memory relay rings. Same env,
+same options, same behavior as the native-tier adapter: `websocket.primaryInit`
+seeds shared memory once in the primary, `websocket.workers.compute` carves
+out compute workers that boot the app without a socket, crashed workers
+respawn into their slot under a backoff budget, and one SIGTERM drains the
+whole fleet through the ordinary readiness-flip/hook/drain sequence.
+
+The cluster is Linux-only because it stands on SO_REUSEPORT accept
+distribution, which is a Linux kernel behavior; anywhere else the boot
+refuses loudly. The dev loop does not need it - a single process is the
+default and serves development fine - and multi-HOST scale-out is unchanged:
+one instance per host (or per core, where the cluster is not in play) under
+the platform process manager behind a load balancer, with
 [svelte-adapter-uws-extensions](https://github.com/lanteanio/svelte-adapter-uws-extensions)
 providing the cross-instance relay, presence and clustering primitives over
-Redis. `server.listen({ reusePort: true })` is platform-dependent (`ENOTSUP`
-on Windows, measured by the probe), so nothing here assumes it; `node:cluster`
-remains the portable single-host alternative for a process manager, but the
-adapter does not supervise workers itself - the topic registry is per-process,
-and cross-worker fan-out belongs to the extensions relay rather than a
-second, in-process relay implementation. `CLUSTER_WORKERS` therefore refuses
-the boot instead of half-working.
+Redis. Container fleets that scale by replicas need neither `reusePort` nor
+`CLUSTER_WORKERS` - the balancer already spreads connections across replicas.
 
 ## License
 
