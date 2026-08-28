@@ -84,8 +84,17 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
      `createReadableStream`) are all present, which is what the HTTP half is
      built on - never adapter-node's private handler.
 
-2. **HTTP half** (done): a built SvelteKit app serves over `node:http` (or
-   `node:https` with `SSL_CERT`/`SSL_KEY`) through the public
+2. **HTTP half** (done): a built SvelteKit app serves over `node:http` - or
+   `node:https` with first-class in-process TLS: a PEM pair (`SSL_CERT`/
+   `SSL_KEY`, comma-separated lists for multiple certificates - the first
+   pair is the default context, every further pair serves the SNI names its
+   cert carries or the `SSL_SNI_HOSTS` override), a PKCS#12 bundle
+   (`SSL_PFX`/`SSL_PFX_PASSPHRASE`), OCSP stapling from an
+   externally-maintained response file (`SSL_OCSP_FILE`), and certificate
+   hot-reload (`SSL_WATCH`, default on; `SSL_RELOAD_DEBOUNCE_MS`) that swaps
+   the secure context in place so a certbot renewal never drops a live
+   connection. The probe TLS section runs unattended against committed
+   fixtures. HTTP serving goes through the public
    `@sveltejs/kit/node` primitives - `getRequest`, `setResponse`,
    `createReadableStream` - bundled into the build output so a production
    install needs no devDependencies. The in-memory static cache answers with

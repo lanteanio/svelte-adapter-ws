@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- First-class in-process TLS: PEM pairs with comma-separated multi-cert SNI
+  (per-name contexts from each cert SAN or the SSL_SNI_HOSTS override),
+  PKCS#12 bundles via SSL_PFX/SSL_PFX_PASSPHRASE, OCSP stapling from an
+  externally-maintained DER response (SSL_OCSP_FILE, hot-reloaded), and
+  certificate hot-reload on SSL_WATCH (default on) that applies
+  setSecureContext to new connections without re-binding the listener. The
+  probe TLS section now runs unattended against committed test fixtures
+  instead of being recorded as manual.
+
 - The pressure lane: a 1 Hz sampler behind `platform.pressure` (publish rate,
   subscriber ratio, memory-wall ratio, the bounded bufferedAmount walk, the
   exact backpressure-shed window, PSI/CFS signals on Linux, top publishers),

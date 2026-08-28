@@ -418,9 +418,65 @@ await run('kit-primitives', async () => {
 	}
 });
 
-// --- manual ------------------------------------------------------------------
-record('tls', 'in-process TLS via node:https with ws mounted on the https server', 'MANUAL - needs certs; run separately and record the result here');
-record('tls', 'SNI callback, multiple certs, OCSP stapling', 'MANUAL - node:tls surface, not probed');
+// --- tls ---------------------------------------------------------------------
+// Runs unattended against the committed self-signed fixtures under
+// test/fixtures/tls (100-year expiry, localhost SANs, generated once with
+// openssl and checked in - the probe never shells out).
+await run('tls', async () => {
+	const { createServer: createHttpsServer } = await import('node:https');
+	const tlsMod = await import('node:tls');
+	const { readFileSync } = await import('node:fs');
+	const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures', 'tls');
+	const cert = readFileSync(join(fixturesDir, 'localhost.crt'));
+	const key = readFileSync(join(fixturesDir, 'localhost.key'));
+	const sniCert = readFileSync(join(fixturesDir, 'sni.crt'));
+	const sniKey = readFileSync(join(fixturesDir, 'sni.key'));
+
+	const server = createHttpsServer({ cert, key }, (_req, res) => { res.end('ok'); });
+	server.addContext('sni.example', tlsMod.createSecureContext({ cert: sniCert, key: sniKey }));
+	const wss = new WebSocketServer({ server });
+	wss.on('connection', (socket) => socket.send('over-tls'));
+	await new Promise((resolve) => server.listen(0, HOST, resolve));
+	const port = server.address().port;
+
+	const wsEcho = await new Promise((resolve) => {
+		const client = new WebSocket(`wss://${HOST}:${port}/`, { rejectUnauthorized: false });
+		client.once('message', (raw) => { resolve(raw.toString()); client.close(); });
+		client.once('error', (err) => resolve('error: ' + err.message));
+	});
+	record('tls', 'ws mounted on node:https - wss upgrade and frame delivery', wsEcho === 'over-tls' ? 'works' : wsEcho);
+
+	const sniCn = await new Promise((resolve) => {
+		const socket = tlsMod.connect({ host: HOST, port, servername: 'sni.example', rejectUnauthorized: false }, () => {
+			resolve(socket.getPeerCertificate().subject?.CN);
+			socket.destroy();
+		});
+		socket.on('error', (err) => resolve('error: ' + err.message));
+	});
+	record('tls', 'SNI addContext serves the per-name certificate', sniCn === 'sni.example' ? 'works (CN sni.example selected)' : String(sniCn));
+
+	server.setSecureContext({ cert: sniCert, key: sniKey });
+	const swappedCn = await new Promise((resolve) => {
+		const socket = tlsMod.connect({ host: HOST, port, rejectUnauthorized: false }, () => {
+			resolve(socket.getPeerCertificate().subject?.CN);
+			socket.destroy();
+		});
+		socket.on('error', (err) => resolve('error: ' + err.message));
+	});
+	record('tls', 'setSecureContext hot-swaps the default certificate without re-binding', swappedCn === 'sni.example' ? 'works (new connections get the new cert)' : String(swappedCn));
+
+	const ocspBytes = Buffer.from('probe-ocsp-response');
+	server.on('OCSPRequest', (_c, _i, cb) => cb(null, ocspBytes));
+	const stapled = await new Promise((resolve) => {
+		const socket = tlsMod.connect({ host: HOST, port, rejectUnauthorized: false, requestOCSP: true });
+		socket.on('OCSPResponse', (response) => { resolve(Buffer.from(response).equals(ocspBytes)); socket.destroy(); });
+		socket.on('secureConnect', () => setTimeout(() => { resolve(false); socket.destroy(); }, 300));
+		socket.on('error', () => resolve(false));
+	});
+	record('tls', 'OCSPRequest staples a provided DER response to a requesting handshake', stapled ? 'works' : 'no OCSPResponse observed');
+
+	await new Promise((resolve) => { wss.close(() => server.close(resolve)); });
+});
 
 // --- report ------------------------------------------------------------------
 const here = dirname(fileURLToPath(import.meta.url));

@@ -1,6 +1,6 @@
 # node:http + ws API facts
 
-Generated 2026-08-28T08:07:12.875Z by `probe/ws-api-facts.mjs`.
+Generated 2026-08-28T10:47:18.933Z by `probe/ws-api-facts.mjs`.
 
 - Node version: **v24.13.1**
 - ws version: **8.21.3**
@@ -117,7 +117,11 @@ Re-run after every Node or ws upgrade; review any diff before trusting the upgra
 
 ## tls
 
-- in-process TLS via node:https with ws mounted on the https server
-  - MANUAL - needs certs; run separately and record the result here
-- SNI callback, multiple certs, OCSP stapling
-  - MANUAL - node:tls surface, not probed
+- ws mounted on node:https - wss upgrade and frame delivery
+  - works
+- SNI addContext serves the per-name certificate
+  - works (CN sni.example selected)
+- setSecureContext hot-swaps the default certificate without re-binding
+  - works (new connections get the new cert)
+- OCSPRequest staples a provided DER response to a requesting handshake
+  - works

@@ -10,7 +10,37 @@ export const ssl_cert = env('SSL_CERT', '');
 
 export const ssl_key = env('SSL_KEY', '');
 
-export const is_tls = !!(ssl_cert && ssl_key);
+/** PKCS#12 bundle path - the alternative to the cert/key pair. */
+export const ssl_pfx = env('SSL_PFX', '');
+
+export const ssl_pfx_passphrase = env('SSL_PFX_PASSPHRASE', '');
+
+export const is_tls = !!(ssl_cert && ssl_key) || !!ssl_pfx;
+
+/**
+ * TLS certificate hot-reload. When TLS is configured the server watches the
+ * cert files and, on a renewed cert (certbot / cert-manager), swaps the
+ * secure context in place - node's setSecureContext applies to NEW
+ * connections without re-binding the listen socket or dropping live ones.
+ * Default ON when TLS is set; SSL_WATCH=0 opts out.
+ */
+export const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
+
+/** Debounce window (ms) coalescing a burst of cert-file writes into one reload. */
+const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
+export const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0
+	? _ssl_debounce_raw
+	: 500;
+
+/** Optional comma-separated SNI host override; empty = auto-discover from each cert SAN. */
+export const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+
+/**
+ * OCSP stapling: path to a DER-encoded OCSP response maintained by external
+ * tooling (certbot's ocsp fetcher, an operator cron). Stapled on every
+ * handshake that asks, hot-reloaded with the certificate watch.
+ */
+export const ssl_ocsp_file = env('SSL_OCSP_FILE', '');
 
 export const origin = parse_origin(env('ORIGIN', undefined));
 

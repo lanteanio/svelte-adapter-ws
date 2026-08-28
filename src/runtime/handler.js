@@ -12,9 +12,7 @@
 /* global WS_ENABLED */
 import './_init.js';
 import http from 'node:http';
-import https from 'node:https';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
 import { env } from './env.js';
 import { monotonicNow } from './runtime.js';
 import { base } from 'MANIFEST';
@@ -101,7 +99,7 @@ console.log(`[svelte-adapter-ws] Static files indexed in ${(monotonicNow() - _t_
 // - Server construction ------------------------------------------------------
 
 export const server = is_tls
-	? https.createServer({ cert: readFileSync(ssl_cert), key: readFileSync(ssl_key) }, handleRequest)
+	? (await import('./handler/tls.js')).createTlsServer(handleRequest)
 	: http.createServer(handleRequest);
 
 // - Realtime lane ------------------------------------------------------------

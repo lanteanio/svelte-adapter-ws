@@ -1,0 +1,221 @@
+// In-process TLS end to end: cert/key and PFX boots, WebSocket upgrades over
+// TLS, SNI selecting the right certificate, OCSP stapling, and the hot
+// reload swapping the served certificate without a restart.
+
+import https from 'node:https';
+import tls from 'node:tls';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import WebSocket from 'ws';
+import { afterEach, describe, expect, it } from 'vitest';
+import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+
+const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
+
+/** @type {Array<() => void>} */
+const cleanups = [];
+afterEach(async () => {
+	for (const fn of cleanups.splice(0)) await fn();
+});
+
+/**
+ * @param {string} prefix
+ * @param {Record<string, string>} envVars
+ */
+async function bootTls(prefix, envVars) {
+	for (const [k, v] of Object.entries(envVars)) process.env[prefix + k] = v;
+	const payload = buildRuntime({ replace: { ENV_PREFIX: JSON.stringify(prefix) } });
+	const rt = await bootRuntime(payload);
+	cleanups.push(async () => {
+		await rt.handler.shutdown({ timeoutMs: 1000 });
+		for (const k of Object.keys(envVars)) delete process.env[prefix + k];
+		payload.cleanup();
+	});
+	return rt;
+}
+
+/**
+ * One TLS request without certificate verification, returning body + peer cert.
+ * @param {number} port
+ * @param {string} reqPath
+ * @param {string} [servername]
+ */
+function tlsGet(port, reqPath, servername) {
+	return new Promise((resolve, reject) => {
+		const req = https.request({
+			host: '127.0.0.1',
+			port,
+			path: reqPath,
+			rejectUnauthorized: false,
+			// Fresh socket per probe: a kept-alive or session-resumed socket
+			// would keep answering with the pre-renewal certificate.
+			agent: false,
+			servername
+		}, (res) => {
+			// Capture the peer certificate while the socket is still attached;
+			// node detaches res.socket by the time 'end' fires.
+			const peerCert = /** @type {import('node:tls').TLSSocket} */ (res.socket).getPeerCertificate();
+			/** @type {Buffer[]} */
+			const chunks = [];
+			res.on('data', (c) => chunks.push(c));
+			res.on('end', () => resolve({
+				status: res.statusCode,
+				body: Buffer.concat(chunks).toString(),
+				peerCert
+			}));
+		});
+		req.on('error', reject);
+		req.end();
+	});
+}
+
+describe('native TLS', () => {
+	it('serves HTTPS from a PEM pair and upgrades WebSockets over it', async () => {
+		const rt = await bootTls('SAW_T1_', {
+			SSL_CERT: path.join(fixtures, 'localhost.crt'),
+			SSL_KEY: path.join(fixtures, 'localhost.key'),
+			SSL_WATCH: '0'
+		});
+		const res = await tlsGet(rt.port, '/healthz');
+		expect(res.status).toBe(200);
+		expect(res.body).toBe('OK');
+		expect(res.peerCert.subject.CN).toBe('localhost');
+
+		// WebSocket over TLS: the payload boots with WS off by default, so a
+		// wss dial must at least complete the TLS handshake and then be
+		// refused at the HTTP layer (404), never a TLS failure.
+		const failure = await new Promise((resolve) => {
+			const ws = new WebSocket(`wss://127.0.0.1:${rt.port}/ws`, { rejectUnauthorized: false });
+			ws.once('error', (err) => resolve(String(err.message)));
+			ws.once('open', () => resolve('open'));
+		});
+		expect(failure).toMatch(/404|Unexpected server response/);
+	});
+
+	it('upgrades a realtime WebSocket over TLS end to end', async () => {
+		process.env.SAW_T2_SSL_CERT = path.join(fixtures, 'localhost.crt');
+		process.env.SAW_T2_SSL_KEY = path.join(fixtures, 'localhost.key');
+		process.env.SAW_T2_SSL_WATCH = '0';
+		const payload = buildRuntime({
+			replace: {
+				ENV_PREFIX: JSON.stringify('SAW_T2_'),
+				WS_ENABLED: JSON.stringify(true),
+				WS_OPTIONS: JSON.stringify({ allowedOrigins: '*', upgradeRateLimit: 0, authPathRateLimit: 0 })
+			},
+			wsHandlerSource: 'export function close() {}\n'
+		});
+		const rt = await bootRuntime(payload);
+		cleanups.push(async () => {
+			await rt.handler.shutdown({ timeoutMs: 1000 });
+			delete process.env.SAW_T2_SSL_CERT;
+			delete process.env.SAW_T2_SSL_KEY;
+			delete process.env.SAW_T2_SSL_WATCH;
+			payload.cleanup();
+		});
+		const welcome = await new Promise((resolve, reject) => {
+			const ws = new WebSocket(`wss://127.0.0.1:${rt.port}/ws`, { rejectUnauthorized: false });
+			ws.once('message', (raw) => { resolve(JSON.parse(raw.toString())); ws.close(); });
+			ws.once('error', reject);
+		});
+		expect(welcome.type).toBe('welcome');
+	});
+
+	it('boots from a PKCS#12 bundle', async () => {
+		const rt = await bootTls('SAW_T3_', {
+			SSL_PFX: path.join(fixtures, 'bundle.pfx'),
+			SSL_PFX_PASSPHRASE: 'testpass',
+			SSL_WATCH: '0'
+		});
+		const res = await tlsGet(rt.port, '/healthz');
+		expect(res.status).toBe(200);
+		expect(res.peerCert.subject.CN).toBe('localhost');
+	});
+
+	it('selects the SNI certificate for its host and the default otherwise', async () => {
+		const rt = await bootTls('SAW_T4_', {
+			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'sni.crt')}`,
+			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${path.join(fixtures, 'sni.key')}`,
+			SSL_WATCH: '0'
+		});
+		const sni = await tlsGet(rt.port, '/healthz', 'sni.example');
+		expect(sni.peerCert.subject.CN).toBe('sni.example');
+		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
+		expect(fallback.peerCert.subject.CN).toBe('localhost');
+	});
+
+	it('staples the configured OCSP response to a handshake that asks', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-ocsp-'));
+		const ocspBytes = Buffer.from('fake-der-ocsp-response');
+		const ocspFile = path.join(dir, 'ocsp.der');
+		writeFileSync(ocspFile, ocspBytes);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T5_', {
+			SSL_CERT: path.join(fixtures, 'localhost.crt'),
+			SSL_KEY: path.join(fixtures, 'localhost.key'),
+			SSL_OCSP_FILE: ocspFile,
+			SSL_WATCH: '0'
+		});
+		const stapled = await new Promise((resolve, reject) => {
+			const socket = tls.connect({
+				host: '127.0.0.1',
+				port: rt.port,
+				rejectUnauthorized: false,
+				requestOCSP: true
+			});
+			socket.on('OCSPResponse', (response) => { resolve(response); socket.destroy(); });
+			socket.on('error', reject);
+			socket.on('secureConnect', () => {
+				// No response event by handshake end means nothing was stapled.
+				setTimeout(() => { resolve(null); socket.destroy(); }, 200);
+			});
+		});
+		expect(stapled && Buffer.from(/** @type {Buffer} */ (stapled)).equals(ocspBytes)).toBe(true);
+	});
+
+	it('hot-reloads a renewed certificate without a restart', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsreload-'));
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T6_', {
+			SSL_CERT: certPath,
+			SSL_KEY: keyPath,
+			SSL_RELOAD_DEBOUNCE_MS: '50'
+		});
+		const before = await tlsGet(rt.port, '/healthz');
+		expect(before.peerCert.subject.CN).toBe('localhost');
+
+		// The renewal: a different certificate lands on the same paths.
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
+		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
+
+		let renewed = null;
+		const t0 = Date.now();
+		while (Date.now() - t0 < 5000) {
+			await new Promise((r) => setTimeout(r, 150));
+			const probe = await tlsGet(rt.port, '/healthz');
+			if (probe.peerCert.subject.CN === 'sni.example') { renewed = probe; break; }
+		}
+		expect(renewed?.peerCert.subject.CN).toBe('sni.example');
+	}, 15000);
+
+	it('refuses an ambiguous PFX plus PEM configuration', async () => {
+		process.env.SAW_T7_SSL_PFX = path.join(fixtures, 'bundle.pfx');
+		process.env.SAW_T7_SSL_CERT = path.join(fixtures, 'localhost.crt');
+		process.env.SAW_T7_SSL_KEY = path.join(fixtures, 'localhost.key');
+		const payload = buildRuntime({ replace: { ENV_PREFIX: JSON.stringify('SAW_T7_') } });
+		cleanups.push(() => {
+			delete process.env.SAW_T7_SSL_PFX;
+			delete process.env.SAW_T7_SSL_CERT;
+			delete process.env.SAW_T7_SSL_KEY;
+			payload.cleanup();
+		});
+		await expect(payload.importRuntime()).rejects.toThrow(/mutually exclusive/);
+	});
+});
