@@ -205,6 +205,61 @@ describe('native TLS', () => {
 		expect(renewed?.peerCert.subject.CN).toBe('sni.example');
 	}, 15000);
 
+	it('selects a wildcard SAN certificate for names under it, one label deep', async () => {
+		const rt = await bootTls('SAW_T8_', {
+			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'wild.crt')}`,
+			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${path.join(fixtures, 'wild.key')}`,
+			SSL_WATCH: '0'
+		});
+		// The dominant multi-host shape: the cert says *.wild.example and the
+		// client says app.wild.example - an exact-match-only lookup would hand
+		// back the default cert and every browser would hard-fail the handshake.
+		const wild = await tlsGet(rt.port, '/healthz', 'app.wild.example');
+		expect(wild.peerCert.subject.CN).toBe('wild.example');
+
+		// RFC 6125: the wildcard covers exactly one left-most label, and the
+		// bare base name is not under it either - both fall to the default.
+		const deep = await tlsGet(rt.port, '/healthz', 'a.b.wild.example');
+		expect(deep.peerCert.subject.CN).toBe('localhost');
+		const bare = await tlsGet(rt.port, '/healthz', 'wild.example');
+		expect(bare.peerCert.subject.CN).toBe('localhost');
+	});
+
+	it('remaps SNI names from the reloaded certificate, dropping stale ones', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-sniremap-'));
+		const certPath = path.join(dir, 'extra.crt');
+		const keyPath = path.join(dir, 'extra.key');
+		copyFileSync(path.join(fixtures, 'sni.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'sni.key'), keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T9_', {
+			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${certPath}`,
+			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${keyPath}`,
+			SSL_RELOAD_DEBOUNCE_MS: '50'
+		});
+		const before = await tlsGet(rt.port, '/healthz', 'sni.example');
+		expect(before.peerCert.subject.CN).toBe('sni.example');
+
+		// The renewal changes the certificate's SAN set entirely: the reloaded
+		// names must serve, and the dropped name must stop matching instead of
+		// pointing at a certificate that no longer claims it.
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'wild.crt')));
+		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'wild.key')));
+
+		let remapped = null;
+		const t0 = Date.now();
+		while (Date.now() - t0 < 5000) {
+			await new Promise((r) => setTimeout(r, 150));
+			const probe = await tlsGet(rt.port, '/healthz', 'app.wild.example');
+			if (probe.peerCert.subject.CN === 'wild.example') { remapped = probe; break; }
+		}
+		expect(remapped?.peerCert.subject.CN).toBe('wild.example');
+
+		const dropped = await tlsGet(rt.port, '/healthz', 'sni.example');
+		expect(dropped.peerCert.subject.CN).toBe('localhost');
+	}, 15000);
+
 	it('refuses an ambiguous PFX plus PEM configuration', async () => {
 		process.env.SAW_T7_SSL_PFX = path.join(fixtures, 'bundle.pfx');
 		process.env.SAW_T7_SSL_CERT = path.join(fixtures, 'localhost.crt');

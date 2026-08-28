@@ -14,7 +14,14 @@ import {
 	ssl_cert, ssl_key, ssl_pfx, ssl_pfx_passphrase, ssl_watch,
 	ssl_reload_debounce_ms, ssl_sni_hosts, ssl_ocsp_file
 } from './config.js';
-import { setTimer, clearTimer } from '../runtime.js';
+import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
+
+// How long stapling keeps serving the last good OCSP response after the
+// response file stops being readable. OCSP responses carry a validity window
+// of about a week; stapling bytes older than that is worse than stapling
+// nothing, because a must-staple client hard-fails on an expired staple where
+// it would have fallen back to its own responder query on an absent one.
+const OCSP_FALLBACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Comma-separated path lists, paired position-wise: the first pair is the
@@ -96,7 +103,17 @@ export function createTlsServer(handleRequest) {
 	const server = https.createServer({
 		...baseOptions,
 		SNICallback: (servername, callback) => {
-			callback(null, sniContexts.get(servername.toLowerCase()));
+			const name = servername.toLowerCase();
+			let context = sniContexts.get(name);
+			if (context === undefined) {
+				// Wildcard SAN: a cert for *.example.test sits under the literal
+				// key '*.example.test', which no servername ever equals. One
+				// left-most-label substitution covers the RFC 6125 wildcard
+				// shape; deeper labels correctly stay unmatched.
+				const dot = name.indexOf('.');
+				if (dot !== -1) context = sniContexts.get('*' + name.slice(dot));
+			}
+			callback(null, context);
 		}
 	}, handleRequest);
 
@@ -129,18 +146,35 @@ export function createTlsServer(handleRequest) {
 	// OCSP stapling: the externally-maintained DER response is read per
 	// handshake that asks (handshakes are rare, the read is cheap), with the
 	// last good bytes as fallback - so a refreshed response staples without a
-	// restart even when the certificate watch is disabled.
+	// restart even when the certificate watch is disabled. The fallback is
+	// age-bounded: once the file has been unreadable longer than an OCSP
+	// validity window, the handshake staples nothing rather than expired bytes.
 	let lastGoodOcsp = ssl_ocsp_file ? readOptional(ssl_ocsp_file) : null;
+	let lastGoodOcspAt = monotonicNow();
+	let warnedStaleOcsp = false;
 	if (ssl_ocsp_file) {
 		server.on('OCSPRequest', (_cert, _issuer, callback) => {
 			const fresh = readOptional(ssl_ocsp_file);
-			if (fresh !== null) lastGoodOcsp = fresh;
+			if (fresh !== null) {
+				lastGoodOcsp = fresh;
+				lastGoodOcspAt = monotonicNow();
+				warnedStaleOcsp = false;
+			} else if (lastGoodOcsp !== null && monotonicNow() - lastGoodOcspAt > OCSP_FALLBACK_MAX_AGE_MS) {
+				lastGoodOcsp = null;
+				if (!warnedStaleOcsp) {
+					warnedStaleOcsp = true;
+					console.warn(
+						`[svelte-adapter-ws] [tls] ${ssl_ocsp_file} has been unreadable for over ` +
+						'7 days; OCSP stapling is off until the file is refreshed.'
+					);
+				}
+			}
 			callback(null, lastGoodOcsp);
 		});
 	}
 
 	if (ssl_watch) {
-		armHotReload(server, pairs, sniPairs, sniContexts);
+		armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts);
 	}
 
 	return server;
@@ -155,9 +189,10 @@ export function createTlsServer(handleRequest) {
  * @param {import('node:https').Server} server
  * @param {{ cert: string, key: string }[]} pairs
  * @param {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} sniPairs
+ * @param {string[][]} overrideGroups - SSL_SNI_HOSTS groups, indexed like sniPairs
  * @param {Map<string, import('node:tls').SecureContext>} sniContexts
  */
-function armHotReload(server, pairs, sniPairs, sniContexts) {
+function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	const watchedFiles = ssl_pfx
 		? [ssl_pfx]
 		: pairs.flatMap((p) => [p.cert, p.key]);
@@ -196,13 +231,30 @@ function armHotReload(server, pairs, sniPairs, sniContexts) {
 					server.setSecureContext({ cert: certPem, key: fs.readFileSync(pairs[0].key) });
 					servedFingerprint = fingerprint;
 				}
-				for (const { pair, hosts } of sniPairs) {
-					const context = tls.createSecureContext({
-						cert: fs.readFileSync(pair.cert),
-						key: fs.readFileSync(pair.key)
-					});
-					for (const host of hosts) sniContexts.set(host, context);
+				// SNI names are re-derived from the RELOADED certs, not replayed
+				// from the boot-time lists: a renewal that adds, drops or changes
+				// SANs must serve under the new name set, and a name the renewal
+				// dropped must stop matching. The next map is built completely
+				// before the live one is touched, so a torn read never leaves the
+				// callback consulting a half-filled map.
+				/** @type {Map<string, import('node:tls').SecureContext>} */
+				const nextContexts = new Map();
+				for (let i = 0; i < sniPairs.length; i++) {
+					const { pair } = sniPairs[i];
+					const certPem = fs.readFileSync(pair.cert);
+					const override = overrideGroups[i];
+					const hosts = override && override.length > 0 ? override : certHosts(certPem);
+					if (hosts.length === 0) {
+						throw new Error(
+							`certificate ${pair.cert} carries no DNS subjectAltName after reload and ` +
+							'SSL_SNI_HOSTS names no group for it'
+						);
+					}
+					const context = tls.createSecureContext({ cert: certPem, key: fs.readFileSync(pair.key) });
+					for (const host of hosts) nextContexts.set(host, context);
 				}
+				sniContexts.clear();
+				for (const [host, context] of nextContexts) sniContexts.set(host, context);
 			}
 			console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
 		} catch (err) {
