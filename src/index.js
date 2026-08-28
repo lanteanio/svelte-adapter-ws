@@ -18,6 +18,26 @@ import { normalizeMessageAdmission } from './runtime/utils/message-admission.js'
 
 const runtimeDir = fileURLToPath(new URL('./runtime', import.meta.url).href);
 
+/**
+ * Import a build-time tool from the APP's dependency tree. A bare import
+ * would resolve from this package's own location, which fails the moment the
+ * adapter is npm-linked or file:-installed (the app's vite/esbuild are not
+ * visible from there); resolving via the app's package.json covers both the
+ * linked and the normally-installed shapes.
+ *
+ * @param {string} name
+ */
+async function importFromApp(name) {
+	try {
+		const { createRequire } = await import('node:module');
+		const { pathToFileURL } = await import('node:url');
+		const appRequire = createRequire(path.resolve('package.json'));
+		return await import(pathToFileURL(appRequire.resolve(name)).href);
+	} catch {
+		return import(name);
+	}
+}
+
 // Empty default WebSocket handler - subscribe/unsubscribe is handled by the
 // runtime for ALL messages regardless of user handler.
 const DEFAULT_WS_HANDLER = '// Built-in: subscribe/unsubscribe handled by the runtime\n';
@@ -169,8 +189,8 @@ export function renderRefusedDotfileWarning(refused) {
  * @param {string} outfile - destination in the build temp dir
  */
 async function esbuildServerModule(builder, entry, outfile) {
-	const esbuild = await import('esbuild');
-	const { loadEnv } = await import('vite');
+	const esbuild = await importFromApp('esbuild');
+	const { loadEnv } = await importFromApp('vite');
 	const libDir = path.resolve(builder.config.kit.files?.lib || 'src/lib');
 	const publicPrefix = builder.config.kit.env?.publicPrefix ?? 'PUBLIC_';
 	const allEnv = loadEnv('production', process.cwd(), '');
