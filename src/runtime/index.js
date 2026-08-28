@@ -37,10 +37,13 @@ const shutdown_timeout = parseIntEnv('SHUTDOWN_TIMEOUT', env('SHUTDOWN_TIMEOUT',
 // signals, and spent OUTSIDE the shutdown budget.
 const shutdown_delay = parseIntEnv('SHUTDOWN_DELAY_MS', env('SHUTDOWN_DELAY_MS', '0'), 0);
 
-// Multi-core deployments run through the platform's own process manager until
-// the adapter's node:cluster lane lands. The env var must not silently no-op:
-// a deployment that sets it expects N workers, and getting one worker with no
-// message is a capacity misconfiguration nobody notices until saturation.
+// Multi-core deployments run one instance per core under the platform's own
+// process manager, with cross-instance fan-out through the extensions relay;
+// this adapter deliberately ships no in-process supervisor (the topic registry
+// is per-process, so an in-process cluster would still need the relay). The
+// env var must not silently no-op: a deployment that sets it expects N
+// workers, and getting one worker with no message is a capacity
+// misconfiguration nobody notices until saturation.
 if (env('CLUSTER_WORKERS', '')) {
 	throw new Error(
 		'[svelte-adapter-ws] CLUSTER_WORKERS is not supported by this adapter. ' +
@@ -88,10 +91,33 @@ async function performShutdown(signal, handler) {
 		await new Promise((resolve) => setTimeout(resolve, shutdown_delay)); // determinism-allow: process-level shutdown pacing, outside the replayable runtime
 	}
 
-	await runShutdownCleanup(signal);
-	// The app's own shutdown hook runs inside the same budget as the drain -
-	// cleanup the app owns (queues, pools) settles before the process exits.
-	await handler.runAppShutdownHook?.();
+	// The app's cleanup (sveltekit:shutdown listeners, then the ws shutdown
+	// hook) gets its own budget of the same length as the drain's: a listener
+	// awaiting a dead database pool must not park shutdown forever. Under
+	// SHUTDOWN_TIMEOUT=0 the hooks run unbounded, matching the documented
+	// no-budget semantics; the second-signal force-exit is the escape hatch.
+	const hooks = (async () => {
+		await runShutdownCleanup(signal);
+		await handler.runAppShutdownHook?.();
+	})().catch((err) => {
+		console.error('[svelte-adapter-ws] app shutdown hook failed:', err);
+	});
+	if (shutdown_timeout > 0) {
+		const EXPIRED = Symbol('expired');
+		/** @type {any} */
+		let timer = null;
+		const deadline = new Promise((resolve) => {
+			timer = setTimeout(() => resolve(EXPIRED), shutdown_timeout * 1000); // determinism-allow: process-level shutdown budget, outside the replayable runtime
+			if (typeof timer?.unref === 'function') timer.unref();
+		});
+		const outcome = await Promise.race([hooks, deadline]);
+		if (timer) clearTimeout(timer); // determinism-allow: pairs with the shutdown budget above
+		if (outcome === EXPIRED) {
+			console.error('[svelte-adapter-ws] shutdown cleanup exceeded the budget; draining now.');
+		}
+	} else {
+		await hooks;
+	}
 	await handler.shutdown({ timeoutMs: shutdown_timeout * 1000 });
 	process.exit(0);
 }
@@ -114,6 +140,12 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 		if (phase === 'boot') {
 			latchedSignal = signal;
 			return;
+		}
+		// A second signal while already draining is the operator saying "now":
+		// exit immediately instead of waiting out hooks or the drain window.
+		if (phase === 'shutting-down') {
+			console.error(`[svelte-adapter-ws] second ${signal} during shutdown; exiting immediately.`);
+			process.exit(1);
 		}
 		void handlerPromise.then((handler) => performShutdown(signal, handler));
 	});

@@ -36,9 +36,23 @@ export { beginDrain, lifecycleState, isDraining, platform };
  * advised and closed within the budget, then the HTTP drain runs.
  * @param {{ timeoutMs?: number }} [opts]
  */
-export async function shutdown(opts = {}) {
+/** @type {Promise<void> | null} */
+let shutdownRun = null;
+
+export function shutdown(opts = {}) {
+	// Idempotent: concurrent callers (a signal plus a programmatic call) share
+	// one run, so live sockets get one advisory and one close frame, not two.
+	if (shutdownRun === null) shutdownRun = runShutdown(opts);
+	return shutdownRun;
+}
+
+/** @param {{ timeoutMs?: number }} opts */
+async function runShutdown(opts) {
 	beginDrain();
 	if (realtime) {
+		// A WebSocket never ends on its own, so 'no budget' cannot mean 'wait
+		// forever' here: SHUTDOWN_TIMEOUT=0 disables the HTTP in-flight budget
+		// but the WS drain still closes holdouts after a 30s window.
 		const budget = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 30_000;
 		await realtime.drainSockets({
 			dispersalMs: reconnect_dispersal_ms,
