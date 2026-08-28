@@ -39,6 +39,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	CLUSTER_CONFIG_COMPUTE: 'ADAPTER-ERR-CLUSTER-CONFIG-COMPUTE',
 	CLUSTER_CONFIG_MODE: 'ADAPTER-ERR-CLUSTER-CONFIG-MODE',
 	CLUSTER_CONFIG_REUSEPORT: 'ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT',
+	CLUSTER_CONFIG_NODE: 'ADAPTER-ERR-CLUSTER-CONFIG-NODE',
 	CLUSTER_CONFIG_ACCEPTOR: 'ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR',
 	CLUSTER_WORKER_ERROR: 'ADAPTER-ERR-CLUSTER-WORKER-ERROR',
 	WORKER_RESTART_LIMIT: 'ADAPTER-ERR-WORKER-RESTART-LIMIT',
@@ -431,6 +432,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		sources: Object.freeze(['src/runtime/index.js']),
 		anchor: 'adapter-err-cluster-config-reuseport',
 		help: 'docs/errors.md#adapter-err-cluster-config-reuseport'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.CLUSTER_CONFIG_NODE,
+		code: null,
+		event: 'cluster.config.node-unsupported',
+		component: null,
+		severity: 'fatal',
+		emission: 'console',
+		problemPrefix: null,
+		messagePrefix: '[svelte-adapter-ws] CLUSTER_WORKERS requires Node 22.12 or newer (this process runs Node ',
+		cause: 'CLUSTER_WORKERS is set on a Node version whose listen() silently ignores the reusePort option (it exists from 22.12 and 23.1).',
+		consequence: 'The cluster primary exits with status 1 before spawning any worker. Without this refusal the first io worker would bind normally and every sibling would crash-loop on EADDRINUSE until the restart budget took the whole process down - minutes of partial service ending in total outage.',
+		automaticRecovery: 'None. Startup configuration is validated once, at boot.',
+		nextAction: 'Upgrade Node to 22.12 or newer, or unset CLUSTER_WORKERS and run one process per core under your process manager.',
+		sources: Object.freeze(['src/runtime/index.js']),
+		anchor: 'adapter-err-cluster-config-node',
+		help: 'docs/errors.md#adapter-err-cluster-config-node'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.CLUSTER_CONFIG_ACCEPTOR,

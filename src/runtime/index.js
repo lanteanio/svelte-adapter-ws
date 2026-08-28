@@ -157,8 +157,20 @@ if (is_primary) {
 	let boot_signal = null;
 	let primary_booted = false;
 	let fleet_spawned = false;
+	// Declared here, ahead of the signal arming, because the handler below
+	// reads it and a signal can land during any await between the arming and
+	// the fleet spawn (primaryInit is unbounded app code).
+	let shutting_down = false;
 	/** @param {'SIGINT' | 'SIGTERM'} reason */
 	const onPrimarySignal = (reason) => {
+		// A second signal while already draining is the operator saying
+		// "now": exit immediately instead of waiting out the workers' hooks
+		// or the drain window - the same escape hatch single-process mode
+		// gives, and the README promise it carries.
+		if (shutting_down) {
+			console.error(`[svelte-adapter-ws] second ${reason} during shutdown; exiting immediately.`);
+			process.exit(1);
+		}
 		if (primary_booted) { graceful_shutdown(reason); return; }
 		if (boot_signal) return;
 		boot_signal = reason;
@@ -244,6 +256,21 @@ if (is_primary) {
 			`${process.platform}). Deploy on Linux, or run one process per core under your process manager.`));
 		process.exit(1);
 	}
+	// `listen({ reusePort: true })` exists from Node 22.12 (and 23.1); an
+	// older Node silently DROPS the unknown option, so the first worker would
+	// bind normally and every sibling would crash-loop on EADDRINUSE until the
+	// restart budget took the whole process down - minutes of partial service
+	// ending in total outage where every other bad configuration refuses
+	// up front. So this refuses up front too.
+	const [node_major, node_minor] = process.versions.node.split('.').map(Number);
+	const reuse_port_supported = node_major >= 24 ||
+		(node_major === 23 && node_minor >= 1) ||
+		(node_major === 22 && node_minor >= 12);
+	if (!reuse_port_supported) {
+		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.CLUSTER_CONFIG_NODE,
+			`${process.versions.node}, which ignores the listen reusePort option). Upgrade Node, or unset CLUSTER_WORKERS.`));
+		process.exit(1);
+	}
 
 	// primaryInit: run the app's optional primary-thread hook ONCE, before any
 	// worker spawns. Its return value is retained and replayed as the
@@ -271,9 +298,20 @@ if (is_primary) {
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
 	const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
-	// The watch keys on the first PEM cert path; a PFX bundle watches its own
-	// file's directory through the same machinery.
-	const watched_cert_path = ssl_pfx || ssl_cert.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
+	// Watch every certificate-bearing DIRECTORY, deduped, exactly as the
+	// single-process watch does (handler/tls.js): certbot renews each domain
+	// on its own schedule and a key can live apart from its cert, so keying
+	// the broadcast on the first pair's directory alone would let every other
+	// pair's renewal land unseen - no broadcast, a fleet serving stale SNI
+	// certs until they expire. Identity/expiry observability still reads the
+	// FIRST PEM cert (the default context); a PKCS#12 bundle is not PEM, so a
+	// PFX deployment watches and broadcasts without the identity record
+	// rather than logging a spurious read failure on every renewal.
+	const watched_files = ssl_pfx
+		? [ssl_pfx]
+		: [...ssl_cert.split(','), ...ssl_key.split(',')].map((s) => s.trim()).filter(Boolean);
+	const watched_dirs = [...new Set(watched_files.map((f) => dirname(f)))];
+	const identity_cert_path = ssl_pfx ? '' : ssl_cert.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
 
 	console.log(
 		`[svelte-adapter-ws] Primary thread starting ${num} workers ` +
@@ -291,8 +329,6 @@ if (is_primary) {
 
 	/** @type {Map<import('node:worker_threads').Worker, WorkerMeta>} */
 	const workers = new Map();
-
-	let shutting_down = false;
 
 	// Per-slot crash-restart budgets. A cluster has a fixed set of worker
 	// slots (io_count io + compute_count compute); the supervisor keeps each
@@ -661,7 +697,8 @@ if (is_primary) {
 	// only tracks the disk cert's identity for observability. Live
 	// connections survive a swap; node applies the new context to new
 	// handshakes without re-binding.
-	let primaryCertWatcher = null;
+	/** @type {Array<{ stop: () => void }>} */
+	let primaryCertWatchers = [];
 	let primaryTlsState = { hosts: [], fingerprint: null, notAfter: null, notAfterText: null };
 
 	// Reload-path health, mirroring the per-worker record. The primary is the
@@ -700,7 +737,11 @@ if (is_primary) {
 		let failure = null;
 		primaryTlsState = reloadClusterTls({
 			workers: workers.keys(),
-			source: { certPath: watched_cert_path, hosts: ssl_sni_hosts },
+			// No identity source on a PFX deployment: the broadcast still goes
+			// out, the workers still swap, and the primary simply keeps no
+			// expiry record instead of reporting a spurious read failure on
+			// every successful renewal.
+			source: identity_cert_path ? { certPath: identity_cert_path, hosts: ssl_sni_hosts } : undefined,
 			state: primaryTlsState,
 			onError: (err) => { failure = err && err.message ? err.message : String(err); }
 		});
@@ -713,41 +754,51 @@ if (is_primary) {
 			primaryTlsRecovered();
 		}
 	}
-	if (is_tls && ssl_watch && watched_cert_path) {
+	if (is_tls && ssl_watch && watched_dirs.length > 0) {
 		// Record the boot cert's identity so the reload broadcast has a
 		// baseline to report against, and its expiry so a later failure can be
 		// reported with the number that says how urgent it is. A parse failure
 		// only degrades primary-side observability - the workers gate on their
-		// own reads. (A PFX bundle is not PEM, so its identity read fails the
-		// same soft way; the watch and broadcast still run.)
-		try {
-			primaryTlsState = readCertIdentity(watched_cert_path, ssl_sni_hosts);
-			primaryTlsHealth.notAfter = primaryTlsState.notAfter;
-			primaryTlsHealth.notAfterText = primaryTlsState.notAfterText;
-		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_BOOT_READ), err && err.message ? err.message : err);
+		// own reads. Skipped for a PFX bundle, which has no PEM identity to read.
+		if (identity_cert_path) {
+			try {
+				primaryTlsState = readCertIdentity(identity_cert_path, ssl_sni_hosts);
+				primaryTlsHealth.notAfter = primaryTlsState.notAfter;
+				primaryTlsHealth.notAfterText = primaryTlsState.notAfterText;
+			} catch (err) {
+				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_BOOT_READ), err && err.message ? err.message : err);
+			}
 		}
-		// Guard the watcher start: fs.watch throws ENOENT synchronously when
-		// the cert's parent directory does not exist (a not-yet-mounted secret
-		// volume, a mistyped path). Single-process degrades gracefully here
-		// (its cert-read gates the watcher), so the cluster primary must too -
-		// log and disable hot-reload rather than crash-loop the whole process
-		// at boot.
-		try {
-			primaryCertWatcher = createCertWatcher({
-				certPath: watched_cert_path,
-				debounceMs: ssl_reload_debounce_ms,
-				onChange: onCertChange
-			});
-			primaryCertWatcher.start();
-			console.log(`[tls] primary watching ${dirname(watched_cert_path)} for certificate renewals (cluster broadcast reload)`);
-		} catch (err) {
-			primaryCertWatcher = null;
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), err && err.message ? err.message : err);
-			// Nothing retries this: with no watcher on the primary, no worker
-			// is ever told to reload, so the whole cluster serves its current
-			// certificate until it expires.
-			primaryTlsDegraded('the primary certificate directory watch failed to start, so no worker will be told to reload');
+		// Guard each watcher start: fs.watch throws ENOENT synchronously when
+		// a parent directory does not exist (a not-yet-mounted secret volume,
+		// a mistyped path). Single-process degrades gracefully here (its
+		// cert-read gates the watcher), so the cluster primary must too - log
+		// and degrade rather than crash-loop the whole process at boot. One
+		// unarmed directory means renewals landing THERE are never seen, so
+		// any failure enters the degraded state even when other directories
+		// armed.
+		let watchFailed = false;
+		for (const dir of watched_dirs) {
+			try {
+				const watcher = createCertWatcher({
+					certPath: identity_cert_path || watched_files[0],
+					dir,
+					debounceMs: ssl_reload_debounce_ms,
+					onChange: onCertChange
+				});
+				watcher.start();
+				primaryCertWatchers.push(watcher);
+				console.log(`[tls] primary watching ${dir} for certificate renewals (cluster broadcast reload)`);
+			} catch (err) {
+				watchFailed = true;
+				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), err && err.message ? err.message : err);
+			}
+		}
+		if (watchFailed) {
+			// Nothing retries this: a renewal in an unwatched directory never
+			// broadcasts, so those workers serve their current certificate
+			// until it expires.
+			primaryTlsDegraded('a primary certificate directory watch failed to start, so renewals there will not be broadcast');
 		}
 	}
 
@@ -769,9 +820,10 @@ if (is_primary) {
 		// this.)
 		restartSupervisor.stopAll();
 
-		// Stop the cert-directory watcher so it never holds the loop or fires
+		// Stop the cert-directory watchers so they never hold the loop or fire
 		// a broadcast at exiting workers.
-		if (primaryCertWatcher) { primaryCertWatcher.stop(); primaryCertWatcher = null; }
+		for (const watcher of primaryCertWatchers) watcher.stop();
+		primaryCertWatchers = [];
 
 		// Step 1: readiness OFF on every worker, BEFORE the delay below. The
 		// workers own the readiness route, so this is what makes the delay do

@@ -382,6 +382,24 @@ Log line begins:
 
 **What to do.** Deploy on Linux to keep the in-process cluster, or unset CLUSTER_WORKERS and run one process per core under your process manager behind a load balancer.
 
+## ADAPTER-ERR-CLUSTER-CONFIG-NODE
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] CLUSTER_WORKERS requires Node 22.12 or newer (this process runs Node 
+```
+
+**Cause.** CLUSTER_WORKERS is set on a Node version whose listen() silently ignores the reusePort option (it exists from 22.12 and 23.1).
+
+**Consequence.** The cluster primary exits with status 1 before spawning any worker. Without this refusal the first io worker would bind normally and every sibling would crash-loop on EADDRINUSE until the restart budget took the whole process down - minutes of partial service ending in total outage.
+
+**Automatic recovery.** None. Startup configuration is validated once, at boot.
+
+**What to do.** Upgrade Node to 22.12 or newer, or unset CLUSTER_WORKERS and run one process per core under your process manager.
+
 ## ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR
 
 Severity: fatal
