@@ -102,6 +102,32 @@ describe('dynamic compression', () => {
 		await res.arrayBuffer();
 	});
 
+	it('compresses the real-world parameterized content type, preferring brotli', async () => {
+		const res = await req('/api/charset', { headers: { 'accept-encoding': 'br, gzip' } });
+		expect(res.headers.get('content-encoding')).toBe('br');
+		expect(await res.text()).toBe('<html>' + 'c'.repeat(4096) + '</html>');
+	});
+
+	it('streams a multi-chunk body uncompressed and complete', async () => {
+		// POST so the exchange bypasses dedup (which buffers anonymous GETs
+		// into single-chunk responses); the read-ahead must reassemble the
+		// stream untouched instead of buffering it for compression.
+		const res = await req('/api/chunked', { method: 'POST', headers: { 'accept-encoding': 'gzip' } });
+		expect(res.headers.get('content-encoding')).toBeNull();
+		const text = await res.text();
+		for (let i = 0; i < 4; i++) {
+			expect(text).toContain('chunk-' + i + '-');
+		}
+		expect(text.length).toBe(4 * ('chunk-0-'.length + 2048));
+	});
+
+	it('compresses the single chunk a dedup-buffered chunked GET collapses to', async () => {
+		const res = await req('/api/chunked', { headers: { 'accept-encoding': 'gzip' } });
+		expect(res.headers.get('content-encoding')).toBe('gzip');
+		const text = await res.text();
+		expect(text.length).toBe(4 * ('chunk-0-'.length + 2048));
+	});
+
 	it('streams SSE untouched', async () => {
 		const res = await req('/api/sse', { headers: { 'accept-encoding': 'gzip' } });
 		expect(res.headers.get('content-type')).toBe('text/event-stream');
@@ -137,5 +163,40 @@ describe('SSR dedup', () => {
 		]).then((rs) => Promise.all(rs.map((r) => r.arrayBuffer())));
 		const after = /** @type {any} */ (globalThis).__renders ?? 0;
 		expect(after - before).toBe(2);
+	});
+
+	it('never shares a response that sets cookies - each waiter renders its own', async () => {
+		const before = /** @type {any} */ (globalThis).__renders ?? 0;
+		const responses = await Promise.all([
+			req('/api/cookie-counted'),
+			req('/api/cookie-counted'),
+			req('/api/cookie-counted')
+		]);
+		for (const res of responses) {
+			expect(res.headers.getSetCookie()).toEqual(['per=request; Path=/']);
+			await res.arrayBuffer();
+		}
+		const after = /** @type {any} */ (globalThis).__renders ?? 0;
+		expect(after - before).toBe(3);
+	});
+
+	it('never shares a response personalized by a non-encoding Vary', async () => {
+		const before = /** @type {any} */ (globalThis).__renders ?? 0;
+		await Promise.all([req('/api/vary-lang'), req('/api/vary-lang')])
+			.then((rs) => Promise.all(rs.map((r) => r.arrayBuffer())));
+		const after = /** @type {any} */ (globalThis).__renders ?? 0;
+		expect(after - before).toBe(2);
+	});
+
+	it('serves concurrent SSE requests without parking on a buffering leader', async () => {
+		const responses = await Promise.all([
+			req('/api/sse'), req('/api/sse'), req('/api/sse')
+		]);
+		for (const res of responses) {
+			const reader = /** @type {ReadableStream} */ (res.body).getReader();
+			const first = await reader.read();
+			expect(new TextDecoder().decode(first.value)).toContain('data: 1');
+			await reader.cancel();
+		}
 	});
 });

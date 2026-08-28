@@ -90,6 +90,38 @@ export class Server {
 				headers: { 'content-type': 'text/html' }
 			});
 		}
+		if (p === '/api/charset') {
+			return new Response('<html>' + 'c'.repeat(4096) + '</html>', {
+				headers: { 'content-type': 'text/html; charset=utf-8' }
+			});
+		}
+		if (p === '/api/chunked') {
+			const enc = new TextEncoder();
+			const stream = new ReadableStream({
+				async start(controller) {
+					for (let i = 0; i < 4; i++) {
+						controller.enqueue(enc.encode('chunk-' + i + '-' + 'z'.repeat(2048)));
+						await new Promise((r) => setTimeout(r, 5));
+					}
+					controller.close();
+				}
+			});
+			return new Response(stream, { headers: { 'content-type': 'text/html' } });
+		}
+		if (p === '/api/vary-lang') {
+			globalThis.__renders = (globalThis.__renders || 0) + 1;
+			await new Promise((r) => setTimeout(r, 80));
+			return new Response('<html>lang</html>', {
+				headers: { 'content-type': 'text/html', vary: 'Accept-Language' }
+			});
+		}
+		if (p === '/api/cookie-counted') {
+			globalThis.__renders = (globalThis.__renders || 0) + 1;
+			await new Promise((r) => setTimeout(r, 80));
+			const headers = new Headers({ 'content-type': 'text/html' });
+			headers.append('set-cookie', 'per=request; Path=/');
+			return new Response('<html>cookie</html>', { headers });
+		}
 		if (p === '/api/tiny') {
 			return new Response('ok', { headers: { 'content-type': 'text/html' } });
 		}
@@ -148,15 +180,17 @@ export class Server {
 export function buildRuntime(options = {}) {
 	const dir = mkdtempSync(path.join(tmpdir(), 'saw-rt-'));
 
+	// Defaults mirror adapt()'s production defaults so tests boot what a real
+	// build boots; a test that needs a different value overrides per key.
 	const replace = {
 		MANIFEST: './server/manifest.js',
 		SERVER: './server/index.js',
 		KIT_NODE: './server/kit-node.js',
-		ENV_PREFIX: JSON.stringify('SAW_TEST_'),
+		ENV_PREFIX: JSON.stringify(''),
 		PRECOMPRESS: JSON.stringify(true),
 		HEALTH_CHECK_PATH: JSON.stringify('/healthz'),
 		READINESS_CHECK_PATH: JSON.stringify('/readyz'),
-		WARMUP_PATHS: JSON.stringify([]),
+		WARMUP_PATHS: JSON.stringify(['/']),
 		STATIC_HEADERS: JSON.stringify(null),
 		STATIC_CACHE_CONTROL: JSON.stringify(null),
 		STATIC_DOTFILES: JSON.stringify(false),

@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405 } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500 } from './http-helpers.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { lifecycleState, requestDone } from './lifecycle.js';
@@ -87,10 +87,23 @@ export function handleRequest(req, res) {
 	// short names ('~') can alias an indexed file under a different spelling.
 	// The in-memory cache is immune, but SvelteKit's own read() lane and app
 	// routes may touch disk, so the platform-specific spellings are refused at
-	// the edge on the platform where they exist.
-	if (IS_WIN32 && (pathname.includes(':') || pathname.includes('~'))) {
-		send400(res);
-		return;
+	// the edge on the platform where they exist. Checked on the DECODED form
+	// too - the lanes this protects operate on decoded paths, so an encoded
+	// `%3A` must not slip past a gate that only reads the raw spelling.
+	if (IS_WIN32) {
+		let decoded = pathname;
+		if (pathname.includes('%')) {
+			try {
+				decoded = decodeURIComponent(pathname);
+			} catch {
+				send400(res);
+				return;
+			}
+		}
+		if (pathname.includes(':') || pathname.includes('~') || decoded.includes(':') || decoded.includes('~')) {
+			send400(res);
+			return;
+		}
 	}
 
 	// The fetch specification forbids CONNECT/TRACE/TRACK outright, so
@@ -140,5 +153,10 @@ export function handleRequest(req, res) {
 	Object.defineProperty(req, 'headers', { value: headers, configurable: true });
 
 	const direct = req.socket?.remoteAddress || '';
-	handleSSR(req, res, headers, direct, state, direct);
+	// handleSSR contains its own error handling; this catch covers only a
+	// throw from that handling itself, which must never become an unhandled
+	// rejection that kills the process.
+	handleSSR(req, res, headers, direct, state, direct).catch(() => {
+		try { send500(res); } catch { /* exchange already gone */ }
+	});
 }

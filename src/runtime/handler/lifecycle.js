@@ -49,18 +49,16 @@ export function beginDrain() {
 	setLifecycleState('draining');
 }
 
-/** @type {(() => void) | null} */
-let drainWaiter = null;
+/** @type {Array<() => void>} */
+const drainResolvers = [];
 
 /**
- * Called by the request handler on every completed exchange. Resolves the
- * in-flight drain once the last accepted request finishes.
+ * Called by the request handler on every completed exchange. Resolves every
+ * pending in-flight drain once the last accepted request finishes.
  */
 export function requestDone() {
-	if (drainWaiter !== null && counters.inFlightCount === 0) {
-		const resolve = drainWaiter;
-		drainWaiter = null;
-		resolve();
+	if (drainResolvers.length > 0 && counters.inFlightCount === 0) {
+		for (const resolve of drainResolvers.splice(0)) resolve();
 	}
 }
 
@@ -110,15 +108,25 @@ export async function start(server, host, port, opts = {}) {
 	if (lifecycle_state === 'starting') setLifecycleState('ready');
 }
 
+/** @type {Promise<void> | null} */
+let shutdownPromise = null;
+
 /**
  * Graceful shutdown: stop accepting, drain in-flight exchanges within the
  * budget, then close whatever remains. Live WebSocket drain layers on top of
- * this in the realtime lane.
+ * this in the realtime lane. Idempotent: concurrent and repeated calls share
+ * one teardown, and the first caller's budget governs it.
  *
  * @param {{ timeoutMs?: number }} [opts] - 0 or undefined = no budget
  * @returns {Promise<void>}
  */
-export async function shutdown(opts = {}) {
+export function shutdown(opts = {}) {
+	if (shutdownPromise === null) shutdownPromise = performShutdown(opts);
+	return shutdownPromise;
+}
+
+/** @param {{ timeoutMs?: number }} opts */
+async function performShutdown(opts) {
 	beginDrain();
 	const server = httpServer;
 	if (!server) {
@@ -134,7 +142,7 @@ export async function shutdown(opts = {}) {
 
 	if (counters.inFlightCount > 0) {
 		/** @type {Promise<void>} */
-		const drained = new Promise((resolve) => { drainWaiter = resolve; });
+		const drained = new Promise((resolve) => { drainResolvers.push(resolve); });
 		const timeoutMs = opts.timeoutMs ?? 0;
 		if (timeoutMs > 0) {
 			let timer;
@@ -144,7 +152,6 @@ export async function shutdown(opts = {}) {
 			});
 			await Promise.race([drained, budget]);
 			clearTimer(timer);
-			drainWaiter = null;
 		} else {
 			await drained;
 		}

@@ -41,6 +41,24 @@ export function normalizeStaticHeaders(input) {
 				`adapter option \`staticHeaders['${rawKey}']\` must be a string, got ${typeof value}.`
 			);
 		}
+		// The name must be an RFC 7230 token and the value a single line of
+		// visible characters. These strings are baked into the build and handed
+		// to res.writeHead on every static response; node refuses an invalid
+		// field with an exception FROM INSIDE the request listener, so a value
+		// that passed the build silently would crash the server on its first
+		// static request - a CR/LF here is also the response-splitting shape.
+		if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(rawKey)) {
+			throw new Error(
+				`adapter option \`staticHeaders\` has an invalid header name ${JSON.stringify(rawKey)}: ` +
+				'header names must be RFC 7230 tokens (no spaces, separators or control characters).'
+			);
+		}
+		if (/[^\t\x20-\x7e\x80-\xff]/.test(value)) {
+			throw new Error(
+				`adapter option \`staticHeaders['${rawKey}']\` contains a control character. ` +
+				'Header values must be a single line with no CR, LF or other controls.'
+			);
+		}
 		const key = rawKey.toLowerCase();
 		if (RESERVED_STATIC_HEADER_KEYS.has(key)) {
 			dropped.push(key);

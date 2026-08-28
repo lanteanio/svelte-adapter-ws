@@ -187,8 +187,11 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 		const ext = path.extname(relPath).toLowerCase();
 		if (DOWNLOAD_EXTENSIONS.has(ext)) {
 			const basename = path.basename(relPath);
-			// Strip characters that are not allowed in a quoted Content-Disposition filename.
-			const safe = basename.replace(/["\\]/g, '');
+			// Strip quote/backslash (not allowed in a quoted Content-Disposition
+			// filename) and every control character: a filesystem name with an
+			// embedded newline is legal on POSIX, and node throws from inside
+			// the request listener on an invalid header value.
+			const safe = basename.replace(/["\\]|[^\x20-\x7e]/g, '');
 			headers.push(['content-disposition', `attachment; filename="${safe}"`]);
 		}
 

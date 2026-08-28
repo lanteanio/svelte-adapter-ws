@@ -12,9 +12,6 @@ beforeAll(async () => {
 	rt = await bootRuntime(payload);
 });
 
-afterAll(async () => {
-	payload.cleanup();
-});
 
 /**
  * Send a raw HTTP/1.1 exchange and return the full response text. Needed for
@@ -110,6 +107,44 @@ describe('graceful shutdown', () => {
 		}
 	});
 
+	it('force-closes what outlives the shutdown budget and still resolves', async () => {
+		const ownPayload = buildRuntime();
+		const own = await bootRuntime(ownPayload);
+		try {
+			// The fixture's slow route takes ~300ms; a 50ms budget must expire.
+			const slow = fetch(own.origin + '/api/slow').catch((err) => err);
+			await new Promise((r) => setTimeout(r, 30));
+			await own.handler.shutdown({ timeoutMs: 50 });
+			expect(own.handler.lifecycleState()).toBe('closed');
+			// The truncated exchange surfaces as an error or an aborted body -
+			// never a clean 200 with the full payload.
+			const outcome = await slow;
+			if (outcome instanceof Error) {
+				expect(String(outcome.cause ?? outcome)).toBeTruthy();
+			} else {
+				await expect(outcome.text()).rejects.toThrow();
+			}
+		} finally {
+			ownPayload.cleanup();
+		}
+	});
+
+	it('treats repeated and premature shutdowns as safe', async () => {
+		const ownPayload = buildRuntime();
+		const own = await bootRuntime(ownPayload);
+		try {
+			await Promise.all([
+				own.handler.shutdown({ timeoutMs: 1000 }),
+				own.handler.shutdown({ timeoutMs: 1000 })
+			]);
+			expect(own.handler.lifecycleState()).toBe('closed');
+			own.handler.beginDrain();
+			expect(own.handler.lifecycleState()).toBe('closed');
+		} finally {
+			ownPayload.cleanup();
+		}
+	});
+
 	it('reports draining on the readiness probe the moment drain begins', async () => {
 		const ownPayload = buildRuntime();
 		const own = await bootRuntime(ownPayload);
@@ -166,4 +201,5 @@ describe('proxy address resolution', () => {
 
 afterAll(async () => {
 	await rt.close();
+	payload.cleanup();
 });

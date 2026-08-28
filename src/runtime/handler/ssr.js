@@ -117,15 +117,35 @@ async function maybeCompress(response, acceptEncoding) {
 	if (first.done) {
 		return new Response(null, response);
 	}
-	const second = await reader.read();
-	if (!second.done) {
+	// The second read decides single-chunk vs streaming, but it must never
+	// WITHHOLD a streaming shell: a page whose next chunk arrives seconds
+	// later (a load() streaming a promise) would otherwise ship its first
+	// byte only when its second exists. A buffered body settles its second
+	// read within a few microtasks; anything parked on real I/O loses the
+	// race and streams uncompressed from the first chunk on.
+	const STREAMING = Symbol('streaming');
+	let microtasks = Promise.resolve();
+	for (let i = 0; i < 8; i++) microtasks = microtasks.then(() => {});
+	/** @type {Promise<ReadableStreamReadResult<Uint8Array>> | null} */
+	let pendingRead = reader.read();
+	const second = await Promise.race([pendingRead, microtasks.then(() => STREAMING)]);
+	if (second !== STREAMING && !(/** @type {ReadableStreamReadResult<Uint8Array>} */ (second).done)) {
+		// Second chunk already exists: replay both and pipe the rest.
+		pendingRead = null;
+	}
+	if (second === STREAMING || pendingRead === null) {
+		const secondValue = second === STREAMING
+			? null
+			: /** @type {ReadableStreamReadResult<Uint8Array>} */ (second).value;
 		const replay = new ReadableStream({
 			start(controller) {
 				controller.enqueue(first.value);
-				controller.enqueue(second.value);
+				if (secondValue) controller.enqueue(secondValue);
 			},
 			async pull(controller) {
-				const { done, value } = await reader.read();
+				const read = pendingRead ?? reader.read();
+				pendingRead = null;
+				const { done, value } = await read;
 				if (done) controller.close();
 				else controller.enqueue(value);
 			},
@@ -167,9 +187,18 @@ async function maybeCompress(response, acceptEncoding) {
  * @param {string} [acceptEncoding]
  */
 async function writeResponse(res, response, state, acceptEncoding) {
-	if (state.aborted) return;
+	if (state.aborted) {
+		// Nothing will consume this body; cancel it so the render's upstream
+		// (a fetch response, a DB cursor held by the stream source) is
+		// released now instead of at GC.
+		await response.body?.cancel().catch(() => {});
+		return;
+	}
 	const finalResponse = await maybeCompress(ensureNosniff(response), acceptEncoding || '');
-	if (state.aborted) return;
+	if (state.aborted) {
+		await finalResponse.body?.cancel().catch(() => {});
+		return;
+	}
 	await setResponse(res, finalResponse);
 }
 
@@ -267,8 +296,10 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 			!isCredentialedRequest &&
 			ssrInflight.size < MAX_SSR_DEDUP;
 		// BREACH defense: suppress the accept-encoding signal for credentialed
-		// requests so writeResponse() leaves the body uncompressed.
-		const respAcceptEncoding = (isCredentialedRequest && !COMPRESS_CREDENTIALED)
+		// requests so writeResponse() leaves the body uncompressed. HEAD gets
+		// the same suppression - node discards the body anyway, so compressing
+		// it would be pure event-loop cost an anonymous client can mint.
+		const respAcceptEncoding = ((isCredentialedRequest && !COMPRESS_CREDENTIALED) || method === 'HEAD')
 			? ''
 			: headers['accept-encoding'];
 
@@ -282,7 +313,8 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 			const existing = ssrInflight.get(dedupKey);
 
 			if (existing) {
-				// Waiter: await the leader's result
+				// Waiter: await the leader's result. An aborted waiter consumes
+				// nothing - the shared buffer needs no cancel.
 				const shared = await existing;
 				if (state.aborted) return;
 				if (shared) {
@@ -312,7 +344,11 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 
 				try {
 					const response = await server.respond(request, { platform: requestPlatform, getClientAddress });
-					if (state.aborted) { resolveShared(null); return; }
+					if (state.aborted) {
+						resolveShared(null);
+						await response.body?.cancel().catch(() => {});
+						return;
+					}
 
 					// Responses with Set-Cookie must not be shared (they're personalized).
 					// Responses that declare Vary on anything other than Accept-Encoding
@@ -383,7 +419,10 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 
 		// Normal (non-dedup) path
 		const response = await server.respond(request, { platform: requestPlatform, getClientAddress });
-		if (state.aborted) return;
+		if (state.aborted) {
+			await response.body?.cancel().catch(() => {});
+			return;
+		}
 		await writeResponse(res, response, state, respAcceptEncoding);
 	} catch (err) {
 		if (state.aborted) return;

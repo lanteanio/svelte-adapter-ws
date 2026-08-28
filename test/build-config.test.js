@@ -37,6 +37,17 @@ describe('normalizeStaticHeaders', () => {
 	it('throws on a non-string value', () => {
 		expect(() => normalizeStaticHeaders({ 'x-num': 5 })).toThrow(/must be a string/);
 	});
+
+	it('refuses header names that are not RFC 7230 tokens', () => {
+		expect(() => normalizeStaticHeaders({ 'x-bad name': 'v' })).toThrow(/RFC 7230/);
+		expect(() => normalizeStaticHeaders({ 'x-bad:colon': 'v' })).toThrow(/RFC 7230/);
+	});
+
+	it('refuses control characters in values (response-splitting shape)', () => {
+		const crlf = String.fromCharCode(13) + String.fromCharCode(10);
+		expect(() => normalizeStaticHeaders({ 'x-foo': `bar${crlf}set-cookie: evil=1` })).toThrow(/control character/);
+		expect(() => normalizeStaticHeaders({ 'x-foo': 'bar' + String.fromCharCode(0) })).toThrow(/control character/);
+	});
 });
 
 describe('normalizeStaticCacheControl', () => {

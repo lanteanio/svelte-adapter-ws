@@ -94,7 +94,9 @@ describe('static serving', () => {
 		// The identity client presenting the brotli validator must NOT get a 304
 		const cross = await get('/logo.svg', { 'accept-encoding': 'identity', 'if-none-match': brEtag });
 		expect(cross.status).toBe(200);
-		await cross.arrayBuffer();
+		expect(cross.headers.get('content-encoding')).toBeNull();
+		expect(cross.headers.get('etag')?.endsWith('-br"')).toBe(false);
+		expect(await cross.text()).toBe(IDENTITY);
 	});
 
 	it('serves single byte ranges in the negotiated representation coordinates', async () => {
@@ -118,7 +120,8 @@ describe('static serving', () => {
 		for (const range of ['bytes=1oops-4', 'bytes=0-4,10-14', 'chars=0-4', 'bytes=4-2']) {
 			const res = await get('/logo.svg', { 'accept-encoding': 'identity', range });
 			expect(res.status, range).toBe(200);
-			await res.arrayBuffer();
+			expect(res.headers.get('content-range'), range).toBeNull();
+			expect(await res.text(), range).toBe(IDENTITY);
 		}
 		const res = await get('/logo.svg', { 'accept-encoding': 'identity', range: 'bytes=999999-' });
 		expect(res.status).toBe(416);
@@ -132,13 +135,16 @@ describe('static serving', () => {
 			'if-range': 'W/"stale"'
 		});
 		expect(res.status).toBe(200);
-		await res.arrayBuffer();
+		expect(res.headers.get('content-range')).toBeNull();
+		expect(await res.text()).toBe(IDENTITY);
 	});
 
 	it('never serves ranges from immutable (validator-less) assets', async () => {
 		const res = await get('/_app/immutable/chunk-abc.js', { 'accept-encoding': 'identity', range: 'bytes=0-4' });
 		expect(res.status).toBe(200);
-		await res.arrayBuffer();
+		expect(res.headers.get('content-range')).toBeNull();
+		expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+		expect(await res.text()).toBe('export const immutable = true;');
 	});
 
 	it('answers HEAD with headers and no body', async () => {
@@ -188,6 +194,24 @@ describe('prerendered pages', () => {
 		const redirected = await get('/docs?a=b');
 		expect(redirected.status).toBe(308);
 		expect(redirected.headers.get('location')).toBe('/docs/?a=b');
+	});
+
+	it('serves an encoded spelling of a prerendered path through the decoded lookup', async () => {
+		// Misses the raw-key fast path, decodes to /about, found in the
+		// prerendered set - the lane tryPrerendered exists for.
+		const res = await get('/ab%6Fut');
+		expect(res.status).toBe(200);
+		expect(await res.text()).toBe('<html>about page</html>');
+	});
+
+	it('serves an encoded directory-style slash path and redirects its encoded bare form', async () => {
+		const page = await get('/d%6Fcs/');
+		expect(page.status).toBe(200);
+		expect(await page.text()).toBe('<html>docs index</html>');
+
+		const redirected = await get('/ab%6Fut/');
+		expect(redirected.status).toBe(308);
+		expect(redirected.headers.get('location')).toBe('/about');
 	});
 
 	it('refuses malformed percent-encoding with 400', async () => {
