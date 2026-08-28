@@ -72,6 +72,18 @@ export const wsWrappers = new Map();
 export const topicSeqs = new Map();
 
 /**
+ * Whether outbound cluster relay frames are stamped with this worker's
+ * per-topic stream identity (origin thread id, dense ordinal, stream birth).
+ * The stamps exist for a receiver-side contiguity check, so they are worth
+ * paying for only when something consumes them; off, the relay send path
+ * (handler/relay.js) pays one boolean test per relayed publish and allocates
+ * nothing. A holder, not `export let`, so a write from the module that arms
+ * the consumer is visible to the read site in relay.js.
+ * @type {{ enabled: boolean }}
+ */
+export const streamTracking = { enabled: false };
+
+/**
  * Wire-subscribe authorization arming. Seeded from build options; the
  * platform can arm it at runtime.
  */

@@ -328,6 +328,24 @@ Log line begins:
 
 **What to do.** Unset CLUSTER_WORKERS and run one process per core under your process manager (systemd template units, PM2, container replicas) behind a load balancer.
 
+## ADAPTER-ERR-RELAY-SPILL-QUARANTINE
+
+Severity: error
+
+Log line begins:
+
+```
+[primary] relay spill quarantining 
+```
+
+**Cause.** The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. The opposite direction, a worker that could not reach the primary, is ADAPTER-ERR-RELAY-SPILL-OVERFLOW.
+
+**Consequence.** The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.
+
+**Automatic recovery.** The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is terminated in place and its slot respawned - the mechanism ADAPTER-ERR-WORKER-EXIT-FORCED documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.
+
+**What to do.** Read the reason on the line. An AGE spill means that worker stopped draining its ring - a blocked event loop is the usual cause, and it is the worker's own thread to profile, not the primary's. A BYTES spill can mean either: a peer merely behind on a ceiling sized too close to the largest relayed frame, where raising CLUSTER_RELAY_MAX_PENDING_KB to a few times that frame is the fix, or sustained fan-out the relay is undersized for, where a wider ceiling only delays the next spill. The droppedBytes on the line tells you which.
+
 ## ADAPTER-ERR-SHUTDOWN-LISTENER-THREW
 
 Severity: error

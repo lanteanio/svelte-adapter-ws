@@ -36,6 +36,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	TLS_RELOAD_SKIPPED: 'ADAPTER-ERR-TLS-RELOAD-SKIPPED',
 	TLS_WATCH: 'ADAPTER-ERR-TLS-WATCH',
 	CLUSTER_CONFIG_WORKERS: 'ADAPTER-ERR-CLUSTER-CONFIG-WORKERS',
+	RELAY_SPILL_QUARANTINE: 'ADAPTER-ERR-RELAY-SPILL-QUARANTINE',
 	SHUTDOWN_LISTENER_THREW: 'ADAPTER-ERR-SHUTDOWN-LISTENER-THREW',
 	SHUTDOWN_REQUESTS_DROPPED: 'ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED',
 	SHUTDOWN_LISTENERS_UNSETTLED: 'ADAPTER-ERR-SHUTDOWN-LISTENERS-UNSETTLED',
@@ -365,6 +366,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		sources: Object.freeze(['src/runtime/index.js']),
 		anchor: 'adapter-err-cluster-config-workers',
 		help: 'docs/errors.md#adapter-err-cluster-config-workers'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.RELAY_SPILL_QUARANTINE,
+		code: null,
+		event: 'cluster-relay.spill-quarantine',
+		component: null,
+		severity: 'error',
+		emission: 'console',
+		problemPrefix: null,
+		messagePrefix: '[primary] relay spill quarantining ',
+		cause: "The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. The opposite direction, a worker that could not reach the primary, is ADAPTER-ERR-RELAY-SPILL-OVERFLOW.",
+		consequence: "The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.",
+		automaticRecovery: "The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is terminated in place and its slot respawned - the mechanism ADAPTER-ERR-WORKER-EXIT-FORCED documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.",
+		nextAction: "Read the reason on the line. An AGE spill means that worker stopped draining its ring - a blocked event loop is the usual cause, and it is the worker's own thread to profile, not the primary's. A BYTES spill can mean either: a peer merely behind on a ceiling sized too close to the largest relayed frame, where raising CLUSTER_RELAY_MAX_PENDING_KB to a few times that frame is the fix, or sustained fan-out the relay is undersized for, where a wider ceiling only delays the next spill. The droppedBytes on the line tells you which.",
+		sources: Object.freeze(['src/runtime/relay-spill-policy.js']),
+		anchor: 'adapter-err-relay-spill-quarantine',
+		help: 'docs/errors.md#adapter-err-relay-spill-quarantine'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW,
