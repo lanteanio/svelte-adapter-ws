@@ -7,6 +7,7 @@
  *   buffer: Buffer,
  *   contentType: string,
  *   etag: string,
+ *   lastModifiedMs?: number,
  *   headers: [string, string][],
  *   headersFlat: (string | number)[],
  *   brBuffer?: Buffer,

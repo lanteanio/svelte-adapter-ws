@@ -8,6 +8,7 @@ import { send400, send413, send500 } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { isDedupBufferable } from './ssr-dedup.js';
+import { acceptsCoding } from './static-assets.js';
 
 /* global ENV_PREFIX */
 /* global WS_OPTIONS */
@@ -106,8 +107,8 @@ async function maybeCompress(response, acceptEncoding) {
 	const semi = ctRaw.indexOf(';');
 	const ct = semi === -1 ? ctRaw : ctRaw.slice(0, semi).trimEnd();
 	if (!COMPRESSIBLE_TYPES.has(ct)) return response;
-	const useBr = acceptEncoding.includes('br');
-	const useGz = !useBr && acceptEncoding.includes('gzip');
+	const useBr = acceptsCoding(acceptEncoding, 'br');
+	const useGz = !useBr && acceptsCoding(acceptEncoding, 'gzip');
 	if (!useBr && !useGz) return response;
 
 	// Read ahead one chunk to see whether this is a single-chunk body. A body
@@ -384,25 +385,76 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 						return;
 					}
 
-					// Buffer the body. Responses above the size cap are not shared.
-					const ab = await response.arrayBuffer();
-					if (state.aborted) { resolveShared(null); return; }
+					// Buffer the body, but only up to the share cap: the cap bounds
+					// MEMORY, not just sharing. A body that overruns it was never
+					// going to be shared, so the leader stops buffering right there,
+					// marks the key non-shareable, and streams the remainder -
+					// concurrent unique-URL requests cannot park arbitrarily large
+					// bodies in RAM waiting for a size check at the end.
+					const reader = /** @type {ReadableStream<Uint8Array>} */ (response.body).getReader();
+					/** @type {Uint8Array[]} */
+					const chunks = [];
+					let buffered = 0;
+					let overran = false;
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						chunks.push(value);
+						buffered += value.byteLength;
+						if (buffered > MAX_SSR_DEDUP_BODY) { overran = true; break; }
+					}
+					if (state.aborted) {
+						resolveShared(null);
+						await reader.cancel().catch(() => {});
+						return;
+					}
 
-					const shared = ab.byteLength <= MAX_SSR_DEDUP_BODY
-						? /** @type {SharedResponse} */ ({
-							status: response.status,
-							statusText: response.statusText,
-							headers: /** @type {[string, string][]} */ ([...response.headers]),
-							body: new Uint8Array(ab)
-						})
-						: null;
+					if (overran) {
+						resolveShared(null);
+						const replay = new ReadableStream({
+							start(controller) {
+								for (const chunk of chunks) controller.enqueue(chunk);
+							},
+							async pull(controller) {
+								const { done, value } = await reader.read();
+								if (done) controller.close();
+								else controller.enqueue(value);
+							},
+							cancel(reason) {
+								return reader.cancel(reason);
+							}
+						});
+						await writeResponse(
+							res,
+							new Response(replay, {
+								status: response.status,
+								statusText: response.statusText,
+								headers: response.headers
+							}),
+							state,
+							respAcceptEncoding
+						);
+						return;
+					}
 
-					resolveShared(shared);
+					const body = new Uint8Array(buffered);
+					let offset = 0;
+					for (const chunk of chunks) {
+						body.set(chunk, offset);
+						offset += chunk.byteLength;
+					}
+
+					resolveShared(/** @type {SharedResponse} */ ({
+						status: response.status,
+						statusText: response.statusText,
+						headers: /** @type {[string, string][]} */ ([...response.headers]),
+						body
+					}));
 
 					// Serve the leader's own response from the same buffer
 					await writeResponse(
 						res,
-						new Response(ab, {
+						new Response(body, {
 							status: response.status,
 							statusText: response.statusText,
 							headers: response.headers

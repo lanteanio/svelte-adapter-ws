@@ -87,11 +87,12 @@ export function handleRequest(req, res) {
 		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname)) return;
 	}
 
-	// Static fast path: one Map lookup on the RAW undecoded pathname, four
+	// Static fast path: one Map lookup on the RAW undecoded pathname, five
 	// header reads, nothing else. Because the index holds prerendered HTML
 	// under its clean aliases too, most prerendered pages are also served here.
 	// An encoded traversal misses by construction - the cache simply has no
-	// such key.
+	// such key. Assets whose names require percent-encoding get their decoded
+	// second chance in tryPrerendered, below the platform hardening gate.
 	if (isGetLike) {
 		const entry = staticCache.get(pathname);
 		if (entry) {
@@ -103,7 +104,8 @@ export function handleRequest(req, res) {
 				/** @type {string} */ (h['if-none-match']) || '',
 				method === 'HEAD',
 				/** @type {string} */ (h['range']) || '',
-				/** @type {string} */ (h['if-range']) || ''
+				/** @type {string} */ (h['if-range']) || '',
+				/** @type {string} */ (h['if-modified-since']) || ''
 			);
 			return;
 		}
@@ -146,7 +148,8 @@ export function handleRequest(req, res) {
 		// answers for its own routes.
 	}
 
-	// Prerendered pages that need decoding or trailing-slash normalization.
+	// Prerendered pages that need decoding or trailing-slash normalization,
+	// and static assets reachable only under a percent-encoded spelling.
 	if (isGetLike) {
 		const h = req.headers;
 		const served = tryPrerendered(
@@ -157,7 +160,8 @@ export function handleRequest(req, res) {
 			/** @type {string} */ (h['if-none-match']) || '',
 			method === 'HEAD',
 			/** @type {string} */ (h['range']) || '',
-			/** @type {string} */ (h['if-range']) || ''
+			/** @type {string} */ (h['if-range']) || '',
+			/** @type {string} */ (h['if-modified-since']) || ''
 		);
 		if (served) return;
 	}

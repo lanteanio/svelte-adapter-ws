@@ -146,6 +146,24 @@ export class Server {
 				headers: { 'content-type': 'text/html' }
 			});
 		}
+		if (p === '/api/huge') {
+			// A finite body well over the dedup share cap: most of it is
+			// produced immediately, the tail only after a pause, so a client
+			// that receives the early bulk before the tail exists proves the
+			// leader streamed past the cap instead of buffering to the end.
+			globalThis.__renders = (globalThis.__renders || 0) + 1;
+			const enc = new TextEncoder();
+			const block = 'h'.repeat(65536);
+			const stream = new ReadableStream({
+				async start(controller) {
+					for (let i = 0; i < 9; i++) controller.enqueue(enc.encode(block));
+					await new Promise((r) => setTimeout(r, 400));
+					controller.enqueue(enc.encode('tail'));
+					controller.close();
+				}
+			});
+			return new Response(stream, { headers: { 'content-type': 'text/html' } });
+		}
 		if (p === '/api/read') {
 			const stream = this.read('hello.txt');
 			return new Response(stream, { headers: { 'content-type': 'text/plain' } });

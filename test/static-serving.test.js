@@ -19,6 +19,8 @@ beforeAll(async () => {
 			'client/logo.svg.br': BR,
 			'client/logo.svg.gz': GZ,
 			'client/download.zip': 'PK-fake-zip-bytes',
+			'client/my file.txt': 'space-named payload',
+			'client/über.txt': 'umlaut payload',
 			'client/.env': 'SECRET=1',
 			'client/.well-known/security.txt': 'Contact: mailto:security@example.com',
 			'client/hello.txt': 'hello from read()',
@@ -219,10 +221,109 @@ describe('prerendered pages', () => {
 		expect(res.status).toBe(400);
 	});
 
-	it('does not serve static entries under encoded spellings', async () => {
-		const res = await get('/logo%2Esvg');
-		// The static fast path keys on the raw undecoded pathname, so the
-		// encoded spelling misses the cache and reaches SSR with the raw URL.
-		expect(await res.text()).toBe('SSR:/logo%2Esvg');
+	it('serves a static entry under an encoded spelling of its name', async () => {
+		// The raw fast path misses, the decoded second chance hits - the same
+		// decode-before-lookup the lead adapter's static layer performs.
+		const res = await get('/logo%2Esvg', { 'accept-encoding': 'identity' });
+		expect(res.status).toBe(200);
+		expect(await res.text()).toBe(IDENTITY);
+		expect(res.headers.get('content-type')).toBe('image/svg+xml');
+	});
+
+	it('serves files whose names have no unencoded URL spelling', async () => {
+		// A space and a non-ASCII name can ONLY be requested percent-encoded;
+		// without the decoded lookup these files are unreachable despite being
+		// in the build output.
+		const spaced = await get('/my%20file.txt');
+		expect(spaced.status).toBe(200);
+		expect(await spaced.text()).toBe('space-named payload');
+
+		const umlaut = await get('/%C3%BCber.txt');
+		expect(umlaut.status).toBe(200);
+		expect(await umlaut.text()).toBe('umlaut payload');
+	});
+
+	it('gives an encoded traversal no decoded second chance', async () => {
+		// '/..%2Flogo.svg' decodes to '/../logo.svg': dot segments never enter
+		// the index, so the decoded lookup misses too and the request falls
+		// through to SvelteKit instead of any file read.
+		const res = await get('/..%2Flogo.svg');
+		expect(await res.text()).not.toBe(IDENTITY);
+	});
+});
+
+describe('If-Modified-Since', () => {
+	it('emits Last-Modified beside the ETag and honors the date validator', async () => {
+		const first = await get('/logo.svg', { 'accept-encoding': 'identity' });
+		const lastModified = first.headers.get('last-modified');
+		expect(lastModified).toMatch(/GMT$/);
+		await first.arrayBuffer();
+
+		const revalidated = await get('/logo.svg', {
+			'accept-encoding': 'identity',
+			'if-modified-since': /** @type {string} */ (lastModified)
+		});
+		expect(revalidated.status).toBe(304);
+		expect(revalidated.headers.get('last-modified')).toBe(lastModified);
+		expect(revalidated.headers.get('vary')).toBe('Accept-Encoding');
+	});
+
+	it('answers 200 for a date before the file changed and for unparseable dates', async () => {
+		const stale = await get('/logo.svg', {
+			'accept-encoding': 'identity',
+			'if-modified-since': 'Thu, 01 Jan 1970 00:00:00 GMT'
+		});
+		expect(stale.status).toBe(200);
+		await stale.arrayBuffer();
+
+		const garbled = await get('/logo.svg', {
+			'accept-encoding': 'identity',
+			'if-modified-since': 'not-a-date'
+		});
+		expect(garbled.status).toBe(200);
+		await garbled.arrayBuffer();
+	});
+
+	it('ignores If-Modified-Since when If-None-Match is present (RFC 9110 13.1.3)', async () => {
+		const first = await get('/logo.svg', { 'accept-encoding': 'identity' });
+		const lastModified = /** @type {string} */ (first.headers.get('last-modified'));
+		await first.arrayBuffer();
+
+		// A stale entity tag with a matching date: the entity tag decides, 200.
+		const res = await get('/logo.svg', {
+			'accept-encoding': 'identity',
+			'if-none-match': 'W/"different"',
+			'if-modified-since': lastModified
+		});
+		expect(res.status).toBe(200);
+		await res.arrayBuffer();
+	});
+
+	it('gives the immutable tree no date validator, matching its missing ETag', async () => {
+		const res = await get('/_app/immutable/chunk-abc.js', { 'accept-encoding': 'identity' });
+		expect(res.headers.get('last-modified')).toBeNull();
+		await res.arrayBuffer();
+	});
+});
+
+describe('Accept-Encoding q-values', () => {
+	it('honors an explicit q=0 refusal of a coding', async () => {
+		const res = await get('/logo.svg', { 'accept-encoding': 'gzip, br;q=0' });
+		expect(res.headers.get('content-encoding')).toBe('gzip');
+		await res.arrayBuffer();
+
+		const identityOnly = await get('/logo.svg', { 'accept-encoding': 'br;q=0, gzip;q=0' });
+		expect(identityOnly.headers.get('content-encoding')).toBeNull();
+		expect(await identityOnly.text()).toBe(IDENTITY);
+	});
+
+	it('accepts a coding through the wildcard member', async () => {
+		const res = await get('/logo.svg', { 'accept-encoding': '*' });
+		expect(res.headers.get('content-encoding')).toBe('br');
+		await res.arrayBuffer();
+
+		const refusedAll = await get('/logo.svg', { 'accept-encoding': '*;q=0, gzip' });
+		expect(refusedAll.headers.get('content-encoding')).toBe('gzip');
+		await refusedAll.arrayBuffer();
 	});
 });

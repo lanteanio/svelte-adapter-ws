@@ -188,6 +188,36 @@ describe('SSR dedup', () => {
 		expect(after - before).toBe(2);
 	});
 
+	it('stops buffering at the share cap and streams the remainder', async () => {
+		const before = /** @type {any} */ (globalThis).__renders ?? 0;
+		const res = await req('/api/huge', { headers: { 'accept-encoding': 'identity' } });
+		const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
+		let received = 0;
+		let bulkAt = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			received += value.byteLength;
+			if (bulkAt === 0 && received >= 9 * 65536) bulkAt = Date.now();
+		}
+		const endAt = Date.now();
+		expect(received).toBe(9 * 65536 + 4);
+		// The early bulk (over the 512K cap) reached the client while the
+		// render was still parked on its tail: the leader streamed the overrun
+		// instead of holding the whole body in memory until the size check.
+		expect(endAt - bulkAt).toBeGreaterThanOrEqual(250);
+
+		// An overrun body is marked non-shareable, so a concurrent waiter
+		// renders its own instead of receiving a truncated share.
+		const pair = await Promise.all([
+			req('/api/huge', { headers: { 'accept-encoding': 'identity' } }),
+			req('/api/huge', { headers: { 'accept-encoding': 'identity' } })
+		]);
+		const sizes = await Promise.all(pair.map(async (r) => (await r.arrayBuffer()).byteLength));
+		expect(sizes).toEqual([9 * 65536 + 4, 9 * 65536 + 4]);
+		expect((/** @type {any} */ (globalThis).__renders ?? 0) - before).toBe(3);
+	}, 15000);
+
 	it('serves concurrent SSE requests without parking on a buffering leader', async () => {
 		const responses = await Promise.all([
 			req('/api/sse'), req('/api/sse'), req('/api/sse')

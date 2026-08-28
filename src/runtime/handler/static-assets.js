@@ -176,12 +176,22 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 			['accept-ranges', 'bytes']
 		];
 		let etag = '';
+		let lastModifiedMs;
 		if (immutable && relPath.startsWith(`${manifest.appPath}/immutable/`)) {
 			headers.push(['cache-control', 'public, max-age=31536000, immutable']);
 		} else {
 			etag = `W/"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
 			const configuredCacheControl = resolveStaticCacheControl(relPath, staticCacheControl);
-			headers.push(['cache-control', configuredCacheControl || 'no-cache'], ['etag', etag]);
+			// Last-Modified rides beside the ETag with HTTP-date (whole second)
+			// resolution; the parsed millisecond value is kept on the entry so an
+			// If-Modified-Since comparison is a number compare, not a re-parse.
+			const lastModified = new Date(stat.mtimeMs).toUTCString(); // determinism-allow: converts the file's own mtime, reads no clock
+			lastModifiedMs = Date.parse(lastModified);
+			headers.push(
+				['cache-control', configuredCacheControl || 'no-cache'],
+				['etag', etag],
+				['last-modified', lastModified]
+			);
 		}
 
 		const ext = path.extname(relPath).toLowerCase();
@@ -201,6 +211,7 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 			buffer,
 			contentType,
 			etag,
+			lastModifiedMs,
 			headers: merged,
 			headersFlat: flattenHeaders(merged, contentType, buffer.byteLength)
 		};
@@ -327,6 +338,75 @@ function parseRange(header, fileSize) {
 }
 
 /**
+ * Whether a content-coding is acceptable under the request's Accept-Encoding.
+ *
+ * The common header carries no q-values at all ("gzip, deflate, br, zstd"),
+ * and that case stays two substring probes with zero allocation. Only when a
+ * q-value is present does the member list get parsed, so an explicit
+ * `br;q=0` refusal is honored instead of being read as an offer. An absent
+ * coding is acceptable only through a `*` member.
+ *
+ * @param {string} acceptEncoding
+ * @param {'br' | 'gzip'} coding
+ * @returns {boolean}
+ */
+export function acceptsCoding(acceptEncoding, coding) {
+	if (acceptEncoding === '') return false;
+	if (!acceptEncoding.includes('q=')) {
+		return acceptEncoding.includes(coding) || acceptEncoding.includes('*');
+	}
+	let quality = -1;
+	let wildcard = -1;
+	let start = 0;
+	const len = acceptEncoding.length;
+	while (start < len) {
+		let end = acceptEncoding.indexOf(',', start);
+		if (end === -1) end = len;
+		const member = acceptEncoding.slice(start, end).trim();
+		start = end + 1;
+		if (member === '') continue;
+		const semi = member.indexOf(';');
+		const name = (semi === -1 ? member : member.slice(0, semi)).trimEnd().toLowerCase();
+		let q = 1;
+		if (semi !== -1) {
+			const match = /;\s*q\s*=\s*([0-9.]+)/i.exec(member.slice(semi));
+			if (match) {
+				q = parseFloat(match[1]);
+				if (!Number.isFinite(q)) q = 0;
+			}
+		}
+		if (name === coding && quality < 0) quality = q;
+		else if (name === '*' && wildcard < 0) wildcard = q;
+	}
+	if (quality >= 0) return quality > 0;
+	if (wildcard >= 0) return wildcard > 0;
+	return false;
+}
+
+/**
+ * The 304 response for a validated representation. A 304 updates a stored
+ * response, so it names WHICH stored representation was validated (its ETag),
+ * what that entry varies on, the freshness policy it is stored under, and its
+ * date validator. Without them a shared cache can attach it to the wrong
+ * variant and hand a coded body to a client that asked for identity.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} repEtag
+ * @param {[string, string][]} headers - the representation's baked tuples
+ */
+function sendNotModified(res, repEtag, headers) {
+	/** @type {Record<string, string>} */
+	const notModified = { vary: VARY_ON };
+	if (repEtag) notModified.etag = repEtag;
+	const cacheControl = headerValue(headers, 'cache-control');
+	if (cacheControl) notModified['cache-control'] = cacheControl;
+	const lastModified = headerValue(headers, 'last-modified');
+	if (lastModified) notModified['last-modified'] = lastModified;
+	res.writeHead(304, notModified);
+	res.end();
+}
+
+/**
  * @param {import('node:http').ServerResponse} res
  * @param {import('./state.js').StaticEntry} entry
  * @param {string} acceptEncoding
@@ -334,8 +414,9 @@ function parseRange(header, fileSize) {
  * @param {boolean} headOnly
  * @param {string} [rangeHeader]
  * @param {string} [ifRangeHeader]
+ * @param {string} [ifModifiedSince]
  */
-export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = false, rangeHeader = '', ifRangeHeader = '') {
+export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = false, rangeHeader = '', ifRangeHeader = '', ifModifiedSince = '') {
 	// Negotiation runs FIRST and everything downstream is expressed in the
 	// chosen representation's own terms. A content-coding is a distinct
 	// representation with its own octet sequence, so the validator compared, the
@@ -350,12 +431,12 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	let headersFlat = entry.headersFlat;
 	let body = entry.buffer;
 	let repEtag = entry.etag;
-	if (entry.brBuffer && acceptEncoding.includes('br')) {
+	if (entry.brBuffer && acceptsCoding(acceptEncoding, 'br')) {
 		headers = /** @type {[string, string][]} */ (entry.brHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.brHeadersFlat);
 		body = entry.brBuffer;
 		repEtag = /** @type {string} */ (entry.brEtag);
-	} else if (entry.gzBuffer && acceptEncoding.includes('gzip')) {
+	} else if (entry.gzBuffer && acceptsCoding(acceptEncoding, 'gzip')) {
 		headers = /** @type {[string, string][]} */ (entry.gzHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.gzHeadersFlat);
 		body = entry.gzBuffer;
@@ -367,18 +448,21 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	// matching the identity ETag for a client that negotiated brotli would
 	// answer 304 for bytes that client never held.
 	if (repEtag && ifNoneMatch === repEtag) {
-		// A 304 updates a stored response, so it has to name WHICH stored
-		// representation was validated, what that entry varies on, and the
-		// freshness policy it is stored under. Without them a shared cache can
-		// attach it to the wrong variant and hand a coded body to a client that
-		// asked for identity.
-		/** @type {Record<string, string>} */
-		const notModified = { etag: repEtag, vary: VARY_ON };
-		const cacheControl = headerValue(headers, 'cache-control');
-		if (cacheControl) notModified['cache-control'] = cacheControl;
-		res.writeHead(304, notModified);
-		res.end();
+		sendNotModified(res, repEtag, headers);
 		return;
+	}
+
+	// If-Modified-Since is consulted only when the request carried no
+	// If-None-Match (RFC 9110 13.1.3: an entity tag present means the date
+	// validator must be ignored). The stored value is already truncated to the
+	// HTTP-date's whole-second resolution, so `<=` is exact, and an unparseable
+	// date falls through to a full response.
+	if (!ifNoneMatch && ifModifiedSince && entry.lastModifiedMs !== undefined) {
+		const since = Date.parse(ifModifiedSince);
+		if (!Number.isNaN(since) && entry.lastModifiedMs <= since) {
+			sendNotModified(res, repEtag, headers);
+			return;
+		}
 	}
 
 	// Ranges are only offered for representations that carry a validator
@@ -476,11 +560,24 @@ function decodePath(pathname) {
  * @param {string} [ifRangeHeader]
  * @returns {boolean}
  */
-export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatch, headOnly = false, rangeHeader = '', ifRangeHeader = '') {
+export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatch, headOnly = false, rangeHeader = '', ifRangeHeader = '', ifModifiedSince = '') {
 	const decoded = decodePath(pathname);
 	if (decoded === null) {
 		send400(res);
 		return true;
+	}
+
+	// Static assets whose on-disk names have no unencoded URL spelling (spaces,
+	// umlauts, any non-ASCII byte) are indexed under the decoded name, so the
+	// raw fast path misses them by construction. One decoded lookup gives them
+	// their representation. Traversal cannot ride this: dot-segment paths never
+	// enter the index, so a decoded `/../` has no key to hit.
+	if (decoded !== pathname) {
+		const entry = staticCache.get(decoded);
+		if (entry) {
+			serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly, rangeHeader, ifRangeHeader, ifModifiedSince);
+			return true;
+		}
 	}
 
 	if (prerendered.has(decoded)) {
@@ -492,7 +589,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 		}
 		const entry = staticCache.get(decoded);
 		if (entry) {
-			serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly, rangeHeader, ifRangeHeader);
+			serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly, rangeHeader, ifRangeHeader, ifModifiedSince);
 			return true;
 		}
 	}
@@ -505,7 +602,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 		if (prerenderedDirStyle.has(alt) && decoded.endsWith('/')) {
 			const entry = staticCache.get(decoded);
 			if (entry) {
-				serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly, rangeHeader, ifRangeHeader);
+				serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly, rangeHeader, ifRangeHeader, ifModifiedSince);
 				return true;
 			}
 		}
