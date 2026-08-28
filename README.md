@@ -173,6 +173,21 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    reproduced under this backend, and the `PLATFORM_KEYS` parity site added.
    Same trace, same wire revision, or it does not ship.
 
+## Deployment
+
+One process serves one core well; scale out by running one instance per core
+under the platform process manager (systemd template units, PM2, container
+replicas) behind a load balancer, with
+[svelte-adapter-uws-extensions](https://github.com/lanteanio/svelte-adapter-uws-extensions)
+providing the cross-instance relay, presence and clustering primitives over
+Redis. `server.listen({ reusePort: true })` is platform-dependent (`ENOTSUP`
+on Windows, measured by the probe), so nothing here assumes it; `node:cluster`
+remains the portable single-host alternative for a process manager, but the
+adapter does not supervise workers itself - the topic registry is per-process,
+and cross-worker fan-out belongs to the extensions relay rather than a
+second, in-process relay implementation. `CLUSTER_WORKERS` therefore refuses
+the boot instead of half-working.
+
 ## License
 
 MIT
