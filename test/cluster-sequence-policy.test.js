@@ -82,6 +82,13 @@ describe('cluster sequence authority policy', () => {
 		// claimed to exclude - so the bounced `(options, count, data = workerData)`
 		// passed it at length 2 and the pin proved nothing.
 		expect(assertBatchSequenceAuthority.length).toBe(1);
+		// A DEFAULTED extra parameter also reports length 1, so the count the
+		// pin above excludes could hide behind a default value. Pin the
+		// declared parameter list in the module source (Function.prototype
+		// toString is not stable under the test transform): options, then the
+		// injectable workerData - no count in any position.
+		const policySource = readFileSync(new URL('../src/runtime/handler/cluster-sequence-policy.js', import.meta.url), 'utf8');
+		expect(policySource).toContain('export function assertBatchSequenceAuthority(options, data = workerData) {');
 	});
 
 	// An entry carrying an explicit seq is the per-entry twin of
