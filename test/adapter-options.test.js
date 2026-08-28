@@ -29,11 +29,24 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ websocket: false })).not.toThrow();
 		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
 		expect(() => adapter({ websocket: { pressure: { publishRatePerSec: 500 } } })).not.toThrow();
-		for (const key of ['metrics', 'primaryInit', 'workers', 'upgradeAdmission', 'egress', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
-			expect(() => adapter({ websocket: { [key]: key === 'workers' ? { compute: 1 } : '/x' } }), key)
+		for (const key of ['metrics', 'upgradeAdmission', 'egress', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
+			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}
 		expect(() => adapter({ tracing: './src/lib/tracing.js' })).toThrow(/tracing option is not available yet/);
+	});
+
+	it('validates the cluster build options at factory time', () => {
+		expect(() => adapter({ websocket: { primaryInit: './src/lib/server/cluster.js' } })).not.toThrow();
+		expect(() => adapter({ websocket: { workers: { compute: 2 } } })).not.toThrow();
+		expect(() => adapter({ websocket: { workers: {} } })).not.toThrow();
+		// A live function cannot ride the serialized build; the path form is
+		// the only shape that reaches the production runtime.
+		expect(() => adapter({ websocket: { primaryInit: () => {} } })).toThrow(/module path string/);
+		expect(() => adapter({ websocket: { workers: 'two' } })).toThrow(/websocket\.workers must be an object/);
+		expect(() => adapter({ websocket: { workers: [2] } })).toThrow(/websocket\.workers must be an object/);
+		expect(() => adapter({ websocket: { workers: { compute: -1 } } })).toThrow(/non-negative integer/);
+		expect(() => adapter({ websocket: { workers: { compute: 1.5 } } })).toThrow(/non-negative integer/);
 	});
 
 	it('refuses misshaped protective websocket values at factory time', () => {

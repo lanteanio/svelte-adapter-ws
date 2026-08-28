@@ -67,7 +67,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * error at the only moment anyone is watching.
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
-	'adminPath', 'adminAuthAcknowledged', 'metrics', 'primaryInit', 'workers',
+	'adminPath', 'adminAuthAcknowledged', 'metrics',
 	'maxTopicSeqEntries', 'upgradeAdmission', 'egress', 'protection',
 	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
 	'postureExport'
@@ -325,6 +325,36 @@ export default function (opts = {}) {
 				`got ${JSON.stringify(websocket.handler)}.`
 			);
 		}
+		if (websocket.primaryInit != null && typeof websocket.primaryInit !== 'string') {
+			throw new Error(
+				"websocket.primaryInit must be a module path string (e.g. './src/lib/server/cluster.js') " +
+				'whose default (or named `primaryInit`) export is a function run once in the primary thread ' +
+				'before workers spawn. A live function cannot be passed: adapter options are serialized into ' +
+				'the build, so it would never reach the production runtime.'
+			);
+		}
+	}
+
+	// Worker roles: `websocket.workers.compute` is how many of the cluster's
+	// CLUSTER_WORKERS total are dedicated compute workers (no listen socket;
+	// app-driven via the primaryInit shared memory). io = total - compute.
+	// Serialized into the primary-visible WORKERS_CONFIG placeholder (plain
+	// data - the count - so it rides the JSON cleanly, unlike primaryInit).
+	let computeWorkers = 0;
+	if (websocket?.workers != null) {
+		const w = websocket.workers;
+		if (typeof w !== 'object' || Array.isArray(w)) {
+			throw new Error('websocket.workers must be an object, e.g. { compute: 2 }.');
+		}
+		if (w.compute != null) {
+			if (!Number.isInteger(w.compute) || w.compute < 0) {
+				throw new Error(
+					`websocket.workers.compute must be a non-negative integer (how many of the ` +
+					`CLUSTER_WORKERS total are compute workers), got ${JSON.stringify(w.compute)}.`
+				);
+			}
+			computeWorkers = w.compute;
+		}
 	}
 
 	// Validate `staticHeaders` eagerly so a misshaped value fails before any
@@ -419,6 +449,44 @@ export default function (opts = {}) {
 				writeFileSync(`${tmp}/ws-handler.js`, '// No WebSocket handler configured\n');
 			}
 
+			// - primaryInit module ------------------------------------------------
+			// Like `handler`, this is a module PATH, not a live function: it is
+			// bundled as its own isolated rollup entry whose default export (or a
+			// named `primaryInit` export) runs ONCE in the cluster primary before
+			// any worker spawns. Importing the entry must never pull the app graph
+			// into the primary, which is why it gets its own bundle.
+			const primaryInitPath = websocket?.primaryInit;
+			if (primaryInitPath && existsSync(`${tmp}/primary-init.js`)) {
+				builder.log.minor('primaryInit: built by Vite plugin');
+			} else if (primaryInitPath) {
+				const primaryInitEntry = `${tmp}/primary-init-src.js`;
+				// Pass the namespace through a pick() so esbuild does not
+				// statically resolve `.default`/`.primaryInit` against the user's
+				// module and warn for whichever export form they did not use.
+				writeFileSync(
+					primaryInitEntry,
+					`import * as m from ${JSON.stringify(path.resolve(primaryInitPath))};\n` +
+					'const pick = (ns) => ns.default ?? ns.primaryInit ?? null;\n' +
+					'export default pick(m);\n'
+				);
+				await esbuildServerModule(builder, primaryInitEntry, `${tmp}/primary-init.js`);
+				builder.log.minor(`primaryInit: ${primaryInitPath}`);
+			} else {
+				writeFileSync(`${tmp}/primary-init.js`, 'export default null;\n');
+			}
+
+			// `workers: { comptue: 2 }` would silently run zero compute workers -
+			// the same unknown-key failure class as the top level, one level down.
+			if (websocket?.workers != null && typeof websocket.workers === 'object' && !Array.isArray(websocket.workers)) {
+				const unknownWorkerKeys = describeUnknownOptionKeys(websocket.workers, new Set(['compute']));
+				if (unknownWorkerKeys.length) {
+					builder.log.warn(
+						`[adapter-ws] unknown websocket.workers option(s): ${unknownWorkerKeys.join(', ')} - ` +
+						'not recognized by the adapter and ignored. The one recognized key is compute.'
+					);
+				}
+			}
+
 			// The public @sveltejs/kit/node primitives the runtime is built on,
 			// bundled INTO the build output. The copied runtime cannot import
 			// '@sveltejs/kit/node' from node_modules at deploy time - kit is a
@@ -436,7 +504,8 @@ export default function (opts = {}) {
 				index: `${tmp}/index.js`,
 				manifest: `${tmp}/manifest.js`,
 				'kit-node': `${tmp}/kit-node.js`,
-				'ws-handler': `${tmp}/ws-handler.js`
+				'ws-handler': `${tmp}/ws-handler.js`,
+				'primary-init': `${tmp}/primary-init.js`
 			};
 
 			if (builder.hasServerInstrumentationFile?.()) {
@@ -587,7 +656,9 @@ export default function (opts = {}) {
 					WARMUP_PATHS: JSON.stringify(warmupPaths),
 					STATIC_HEADERS: JSON.stringify(staticHeadersResult.headers),
 					STATIC_CACHE_CONTROL: JSON.stringify(staticCacheControl),
-					STATIC_DOTFILES: JSON.stringify(staticDotfiles)
+					STATIC_DOTFILES: JSON.stringify(staticDotfiles),
+					PRIMARY_INIT: './server/primary-init.js',
+					WORKERS_CONFIG: JSON.stringify({ compute: computeWorkers })
 				}
 			});
 			// tracing.js reaches trace-context.js at the runtime root once

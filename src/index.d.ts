@@ -75,6 +75,16 @@ export interface WebSocketOptions {
 	compressCredentialedResponses?: boolean;
 	/** Run 'same-origin' without a host pin (audited apps only; default false). */
 	unsafeSameOriginWithoutHostPin?: boolean;
+	/**
+	 * Module path whose default (or named `primaryInit`) export runs ONCE in
+	 * the cluster primary before any worker spawns; its return value is
+	 * replayed as `workerData.app` to every worker and respawn
+	 * (SharedArrayBuffers ride by reference). Only consulted when
+	 * CLUSTER_WORKERS is set at runtime.
+	 */
+	primaryInit?: string;
+	/** Cluster worker roles: how many of the CLUSTER_WORKERS total are compute workers (no listen socket). */
+	workers?: { compute?: number };
 }
 
 export interface AdapterOptions {
