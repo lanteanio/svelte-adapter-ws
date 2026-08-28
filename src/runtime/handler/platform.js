@@ -28,8 +28,9 @@ import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
 	throwInvalidSeq, topicEpochValue, wrapBatchEnvelope
 } from '../utils/epoch.js';
+import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
-import { readAssertionCounts, fatal } from '../utils/assertions.js';
+import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
@@ -39,8 +40,13 @@ import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateLi
 import { notePublish } from './pressure.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
 import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
-import { registerWireCodec } from './codec-registry.js';
-import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload } from './game-ingress.js';
+import { registerWireCodec, getWireCodec } from './codec-registry.js';
+import { batchRelay, relayBatched } from './relay.js';
+import {
+	assertClusterSequenceAuthority, assertClusterSequenceAuthorityValues,
+	assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority
+} from './cluster-sequence-policy.js';
+import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload, assertGameLaneClusterSafe } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
 import { captureResumeFrame, resumeCaptureActive } from './resume-capture.js';
 import { bumpOut } from './conn-stats.js';
@@ -225,9 +231,11 @@ function publish(topic, event, data, options) {
 	// stateful accessor must not answer validation with one value and the
 	// stamp with another.
 	const seqOption = options != null ? options.seq : undefined;
+	const relayOption = options != null ? options.relay : undefined;
 	const compressOption = options != null ? options.compress : undefined;
 	const jitterOption = options != null ? options.jitterMs : undefined;
 	const excludeWs = (options && options.excludeWs) || null;
+	assertClusterSequenceAuthorityValues(seqOption, relayOption);
 
 	const seq = stampSeqValue(seqOption, topicSeqs, topic);
 	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
@@ -247,7 +255,23 @@ function publish(topic, event, data, options) {
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
 	const compress = WS_COMPRESSION_ON && compressOption !== false;
-	return fanOut(topic, envelope, excludeWs, compress);
+	const sent = fanOut(topic, envelope, excludeWs, compress);
+	// Relay to sibling workers via the primary; a no-op in single-process
+	// mode (no parentPort). `{ relay: false }` is for a message that arrives
+	// through an external pub/sub source (Redis, Postgres) that already fans
+	// out to every process - relaying it again would deliver duplicates.
+	// Exclusion stays local: an excluded socket cannot be connected to any
+	// other worker, so the relay still fires exactly once.
+	const relayed = !!(parentPort && relayOption !== false);
+	if (relayed) {
+		// The stamped seq rides as explicit relay-frame metadata so the
+		// receiving worker never re-parses the envelope string.
+		batchRelay(topic, envelope, compress, seq);
+	}
+	// In clustered mode subscribers may live on other workers, and a caller
+	// cannot query cross-worker subscriber counts - so a fired relay counts
+	// as delivery even when this worker has no local subscriber.
+	return sent || relayed;
 }
 
 /**
@@ -321,6 +345,56 @@ function request(facade, event, data, options) {
 	});
 }
 
+/**
+ * Deliver a batch of pre-built per-event envelopes to this worker's local
+ * subscribers: the shared batch frame to 'batch'-capable connections, the
+ * per-event envelopes (filtered to each connection's subscriptions in the
+ * multi-topic shape) to everyone else. The fast/slow detection is the
+ * caller's; this is the one walk the local fast path and the cross-worker
+ * receive path share, so the two cannot drift in what a subscriber sees.
+ *
+ * @param {Array<{ topic: string, env: string }>} events
+ * @param {boolean} allSameTopic
+ * @param {string} firstTopic
+ * @param {Set<string> | null} batchTopics - the distinct topics when not allSameTopic
+ * @param {boolean} compress
+ */
+function deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compress) {
+	const slice = new Array(events.length);
+	for (let i = 0; i < events.length; i++) slice[i] = events[i].env;
+	const sharedBatchEnv = wrapBatchEnvelope(slice);
+	for (const [rawWs, topics] of allSockets()) {
+		if (rawWs.readyState !== OPEN) continue;
+		let receives = false;
+		if (allSameTopic) {
+			receives = topics.has(firstTopic);
+		} else {
+			for (const t of /** @type {Set<string>} */ (batchTopics)) {
+				if (topics.has(t)) { receives = true; break; }
+			}
+		}
+		if (!receives) continue;
+		const facade = wsWrappers.get(rawWs);
+		if (!facade) continue;
+		const userData = /** @type {any} */ (facade).getUserData();
+		const caps = userData[WS_CAPS];
+		try {
+			if (caps && caps.has('batch')) {
+				/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
+				bumpOut(userData, sharedBatchEnv);
+			} else {
+				for (let i = 0; i < events.length; i++) {
+					if (!allSameTopic && !topics.has(events[i].topic)) continue;
+					/** @type {any} */ (facade).send(events[i].env, false, compress);
+					bumpOut(userData, events[i].env);
+				}
+			}
+		} catch {
+			counters.closedWsAborts++;
+		}
+	}
+}
+
 export const platform = {
 	// The observer lane's deny-unwind (authorizeDerivedSubscribe) runs the
 	// app's unsubscribe hook through this slot - the shared primitive has no
@@ -343,6 +417,24 @@ export const platform = {
 		if (!Array.isArray(messages) || messages.length === 0) return;
 		messages = collapseByCoalesceKey(messages);
 		if (messages.length === 0) return;
+		// Validate the WHOLE batch before one event can mutate counters or
+		// reach a subscriber - a mixed safe/unsafe batch fails atomically
+		// rather than publishing its prefix. One read per field, snapshotted:
+		// the value judged here is the value the stamp and the relay decision
+		// use below, so a stateful accessor cannot pass the atomic pre-pass
+		// and then hand the fast path an authoritative number it would relay.
+		const msgSeqs = new Array(messages.length);
+		const msgRelays = new Array(messages.length);
+		const msgJitters = new Array(messages.length);
+		for (let i = 0; i < messages.length; i++) {
+			const o = /** @type {any} */ (messages[i].options);
+			const seqOption = o != null ? o.seq : undefined;
+			const relayOption = o != null ? o.relay : undefined;
+			msgJitters[i] = o != null ? o.jitterMs : undefined;
+			assertClusterSequenceAuthorityValues(seqOption, relayOption);
+			msgSeqs[i] = seqOption;
+			msgRelays[i] = relayOption;
+		}
 		const firstTopic = messages[0].topic;
 		let allSameTopic = true;
 		for (let i = 1; i < messages.length; i++) {
@@ -368,62 +460,50 @@ export const platform = {
 		}
 		if (!allSameTopic && !allSeeAll) {
 			// Slow-path fallback: per-event publish() so small / disjoint batch
-			// shapes pay no shared-frame machinery.
+			// shapes pay no shared-frame machinery. The snapshot, not a spread
+			// of the live options object: publish() consumes exactly the
+			// fields the atomic pre-pass above already judged.
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
-				publish(m.topic, m.event, m.data, /** @type {any} */ ({ ...(m.options || {}), compress: compressOptIn }));
+				publish(m.topic, m.event, m.data, /** @type {any} */ ({
+					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i], compress: compressOptIn
+				}));
 			}
 			return;
 		}
 		// Fast path: build per-event envelopes (each stamped with its topic's
 		// seq) and a shared batch frame for cap-able subscribers.
+		/** @type {Array<{ topic: string, env: string, seq: number | null }>} */
 		const events = new Array(messages.length);
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
-			const opts = /** @type {any} */ (m.options);
-			const seq = stampSeqValue(opts != null ? opts.seq : undefined, topicSeqs, m.topic);
+			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic);
 			events[i] = {
 				topic: m.topic,
-				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null)
+				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null),
+				seq
 			};
+		}
+		// Cross-worker relay: one frame carrying the pre-built per-event
+		// envelopes. The receiving worker re-runs the fast/slow detection
+		// against ITS OWN subscriber set and dispatches accordingly, so the
+		// wire-batching win survives worker boundaries instead of degrading
+		// to per-event relays. Each event's stamped seq rides along.
+		if (parentPort) {
+			/** @type {Array<import('./relay.js').RelayBatchedEntry>} */
+			const relayed = [];
+			for (let i = 0; i < messages.length; i++) {
+				if (msgRelays[i] !== false) {
+					relayed.push({ topic: events[i].topic, env: events[i].env, seq: events[i].seq });
+				}
+			}
+			if (relayed.length > 0) relayBatched(relayed, compressOptIn);
 		}
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
 		}
 		for (let i = 0; i < events.length; i++) notePublish(events[i].topic, events[i].env.length);
-		const slice = new Array(events.length);
-		for (let i = 0; i < events.length; i++) slice[i] = events[i].env;
-		const sharedBatchEnv = wrapBatchEnvelope(slice);
-		for (const [rawWs, topics] of allSockets()) {
-			if (rawWs.readyState !== OPEN) continue;
-			let receives = false;
-			if (allSameTopic) {
-				receives = topics.has(firstTopic);
-			} else {
-				for (const t of /** @type {Set<string>} */ (batchTopics)) {
-					if (topics.has(t)) { receives = true; break; }
-				}
-			}
-			if (!receives) continue;
-			const facade = wsWrappers.get(rawWs);
-			if (!facade) continue;
-			const userData = /** @type {any} */ (facade).getUserData();
-			const caps = userData[WS_CAPS];
-			try {
-				if (caps && caps.has('batch')) {
-					/** @type {any} */ (facade).send(sharedBatchEnv, false, compressOptIn);
-					bumpOut(userData, sharedBatchEnv);
-				} else {
-					for (let i = 0; i < events.length; i++) {
-						if (!allSameTopic && !topics.has(events[i].topic)) continue;
-						/** @type {any} */ (facade).send(events[i].env, false, compressOptIn);
-						bumpOut(userData, events[i].env);
-					}
-				}
-			} catch {
-				counters.closedWsAborts++;
-			}
-		}
+		deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compressOptIn);
 	},
 
 	/**
@@ -431,10 +511,24 @@ export const platform = {
 	 * @returns {boolean[]}
 	 */
 	batch(messages) {
+		// Snapshot every message's option fields once and vet each snapshot
+		// BEFORE the first publish: a mixed safe/unsafe batch fails atomically
+		// instead of delivering a prefix, and the snapshot handed to publish()
+		// is the same read the check judged - a stateful accessor cannot pass
+		// the pre-pass and stamp under different values.
+		const snapshots = new Array(messages.length);
+		for (let i = 0; i < messages.length; i++) {
+			const o = /** @type {any} */ (messages[i].options);
+			const snap = o == null
+				? o
+				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };
+			assertClusterSequenceAuthority(snap);
+			snapshots[i] = snap;
+		}
 		const results = [];
 		for (let i = 0; i < messages.length; i++) {
-			const { topic, event, data, options } = messages[i];
-			results.push(publish(topic, event, data, /** @type {any} */ (options)));
+			const { topic, event, data } = messages[i];
+			results.push(publish(topic, event, data, /** @type {any} */ (snapshots[i])));
 		}
 		return results;
 	},
@@ -452,30 +546,72 @@ export const platform = {
 	 * @returns {boolean}
 	 */
 	publishWire(topic, event, data, wire, options) {
+		// One read per option field (see publish): the field set here
+		// additionally carries the internal relay-receive markers, which keep
+		// the cross-worker path from re-stamping or re-relaying. Locals, no
+		// capture object.
 		const seqOption = options != null ? options.seq : undefined;
-		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
-		const excludeWs = (options && options.excludeWs) || null;
-		const seq = stampSeqValue(seqOption, topicSeqs, topic);
+		const relayOption = options != null ? options.relay : undefined;
+		const compressOption = options != null ? options.compress : undefined;
+		const excludeOption = options != null ? options.excludeWs : undefined;
+		const isRelay = !!(options && /** @type {any} */ (options)._isRelay);
+		const relaySeqOption = isRelay ? /** @type {any} */ (options)._relaySeq : undefined;
+		if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);
+		// A relayed frame carries the origin worker's stamp verbatim: the
+		// origin already stamped and counted this publish once, and stamping
+		// again here would fork the topic's sequence per worker.
+		const seq = isRelay
+			? (typeof relaySeqOption === 'number' ? relaySeqOption : null)
+			: stampSeqValue(seqOption, topicSeqs, topic);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
-		notePublish(topic, envelope.length);
+		if (!isRelay) notePublish(topic, envelope.length);
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
+		const compressIntent = compressOption === true;
+		const compress = WS_COMPRESSION_ON && compressIntent;
+		const excludeWs = excludeOption || null;
+
+		// Cross-worker relay decision, taken once for every exit below. A codec
+		// registered in the wire-codec registry relays its capability + raw
+		// payload so a receiving worker with binary subscribers re-encodes
+		// binary locally (relayPublishWire) instead of delivering JSON; an
+		// unregistered codec relays the JSON envelope only - the registry IS
+		// the opt-in. The compress INTENT (not the locally-gated value) rides
+		// along so the receiver re-gates by its own compressor. Exclusion
+		// stays local: the excluded socket cannot be on another worker.
+		const relayed = !!(parentPort && relayOption !== false);
+		const relayCap = relayed && wire && typeof wire.capability === 'string' && getWireCodec(wire.capability)
+			? wire.capability
+			: undefined;
+		const relayEvent = relayCap !== undefined ? event : undefined;
+		const relayData = relayCap !== undefined ? data : undefined;
 
 		// JSON fast path: nobody on this worker advertised the capability.
+		// Cross-worker subscribers that did still re-encode binary on their
+		// own worker, so the codec carry rides the relay regardless.
 		if (!wire || typeof wire.capability !== 'string' || !capCounts.has(wire.capability)) {
-			return fanOut(topic, envelope, excludeWs, compress);
+			const sent = fanOut(topic, envelope, excludeWs, compress);
+			if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
+			return sent || relayed;
 		}
 
 		if (!wire.state) {
 			const payload = encodeStatelessWirePayload(wire, event, data);
+			if (relayed) {
+				// A declined frame (null payload) declines identically on every
+				// worker, so the codec carry would be dead IPC weight: relay the
+				// envelope alone and let the receivers take their JSON path.
+				if (payload == null) batchRelay(topic, envelope, compressIntent, seq);
+				else batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
+			}
 			const subscribers = subscribersOf(topic);
-			if (!subscribers) return false;
+			if (!subscribers) return relayed;
 			const targets = [];
 			for (const rawWs of subscribers) {
 				if (rawWs.readyState !== 1) continue;
 				const facade = wsWrappers.get(rawWs);
 				if (facade && facade !== excludeWs && rawWs !== excludeWs) targets.push(facade);
 			}
-			return deliverStatelessWireFanout(wire, payload, {
+			const delivered = deliverStatelessWireFanout(wire, payload, {
 				topic,
 				envelope,
 				seq: seq ?? 0,
@@ -487,11 +623,13 @@ export const platform = {
 				compress,
 				counters
 			});
+			return delivered || relayed;
 		}
 
 		// Stateful: encode per connection against its own codec state.
+		if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
 		const subscribers = subscribersOf(topic);
-		if (!subscribers) return false;
+		if (!subscribers) return relayed;
 		let delivered = false;
 		for (const rawWs of subscribers) {
 			if (rawWs.readyState !== 1) continue;
@@ -500,7 +638,7 @@ export const platform = {
 			const result = deliverWireToOne(facade, topic, event, data, wire, envelope, seq ?? 0, compress);
 			if (result !== 3) delivered = true;
 		}
-		return delivered;
+		return delivered || relayed;
 	},
 
 	/**
@@ -528,36 +666,80 @@ export const platform = {
 	 * @returns {boolean}
 	 */
 	publishWireBatch(topic, event, entries, wire, options) {
+		// The contract is checked before the data is: an invalid seq is
+		// invalid whether or not this call happens to carry entries, so an
+		// empty batch cannot silently accept options a full one refuses.
+		// Field reads rather than a spread - a spread copies own enumerable
+		// properties only, so a numeric seq carried on a prototype or by an
+		// inherited accessor would vanish from the copy and slip past a
+		// refusal every other read of the same object would have thrown on.
+		// Each field is read once, here; the value refused and the value used
+		// are the same read.
 		const opts = options == null
 			? options
-			: { seq: options.seq, relay: options.relay, compress: options.compress, excludeWs: options.excludeWs, jitterMs: options.jitterMs };
-		// A batch-level numeric seq would stamp every entry identically.
-		if (opts && typeof opts.seq === 'number') throwInvalidSeq(opts.seq);
+			: { seq: options.seq, relay: options.relay, compress: options.compress, excludeWs: options.excludeWs };
+		assertBatchSequenceAuthority(opts);
 		if (!Array.isArray(entries) || entries.length === 0) return false;
-		const compress = WS_COMPRESSION_ON && Boolean(opts && opts.compress === true);
+		const compressIntent = Boolean(opts && opts.compress === true);
+		const compress = WS_COMPRESSION_ON && compressIntent;
 		const sharedExclude = (opts && opts.excludeWs) || null;
 		const count = entries.length;
-		// One read per application-owned field, up front: the JSON envelopes
-		// and the codec must see the same values under one seq.
+		// Read and validate EVERY entry before anything is stamped: a numeric
+		// per-entry seq must pass the value check and the clustered authority
+		// rule while the batch is still whole, or a mid-loop refusal would
+		// leave earlier entries already stamped for a batch that never went
+		// out. One read per application-owned field: the JSON envelopes and
+		// the codec must see the same values under one seq.
 		const datas = new Array(count);
 		const excludes = new Array(count);
-		const seqs = new Array(count);
-		const envelopes = new Array(count);
+		const entrySeqs = new Array(count);
+		let sawEntrySeq = false;
 		for (let i = 0; i < count; i++) {
 			const entry = entries[i];
 			datas[i] = entry.data;
 			excludes[i] = entry.excludeWs;
 			const entrySeq = entry.seq;
-			if (typeof entrySeq === 'number' && (!Number.isInteger(entrySeq) || entrySeq < 1)) throwInvalidSeq(entrySeq);
-			seqs[i] = stampSeqValue(typeof entrySeq === 'number' ? entrySeq : undefined, topicSeqs, topic) ?? 0;
+			if (typeof entrySeq === 'number') {
+				if (!Number.isInteger(entrySeq) || entrySeq < 1) throwInvalidSeq(entrySeq);
+				// An explicit entry seq is the per-entry twin of
+				// publishWire({ seq: N }) and takes the same clustered rule:
+				// the external allocator must also be the fan-out, proven by
+				// relay: false. Checked once per batch, on the first number.
+				if (!sawEntrySeq) {
+					assertBatchEntrySequenceAuthority(opts);
+					sawEntrySeq = true;
+				}
+				entrySeqs[i] = entrySeq;
+			}
+		}
+		const seqs = new Array(count);
+		const envelopes = new Array(count);
+		for (let i = 0; i < count; i++) {
+			seqs[i] = stampSeqValue(entrySeqs[i], topicSeqs, topic) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
+		}
+		// Cross-worker relay: one relay envelope per entry, exactly as N
+		// publishWire calls would send - the receive path re-encodes each
+		// entry through publishWire on its own worker, so batching stays a
+		// local egress optimization. The codec carry follows publishWire's
+		// registry gate.
+		const relayed = !!(parentPort && !(opts && opts.relay === false));
+		if (relayed) {
+			const relayCap = wire && typeof wire.capability === 'string' && getWireCodec(wire.capability)
+				? wire.capability
+				: undefined;
+			for (let i = 0; i < count; i++) {
+				batchRelay(topic, envelopes[i], compressIntent, seqs[i] === 0 ? null : seqs[i], relayCap,
+					relayCap !== undefined ? event : undefined,
+					relayCap !== undefined ? datas[i] : undefined);
+			}
 		}
 		for (let i = 0; i < count; i++) notePublish(topic, envelopes[i].length);
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < count; i++) captureResumeFrame(topic, envelopes[i]);
 		}
 		const subscribers = subscribersOf(topic);
-		if (!subscribers) return false;
+		if (!subscribers) return relayed;
 		const capable = capCounts.has(wire?.capability);
 		let delivered = false;
 		for (const rawWs of subscribers) {
@@ -616,7 +798,7 @@ export const platform = {
 			});
 			if (result !== 3) delivered = true;
 		}
-		return delivered;
+		return delivered || relayed;
 	},
 
 	/**
@@ -991,6 +1173,11 @@ export const platform = {
 	// Client-publish authorization (the `game` lane). A connection is bound
 	// to exactly one topic it may publish to via a topicless `game` frame.
 	grantPublish(facade, topic) {
+		// The per-room seq and sender-excluding walk are worker-local. Refuse
+		// the first grant in a multi-I/O-worker topology instead of
+		// authorizing a lane that would silently omit remote participants and
+		// fork its sequence.
+		assertGameLaneClusterSafe();
 		let ud;
 		try {
 			ud = /** @type {any} */ (facade).getUserData();
@@ -1033,6 +1220,9 @@ export const platform = {
 	 * @returns {{ seq: number | null, delivered: number }}
 	 */
 	publishGame(senderWs, topic, event, data, id) {
+		// Same topology gate as grantPublish: the game lane's room sequencer
+		// is authoritative only on the single socket-owning I/O worker.
+		assertGameLaneClusterSafe();
 		const seq = stampSeqValue(undefined, topicSeqs, topic);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
 		notePublish(topic, env.length);
@@ -1198,6 +1388,156 @@ export function flushCoalescedFor(facade, userData) {
 			return 2;
 		}
 	});
+}
+
+// - Cross-worker relay receive -----------------------------------------------
+
+/**
+ * Codec-aware relay receive: a sibling worker relayed a wire publish carrying
+ * the codec's `capability` and `{ event, data }` alongside the JSON envelope.
+ * When this worker has the codec registered AND a local connection advertises
+ * the capability, re-encode binary locally by re-entering publishWire with the
+ * origin's seq (no re-stamp), `relay: false` (no re-relay loop), and the
+ * origin's compress intent (re-gated by this worker's own compressor).
+ *
+ * Returns false - the caller (relayPublish) then takes the plain JSON fan-out -
+ * when no codec is registered for the capability or no local connection
+ * advertises it, so the no-binary-subscriber worker stays on the cheaper
+ * envelope path instead of entering the per-subscriber walk to hand everyone
+ * JSON.
+ *
+ * @param {string} topic
+ * @param {string} event
+ * @param {any} data
+ * @param {string} capability
+ * @param {number | null} seq - The origin worker's stamped per-topic seq, carried verbatim.
+ * @param {boolean} [compress] - The origin's compress intent (re-gated locally).
+ * @returns {boolean}
+ */
+export function relayPublishWire(topic, event, data, capability, seq, compress) {
+	const codec = getWireCodec(capability);
+	if (!codec) return false;
+	if (!capCounts.has(capability)) return false;
+	platform.publishWire(topic, event, data, codec, /** @type {any} */ ({ relay: false, _isRelay: true, _relaySeq: seq, compress }));
+	return true;
+}
+
+/**
+ * Deliver a publish relayed from a sibling worker to this worker's local
+ * subscribers. The frame arrives pre-stamped and pre-serialized: the carried
+ * seq is metadata, never re-stamped, and nothing here re-relays (the primary
+ * already forwarded the frame to every other worker).
+ *
+ * @param {string} topic
+ * @param {string} envelope - Pre-serialized JSON envelope.
+ * @param {boolean} [compress] - Per-frame compress intent carried across the
+ *   worker boundary; re-gated by this worker's compressor.
+ * @param {number | null} [seq] - The originator's stamped per-topic seq,
+ *   carried as explicit metadata so a receiver never re-parses the envelope.
+ * @param {string} [capability] - A registered wire codec's capability token;
+ *   its presence is the sole signal that a binary re-encode was intended.
+ * @param {string} [event] - The publish event name, for the codec re-encode.
+ * @param {any} [data] - The raw publish payload, for the codec re-encode.
+ * @param {number} [origin] - The sending worker's thread id.
+ * @param {number} [ord] - That worker's per-topic relay ordinal for this frame.
+ * @param {number} [birth] - When that worker opened this topic's relay stream.
+ *   origin/ord/birth are the frame's stream identity: they travel on the wire
+ *   for the receiver-side contiguity check the relay format reserves them for,
+ *   and delivery never depends on them.
+ */
+export function relayPublish(topic, envelope, compress, seq, capability, event, data, origin, ord, birth) {
+	// Hard tier: a non-string topic or an empty/non-string envelope arriving
+	// from a sibling worker (trusted, same codebase) means the cross-worker
+	// relay serialization is structurally broken - publishing it would
+	// misroute or send garbage to every local subscriber and, transitively,
+	// cluster-wide. That is not recoverable by dropping one frame, so it
+	// escalates to a deferred worker restart rather than a soft log.
+	fatal(typeof topic === 'string', 'relay.topic-type', { topic: typeof topic });
+	fatal(typeof envelope === 'string' && envelope.length > 0, 'relay.envelope-type', {
+		envelopeType: typeof envelope,
+		envelopeLen: typeof envelope === 'string' ? envelope.length : null
+	});
+	// Codec-aware relay: a set `capability` always travels with its payload
+	// and only for a codec the origin found in its registry; the gate keys on
+	// `capability` alone, not on `data`, because a codec may legitimately
+	// encode an undefined payload (an event-only or tick frame). The local
+	// re-encode passes relay:false, so it never re-relays and cannot loop.
+	if (capability !== undefined &&
+		relayPublishWire(topic, event, data, capability, seq ?? null, compress)) {
+		return;
+	}
+	// Resume cutover in flight on this worker: hold the JSON envelope a
+	// resuming subscriber would receive from this cross-worker frame. The
+	// codec re-encode path above captures inside publishWire.
+	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
+	fanOut(topic, envelope, null, WS_COMPRESSION_ON && compress === true);
+}
+
+/**
+ * Re-dispatch a relayed publishBatched call from another worker. The
+ * fast/slow detection (all-see-all + everyone batch-capable) is re-run
+ * against THIS worker's local subscriber set: a worker with a different cap
+ * profile or different subscription overlap may take the slow path even when
+ * the originating worker took the fast path. Seqs were stamped by the
+ * originator and ride along in each per-event envelope; nothing here
+ * re-stamps and nothing re-relays.
+ *
+ * @param {Array<import('./relay.js').RelayBatchedEntry>} events
+ *   The batched-lane entry contract, declared at the sender boundary
+ *   (relay.js) and asserted below: the envelope travels under `env`, NOT
+ *   `envelope` (the single-publish lane's field name).
+ * @param {boolean} [compress] - Batch-level compress intent from the
+ *   originating worker; re-gated by this worker's compressor.
+ */
+export function relayPublishBatched(events, compress) {
+	if (!Array.isArray(events) || events.length === 0) return;
+	assert(typeof events[0].topic === 'string', 'relay.batched-topic-type', {
+		first: typeof events[0].topic
+	});
+	assert(typeof events[0].env === 'string', 'relay.batched-env-type', {
+		first: typeof events[0].env
+	});
+	const compressGated = WS_COMPRESSION_ON && compress === true;
+
+	const firstTopic = events[0].topic;
+	let allSameTopic = true;
+	for (let i = 1; i < events.length; i++) {
+		if (events[i].topic !== firstTopic) { allSameTopic = false; break; }
+	}
+	let allSeeAll = allSameTopic;
+	/** @type {Set<string> | null} */
+	let batchTopics = null;
+	if (!allSameTopic) {
+		batchTopics = new Set();
+		for (let i = 0; i < events.length; i++) batchTopics.add(events[i].topic);
+		allSeeAll = true;
+		for (const [rawWs, topics] of allSockets()) {
+			if (rawWs.readyState !== OPEN || topics.size === 0) continue;
+			let touchesAny = false;
+			let touchesAll = true;
+			for (const t of batchTopics) {
+				if (topics.has(t)) touchesAny = true;
+				else touchesAll = false;
+			}
+			if (touchesAny && !touchesAll) { allSeeAll = false; break; }
+		}
+	}
+	// A resuming connection receives these events as per-event JSON on either
+	// path, so hold each per-event envelope - never the wrapped batch frame.
+	if (resumeCaptureActive()) {
+		for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
+	}
+	if (!allSameTopic && !allSeeAll) {
+		// Slow path: per-event fan-out, mirroring the local fallback and the
+		// receive-side shape cap-less subscribers on this worker would have
+		// seen if the originator had taken its slow path too.
+		for (let i = 0; i < events.length; i++) {
+			fanOut(events[i].topic, events[i].env, null, compressGated);
+		}
+		return;
+	}
+	// Fast path: the same shared-frame walk the local fast path takes.
+	deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compressGated);
 }
 
 export { hasUserSubscribeHook, runUserSubscribeGate, WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS };

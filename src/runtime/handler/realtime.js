@@ -49,7 +49,7 @@ import { leaseGrantSize } from '../wire.js';
 import { recordBackpressureDrop } from '../utils/backpressure.js';
 import { accountClosedLogicalSubscriptions, addLogicalSubscription, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
-import { registerGameIngress } from './game-ingress.js';
+import { registerGameIngress, gameLaneClusterSafe } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
 import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
@@ -652,8 +652,13 @@ function runGameWork(facade, context) {
 	const msg = context.msg;
 	const gud = facade.getUserData();
 	const grantTopic = gud?.[WS_PUBLISH_GRANT];
-	if (!grantTopic || typeof msg.event !== 'string') {
-		const reason = grantTopic ? 'INVALID' : 'FORBIDDEN';
+	// The game lane's room sequencer is worker-local, so a topology where
+	// sockets can land on more than one I/O worker denies the frame rather
+	// than forking a room's sequence across workers - the same rule
+	// grantPublish enforces at authorization time.
+	const clusterSafe = gameLaneClusterSafe();
+	if (!clusterSafe || !grantTopic || typeof msg.event !== 'string') {
+		const reason = clusterSafe && grantTopic ? 'INVALID' : 'FORBIDDEN';
 		const denied = msg.id === undefined
 			? JSON.stringify({ type: 'game-denied', reason })
 			: JSON.stringify({ type: 'game-denied', reason, id: msg.id });

@@ -31,6 +31,13 @@ import { reconnect_dispersal_ms } from './handler/config.js';
 
 export { beginDrain, lifecycleState, isDraining, platform };
 
+// The cluster surface the worker branch of the process entry consumes: the
+// relay receive pair delivers a sibling worker's pre-stamped publishes into
+// this worker's local subscribers, and the two setters wire the shared-memory
+// ring writer and the sender-side frame ceiling at worker startup.
+export { relayPublish, relayPublishBatched } from './handler/platform.js';
+export { setRelayRingWriter, setRelayFrameCeiling } from './handler/relay.js';
+
 /**
  * Graceful shutdown, realtime included: readiness flips, live WebSockets are
  * advised and closed within the budget, then the HTTP drain runs.
