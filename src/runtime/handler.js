@@ -9,6 +9,7 @@
 /* global STATIC_HEADERS */
 /* global STATIC_CACHE_CONTROL */
 /* global WARMUP_PATHS */
+/* global WS_ENABLED */
 import './_init.js';
 import http from 'node:http';
 import https from 'node:https';
@@ -24,7 +25,7 @@ import {
 import { declareSingleValuedProxyHeaders } from './utils/request-headers.js';
 import { cacheDir, clientDir, prerenderedDir, _t_static } from './handler/static-assets.js';
 import { staticCache } from './handler/state.js';
-import { handleRequest } from './handler/request.js';
+import { handleRequest, installRealtimeRoutes } from './handler/request.js';
 import { start as lifecycleStart, shutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
 
@@ -85,12 +86,40 @@ export const server = is_tls
 	? https.createServer({ cert: readFileSync(ssl_cert), key: readFileSync(ssl_key) }, handleRequest)
 	: http.createServer(handleRequest);
 
+// - Realtime lane ------------------------------------------------------------
+
+/** @type {typeof import('./handler/realtime.js') | null} */
+let realtime = null;
+if (WS_ENABLED) {
+	// Dynamic so a JSON-only (websocket-less) build never evaluates the ws
+	// import graph. The await rides module top-level await like _init.js.
+	realtime = await import('./handler/realtime.js');
+	server.on('upgrade', (req, socket, head) => {
+		void realtime?.handleUpgrade(req, socket, head);
+	});
+	installRealtimeRoutes({
+		wsPath: realtime.wsPath(),
+		tryAuthenticateRoute: realtime.tryAuthenticateRoute
+	});
+}
+
+export { realtime };
+
 /**
- * Bind and boot: listen, warm the SSR path, commit readiness.
+ * Bind and boot: listen, run the app's init hook, warm the SSR path, commit
+ * readiness.
  * @param {string} host
  * @param {number} port
  * @returns {Promise<void>}
  */
-export function start(host, port) {
-	return lifecycleStart(server, host, port, { warmupPaths: WARMUP_PATHS });
+export async function start(host, port) {
+	return lifecycleStart(server, host, port, {
+		warmupPaths: WARMUP_PATHS,
+		beforeReady: realtime ? () => /** @type {NonNullable<typeof realtime>} */ (realtime).fireInitOnce() : undefined
+	});
+}
+
+/** Run the app's shutdown hook; the entry awaits this inside its budget. */
+export async function runAppShutdownHook() {
+	if (realtime) await realtime.fireShutdownOnce();
 }

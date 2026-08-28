@@ -17,6 +17,12 @@
 	"exports": {
 		".": {
 			"default": "./src/index.js"
+		},
+		"./upgrade-response": {
+			"default": "./src/upgrade-response.js"
+		},
+		"./connection": {
+			"default": "./src/connection.js"
 		}
 	},
 	"files": [

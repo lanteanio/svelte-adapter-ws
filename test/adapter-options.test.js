@@ -23,11 +23,20 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ readinessCheckPath: false })).not.toThrow();
 	});
 
-	it('refuses the not-yet-shipped websocket and tracing options loudly', () => {
-		expect(() => adapter({ websocket: true })).toThrow(/websocket option is not available yet/);
-		expect(() => adapter({ websocket: {} })).toThrow(/websocket option is not available yet/);
+	it('accepts the websocket lane and refuses only its unshipped sub-options', () => {
+		expect(() => adapter({ websocket: true })).not.toThrow();
+		expect(() => adapter({ websocket: {} })).not.toThrow();
 		expect(() => adapter({ websocket: false })).not.toThrow();
+		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
+		for (const key of ['metrics', 'primaryInit', 'workers', 'upgradeAdmission', 'egress', 'pressure', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
+			expect(() => adapter({ websocket: { [key]: key === 'workers' ? { compute: 1 } : '/x' } }), key)
+				.toThrow(/is not available yet/);
+		}
 		expect(() => adapter({ tracing: './src/lib/tracing.js' })).toThrow(/tracing option is not available yet/);
+	});
+
+	it('refuses misshaped protective websocket values at factory time', () => {
+		expect(() => adapter({ websocket: { handler: 42 } })).toThrow(/websocket\.handler/);
 	});
 
 	it('validates staticDotfiles strictly', () => {

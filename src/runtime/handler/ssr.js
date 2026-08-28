@@ -10,6 +10,7 @@ import { platform } from './platform.js';
 import { isDedupBufferable } from './ssr-dedup.js';
 
 /* global ENV_PREFIX */
+/* global WS_OPTIONS */
 
 // Maximum number of in-flight dedup keys tracked simultaneously.
 const MAX_SSR_DEDUP = 500;
@@ -37,10 +38,10 @@ const COMPRESS_MIN_SIZE = 1024;
 // response length into a side channel that leaks any secret reflected
 // alongside attacker-influenced input (CSRF tokens, session IDs, API keys in
 // the page body). Compression is skipped on every request that carries a
-// `Cookie` or `Authorization` header. The family opt-in
-// (`websocket.compressCredentialedResponses`) arrives with the websocket
-// option surface; until then credentialed responses are never compressed.
-const COMPRESS_CREDENTIALED = false;
+// `Cookie` or `Authorization` header; apps that have audited their
+// reflected-input surface opt back in via
+// `websocket.compressCredentialedResponses`.
+const COMPRESS_CREDENTIALED = /** @type {any} */ (typeof WS_OPTIONS === 'object' && WS_OPTIONS)?.compressCredentialedResponses === true;
 
 const COMPRESSIBLE_TYPES = new Set([
 	'text/html', 'text/css', 'text/plain', 'text/xml', 'text/javascript',

@@ -186,8 +186,14 @@ export function buildRuntime(options = {}) {
 		MANIFEST: './server/manifest.js',
 		SERVER: './server/index.js',
 		KIT_NODE: './server/kit-node.js',
+		WS_HANDLER: './server/ws-handler.js',
+		TRACING_PROVIDER: './tracing-provider.js',
 		ENV_PREFIX: JSON.stringify(''),
 		PRECOMPRESS: JSON.stringify(true),
+		WS_ENABLED: JSON.stringify(false),
+		WS_PATH: JSON.stringify('/ws'),
+		WS_AUTH_PATH: JSON.stringify('/__ws/auth'),
+		WS_OPTIONS: JSON.stringify(null),
 		HEALTH_CHECK_PATH: JSON.stringify('/healthz'),
 		READINESS_CHECK_PATH: JSON.stringify('/readyz'),
 		WARMUP_PATHS: JSON.stringify(['/']),
@@ -199,8 +205,20 @@ export function buildRuntime(options = {}) {
 
 	copyRuntime(runtimeDir, dir, /** @type {Record<string, string>} */ (replace));
 
+	// Mirror adapt()'s post-copy fixups: the tracing helper reaches
+	// trace-context.js at the payload root, and the provider stub keeps the
+	// bridge import resolvable.
+	const tracingPath = path.join(dir, 'tracing.js');
+	writeFileSync(
+		tracingPath,
+		readFileSync(tracingPath, 'utf8').replace("from '../trace-context.js';", "from './trace-context.js';")
+	);
+	writeFileSync(path.join(dir, 'trace-context.js'), readFileSync(path.join(repoRoot, 'src', 'trace-context.js'), 'utf8'));
+	writeFileSync(path.join(dir, 'tracing-provider.js'), 'export default null;\n');
+
 	mkdirSync(path.join(dir, 'server'), { recursive: true });
 	writeFileSync(path.join(dir, 'server', 'index.js'), options.serverSource ?? FIXTURE_SERVER);
+	writeFileSync(path.join(dir, 'server', 'ws-handler.js'), options.wsHandlerSource ?? '// No WebSocket handler configured\n');
 	writeFileSync(
 		path.join(dir, 'server', 'manifest.js'),
 		options.manifestSource ??

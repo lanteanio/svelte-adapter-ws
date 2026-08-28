@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rollup } from 'rollup';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
@@ -6,8 +7,114 @@ import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
 import { normalizeStaticCacheControl, normalizeStaticHeaders } from './build-config.js';
 import { listExcludedDotPaths } from './static-scan.js';
+import {
+	assertWireSubscribeAuthorization,
+	assertProtectiveNumber,
+	assertSharedOptionValues,
+	describeUnknownOptionKeys,
+	DEFAULT_MAX_PAYLOAD_LENGTH
+} from './config-guards.js';
+import { normalizeMessageAdmission } from './runtime/utils/message-admission.js';
 
 const runtimeDir = fileURLToPath(new URL('./runtime', import.meta.url).href);
+
+// Empty default WebSocket handler - subscribe/unsubscribe is handled by the
+// runtime for ALL messages regardless of user handler.
+const DEFAULT_WS_HANDLER = '// Built-in: subscribe/unsubscribe handled by the runtime\n';
+
+/**
+ * Every `websocket.*` option key the family declares. Keys whose lanes have
+ * not shipped in this adapter REFUSE the build (see UNSHIPPED_WEBSOCKET_KEYS)
+ * rather than silently no-op'ing; unknown keys warn like the top level.
+ */
+export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
+	'handler', 'path', 'authPath', 'adminPath', 'adminAuthAcknowledged', 'metrics', 'primaryInit', 'workers',
+	'maxPayloadLength', 'idleTimeout', 'maxBackpressure', 'closeOnBackpressureLimit', 'maxTopicSeqEntries',
+	'sendPingsAutomatically', 'compression', 'allowedOrigins',
+	'upgradeTimeout', 'upgradeRateLimit', 'upgradeRateLimitWindow', 'upgradeAdmission',
+	'messageAdmission', 'egress',
+	'authPathRateLimit', 'authPathRateLimitWindow',
+	'pressure', 'protection', 'stateHashIntervalMs', 'consistencyAuditIntervalMs',
+	'resourceGrowthAuditIntervalMs', 'postureExport',
+	'allowSystemTopicSubscribe', 'authorizeWireSubscribe', 'allowNonAsciiTopics',
+	'authPathRequireOrigin', 'compressCredentialedResponses', 'unsafeSameOriginWithoutHostPin'
+]);
+
+/**
+ * Family websocket options whose lanes have not shipped here. A config that
+ * sets one expects behavior this build cannot deliver, so the build refuses
+ * loudly - a protection knob that silently does nothing is worse than an
+ * error at the only moment anyone is watching.
+ */
+const UNSHIPPED_WEBSOCKET_KEYS = [
+	'adminPath', 'adminAuthAcknowledged', 'metrics', 'primaryInit', 'workers',
+	'maxTopicSeqEntries', 'upgradeAdmission', 'egress', 'pressure', 'protection',
+	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
+	'postureExport'
+];
+
+/**
+ * The `wsOpts` payload serialized into the build as `WS_OPTIONS`. Every
+ * runtime-tunable `websocket.*` key this adapter honors is threaded through
+ * here - a documented key missing from this object would be silently dropped
+ * at build time.
+ *
+ * @param {Record<string, any> | null} websocket - normalized websocket options
+ * @returns {Record<string, unknown>}
+ */
+export function serializeWsOptions(websocket) {
+	// A flag that RESTRICTS access must never be coerced: `=== true` reads
+	// treat every other value as "off", so a misshaped value is a build error.
+	assertWireSubscribeAuthorization(websocket, 'authorizeWireSubscribe');
+	assertProtectiveNumber(websocket, 'upgradeRateLimit');
+	assertProtectiveNumber(websocket, 'authPathRateLimit');
+	const ZERO_WINDOW =
+		'A zero WINDOW does not disable the limiter, it breaks it: every request then looks ' +
+		'like a fresh window, the estimate evaluates to NaN, and NaN >= limit is false - so ' +
+		'everything is admitted. Set the limit itself to 0 to disable it deliberately.';
+	assertProtectiveNumber(websocket, 'upgradeRateLimitWindow', 'websocket.upgradeRateLimitWindow', { allowZero: false, zeroMeans: ZERO_WINDOW });
+	assertProtectiveNumber(websocket, 'authPathRateLimitWindow', 'websocket.authPathRateLimitWindow', { allowZero: false, zeroMeans: ZERO_WINDOW });
+	assertProtectiveNumber(websocket, 'maxPayloadLength', 'websocket.maxPayloadLength', {
+		allowZero: false,
+		ceiling: 0x7fffffff,
+		zeroMeans:
+			'ws reads maxPayload 0 as UNLIMITED, the opposite of a zero-byte ceiling. ' +
+			'Raise the limit instead.'
+	});
+	assertProtectiveNumber(websocket, 'maxBackpressure', 'websocket.maxBackpressure', {
+		allowZero: false,
+		zeroMeans:
+			'A zero backpressure ceiling reads as "drop every frame the socket cannot flush ' +
+			'synchronously". Raise the ceiling instead.'
+	});
+	assertProtectiveNumber(websocket, 'idleTimeout');
+	assertProtectiveNumber(websocket, 'upgradeTimeout');
+	assertSharedOptionValues(websocket, (key) => `websocket.${key}`);
+	normalizeMessageAdmission(websocket?.messageAdmission, 'websocket.messageAdmission');
+	return {
+		maxPayloadLength: websocket?.maxPayloadLength ?? DEFAULT_MAX_PAYLOAD_LENGTH,
+		idleTimeout: websocket?.idleTimeout ?? 120,
+		maxBackpressure: websocket?.maxBackpressure ?? 1024 * 1024,
+		closeOnBackpressureLimit: websocket?.closeOnBackpressureLimit ?? false,
+		sendPingsAutomatically: websocket?.sendPingsAutomatically ?? true,
+		compression: websocket?.compression ?? false,
+		allowedOrigins: websocket?.allowedOrigins ?? 'same-origin',
+		upgradeTimeout: websocket?.upgradeTimeout ?? 10,
+		upgradeRateLimit: websocket?.upgradeRateLimit ?? 10,
+		upgradeRateLimitWindow: websocket?.upgradeRateLimitWindow ?? 10,
+		authPathRateLimit: websocket?.authPathRateLimit ?? 30,
+		authPathRateLimitWindow: websocket?.authPathRateLimitWindow ?? 10,
+		messageAdmission: websocket?.messageAdmission,
+		allowSystemTopicSubscribe: websocket?.allowSystemTopicSubscribe === true,
+		authorizeWireSubscribe: websocket?.authorizeWireSubscribe === 'strict'
+			? 'strict'
+			: websocket?.authorizeWireSubscribe === true,
+		allowNonAsciiTopics: websocket?.allowNonAsciiTopics === true,
+		authPathRequireOrigin: websocket?.authPathRequireOrigin !== false,
+		compressCredentialedResponses: websocket?.compressCredentialedResponses === true,
+		unsafeSameOriginWithoutHostPin: websocket?.unsafeSameOriginWithoutHostPin === true
+	};
+}
 
 /**
  * Every top-level option key the adapter factory consumes. A key outside this
@@ -49,6 +156,68 @@ export function renderRefusedDotfileWarning(refused) {
 		`.well-known/ still serves its own non-dot files): ${refused.join(', ')}. ` +
 		'Rename the file to serve it, or set staticDotfiles: true to serve every dotfile.'
 	);
+}
+
+/**
+ * Bundle a user-authored server module (the ws-handler fallback) through
+ * esbuild, resolving SvelteKit aliases ($lib, kit.alias) and the $env / $app
+ * virtual modules the way the app's own build would.
+ *
+ * @param {import('@sveltejs/kit').Builder} builder
+ * @param {string} entry - path to the user module to bundle
+ * @param {string} outfile - destination in the build temp dir
+ */
+async function esbuildServerModule(builder, entry, outfile) {
+	const esbuild = await import('esbuild');
+	const { loadEnv } = await import('vite');
+	const libDir = path.resolve(builder.config.kit.files?.lib || 'src/lib');
+	const publicPrefix = builder.config.kit.env?.publicPrefix ?? 'PUBLIC_';
+	const allEnv = loadEnv('production', process.cwd(), '');
+	const version = builder.config.kit.version?.name ?? '';
+	/** @type {Record<string, string>} */
+	const aliasMap = { '$lib': libDir };
+	const kitAliases = builder.config.kit.alias;
+	if (kitAliases) {
+		for (const [key, value] of Object.entries(kitAliases)) {
+			if (!(key in aliasMap)) aliasMap[key] = path.resolve(value);
+		}
+	}
+	await esbuild.build({
+		entryPoints: [path.resolve(entry)],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		outfile,
+		alias: aliasMap,
+		packages: 'external',
+		plugins: [{
+			name: 'sveltekit-virtual-modules',
+			setup(build) {
+				build.onResolve({ filter: /^\$(env|app)\// }, (args) => ({
+					path: args.path,
+					namespace: 'sveltekit'
+				}));
+				build.onLoad({ filter: /.*/, namespace: 'sveltekit' }, (args) => {
+					if (args.path === '$app/environment') {
+						return { contents: `export const dev = false;\nexport const building = false;\nexport const version = ${JSON.stringify(version)};` };
+					}
+					const isPublic = args.path.includes('/public');
+					const isStatic = args.path.includes('/static');
+					if (!isStatic) {
+						if (isPublic) {
+							return { contents: `export const env = new Proxy(process.env, { get(t, k) { return typeof k === 'string' && k.startsWith(${JSON.stringify(publicPrefix)}) ? t[k] : undefined; }, ownKeys(t) { return Object.keys(t).filter(k => k.startsWith(${JSON.stringify(publicPrefix)})); }, has(t, k) { return typeof k === 'string' && k.startsWith(${JSON.stringify(publicPrefix)}) && k in t; }, getOwnPropertyDescriptor(t, k) { if (typeof k === 'string' && k.startsWith(${JSON.stringify(publicPrefix)}) && k in t) return { value: t[k], enumerable: true, configurable: true }; return undefined; } });` };
+						}
+						return { contents: 'export const env = process.env;' };
+					}
+					const entries = Object.entries(allEnv).filter(([k]) =>
+						(isPublic ? k.startsWith(publicPrefix) : !k.startsWith(publicPrefix))
+						&& /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k)
+					);
+					return { contents: entries.map(([k, v]) => `export const ${k} = ${JSON.stringify(v)};`).join('\n') || 'export {};' };
+				});
+			}
+		}]
+	});
 }
 
 /** @type {import('./index.js').default} */
@@ -102,23 +271,39 @@ export default function (opts = {}) {
 		}
 	}
 
-	// These two option families are declared surface across the adapter family,
-	// but their lanes have not shipped in this adapter. A config that sets them
+	// The tracing lane has not shipped in this adapter. A config that sets it
 	// expects behavior this build cannot deliver, so the build refuses loudly
 	// instead of dropping the option on the floor.
-	if (opts.websocket !== undefined && opts.websocket !== false) {
-		throw new Error(
-			'[adapter-ws] The websocket option is not available yet in svelte-adapter-ws. ' +
-			'The realtime lane is under construction; until it ships, use svelte-adapter-uws ' +
-			'for realtime apps or remove the websocket option.'
-		);
-	}
 	if (opts.tracing != null) {
 		throw new Error(
 			'[adapter-ws] The tracing option is not available yet in svelte-adapter-ws. ' +
 			'Remove the option, or instrument via OpenTelemetry auto-instrumentation, which ' +
 			'hooks node:http directly.'
 		);
+	}
+
+	// Normalize websocket config: true -> {}, false/undefined -> null
+	const websocket =
+		opts.websocket === true
+			? {}
+			: opts.websocket || null;
+
+	if (websocket) {
+		for (const key of UNSHIPPED_WEBSOCKET_KEYS) {
+			if (websocket[key] !== undefined) {
+				throw new Error(
+					`[adapter-ws] websocket.${key} is not available yet in svelte-adapter-ws. ` +
+					'The lane behind it has not shipped here; remove the option, or use ' +
+					'svelte-adapter-uws where it is supported.'
+				);
+			}
+		}
+		if (websocket.handler != null && typeof websocket.handler !== 'string') {
+			throw new Error(
+				`websocket.handler must be a path string (e.g. './src/lib/server/ws.js') - ` +
+				`got ${JSON.stringify(websocket.handler)}.`
+			);
+		}
 	}
 
 	// Validate `staticHeaders` eagerly so a misshaped value fails before any
@@ -178,6 +363,41 @@ export default function (opts = {}) {
 				].join('\n\n')
 			);
 
+			// - WebSocket handler module -----------------------------------------
+			if (websocket) {
+				if (existsSync(`${tmp}/ws-handler.js`)) {
+					// A Vite plugin already emitted the handler through the app's
+					// own bundle; take it as it stands.
+					builder.log.minor('WebSocket handler: built by Vite plugin');
+				} else {
+					let handlerFile = websocket.handler;
+					if (!handlerFile) {
+						const candidates = ['src/hooks.ws.js', 'src/hooks.ws.ts', 'src/hooks.ws.mjs'];
+						for (const candidate of candidates) {
+							if (existsSync(candidate)) {
+								handlerFile = candidate;
+								break;
+							}
+						}
+					}
+					if (handlerFile) {
+						if (!existsSync(handlerFile) && (handlerFile.startsWith('./') || handlerFile.startsWith('../'))) {
+							throw new Error(
+								`[adapter-ws] WebSocket handler ${JSON.stringify(handlerFile)} does not exist.`
+							);
+						}
+						// Bundle through esbuild to resolve SvelteKit aliases and TS.
+						await esbuildServerModule(builder, handlerFile, `${tmp}/ws-handler.js`);
+						builder.log.minor(`WebSocket handler: ${handlerFile}`);
+					} else {
+						writeFileSync(`${tmp}/ws-handler.js`, DEFAULT_WS_HANDLER);
+						builder.log.minor('WebSocket enabled (built-in handler)');
+					}
+				}
+			} else {
+				writeFileSync(`${tmp}/ws-handler.js`, '// No WebSocket handler configured\n');
+			}
+
 			// The public @sveltejs/kit/node primitives the runtime is built on,
 			// bundled INTO the build output. The copied runtime cannot import
 			// '@sveltejs/kit/node' from node_modules at deploy time - kit is a
@@ -194,7 +414,8 @@ export default function (opts = {}) {
 			const input = {
 				index: `${tmp}/index.js`,
 				manifest: `${tmp}/manifest.js`,
-				'kit-node': `${tmp}/kit-node.js`
+				'kit-node': `${tmp}/kit-node.js`,
+				'ws-handler': `${tmp}/ws-handler.js`
 			};
 
 			if (builder.hasServerInstrumentationFile?.()) {
@@ -279,13 +500,53 @@ export default function (opts = {}) {
 				}
 			}
 
+			// WebSocket path config, serialized as globals for the runtime.
+			const wsPath = websocket?.path ?? '/ws';
+			if (wsPath[0] !== '/') {
+				throw new Error(
+					`websocket.path must start with '/' - got '${wsPath}'. Use '/${wsPath}' instead.`
+				);
+			}
+			const wsAuthPath = websocket?.authPath ?? '/__ws/auth';
+			if (wsAuthPath[0] !== '/') {
+				throw new Error(
+					`websocket.authPath must start with '/' - got '${wsAuthPath}'. Use '/${wsAuthPath}' instead.`
+				);
+			}
+			if (wsAuthPath === wsPath) {
+				throw new Error(
+					`websocket.authPath ('${wsAuthPath}') must differ from websocket.path ('${wsPath}').`
+				);
+			}
+			const wsOpts = websocket ? serializeWsOptions(websocket) : null;
+
+			// Loud on unknown websocket.* keys: options are serialized into the
+			// build, so a key the adapter does not recognize would be dropped
+			// silently - warn so a typo surfaces instead of no-op'ing.
+			if (websocket) {
+				const unknownWsKeys = describeUnknownOptionKeys(websocket, KNOWN_WEBSOCKET_OPTION_KEYS);
+				if (unknownWsKeys.length) {
+					builder.log.warn(
+						`[adapter-ws] unknown websocket option(s): ${unknownWsKeys.join(', ')} - ` +
+						'not recognized by the adapter and ignored. Check the spelling against the ' +
+						'documented websocket options.'
+					);
+				}
+			}
+
 			builder.copy(runtimeDir, out, {
 				replace: {
 					MANIFEST: './server/manifest.js',
 					SERVER: './server/index.js',
 					KIT_NODE: './server/kit-node.js',
+					WS_HANDLER: './server/ws-handler.js',
+					TRACING_PROVIDER: './tracing-provider.js',
 					ENV_PREFIX: JSON.stringify(envPrefix),
 					PRECOMPRESS: JSON.stringify(precompress),
+					WS_ENABLED: JSON.stringify(!!websocket),
+					WS_PATH: JSON.stringify(wsPath),
+					WS_AUTH_PATH: JSON.stringify(wsAuthPath),
+					WS_OPTIONS: JSON.stringify(wsOpts),
 					HEALTH_CHECK_PATH: JSON.stringify(healthCheckPath),
 					READINESS_CHECK_PATH: JSON.stringify(readinessCheckPath),
 					WARMUP_PATHS: JSON.stringify(warmupPaths),
@@ -294,6 +555,25 @@ export default function (opts = {}) {
 					STATIC_DOTFILES: JSON.stringify(staticDotfiles)
 				}
 			});
+			// tracing.js reaches trace-context.js at the runtime root once
+			// copied; in the source tree it sits one level up.
+			const tracingRuntimePath = out + '/tracing.js';
+			const tracingRuntimeSource = readFileSync(tracingRuntimePath, 'utf8');
+			const generatedTracingRuntime = tracingRuntimeSource.replace(
+				"from '../trace-context.js';",
+				"from './trace-context.js';"
+			);
+			if (generatedTracingRuntime === tracingRuntimeSource) {
+				throw new Error('Failed to rewrite the generated tracing helper import.');
+			}
+			writeFileSync(tracingRuntimePath, generatedTracingRuntime);
+			writeFileSync(
+				out + '/trace-context.js',
+				readFileSync(new URL('./trace-context.js', import.meta.url), 'utf8')
+			);
+			// The tracing provider stub keeps the bridge import resolvable; the
+			// tracing option itself is refused until its lane ships.
+			writeFileSync(out + '/tracing-provider.js', 'export default null;\n');
 
 			// Runtime-readable identity metadata. Keep this as package/schema
 			// files beside the copied runtime rather than compiling version

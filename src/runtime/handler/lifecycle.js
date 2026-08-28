@@ -68,7 +68,7 @@ export function requestDone() {
  * @param {import('node:http').Server | import('node:https').Server} server
  * @param {string} host
  * @param {number} port
- * @param {{ warmupPaths?: string[] }} [opts]
+ * @param {{ warmupPaths?: string[], beforeReady?: () => Promise<void> }} [opts]
  * @returns {Promise<void>}
  */
 export async function start(server, host, port, opts = {}) {
@@ -97,6 +97,11 @@ export async function start(server, host, port, opts = {}) {
 		`[svelte-adapter-ws] Listening on http${is_tls ? 's' : ''}://${host}:${address?.port ?? port} ` +
 		`(bound in ${(monotonicNow() - t0).toFixed(0)}ms)`
 	);
+
+	// The app's init hook runs with the socket already bound (the kernel
+	// queues connections during a rolling restart) but before warmup and
+	// readiness, so top-level state it installs exists before any request.
+	if (opts.beforeReady) await opts.beforeReady();
 
 	const warmupPaths = opts.warmupPaths ?? [];
 	if (warmupPaths.length > 0) {

@@ -103,9 +103,30 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    resolution and a managed drain of in-flight requests are in. `PROXY_PROTOCOL`
    and `CLUSTER_WORKERS` refuse the boot loudly rather than half-working.
 
-3. **JSON realtime** (not started): the upgrade path, the socket facade, and the
-   `platform` object with publish/send/subscribe/unsubscribe/sendTo/connections/
-   subscribers over a JS topic registry.
+3. **JSON realtime** (done): the upgrade path with async admission, origin
+   policy, per-IP rate limiting, upgrade timeout and validated custom 101
+   headers; the socket facade that synthesizes the family tri-state send
+   result (0 enqueued / 1 sent / 2 dropped) from `bufferedAmount` plus the
+   backpressure ceiling and throws on closed sockets exactly where the
+   sibling packages' liveness sweeps expect it; the JS topic registry with a
+   per-topic reverse index so a publish walks subscribers, not connections;
+   and the full `platform` surface - publish (seq-stamped per topic),
+   publishBatched with the shared batch frame for cap-holders, send, sendTo,
+   sendCoalesced with the drain pump, request/requestTopic over reply frames,
+   subscribe/checkSubscribe/unsubscribe with the shared authorization-policy
+   predicates and pending-subscribe revocation machinery, the game lane
+   (grantPublish/publishGame), adviseReconnect, hlc, and the extensions-facing
+   symbol slots under the family's shared `Symbol.for` keys. Control frames:
+   welcome, hello/caps with the lease grant, subscribe and subscribe-batch
+   with resume-on-subscribe gap-fill barriers, unsubscribe, resume, reply,
+   request-n, game, and the oversized-control-frame refusal. The
+   `authenticate` preflight endpoint with CSRF defense and rate limiting is
+   in; app hooks fire through the same lifecycle as the lead adapter (init
+   before readiness, shutdown inside the drain budget). The `websocket.*`
+   options whose lanes have not shipped here (admin, metrics, workers,
+   admission ceilings, egress, pressure tuning, posture) refuse the build
+   loudly. The binary `0x03` lanes currently deliver the JSON representation
+   of each event - a form the wire protocol requires every client to accept.
 
 4. **Binary wire** (not started): the `0x03` frame fan-out, per-connection topic
    ids, per-connection codec state, resume and seq stamping.

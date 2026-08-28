@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The JSON realtime lane: WebSocket upgrades over `node:http` with async
+  admission, origin policy, per-IP sliding-window rate limits, upgrade
+  timeout, and validated custom 101 headers; a socket facade that synthesizes
+  the family tri-state send result from `bufferedAmount` plus the
+  backpressure ceiling (shedding past it, optionally terminating the pinned
+  consumer) and throws on closed sockets for the accessors sibling packages
+  reap through; a topic registry with a per-topic reverse index; the full
+  `platform` surface over JSON delivery - seq-stamped publish, batched
+  publishing with the shared batch frame, send/sendTo/sendCoalesced with a
+  drain pump, request/reply, the subscribe authorization machinery on the
+  family's shared policy predicates and `Symbol.for` slots, the game lane,
+  adviseReconnect, hlc - and the control-frame set: welcome, hello with the
+  lease grant, subscribe and subscribe-batch with resume-on-subscribe
+  gap-fill, unsubscribe, resume, reply, request-n, game, and the oversized
+  control-frame refusal. The `authenticate` preflight endpoint ships with
+  CSRF defense and rate limiting; idle connections are reaped by ping/pong
+  with `idleTimeout`; app hooks (`init`, `shutdown`, `open`, `message`,
+  `close`, `drain`, `upgrade`, `subscribe`, `subscribeBatch`, `unsubscribe`,
+  `resume`, `authenticate`, `attribution`) run with the lead adapter's
+  semantics. `svelte-adapter-ws/upgrade-response` and
+  `svelte-adapter-ws/connection` are exported. Family websocket options whose
+  lanes have not shipped here refuse the build instead of silently no-op'ing.
+
 - The HTTP half: the `adapter()` build (rollup-bundled server output, the
   public `@sveltejs/kit/node` primitives bundled in as `server/kit-node.js`)
   and the `node:http`/`node:https` runtime. Static and prerendered assets are

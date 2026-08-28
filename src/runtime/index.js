@@ -89,6 +89,9 @@ async function performShutdown(signal, handler) {
 	}
 
 	await runShutdownCleanup(signal);
+	// The app's own shutdown hook runs inside the same budget as the drain -
+	// cleanup the app owns (queues, pools) settles before the process exits.
+	await handler.runAppShutdownHook?.();
 	await handler.shutdown({ timeoutMs: shutdown_timeout * 1000 });
 	process.exit(0);
 }

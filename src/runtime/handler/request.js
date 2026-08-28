@@ -16,6 +16,20 @@ import { lifecycleState, requestDone } from './lifecycle.js';
 const IS_WIN32 = process.platform === 'win32';
 
 /**
+ * Realtime HTTP routes, installed by handler.js when the websocket lane is
+ * built in: the 426 answer on the WebSocket path and the authenticate
+ * preflight endpoint. Null when realtime is off - the checks then cost one
+ * comparison.
+ * @type {{ wsPath: string, tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) => boolean } | null}
+ */
+let realtimeRoutes = null;
+
+/** @param {NonNullable<typeof realtimeRoutes>} routes */
+export function installRealtimeRoutes(routes) {
+	realtimeRoutes = routes;
+}
+
+/**
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  */
@@ -59,6 +73,18 @@ export function handleRequest(req, res) {
 			}
 			return;
 		}
+	}
+
+	if (realtimeRoutes !== null) {
+		// A plain GET on the WebSocket path is a client that forgot (or was
+		// stripped of) its upgrade headers - answer with the status that says
+		// so instead of rendering the app's 404.
+		if (pathname === realtimeRoutes.wsPath && isGetLike) {
+			res.writeHead(426, { 'content-type': 'text/plain', upgrade: 'websocket' });
+			res.end('WebSocket upgrade required');
+			return;
+		}
+		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname)) return;
 	}
 
 	// Static fast path: one Map lookup on the RAW undecoded pathname, four
