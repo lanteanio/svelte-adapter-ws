@@ -16,18 +16,22 @@
 	"type": "module",
 	"exports": {
 		".": {
+			"types": "./src/index.d.ts",
 			"default": "./src/index.js"
 		},
 		"./upgrade-response": {
+			"types": "./src/upgrade-response.d.ts",
 			"default": "./src/upgrade-response.js"
 		},
 		"./connection": {
+			"types": "./src/connection.d.ts",
 			"default": "./src/connection.js"
 		}
 	},
 	"files": [
 		"src",
 		"protocol.schema.json",
+		"test-vectors",
 		"LICENSE",
 		"README.md",
 		"CHANGELOG.md"

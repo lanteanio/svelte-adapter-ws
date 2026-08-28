@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Typed public entry points: AdapterOptions/WebSocketOptions/Platform/
+  PressureSnapshot in index.d.ts, plus typed upgrade-response and connection
+  subpaths; the exports map carries types conditions and the publish gate
+  (publint + attw, ESM-only profile) passes clean.
+
 - The golden gate: an AST platform-surface parity test against the lead
   adapter (fails on a missing key AND on a missing oracle checkout), the wire
   revision pinned byte-identical to the lead protocol.schema.json, and a
