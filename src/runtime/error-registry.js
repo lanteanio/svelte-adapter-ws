@@ -503,7 +503,6 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		anchor: 'adapter-err-recover-hook',
 		help: 'docs/errors.md#adapter-err-recover-hook'
 	})
-
 ]);
 
 const ERROR_BY_ID = new Map(ADAPTER_ERROR_REGISTRY.map((entry) => [entry.id, entry]));

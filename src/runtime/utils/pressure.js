@@ -1,4 +1,3 @@
-import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 
 /**
  * Resolve which pressure signal (if any) is firing for a given sample.

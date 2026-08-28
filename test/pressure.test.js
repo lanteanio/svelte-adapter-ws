@@ -112,6 +112,12 @@ describe('samplePressureOnce', () => {
 			drive('runaway-a');
 			expect(runaway().length).toBe(1);
 
+			// A full quiet dwell re-arms the latch: the topic alarms again on
+			// its next crossing.
+			for (let i = 0; i < 60; i++) samplePressureOnce(topicThresholds);
+			drive('runaway-a');
+			expect(runaway().length).toBe(2);
+
 			// With a listener registered the diagnostic line is suppressed
 			// entirely - the offenders go to the listener instead.
 			const seen = [];
