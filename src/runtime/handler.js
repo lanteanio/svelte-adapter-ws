@@ -113,7 +113,9 @@ if (WS_ENABLED) {
 	// import graph. The await rides module top-level await like _init.js.
 	realtime = await import('./handler/realtime.js');
 	server.on('upgrade', (req, socket, head) => {
-		void realtime?.handleUpgrade(req, socket, head);
+		void realtime?.handleUpgrade(req, socket, head).catch(() => {
+			try { socket.destroy(); } catch { /* already gone */ }
+		});
 	});
 	installRealtimeRoutes({
 		wsPath: realtime.wsPath(),

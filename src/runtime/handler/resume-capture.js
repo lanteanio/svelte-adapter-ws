@@ -76,18 +76,34 @@ export function discardResumeCapture(handle) {
  *
  * @param {ReturnType<typeof beginResumeCapture>} handle
  * @param {string} topic
- * @param {(payload: string) => void} deliver
+ * @param {(payload: string) => number} deliver - tri-state send (2 = dropped)
  */
 export function flushResumeTopic(handle, topic, deliver) {
 	const index = handle.entries.findIndex((e) => e.topic === topic);
 	if (index === -1) return;
 	const entry = handle.entries[index];
+	const truncatedMarker = () =>
+		deliver('{"topic":' + JSON.stringify('__replay:' + topic) + ',"event":"truncated","data":null}');
+	let failed = false;
 	if (entry.buffer.overflow) {
 		// Overflow: signal truncation FIRST so the resync marker is not lost
 		// behind the partial flush.
-		deliver('{"topic":' + JSON.stringify('__replay:' + topic) + ',"event":"truncated","data":null}');
+		if (truncatedMarker() === 2) failed = true;
 	}
-	for (const envelope of entry.buffer.frames) deliver(envelope);
+	if (!failed) {
+		for (const envelope of entry.buffer.frames) {
+			if (deliver(envelope) === 2) {
+				// A shed frame is a hole the client cannot detect by itself;
+				// the resync marker says so. A marker that is itself shed means
+				// the connection cannot be told - the caller closes it.
+				failed = truncatedMarker() === 2;
+				break;
+			}
+		}
+	}
 	unregister(entry);
 	handle.entries.splice(index, 1);
+	if (failed && typeof handle.facade?.end === 'function') {
+		handle.facade.end(1013, 'resume flush overflow');
+	}
 }

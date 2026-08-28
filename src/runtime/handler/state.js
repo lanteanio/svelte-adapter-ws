@@ -45,7 +45,18 @@ export const counters = {
 	/** Frames shed past maxBackpressure since boot. */
 	droppedFrames: 0,
 	/** Payload bytes shed past maxBackpressure since boot. */
-	droppedBytes: 0
+	droppedBytes: 0,
+	/** Exact shed window for the pressure sampler (recordBackpressureDrop). */
+	droppedFramesWindow: 0,
+	droppedBytesWindow: 0,
+	/** platform.publish calls in the current sample window. */
+	publishCountWindow: 0,
+	/** Live logical subscription count across every connection. */
+	totalSubscriptions: 0,
+	/** Worst client-reported send-gate backlog since the last sample. */
+	leaseSaturationPeak: 0,
+	/** The wall ratio the last sample measured (sizes lease grants). */
+	lastHeapUsedRatio: 0
 };
 
 // - Realtime state -----------------------------------------------------------
@@ -79,3 +90,35 @@ import { createCapCounts } from '../wire.js';
  * advertises a capability.
  */
 export const capCounts = createCapCounts();
+
+/**
+ * The live pressure snapshot: ONE stable object mutated in place by the 1 Hz
+ * sampler and returned by reference from `platform.pressure`. `sampledAt`
+ * null is the only discriminator between a real reading and this placeholder.
+ */
+export const pressureSnapshot = {
+	sampledAt: /** @type {number | null} */ (null),
+	active: false,
+	value: 0,
+	subscriberRatio: 0,
+	publishRate: 0,
+	memoryMB: 0,
+	reason: 'NONE',
+	psi: /** @type {object | null} */ (null),
+	cpuThrottle: /** @type {object | null} */ (null),
+	maxBufferedBytes: 0,
+	backpressuredConnections: 0,
+	droppedFrames: 0,
+	droppedBytes: 0,
+	egress: { deliveries: 0, bytes: 0, refusedTopic: 0, refusedTenant: 0 },
+	topPublishers: /** @type {Array<object>} */ ([])
+};
+
+/** onPressure transition listeners. @type {Set<(snapshot: object) => void>} */
+export const pressureListeners = new Set();
+
+/** onPublishRate window listeners. @type {Set<(top: Array<object>) => void>} */
+export const publishRateListeners = new Set();
+
+/** Per-topic publish counters for the current window. @type {Map<string, { m: number, b: number }>} */
+export const topicPublishStats = new Map();

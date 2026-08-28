@@ -1,12 +1,11 @@
 # svelte-adapter-ws
 
-> **Status: under construction.** The HTTP half is built and tested: a built
-> SvelteKit app serves over `node:http` through the public `@sveltejs/kit/node`
-> primitives, with the full static/prerendered semantics below. The realtime
-> half is not built yet - the `websocket` option refuses the build rather than
-> silently no-op'ing. For realtime apps, use
-> [svelte-adapter-uws](https://github.com/lanteanio/svelte-adapter-uws) today;
-> watch this one.
+> **Status: under construction, functionally broad.** The HTTP half, the JSON
+> realtime lane, the 0x03 binary wire, the pressure sampler and the managed
+> drain are built and tested against the family contracts. Not yet published
+> to npm; the remaining lanes are listed under Current state. Family options
+> whose lanes have not shipped here refuse the build rather than silently
+> no-op'ing.
 
 A SvelteKit adapter on Node's own `http`/`https` server plus the
 [ws](https://github.com/websockets/ws) library: it follows
@@ -124,9 +123,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    in; app hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). The `websocket.*`
    options whose lanes have not shipped here (admin, metrics, workers,
-   admission ceilings, egress, pressure tuning, posture) refuse the build
-   loudly. The binary `0x03` lanes currently deliver the JSON representation
-   of each event - a form the wire protocol requires every client to accept.
+   admission ceilings, egress, posture) refuse the build loudly.
    Graceful shutdown drains live sockets itself (`http.close()` never
    completes while one is open): new upgrades are refused the moment drain
    begins, every client gets the reconnect advisory with the
@@ -148,10 +145,20 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    (`test-vectors/binary.json`), varints decoded with division so shared ids
    above 2^32 survive. Seq values ride both representations from one stamp.
 
-5. **Pressure and protection parity** (not started): real `bufferedAmount`-driven
-   backpressure with a drain pump, and a `platform.pressure` snapshot with the
-   shape flow control actually consumes. A zero stub silently disables flow
-   control, so this lane ships with a slow-consumer bench that proves engagement.
+5. **Pressure** (done): the 1 Hz sampler behind `platform.pressure` mutates
+   one stable snapshot in place - publish rate, subscriber ratio, the
+   memory-wall ratio (distance to the nearest of the V8 heap limit and the
+   cgroup limit, never arena fullness), the bounded `bufferedAmount` walk
+   (1024-connection cap, 64 KiB threshold), the exact shed window, kernel PSI
+   and CFS-throttle signals where Linux provides them, and the top publishers
+   by rate. `platform.onPressure` fires on reason transitions,
+   `platform.onPublishRate` once per window; lease grants are sized from the
+   live heap ratio and subscriber ratio, and the client-reported send-gate
+   backlog folds into the headline `value`. `websocket.pressure` thresholds
+   are honored. `npm run bench:slow-consumer` proves engagement end to end: a
+   TCP-paused consumer must appear in the sampler, shed at the
+   `maxBackpressure` ceiling, and recover to a clean snapshot - a zero stub
+   fails the bench.
 
 6. **Golden gate** (not started): the transport-independent DST goldens
    reproduced under this backend, and the `PLATFORM_KEYS` parity site added.

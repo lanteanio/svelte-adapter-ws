@@ -48,7 +48,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
 	'adminPath', 'adminAuthAcknowledged', 'metrics', 'primaryInit', 'workers',
-	'maxTopicSeqEntries', 'upgradeAdmission', 'egress', 'pressure', 'protection',
+	'maxTopicSeqEntries', 'upgradeAdmission', 'egress', 'protection',
 	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
 	'postureExport'
 ];
@@ -105,6 +105,7 @@ export function serializeWsOptions(websocket) {
 		authPathRateLimit: websocket?.authPathRateLimit ?? 30,
 		authPathRateLimitWindow: websocket?.authPathRateLimitWindow ?? 10,
 		messageAdmission: websocket?.messageAdmission,
+		pressure: websocket?.pressure,
 		allowSystemTopicSubscribe: websocket?.allowSystemTopicSubscribe === true,
 		authorizeWireSubscribe: websocket?.authorizeWireSubscribe === 'strict'
 			? 'strict'

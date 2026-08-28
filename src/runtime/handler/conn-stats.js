@@ -24,7 +24,7 @@ export function bumpIn(userData, payload) {
 	const stats = userData?.[WS_STATS];
 	if (!stats) return;
 	stats.messagesIn++;
-	stats.bytesIn += typeof payload === 'string' ? payload.length : payload.byteLength;
+	stats.bytesIn += typeof payload === 'string' ? Buffer.byteLength(payload) : payload.byteLength;
 }
 
 /**
@@ -36,5 +36,5 @@ export function bumpOut(userData, payload) {
 	const stats = userData?.[WS_STATS];
 	if (!stats) return;
 	stats.messagesOut++;
-	stats.bytesOut += typeof payload === 'string' ? payload.length : payload.byteLength;
+	stats.bytesOut += typeof payload === 'string' ? Buffer.byteLength(payload) : payload.byteLength;
 }

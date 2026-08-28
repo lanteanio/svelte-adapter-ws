@@ -37,7 +37,8 @@
 		"check:determinism": "node scripts/check-determinism.js",
 		"check:publish": "publint && attw --pack . --profile esm-only",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"bench:slow-consumer": "node bench/slow-consumer.mjs"
 	},
 	"dependencies": {
 		"@rollup/plugin-commonjs": "^28.0.0",

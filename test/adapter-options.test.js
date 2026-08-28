@@ -28,7 +28,8 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ websocket: {} })).not.toThrow();
 		expect(() => adapter({ websocket: false })).not.toThrow();
 		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
-		for (const key of ['metrics', 'primaryInit', 'workers', 'upgradeAdmission', 'egress', 'pressure', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
+		expect(() => adapter({ websocket: { pressure: { publishRatePerSec: 500 } } })).not.toThrow();
+		for (const key of ['metrics', 'primaryInit', 'workers', 'upgradeAdmission', 'egress', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
 			expect(() => adapter({ websocket: { [key]: key === 'workers' ? { compute: 1 } : '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}

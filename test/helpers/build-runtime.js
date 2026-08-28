@@ -26,6 +26,10 @@ function substitute(source, replace) {
 	for (const [key, value] of Object.entries(replace)) {
 		out = out.replace(new RegExp(`\\b${key}\\b`, 'g'), value);
 	}
+	// The payload lives in a temp dir with no node_modules; the `ws` bare
+	// specifier (resolved from the deployment's install in production) is
+	// pinned to this repo's own dependency so plain `node` can run payloads.
+	out = out.replace("from 'ws';", `from ${JSON.stringify(import.meta.resolve('ws'))};`);
 	return out;
 }
 

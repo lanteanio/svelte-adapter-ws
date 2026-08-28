@@ -17,7 +17,8 @@ import {
 } from '../utils/ws-symbols.js';
 import {
 	MAX_COALESCED_KEYS_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION,
-	MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION
+	MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+	TOPIC_SEQS_WARN_THRESHOLD
 } from '../utils/caps.js';
 import {
 	deniesUngrantedObserve, exceedsPendingSubscribeCap, exceedsSubscriptionCap
@@ -34,7 +35,8 @@ import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { buildBinaryFrame } from '../wire.js';
-import { capCounts, counters, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { notePublish } from './pressure.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
 import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
 import { registerWireCodec } from './codec-registry.js';
@@ -55,6 +57,7 @@ const ALLOW_NON_ASCII_TOPICS = Boolean(WS_OPTIONS && WS_OPTIONS.allowNonAsciiTop
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 
 let sendToAsyncWarned = false;
+let _warnedTopicSeqCardinality = false;
 
 /**
  * Whether the app ships its own subscribe authorization (a side-effect-only
@@ -127,8 +130,10 @@ function fanOut(topic, envelope, excludeWs, compress) {
 		if (!facade) continue;
 		try {
 			const result = /** @type {any} */ (facade).send(envelope, false, compress);
-			if (result !== 2) sent = true;
-			bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
+			if (result !== 2) {
+				sent = true;
+				bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
+			}
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -225,9 +230,18 @@ function publish(topic, event, data, options) {
 	const excludeWs = (options && options.excludeWs) || null;
 
 	const seq = stampSeqValue(seqOption, topicSeqs, topic);
+	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
+		_warnedTopicSeqCardinality = true;
+		console.warn(
+			'[svelte-adapter-ws] the per-topic seq registry reached ' + TOPIC_SEQS_WARN_THRESHOLD +
+			' topics. High-cardinality topic names (per-user, per-request) grow this registry ' +
+			'without bound; prefer bounded topic names or publish with { seq: false }.'
+		);
+	}
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
 	const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, jitterMs);
 	fatal(envelope.length > 0, 'envelope.empty', null);
+	notePublish(topic, envelope.length);
 
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
@@ -318,8 +332,13 @@ export const platform = {
 
 	/**
 	 * @param {Array<{ topic: string, event: string, data?: unknown, options?: object }>} messages
+	 * @param {{ compress?: boolean } | undefined} [options]
 	 */
-	publishBatched(messages) {
+	publishBatched(messages, options) {
+		// One compression decision for the whole batch, applied identically on
+		// the shared-frame and per-event paths - the delivered shape must not
+		// decide whether a frame deflates. Opt-in, like every wire lane.
+		const compressOptIn = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		if (!Array.isArray(messages) || messages.length === 0) return;
 		messages = collapseByCoalesceKey(messages);
 		if (messages.length === 0) return;
@@ -351,7 +370,7 @@ export const platform = {
 			// shapes pay no shared-frame machinery.
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
-				publish(m.topic, m.event, m.data, /** @type {any} */ (m.options));
+				publish(m.topic, m.event, m.data, /** @type {any} */ ({ ...(m.options || {}), compress: compressOptIn }));
 			}
 			return;
 		}
@@ -390,12 +409,12 @@ export const platform = {
 			const caps = userData[WS_CAPS];
 			try {
 				if (caps && caps.has('batch')) {
-					/** @type {any} */ (facade).send(sharedBatchEnv, false, false);
+					/** @type {any} */ (facade).send(sharedBatchEnv, false, compressOptIn);
 					bumpOut(userData, sharedBatchEnv);
 				} else {
 					for (let i = 0; i < events.length; i++) {
 						if (!allSameTopic && !topics.has(events[i].topic)) continue;
-						/** @type {any} */ (facade).send(events[i].env, false, false);
+						/** @type {any} */ (facade).send(events[i].env, false, compressOptIn);
 						bumpOut(userData, events[i].env);
 					}
 				}
@@ -436,6 +455,7 @@ export const platform = {
 		const excludeWs = (options && options.excludeWs) || null;
 		const seq = stampSeqValue(seqOption, topicSeqs, topic);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+		notePublish(topic, envelope.length);
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
 		// JSON fast path: nobody on this worker advertised the capability.
@@ -530,6 +550,7 @@ export const platform = {
 			seqs[i] = stampSeqValue(typeof entrySeq === 'number' ? entrySeq : undefined, topicSeqs, topic) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
 		}
+		for (let i = 0; i < count; i++) notePublish(topic, envelopes[i].length);
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < count; i++) captureResumeFrame(topic, envelopes[i]);
 		}
@@ -728,6 +749,7 @@ export const platform = {
 	 * @returns {number}
 	 */
 	adviseReconnect(options) {
+		const compress = WS_COMPRESSION_ON && Boolean(options && /** @type {any} */ (options).compress === true);
 		const windowMs = options && typeof options.windowMs === 'number' && options.windowMs > 0
 			? Math.floor(options.windowMs) : 0;
 		if (windowMs <= 0) return 0;
@@ -747,7 +769,7 @@ export const platform = {
 					if (decision && typeof (/** @type {any} */ (decision).then) === 'function') continue;
 					if (!decision) continue;
 				}
-				/** @type {any} */ (facade).send(frame, false, false);
+				/** @type {any} */ (facade).send(frame, false, compress);
 				bumpOut(userData, frame);
 				if (doClose) /** @type {any} */ (facade).end(1001, 'Server draining');
 				count++;
@@ -794,26 +816,9 @@ export const platform = {
 	diagnostic(_diagnosticId) { return undefined; },
 
 	get pressure() {
-		// The sampler lands with the pressure lane; until then this is the
-		// documented "not sampled yet" placeholder every consumer must handle
-		// before a first tick anyway. sampledAt null is the discriminator.
-		return {
-			sampledAt: null,
-			active: false,
-			value: 0,
-			subscriberRatio: 0,
-			publishRate: 0,
-			memoryMB: 0,
-			reason: 'NONE',
-			psi: null,
-			cpuThrottle: null,
-			maxBufferedBytes: 0,
-			backpressuredConnections: 0,
-			droppedFrames: counters.droppedFrames,
-			droppedBytes: counters.droppedBytes,
-			egress: { deliveries: 0, bytes: 0, refusedTopic: 0, refusedTenant: 0 },
-			topPublishers: []
-		};
+		// The LIVE snapshot object, mutated in place by the 1 Hz sampler.
+		// Consumers must not mutate it; sampledAt null means never sampled.
+		return pressureSnapshot;
 	},
 
 	get protection() { return 'normal'; },
@@ -822,8 +827,27 @@ export const platform = {
 
 	metricsSnapshot() { return Promise.resolve(null); },
 
-	onPressure(_cb) { return () => {}; },
-	onPublishRate(_cb) { return () => {}; },
+	/**
+	 * Register a callback fired when the pressure `reason` TRANSITIONS -
+	 * at most once per sample tick. Returns the unsubscriber.
+	 * @param {(snapshot: object) => void} cb
+	 */
+	onPressure(cb) {
+		if (typeof cb !== 'function') return () => {};
+		pressureListeners.add(cb);
+		return () => { pressureListeners.delete(cb); };
+	},
+
+	/**
+	 * Register a callback handed the window's top publishers once per sample
+	 * window. Returns the unsubscriber.
+	 * @param {(top: Array<object>) => void} cb
+	 */
+	onPublishRate(cb) {
+		if (typeof cb !== 'function') return () => {};
+		publishRateListeners.add(cb);
+		return () => { publishRateListeners.delete(cb); };
+	},
 
 	/**
 	 * Server-side subscribe with the app's authorization hook. Returns null
@@ -1009,6 +1033,7 @@ export const platform = {
 	publishGame(senderWs, topic, event, data, id) {
 		const seq = stampSeqValue(undefined, topicSeqs, topic);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
+		notePublish(topic, env.length);
 		if (resumeCaptureActive()) captureResumeFrame(topic, env);
 		const subscribers = subscribersOf(topic);
 		let delivered = 0;

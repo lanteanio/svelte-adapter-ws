@@ -46,7 +46,10 @@ export function wrapWebSocket(rawWs, userData, opts) {
 	// buffer emptied and fires the drain hook once per pressure episode.
 	let pressured = false;
 	const onFlushed = () => {
-		if (pressured && rawWs.bufferedAmount === 0) {
+		// Never on a dead socket: node invokes pending write callbacks when a
+		// socket is destroyed, and a drain against a closed connection would
+		// run the app hook on a corpse.
+		if (pressured && rawWs.readyState === OPEN && rawWs.bufferedAmount === 0) {
 			pressured = false;
 			opts.onDrain?.(facade);
 		}
@@ -66,7 +69,7 @@ export function wrapWebSocket(rawWs, userData, opts) {
 				// Past the ceiling: the frame is shed, exactly as the native
 				// tier sheds it. `closeOnBackpressureLimit` trades the shed for
 				// a bounded-recovery close of the chronically slow consumer.
-				const size = typeof message === 'string' ? message.length : message.byteLength;
+				const size = typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength;
 				opts.onDrop?.(size);
 				if (opts.closeOnBackpressureLimit) {
 					// Abrupt close, matching the native tier's forcible close of
@@ -128,13 +131,22 @@ export function wrapWebSocket(rawWs, userData, opts) {
 			if (rawWs.readyState !== OPEN) throwClosed();
 			const subscribers = subscribersOf(topic);
 			if (!subscribers) return false;
-			const payload = typeof message === 'string' ? message : Buffer.from(/** @type {ArrayBuffer} */ (message));
 			let sent = false;
 			for (const peer of subscribers) {
 				if (peer === rawWs || peer.readyState !== OPEN) continue;
-				if (opts.compressionEnabled) peer.send(payload, { binary: isBinary, compress: compress === true });
-				else peer.send(payload, { binary: isBinary });
-				sent = true;
+				// Through the peer FACADE, never the raw socket: the ceiling,
+				// the shed accounting and closeOnBackpressureLimit must apply
+				// to socket-level publishes exactly as to platform sends.
+				const peerFacade = opts.peerFacadeOf?.(peer);
+				try {
+					if (peerFacade) {
+						if (peerFacade.send(message, isBinary, compress) !== 2) sent = true;
+					} else {
+						const payload = typeof message === 'string' ? message : Buffer.from(/** @type {ArrayBuffer} */ (message));
+						peer.send(payload, { binary: isBinary });
+						sent = true;
+					}
+				} catch { /* peer closed mid-walk */ }
 			}
 			return sent;
 		},
@@ -188,6 +200,9 @@ export function wrapWebSocket(rawWs, userData, opts) {
 		 * @param {() => void} fn
 		 */
 		cork(fn) { fn(); },
+
+		/** Drain-edge backstop for callback-less writes (ping/pong/close). */
+		_checkDrain: onFlushed,
 
 		/** The raw ws socket, for runtime-internal delivery walks. */
 		_raw: rawWs

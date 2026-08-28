@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The pressure lane: a 1 Hz sampler behind `platform.pressure` (publish rate,
+  subscriber ratio, memory-wall ratio, the bounded bufferedAmount walk, the
+  exact backpressure-shed window, PSI/CFS signals on Linux, top publishers),
+  `onPressure` transition callbacks, `onPublishRate` window callbacks,
+  pressure-sized lease grants, `websocket.pressure` threshold overrides, and
+  the slow-consumer bench (`npm run bench:slow-consumer`) that fails unless
+  flow control demonstrably engages and recovers. Hardening from an
+  adversarial review of the realtime lane: the origin gate now honors
+  HOST_HEADER/PROTOCOL_HEADER/PORT_HEADER on both doors, the authenticate
+  door checks origin before spending rate-limit budget, connection setup
+  failures tear the socket down instead of leaking a half-registered
+  connection, app open/drain hook throws are contained, resume gap-fill
+  flushes detect shed frames and signal resync (closing 1013 when even the
+  marker is shed), socket-level publish routes through peer facades so the
+  backpressure ceiling applies, custom 101 headers write one line per array
+  element, batched publish takes a batch-level compression decision, idle
+  deadlines and close durations use the monotonic clock, and the per-topic
+  seq registry warns at the family cardinality threshold.
+
 - The binary wire: `0x03` frames for capability-advertising subscribers with
   the `wire-id` announce ordered before the first frame, per-connection topic
   ids and codec state, the stateful-drop poison rule (backpressure-shed
@@ -85,5 +104,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timer read under `src/` must go through the injectable runtime module, or the
   scan fails naming the raw call site.
 
-There is no adapter yet. The runtime, the test lanes and the published package
-land in the slices listed under Current state in the README.
+The package is not yet published to npm; the remaining lanes before the first
+release are listed under Current state in the README.

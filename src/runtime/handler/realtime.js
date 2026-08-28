@@ -44,6 +44,10 @@ import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterEr
 import { wsModule } from '../ws-handler-bridge.js';
 import { capCounts, counters, subscribeAuth, wsConnections, wsWrappers } from './state.js';
 import { detachWireStates } from './wire-state.js';
+import { startPressureSampler } from './pressure.js';
+import { leaseGrantSize } from '../wire.js';
+import { recordBackpressureDrop } from '../utils/backpressure.js';
+import { accountClosedLogicalSubscriptions, addLogicalSubscription, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
 import { registerGameIngress } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
@@ -51,7 +55,7 @@ import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic } from './resume-capture.js';
 import { bumpIn, bumpOut, setStatsEnabled } from './conn-stats.js';
-import { origin as pinnedOrigin, host_header, is_tls, resolveClientIp } from './config.js';
+import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp } from './config.js';
 import { isDraining } from './lifecycle.js';
 
 const OPEN = 1;
@@ -115,6 +119,12 @@ setStatsEnabled(!!wsModule.close);
 // to kind `game:1` and publish game frames as `0x03`.
 registerGameIngress();
 
+// The 1 Hz pressure sampler and the live logical-subscription counter it
+// reads. The hook fires from the shared add/remove primitives, so every
+// lane - platform, wire, plugin trackedSubscribe - lands on one counter.
+startPressureSampler(wsOptions.pressure);
+setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta; });
+
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
 
 // Rate limiters for the two doors, sharing one implementation so a
@@ -167,7 +177,13 @@ wss.on('headers', (headers, req) => {
 	const extra = upgradeExtraHeaders.get(req);
 	if (!extra) return;
 	for (const [name, value] of Object.entries(extra)) {
-		headers.push(`${name}: ${value}`);
+		// An array value (several Set-Cookie lines) writes one header LINE per
+		// element - joining them would corrupt every cookie after the first.
+		if (Array.isArray(value)) {
+			for (const item of value) headers.push(`${name}: ${item}`);
+		} else {
+			headers.push(`${name}: ${value}`);
+		}
 	}
 });
 
@@ -230,6 +246,13 @@ export async function handleUpgrade(req, socket, head) {
 	if (!isOriginAllowed(headers['origin'], headers, {
 		allowedOrigins: ALLOWED_ORIGINS,
 		pinnedOrigin,
+		// The proxy headers the deployment trusts: without them the check
+		// falls back to the client-controlled Host and the direct scheme,
+		// which behind a TLS-terminating proxy 403s every real browser and
+		// behind no proxy compares two attacker-controlled headers.
+		hostHeader: host_header,
+		protocolHeader: protocol_header,
+		portHeader: port_header,
 		isTls: is_tls,
 		hasUpgradeHook: !!wsModule.upgrade
 	})) {
@@ -299,7 +322,27 @@ export async function handleUpgrade(req, socket, head) {
 	wss.handleUpgrade(req, socket, head, (ws) => {
 		const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 		const merged = { remoteAddress, .../** @type {any} */ (userData) };
-		openConnection(ws, merged, wsRequestId);
+		try {
+			openConnection(ws, merged, wsRequestId);
+		} catch (err) {
+			// A failure between accept and full registration must tear the
+			// socket down completely - a half-registered connection would sit
+			// in the walks forever with no close listener to reap it.
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.websocket-open',
+				event: 'runtime.websocket-open.failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'Connection setup failed after the upgrade completed.',
+				attributes: { requestId: wsRequestId, error: diagnosticError(err) }
+			});
+			const facade = wsWrappers.get(ws);
+			unregisterSocket(ws);
+			wsWrappers.delete(ws);
+			if (facade) wsConnections.delete(facade);
+			try { ws.terminate(); } catch { /* already gone */ }
+		}
 	});
 }
 
@@ -309,6 +352,13 @@ export async function handleUpgrade(req, socket, head) {
  * @param {string} requestId
  */
 function openConnection(rawWs, userData, requestId) {
+	// The error listener attaches before anything can close the socket - a
+	// peer RST during setup must never become an uncaught emitter throw.
+	rawWs.on('error', (err) => {
+		if (/** @type {any} */ (err)?.code !== 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
+			console.error('[svelte-adapter-ws] connection error:', err);
+		}
+	});
 	registerSocket(rawWs);
 	userData[WS_SUBSCRIPTIONS] = new Set();
 
@@ -323,11 +373,19 @@ function openConnection(rawWs, userData, requestId) {
 		onDrop: (byteLength) => {
 			counters.droppedFrames++;
 			counters.droppedBytes += byteLength;
+			recordBackpressureDrop(counters, { byteLength });
 		},
 		onDrain: (f) => {
 			flushCoalescedFor(f);
-			wsModule.drain?.(f, { platform: userData[WS_PLATFORM] });
-		}
+			// The drain callback rides a node write callback, not a native
+			// boundary - an app throw here would otherwise be uncaught.
+			try {
+				wsModule.drain?.(f, { platform: userData[WS_PLATFORM] });
+			} catch (err) {
+				console.error('[adapter-ws] drain hook threw:', err);
+			}
+		},
+		peerFacadeOf: (peer) => wsWrappers.get(peer)
 	});
 
 	// Attribution: resolved once, before the app open hook, fail-closed.
@@ -351,7 +409,7 @@ function openConnection(rawWs, userData, requestId) {
 	const sessionId = randomUuid();
 	userData[WS_SESSION_ID] = sessionId;
 	userData[WS_STATS] = {
-		openedAt: wallEpoch(),
+		openedAt: monotonicNow(),
 		messagesIn: 0,
 		messagesOut: 0,
 		bytesIn: 0,
@@ -361,24 +419,20 @@ function openConnection(rawWs, userData, requestId) {
 	wsWrappers.set(rawWs, facade);
 	wsConnections.add(facade);
 
-	// Consume the expected oversized-frame boundary error so it cannot become
-	// an uncaught process exception; everything else is reported.
-	rawWs.on('error', (err) => {
-		if (/** @type {any} */ (err)?.code !== 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
-			console.error('[svelte-adapter-ws] connection error:', err);
-		}
-	});
-
 	// Idle reaping: ws has no built-in idle timeout, so a JS timer plus
 	// ping/pong stands in. A live peer answers the half-interval ping and the
 	// deadline never fires; a vanished peer is terminated at the timeout.
-	let lastActivity = wallEpoch();
+	let lastActivity = monotonicNow();
 	/** @type {any} */
 	let idleTimer = null;
 	if (IDLE_TIMEOUT_S > 0) {
 		const halfMs = (IDLE_TIMEOUT_S * 1000) / 2;
 		idleTimer = setIntervalTimer(() => {
-			const idleFor = wallEpoch() - lastActivity;
+			const idleFor = monotonicNow() - lastActivity;
+			// The idle tick doubles as the drain-edge backstop: a pressure
+			// episode whose last flush callback rode a callback-less write
+			// (ping, pong, close frame) is caught here within a half-interval.
+			/** @type {any} */ (facade)._checkDrain?.();
 			if (idleFor >= IDLE_TIMEOUT_S * 1000) {
 				rawWs.terminate();
 			} else if (SEND_PINGS && idleFor >= halfMs && rawWs.readyState === OPEN) {
@@ -387,16 +441,14 @@ function openConnection(rawWs, userData, requestId) {
 		}, halfMs);
 		if (typeof idleTimer?.unref === 'function') idleTimer.unref();
 	}
-	rawWs.on('pong', () => { lastActivity = wallEpoch(); });
+	rawWs.on('pong', () => { lastActivity = monotonicNow(); });
 
 	const welcome = '{"type":"welcome","sessionId":"' + sessionId + '"}';
 	try { rawWs.send(welcome); } catch { /* closing */ }
 	bumpOut(userData, welcome);
 
-	wsModule.open?.(facade, { platform: userData[WS_PLATFORM] });
-
 	rawWs.on('message', (raw, isBinary) => {
-		lastActivity = wallEpoch();
+		lastActivity = monotonicNow();
 		void handleMessage(rawWs, facade, userData, /** @type {Buffer} */ (raw), !!isBinary).catch((err) => {
 			console.error('[svelte-adapter-ws] message handling failed:', err);
 		});
@@ -406,6 +458,14 @@ function openConnection(rawWs, userData, requestId) {
 		if (idleTimer !== null) clearIntervalTimer(idleTimer);
 		closeConnection(rawWs, facade, userData, code, reason);
 	});
+
+	// The app open hook runs LAST, with every listener armed: a throw here is
+	// contained and the connection keeps its close path.
+	try {
+		wsModule.open?.(facade, { platform: userData[WS_PLATFORM] });
+	} catch (err) {
+		console.error('[adapter-ws] open hook threw:', err);
+	}
 }
 
 /** @param {object} facade @param {any} rejection */
@@ -453,7 +513,16 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 	if (!isBinary && buf.byteLength < 8192 && buf[3] === 0x79) {
 		try {
 			msg = JSON.parse(buf.toString());
-			if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) throw 0;
+			if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) msg = undefined;
+		} catch {
+			msg = undefined;
+		}
+	}
+
+	// Control dispatch runs OUTSIDE the parse guard: a throw inside a control
+	// handler surfaces to the message-loop catch instead of being swallowed
+	// and the frame re-delivered to the app hook as raw bytes.
+	if (msg !== undefined) {
 
 			if (msg.type === 'subscribe' && typeof msg.topic === 'string') {
 				await handleSubscribe(rawWs, facade, userData, msg);
@@ -461,7 +530,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 			}
 			if (msg.type === 'unsubscribe' && typeof msg.topic === 'string') {
 				tombstonePendingSubscribe(userData, msg.topic);
-				userData[WS_SUBSCRIPTIONS]?.delete(msg.topic);
+				{ const subsSet = userData[WS_SUBSCRIPTIONS]; if (subsSet instanceof Set) removeLogicalSubscription(subsSet, msg.topic); }
 				try { facade.unsubscribe(msg.topic); } catch { /* closed */ }
 				if (userData[WS_PUBLISH_GRANT] === msg.topic) userData[WS_PUBLISH_GRANT] = undefined;
 				releaseDerivedSubscriptions(facade, msg.topic);
@@ -490,12 +559,16 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				// Only the first hello allocates the lease slot and emits the
 				// first window, so a re-sent hello does not reset the gate.
 				if (caps.has('lease') && !userData[WS_LEASE]) {
-					const gate = createLeaseState({ requestCount: DEFAULT_GRANT.requestCount, ttlMs: DEFAULT_GRANT.ttlMs });
+					const grantCount = leaseGrantSize({
+						heapRatio: counters.lastHeapUsedRatio,
+						subscriberRatio: wsConnections.size > 0 ? counters.totalSubscriptions / wsConnections.size : 0
+					});
+					const gate = createLeaseState({ requestCount: grantCount, ttlMs: DEFAULT_GRANT.ttlMs });
 					gate.grant();
 					userData[WS_LEASE] = { gate, saturation: 0 };
 					try { rawWs.send('{"type":"lease-ok"}'); } catch { /* closed */ }
 					bumpOut(userData, '{"type":"lease-ok"}');
-					const frame = leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
+					const frame = leaseGrantFrame(grantCount, DEFAULT_GRANT.ttlMs);
 					try { rawWs.send(frame); } catch { /* closed */ }
 					bumpOut(userData, frame);
 				}
@@ -531,8 +604,13 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				const slot = userData[WS_LEASE];
 				if (slot) {
 					slot.saturation = leaseReportedSaturation(msg.queued);
-					slot.gate.requestN(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
-					const frame = leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
+					if (slot.saturation > counters.leaseSaturationPeak) counters.leaseSaturationPeak = slot.saturation;
+					const regrant = leaseGrantSize({
+						heapRatio: counters.lastHeapUsedRatio,
+						subscriberRatio: wsConnections.size > 0 ? counters.totalSubscriptions / wsConnections.size : 0
+					});
+					slot.gate.requestN(regrant, DEFAULT_GRANT.ttlMs);
+					const frame = leaseGrantFrame(regrant, DEFAULT_GRANT.ttlMs);
 					try { rawWs.send(frame); } catch { /* closed */ }
 					bumpOut(userData, frame);
 				}
@@ -542,12 +620,6 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				await runAdmittedMessageWork(messageAdmission, facade, { msg, platform: userData[WS_PLATFORM], data: raw }, runGameWork, rejectApplicationMessage);
 				return;
 			}
-		} catch {
-			// Not JSON, not an object envelope, or a known control type that
-			// threw inside its handler. Clear msg so the fall-through
-			// delegation sees raw bytes only.
-			msg = undefined;
-		}
 	}
 
 	const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -723,11 +795,14 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		counters.closedWsAborts++;
 		return;
 	}
-	subs.add(msg.topic);
+	addLogicalSubscription(subs, msg.topic);
 	if (capture) {
 		flushResumeTopic(capture, msg.topic, (payload) => {
-			try { rawWs.send(payload); } catch { /* closed */ }
-			bumpOut(userData, payload);
+			try {
+				const result = facade.send(payload, false, false);
+				if (result !== 2) bumpOut(userData, payload);
+				return result;
+			} catch { return 2; }
 		});
 	}
 	sendSubscribed(rawWs, msg.topic, ref, userData);
@@ -900,12 +975,15 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			counters.closedWsAborts++;
 			continue;
 		}
-		udSubs.add(topic);
+		addLogicalSubscription(udSubs, topic);
 		if (batchCapture) {
 			flushResumeTopic(batchCapture, topic, (payload) => {
-				try { rawWs.send(payload); } catch { /* closed */ }
-				bumpOut(userData, payload);
-			});
+				try {
+					const result = facade.send(payload, false, false);
+					if (result !== 2) bumpOut(userData, payload);
+					return result;
+				} catch { return 2; }
+				});
 		}
 		sendSubscribed(rawWs, topic, ref, userData);
 	}
@@ -997,7 +1075,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 				platform: closePlatform,
 				subscriptions: subs,
 				id: userData[WS_SESSION_ID],
-				duration: wallEpoch() - stats.openedAt,
+				duration: Math.round(monotonicNow() - stats.openedAt),
 				messagesIn: stats.messagesIn,
 				messagesOut: stats.messagesOut,
 				bytesIn: stats.bytesIn,
@@ -1010,6 +1088,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 			console.error('[adapter-ws] close hook threw:', err);
 		}
 	}
+	accountClosedLogicalSubscriptions(subs);
 	if (userData[WS_LEASE]) userData[WS_LEASE] = undefined;
 	capCounts.adjust(userData[WS_CAPS], null);
 	userData[WS_CAPS] = undefined;
@@ -1063,24 +1142,28 @@ async function runAuthenticateRoute(req, res) {
 		return;
 	}
 
-	const direct = req.socket?.remoteAddress || '';
-	const clientIp = resolveClientIp(direct, headers, direct);
-	if (authPathRateLimiter.exceeded(clientIp, now())) {
-		res.writeHead(429, { 'content-type': 'text/plain' });
-		res.end('Too Many Requests');
-		return;
-	}
-
-	// CSRF defense: the request must carry x-requested-with, a same-origin
-	// Sec-Fetch-Site, or an Origin matching the policy.
+	// CSRF defense FIRST, the limiter after: metering rejected origins would
+	// let hostile cross-site traffic behind a shared NAT consume the
+	// legitimate clients' whole authentication budget.
 	if (AUTH_PATH_REQUIRE_ORIGIN && !isAuthOriginAccepted(headers, {
 		allowedOrigins: ALLOWED_ORIGINS,
 		pinnedOrigin,
+		hostHeader: host_header,
+		protocolHeader: protocol_header,
+		portHeader: port_header,
 		isTls: is_tls,
 		hasUpgradeHook: false
 	})) {
 		res.writeHead(403, { 'content-type': 'text/plain' });
 		res.end('Origin not allowed');
+		return;
+	}
+
+	const direct = req.socket?.remoteAddress || '';
+	const clientIp = resolveClientIp(direct, headers, direct);
+	if (authPathRateLimiter.exceeded(clientIp, now())) {
+		res.writeHead(429, { 'content-type': 'text/plain' });
+		res.end('Too Many Requests');
 		return;
 	}
 
