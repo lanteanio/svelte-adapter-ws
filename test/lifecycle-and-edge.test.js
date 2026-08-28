@@ -110,12 +110,21 @@ describe('graceful shutdown', () => {
 	it('force-closes what outlives the shutdown budget and still resolves', async () => {
 		const ownPayload = buildRuntime();
 		const own = await bootRuntime(ownPayload);
+		/** @type {string[]} */
+		const errorLines = [];
+		const originalError = console.error;
+		console.error = (...args) => { errorLines.push(args.map(String).join(' ')); };
 		try {
 			// The fixture's slow route takes ~300ms; a 50ms budget must expire.
 			const slow = fetch(own.origin + '/api/slow').catch((err) => err);
 			await new Promise((r) => setTimeout(r, 30));
 			await own.handler.shutdown({ timeoutMs: 50 });
+			console.error = originalError;
 			expect(own.handler.lifecycleState()).toBe('closed');
+			// The dropped request is counted and reported through the catalog.
+			const dropped = errorLines.filter((line) => line.includes('ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED'));
+			expect(dropped.length).toBe(1);
+			expect(dropped[0]).toContain('1 still open');
 			// The truncated exchange surfaces as an error or an aborted body -
 			// never a clean 200 with the full payload.
 			const outcome = await slow;
@@ -125,6 +134,7 @@ describe('graceful shutdown', () => {
 				await expect(outcome.text()).rejects.toThrow();
 			}
 		} finally {
+			console.error = originalError;
 			ownPayload.cleanup();
 		}
 	});

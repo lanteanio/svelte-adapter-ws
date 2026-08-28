@@ -265,7 +265,7 @@ export function createPosture(cfg) {
 				try {
 					onTransition(prev, level);
 				} catch (err) {
-					console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.POSTURE_OBSERVER), err);
+					console.error('[svelte-adapter-ws] a posture observer threw', err);
 				}
 			}
 		}

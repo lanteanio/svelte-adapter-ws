@@ -6,12 +6,12 @@ Every operator-facing failure the runtime can emit, indexed by its stable
 
 ## ADAPTER-ERR-LISTEN
 
-Severity: fatal
+Severity: error
 
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.listener event=runtime.listen.failed severity=fatal] runtime.listen.failed: Could not bind the server listener on
+[svelte-adapter-ws] runtime.listen.failed: Failed to bind 
 ```
 
 **Cause.** The configured address or port could not be bound, or the process lacks permission.
@@ -83,7 +83,7 @@ Severity: warn
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.warmup event=runtime.warmup.render-failed severity=warn] A boot warmup render failed; readiness proceeds without it.
+[svelte-adapter-ws] runtime.warmup.render-failed: A boot warmup render failed; readiness proceeds without it.
 ```
 
 **Cause.** Rendering a configured warmup path through the SSR engine during boot threw. The warmup runs the app's own server hooks and load functions for that path, so the throw is almost always in application boot-path code (a load that assumes a real request header, a resource not ready at boot), not in the adapter.
@@ -101,10 +101,10 @@ Severity: warn
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.runaway-publisher severity=warn] A publisher crossed a configured per-topic pressure threshold.
+[svelte-adapter-ws] pressure.runaway-publisher: A publisher crossed a configured per-topic pressure threshold.
 ```
 
-**Cause.** One topic exceeded its configured publish pressure threshold. The event is emitted only when no onPublishRate listener is registered, and it is latched per topic: one line when the topic crosses the threshold, re-armed only after that topic falls back below it.
+**Cause.** One topic exceeded its configured publish pressure threshold. The event is emitted only when no onPublishRate listener is registered, and it is latched per topic: one line when the topic crosses the threshold, re-armed only after the topic stays below it for a minute of consecutive samples.
 
 **Consequence.** Nothing is dropped by this event alone. It is the early signal that one topic is consuming a disproportionate share of outbound capacity.
 
@@ -155,7 +155,7 @@ Severity: error
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.authenticate event=runtime.authenticate.failed severity=error] The WebSocket authentication endpoint failed.
+[svelte-adapter-ws] runtime.authenticate.failed: The WebSocket authentication endpoint failed.
 ```
 
 **Cause.** The application `authenticate` export threw or rejected while answering its HTTP POST endpoint, which the client posts to before opening its WebSocket.
@@ -173,7 +173,7 @@ Severity: error
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.ssr event=runtime.ssr.failed severity=error] SvelteKit request handling failed.
+[svelte-adapter-ws] runtime.ssr.failed: SvelteKit request handling failed.
 ```
 
 **Cause.** The SvelteKit server handler threw while rendering or handling a request.
@@ -191,7 +191,7 @@ Severity: error
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-upgrade event=runtime.websocket-upgrade.failed severity=error] The WebSocket upgrade hook failed.
+[svelte-adapter-ws] runtime.websocket-upgrade.failed: The WebSocket upgrade hook failed.
 ```
 
 **Cause.** The application upgrade hook threw while a client was being upgraded.
@@ -209,7 +209,7 @@ Severity: error
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-attribution event=runtime.websocket-attribution.failed severity=error] The WebSocket attribution hook failed; the connection was refused at open.
+[svelte-adapter-ws] runtime.websocket-attribution.failed: The WebSocket attribution hook failed; the connection was refused at open.
 ```
 
 **Cause.** The handler module's `attribution` export threw, returned a promise, returned a misshaped result, or returned an id outside the allowed form (a string of [a-zA-Z0-9_-], at most 64 characters).
@@ -432,11 +432,11 @@ Log line begins:
 
 **Cause.** The `shutdown` export of the WebSocket handler threw synchronously or rejected while the server was closing.
 
-**Consequence.** Whatever that hook was flushing did not finish - final writes, external deregistration, or draining a queue. The throw is contained and the teardown carries on regardless, so the loss is silent unless this line is read. The same line prints for the same hook on all three surfaces: under the production runtime and createTestServer the listen socket closes after the hook, and on the dev server the hook runs from the server's own close event, so the socket is already gone by then.
+**Consequence.** Whatever that hook was flushing did not finish - final writes, external deregistration, or draining a queue. The throw is contained and the teardown carries on regardless, so the loss is silent unless this line is read.
 
 **Automatic recovery.** None. Shutdown is best-effort and proceeds without the hook.
 
-**What to do.** Fix the hook, then check whatever it was flushing for state left behind. Under the production runtime and createTestServer the hook is handed a `signal` it can watch to give up cleanly instead of throwing - but only when a shutdown budget is configured, and it is null without one. The dev server passes no such field at all, so a hook that reads it must tolerate undefined.
+**What to do.** Fix the hook, then check whatever it was flushing for state left behind. The hook is awaited with { platform } during the drain and shares the shutdown cleanup budget, so long-running flushes must finish inside it.
 
 ## ADAPTER-ERR-MESSAGE-HOOK
 
@@ -473,22 +473,4 @@ Log line begins:
 **Automatic recovery.** None. Live delivery continues; the missed range is not retried.
 
 **What to do.** Fix the hook or make it fail closed for the topics it cannot serve. A hook that throws for a topic it does not own should return an empty result for it instead.
-
-## ADAPTER-ERR-POSTURE-OBSERVER
-
-Severity: error
-
-Log line begins:
-
-```
-[ws] a posture transition handler threw
-```
-
-**Cause.** The adapter's own protection-posture transition handler threw. It records the transition metric, prints the posture line, then pushes the new posture to the export socket. The metric is contained and the export push contains its own failures, so what remains is the console write.
-
-**Consequence.** The posture CHANGED and the runtime is shedding or recovering as configured, but the record of it did not finish. What went missing is the posture log line, and with it the IMMEDIATE export push that follows it - a defense daemon reacting to the change does not get it at the instant of transition. The staleness that leaves is shorter than a sample, not longer: the posture advances from inside the 1 Hz pressure sampler, and that same sampler run pushes the ordinary posture heartbeat a few statements later, so an export reader carries the true posture before the tick that raised it has finished.
-
-**Automatic recovery.** The heartbeat later in the SAME sampler run carries the new posture, so no export reader waits for another transition or another second; the next transition runs the handler again, since a throw does not unregister it. Only the incident-timeline console line for this transition is gone for good.
-
-**What to do.** This is an adapter-internal failure - report it with the error printed beside it. The console write is the candidate to look at first: the transition metric is recorded before it and is contained, and the export push after it contains its own failures (a non-serializable snapshot and a slow client are both handled inside it). A configured metrics registry is NOT a candidate - an instrument that throws is contained and prints ADAPTER-ERR-METRICS-INSTRUMENT instead of reaching this handler.
 

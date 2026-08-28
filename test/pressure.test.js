@@ -86,6 +86,46 @@ describe('samplePressureOnce', () => {
 		expect(seen).toEqual(['PUBLISH_RATE', 'NONE']);
 	});
 
+	it('reports a runaway publisher when nobody listens, latched per topic', () => {
+		const topicThresholds = normalizePressureThresholds({ topicPublishRatePerSec: 50 });
+		/** @type {string[]} */
+		const warned = [];
+		const originalWarn = console.warn;
+		console.warn = (...args) => { warned.push(args.map(String).join(' ')); };
+		try {
+			const drive = (topic) => {
+				for (let i = 0; i < 500; i++) notePublish(topic, 10);
+				samplePressureOnce(topicThresholds);
+			};
+			const runaway = () => warned.filter((line) => line.includes('pressure.runaway-publisher'));
+
+			drive('runaway-a');
+			expect(runaway().length).toBe(1);
+			expect(runaway()[0]).toContain('runaway-a');
+
+			// Still over on the next sample: latched, no second line.
+			drive('runaway-a');
+			expect(runaway().length).toBe(1);
+
+			// A dip shorter than the re-arm dwell does not reset the latch.
+			samplePressureOnce(topicThresholds);
+			drive('runaway-a');
+			expect(runaway().length).toBe(1);
+
+			// With a listener registered the diagnostic line is suppressed
+			// entirely - the offenders go to the listener instead.
+			const seen = [];
+			const listener = (offenders) => seen.push(offenders.map((o) => o.topic));
+			publishRateListeners.add(listener);
+			drive('runaway-b');
+			publishRateListeners.delete(listener);
+			expect(seen.flat()).toContain('runaway-b');
+			expect(runaway().some((line) => line.includes('runaway-b'))).toBe(false);
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+
 	it('folds the lease saturation peak into value and decays it', () => {
 		counters.leaseSaturationPeak = 1;
 		samplePressureOnce(thresholds);

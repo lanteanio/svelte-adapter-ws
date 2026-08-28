@@ -67,12 +67,21 @@ describe('error catalog', () => {
 		}
 	});
 
-	it('renders a console line for every console-emitted entry', () => {
+	it('documents prefixes in the shape their emitter actually prints', () => {
 		for (const entry of ADAPTER_ERROR_REGISTRY) {
-			if (entry.emission !== 'console') continue;
-			const line = adapterConsoleLine(entry.id, 'detail');
-			expect(line.startsWith(entry.messagePrefix)).toBe(true);
-			expect(line).toContain('[' + entry.id + ']');
+			if (entry.emission === 'direct') {
+				// emitOperationalEvent prints `[source] <event>: <message>`; a
+				// prefix that starts any other way is a line nothing prints.
+				expect(
+					entry.messagePrefix.startsWith(`[svelte-adapter-ws] ${entry.event}: `),
+					`${entry.id} documents a prefix its emitter never prints: ${entry.messagePrefix}`
+				).toBe(true);
+			}
+			if (entry.emission === 'console') {
+				// Console lines are plain, never the lantean diagnostic head.
+				expect(entry.messagePrefix.includes('lantean/diagnostic'), entry.id).toBe(false);
+				expect(() => adapterConsoleLine(entry.id)).not.toThrow();
+			}
 		}
 	});
 

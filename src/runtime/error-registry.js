@@ -7,19 +7,15 @@
  * and a prefix that never appears in a log is worse than no prefix:
  *
  * - `thrown`   - an Error message with no diagnostic line around it.
- * - `composed` - emitOperationalDiagnostic(), whose message reads
- *                `<event>: <problem>` inside the diagnostic line.
- * - `direct`   - emitOperationalEvent() with a literal message, so the line
- *                carries the message with no event repetition.
- * - `head`     - only the line head is invariant; severity and message vary by
- *                call site, so the prefix stops where the variation begins.
- * - `console`  - a plain console line with no diagnostic head, printed through
- *                adapterConsoleLine() so the emitted text IS the registry's
- *                prefix plus the call-site detail and the stable ID tag. These
- *                are the consequential failures that never enter the
- *                diagnostic-event pipeline (primary-thread and once-per-worker
- *                guidance lines), indexed so the text an operator saw resolves
- *                here like every other failure.
+ * - `direct`   - emitOperationalEvent(), which prints
+ *                `[svelte-adapter-ws] <event>: <message>` plus an attributes
+ *                JSON tail.
+ * - `head`     - only the formatDiagnostic line head is invariant; severity
+ *                and message vary by call site, so the prefix stops where the
+ *                variation begins.
+ * - `console`  - a plain console line printed through adapterConsoleLine()
+ *                so the emitted text IS the registry's prefix plus the
+ *                call-site detail and the stable ID tag.
  */
 export const ADAPTER_ERROR_IDS = Object.freeze({
 	LISTEN: 'ADAPTER-ERR-LISTEN',
@@ -47,15 +43,17 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	SENDTO_ASYNC_FILTER: 'ADAPTER-ERR-SENDTO-ASYNC-FILTER',
 	WS_SHUTDOWN_HOOK_THREW: 'ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW',
 	MESSAGE_HOOK: 'ADAPTER-ERR-MESSAGE-HOOK',
-	RECOVER_HOOK: 'ADAPTER-ERR-RECOVER-HOOK',
-	POSTURE_OBSERVER: 'ADAPTER-ERR-POSTURE-OBSERVER'
+	RECOVER_HOOK: 'ADAPTER-ERR-RECOVER-HOOK'
 });
 
 const HEAD = '[lantean/diagnostic source=svelte-adapter-ws component=';
 
-/** Builds the invariant head of a directly-emitted diagnostic line. */
-function direct(component, event, severity, message) {
-	return HEAD + component + ' event=' + event + ' severity=' + severity + '] ' + message;
+/**
+ * Builds the invariant beginning of an emitOperationalEvent line, which
+ * prints as `[source] <event>: <message>` with the attributes JSON after.
+ */
+function direct(event, message) {
+	return '[svelte-adapter-ws] ' + event + ': ' + message;
 }
 
 export const ADAPTER_ERROR_REGISTRY = Object.freeze([
@@ -63,11 +61,11 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		id: ADAPTER_ERROR_IDS.LISTEN,
 		code: 'LISTEN_FAILED',
 		event: 'runtime.listen.failed',
-		component: 'runtime.listener',
-		severity: 'fatal',
-		emission: 'composed',
-		problemPrefix: 'Could not bind the server listener on',
-		messagePrefix: '[lantean/diagnostic source=svelte-adapter-ws component=runtime.listener event=runtime.listen.failed severity=fatal] runtime.listen.failed: Could not bind the server listener on',
+		component: 'runtime.lifecycle',
+		severity: 'error',
+		emission: 'direct',
+		problemPrefix: null,
+		messagePrefix: direct('runtime.listen.failed', 'Failed to bind '),
 		cause: 'The configured address or port could not be bound, or the process lacks permission.',
 		consequence: 'The process never becomes ready and exits with status 1.',
 		automaticRecovery: 'None inside the process. If a process manager restarts it, the replacement retries the same bind and a persistent conflict fails the same way each time.',
@@ -138,7 +136,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'warn',
 		emission: 'direct',
 		problemPrefix: 'A boot warmup render failed; readiness proceeds without it.',
-		messagePrefix: direct('runtime.warmup', 'runtime.warmup.render-failed', 'warn', 'A boot warmup render failed; readiness proceeds without it.'),
+		messagePrefix: direct('runtime.warmup.render-failed', 'A boot warmup render failed; readiness proceeds without it.'),
 		cause: 'Rendering a configured warmup path through the SSR engine during boot threw. The warmup runs the app\'s own server hooks and load functions for that path, so the throw is almost always in application boot-path code (a load that assumes a real request header, a resource not ready at boot), not in the adapter.',
 		consequence: 'That path is not pre-warmed, so the first real request to it after readiness pays the cold-render cost the warmup exists to remove. Nothing else is affected: readiness still commits and every other configured path still warms.',
 		automaticRecovery: 'Yes. The first real request renders the path normally and warms it from then on; the warmup does not retry.',
@@ -155,8 +153,8 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'warn',
 		emission: 'direct',
 		problemPrefix: 'A publisher crossed a configured per-topic pressure threshold.',
-		messagePrefix: direct('runtime.pressure', 'pressure.runaway-publisher', 'warn', 'A publisher crossed a configured per-topic pressure threshold.'),
-		cause: 'One topic exceeded its configured publish pressure threshold. The event is emitted only when no onPublishRate listener is registered, and it is latched per topic: one line when the topic crosses the threshold, re-armed only after that topic falls back below it.',
+		messagePrefix: direct('pressure.runaway-publisher', 'A publisher crossed a configured per-topic pressure threshold.'),
+		cause: 'One topic exceeded its configured publish pressure threshold. The event is emitted only when no onPublishRate listener is registered, and it is latched per topic: one line when the topic crosses the threshold, re-armed only after the topic stays below it for a minute of consecutive samples.',
 		consequence: 'Nothing is dropped by this event alone. It is the early signal that one topic is consuming a disproportionate share of outbound capacity.',
 		automaticRecovery: 'None. Nothing throttles the publisher on the strength of this threshold.',
 		nextAction: 'Identify the topic from the attributes and decide whether the rate is intended. The line is suppressed entirely while an onPublishRate listener is registered, so its absence is not evidence the condition ended - read platform.pressure for that. Left alone, a runaway publisher is what later produces slow-consumer disconnects on unrelated topics.',
@@ -206,7 +204,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'error',
 		emission: 'direct',
 		problemPrefix: 'The WebSocket authentication endpoint failed.',
-		messagePrefix: direct('runtime.authenticate', 'runtime.authenticate.failed', 'error', 'The WebSocket authentication endpoint failed.'),
+		messagePrefix: direct('runtime.authenticate.failed', 'The WebSocket authentication endpoint failed.'),
 		cause: 'The application `authenticate` export threw or rejected while answering its HTTP POST endpoint, which the client posts to before opening its WebSocket.',
 		consequence: 'That POST is answered 500. This is an ordinary HTTP route rather than the upgrade path, so no upgrade is refused and established connections are untouched; a client that treats the failed POST as fatal never goes on to open its WebSocket.',
 		automaticRecovery: 'None for the failed request. The client may post again, which runs the hook again.',
@@ -223,7 +221,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'error',
 		emission: 'direct',
 		problemPrefix: 'SvelteKit request handling failed.',
-		messagePrefix: direct('runtime.ssr', 'runtime.ssr.failed', 'error', 'SvelteKit request handling failed.'),
+		messagePrefix: direct('runtime.ssr.failed', 'SvelteKit request handling failed.'),
 		cause: 'The SvelteKit server handler threw while rendering or handling a request.',
 		consequence: 'A failure before the response starts is answered with an error response. A response already streaming its body is aborted instead, so the client sees the truncation rather than a clean end that reads as a complete response. Other requests and WebSocket connections are unaffected.',
 		automaticRecovery: 'None for the failed request.',
@@ -240,7 +238,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'error',
 		emission: 'direct',
 		problemPrefix: 'The WebSocket upgrade hook failed.',
-		messagePrefix: direct('runtime.websocket-upgrade', 'runtime.websocket-upgrade.failed', 'error', 'The WebSocket upgrade hook failed.'),
+		messagePrefix: direct('runtime.websocket-upgrade.failed', 'The WebSocket upgrade hook failed.'),
 		cause: 'The application upgrade hook threw while a client was being upgraded.',
 		consequence: 'That upgrade does not complete and the client cannot open its WebSocket.',
 		automaticRecovery: 'None. The client retries by reconnecting, which runs the hook again.',
@@ -257,7 +255,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		severity: 'error',
 		emission: 'direct',
 		problemPrefix: 'The WebSocket attribution hook failed; the connection was refused at open.',
-		messagePrefix: direct('runtime.websocket-attribution', 'runtime.websocket-attribution.failed', 'error', 'The WebSocket attribution hook failed; the connection was refused at open.'),
+		messagePrefix: direct('runtime.websocket-attribution.failed', 'The WebSocket attribution hook failed; the connection was refused at open.'),
 		cause: 'The handler module\'s `attribution` export threw, returned a promise, returned a misshaped result, or returned an id outside the allowed form (a string of [a-zA-Z0-9_-], at most 64 characters).',
 		consequence: 'That connection is closed with code 1008 before the application open hook runs. Attribution is fail-closed: a connection that cannot be attributed is refused rather than admitted unattributed, because an unattributed admission would silently stand down every tenant-scoped limit that reads the attribution.',
 		automaticRecovery: 'None for that connection. The client may reconnect, which runs the resolver again against a fresh userData.',
@@ -464,10 +462,10 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		problemPrefix: null,
 		messagePrefix: '[ws] the WebSocket shutdown hook threw',
 		cause: 'The `shutdown` export of the WebSocket handler threw synchronously or rejected while the server was closing.',
-		consequence: "Whatever that hook was flushing did not finish - final writes, external deregistration, or draining a queue. The throw is contained and the teardown carries on regardless, so the loss is silent unless this line is read. The same line prints for the same hook on all three surfaces: under the production runtime and createTestServer the listen socket closes after the hook, and on the dev server the hook runs from the server's own close event, so the socket is already gone by then.",
+		consequence: 'Whatever that hook was flushing did not finish - final writes, external deregistration, or draining a queue. The throw is contained and the teardown carries on regardless, so the loss is silent unless this line is read.',
 		automaticRecovery: 'None. Shutdown is best-effort and proceeds without the hook.',
-		nextAction: "Fix the hook, then check whatever it was flushing for state left behind. Under the production runtime and createTestServer the hook is handed a `signal` it can watch to give up cleanly instead of throwing - but only when a shutdown budget is configured, and it is null without one. The dev server passes no such field at all, so a hook that reads it must tolerate undefined.",
-		sources: Object.freeze(['src/runtime/handler/lifecycle.js']),
+		nextAction: 'Fix the hook, then check whatever it was flushing for state left behind. The hook is awaited with { platform } during the drain and shares the shutdown cleanup budget, so long-running flushes must finish inside it.',
+		sources: Object.freeze(['src/runtime/handler/realtime.js']),
 		anchor: 'adapter-err-ws-shutdown-hook-threw',
 		help: 'docs/errors.md#adapter-err-ws-shutdown-hook-threw'
 	}),
@@ -501,27 +499,11 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		consequence: "The subscription itself still completes: the client is subscribed and receives live frames from that moment on, but the events it missed before subscribing are not delivered and no gap is reported to it. It looks like a working subscription with a hole at the start.",
 		automaticRecovery: 'None. Live delivery continues; the missed range is not retried.',
 		nextAction: 'Fix the hook or make it fail closed for the topics it cannot serve. A hook that throws for a topic it does not own should return an empty result for it instead.',
-		sources: Object.freeze(['src/runtime/handler.js']),
+		sources: Object.freeze(['src/runtime/handler/realtime.js']),
 		anchor: 'adapter-err-recover-hook',
 		help: 'docs/errors.md#adapter-err-recover-hook'
-	}),
-	Object.freeze({
-		id: ADAPTER_ERROR_IDS.POSTURE_OBSERVER,
-		code: null,
-		event: 'ws.posture-observer.threw',
-		component: null,
-		severity: 'error',
-		emission: 'console',
-		problemPrefix: null,
-		messagePrefix: '[ws] a posture transition handler threw',
-		cause: "The adapter's own protection-posture transition handler threw. It records the transition metric, prints the posture line, then pushes the new posture to the export socket. The metric is contained and the export push contains its own failures, so what remains is the console write.",
-		consequence: "The posture CHANGED and the runtime is shedding or recovering as configured, but the record of it did not finish. What went missing is the posture log line, and with it the IMMEDIATE export push that follows it - a defense daemon reacting to the change does not get it at the instant of transition. The staleness that leaves is shorter than a sample, not longer: the posture advances from inside the 1 Hz pressure sampler, and that same sampler run pushes the ordinary posture heartbeat a few statements later, so an export reader carries the true posture before the tick that raised it has finished.",
-		automaticRecovery: "The heartbeat later in the SAME sampler run carries the new posture, so no export reader waits for another transition or another second; the next transition runs the handler again, since a throw does not unregister it. Only the incident-timeline console line for this transition is gone for good.",
-		nextAction: "This is an adapter-internal failure - report it with the error printed beside it. The console write is the candidate to look at first: the transition metric is recorded before it and is contained, and the export push after it contains its own failures (a non-serializable snapshot and a slow client are both handled inside it). A configured metrics registry is NOT a candidate - an instrument that throws is contained and prints ADAPTER-ERR-METRICS-INSTRUMENT instead of reaching this handler.",
-		sources: Object.freeze(['src/runtime/utils/pressure.js']),
-		anchor: 'adapter-err-posture-observer',
-		help: 'docs/errors.md#adapter-err-posture-observer'
 	})
+
 ]);
 
 const ERROR_BY_ID = new Map(ADAPTER_ERROR_REGISTRY.map((entry) => [entry.id, entry]));
@@ -534,9 +516,10 @@ export function adapterErrorDefinition(id) {
 
 export function adapterErrorHelpSuffix(id) {
 	const entry = adapterErrorDefinition(id);
-	// A dev console cannot resolve a repo-relative path; entries that
-	// carry an absolute link render it instead of the packaged doc route.
-	return ' [' + entry.id + '] See: ' + (entry.link ?? entry.help);
+	// A console or an Error message cannot resolve the repo-relative docs
+	// route, so only the stable id (which finds the entry anywhere) and an
+	// absolute shortlink, when the entry has one, are appended.
+	return ' [' + entry.id + ']' + (entry.link ? ' See: ' + entry.link : '');
 }
 
 /**
@@ -557,12 +540,6 @@ export const REQUEST_CLOSED_DETAIL = Object.freeze({
 export function adapterErrorMessage(id, detail = '') {
 	const entry = adapterErrorDefinition(id);
 	return entry.messagePrefix + detail + adapterErrorHelpSuffix(id);
-}
-
-export function adapterErrorProblem(id, detail = '') {
-	const entry = adapterErrorDefinition(id);
-	if (entry.problemPrefix === null) throw new TypeError('Adapter error id has no operational problem prefix: ' + id);
-	return entry.problemPrefix + detail + adapterErrorHelpSuffix(id);
 }
 
 /**

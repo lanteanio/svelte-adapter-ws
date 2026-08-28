@@ -161,16 +161,23 @@ export function samplePressureOnce(thresholds) {
 	} else if (overThreshold.length > 0) {
 		// No listener to hand the offenders to: report the condition on the
 		// diagnostic pipeline instead, latched per topic so a sustained runaway
-		// prints one line at the crossing, re-armed once it falls back below.
+		// prints one line at the crossing. The latch re-arms only after the
+		// topic stays below the threshold for a full dwell of samples - a
+		// publisher oscillating around the threshold must not print a line
+		// every other tick.
 		for (const offender of overThreshold) {
-			if (alarmedRunawayTopics.has(offender.topic)) continue;
-			alarmedRunawayTopics.add(offender.topic);
+			if (alarmedRunawayTopics.has(offender.topic)) {
+				alarmedRunawayTopics.set(offender.topic, 0);
+				continue;
+			}
+			alarmedRunawayTopics.set(offender.topic, 0);
 			emitOperationalEvent({
 				source: 'svelte-adapter-ws',
 				component: 'runtime.pressure',
 				event: 'pressure.runaway-publisher',
 				severity: 'warn',
-				dataClass: 'none',
+				// Topic names commonly embed user or session identifiers.
+				dataClass: 'pseudonymous',
 				message: 'A publisher crossed a configured per-topic pressure threshold.',
 				attributes: {
 					topic: offender.topic,
@@ -182,14 +189,23 @@ export function samplePressureOnce(thresholds) {
 	}
 	if (alarmedRunawayTopics.size > 0) {
 		const stillOver = new Set(overThreshold.map((entry) => entry.topic));
-		for (const topic of alarmedRunawayTopics) {
-			if (!stillOver.has(topic)) alarmedRunawayTopics.delete(topic);
+		for (const [topic, belowTicks] of alarmedRunawayTopics) {
+			if (stillOver.has(topic)) continue;
+			if (belowTicks + 1 >= RUNAWAY_REARM_TICKS) alarmedRunawayTopics.delete(topic);
+			else alarmedRunawayTopics.set(topic, belowTicks + 1);
 		}
 	}
 }
 
-/** Topics currently latched by the no-listener runaway alarm. @type {Set<string>} */
-const alarmedRunawayTopics = new Set();
+// One quiet minute at the 1 Hz default cadence before a topic may alarm again.
+const RUNAWAY_REARM_TICKS = 60;
+
+/**
+ * Topics latched by the no-listener runaway alarm, each with its count of
+ * consecutive below-threshold samples toward re-arming.
+ * @type {Map<string, number>}
+ */
+const alarmedRunawayTopics = new Map();
 
 /** @type {any} */
 let samplerTimer = null;
