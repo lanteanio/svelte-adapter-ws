@@ -15,6 +15,7 @@ import {
 	ssl_reload_debounce_ms, ssl_sni_hosts, ssl_ocsp_file
 } from './config.js';
 import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
+import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 
 // How long stapling keeps serving the last good OCSP response after the
 // response file stops being readable. OCSP responses carry a validity window
@@ -260,7 +261,7 @@ function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		} catch (err) {
 			// A renewal mid-write can present a torn pair; the next watcher
 			// event retries. The served context stays on the previous cert.
-			console.error('[svelte-adapter-ws] [tls] certificate reload failed (serving the previous cert):', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_RELOAD_SKIPPED), err);
 		}
 	};
 
@@ -271,11 +272,11 @@ function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	const warnWatcher = (err, what) => {
 		if (warnedWatcherError) return;
 		warnedWatcherError = true;
-		console.warn(
-			`[svelte-adapter-ws] [tls] certificate watch ${what} (` +
-			(/** @type {any} */ (err)?.code || err) +
+		console.warn(adapterConsoleLine(
+			ADAPTER_ERROR_IDS.TLS_WATCH,
+			`${what} (` + (/** @type {any} */ (err)?.code || err) +
 			'); hot reload is off until restart - the served certificate stays on its current bytes.'
-		);
+		));
 	};
 	for (const dir of watchedDirs) {
 		try {

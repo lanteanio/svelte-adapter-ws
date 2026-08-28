@@ -896,7 +896,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 				}
 			}
 		} catch (err) {
-			console.error('[adapter-ws] subscribeBatch hook threw:', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_HOOK), err);
 			batchDenials = Object.create(null);
 			for (const t of hookTopics) batchDenials[t] = 'INTERNAL_ERROR';
 		}
@@ -1043,7 +1043,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 				platform: userData[WS_PLATFORM]
 			});
 		} catch (err) {
-			console.error('[adapter-ws] resume hook threw:', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RESUME_HOOK), err);
 		}
 	}
 	try { rawWs.send('{"type":"resumed"}'); } catch { /* closed */ }

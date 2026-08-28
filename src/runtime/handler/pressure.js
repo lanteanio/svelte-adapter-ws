@@ -13,6 +13,7 @@ import {
 	BACKPRESSURE_SAMPLE_CAP, BACKPRESSURE_SAMPLE_THRESHOLD_BYTES
 } from '../utils/backpressure.js';
 import { setIntervalTimer, clearIntervalTimer, wallEpoch } from '../runtime.js';
+import { emitOperationalEvent } from '../diagnostic.js';
 import {
 	counters, pressureListeners, pressureSnapshot, publishRateListeners,
 	topicPublishStats, wsConnections
@@ -157,8 +158,38 @@ export function samplePressureOnce(thresholds) {
 		for (const listener of [...publishRateListeners]) {
 			try { listener(overThreshold); } catch { /* listener owns its errors */ }
 		}
+	} else if (overThreshold.length > 0) {
+		// No listener to hand the offenders to: report the condition on the
+		// diagnostic pipeline instead, latched per topic so a sustained runaway
+		// prints one line at the crossing, re-armed once it falls back below.
+		for (const offender of overThreshold) {
+			if (alarmedRunawayTopics.has(offender.topic)) continue;
+			alarmedRunawayTopics.add(offender.topic);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.pressure',
+				event: 'pressure.runaway-publisher',
+				severity: 'warn',
+				dataClass: 'none',
+				message: 'A publisher crossed a configured per-topic pressure threshold.',
+				attributes: {
+					topic: offender.topic,
+					messagesPerSec: offender.messagesPerSec,
+					bytesPerSec: offender.bytesPerSec
+				}
+			});
+		}
+	}
+	if (alarmedRunawayTopics.size > 0) {
+		const stillOver = new Set(overThreshold.map((entry) => entry.topic));
+		for (const topic of alarmedRunawayTopics) {
+			if (!stillOver.has(topic)) alarmedRunawayTopics.delete(topic);
+		}
 	}
 }
+
+/** Topics currently latched by the no-listener runaway alarm. @type {Set<string>} */
+const alarmedRunawayTopics = new Set();
 
 /** @type {any} */
 let samplerTimer = null;

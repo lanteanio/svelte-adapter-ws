@@ -18,7 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The operator error reference: docs/errors.md, generated from the runtime's
   error catalog by `node scripts/render-error-docs.js`, so every stable
   ADAPTER-ERR-* id's help link resolves to its cause, consequence and next
-  action.
+  action. The catalog carries exactly the failures this runtime can emit -
+  every entry has a live emit site, every hook-failure and TLS/shutdown
+  console line prints through the catalog so the logged text and the indexed
+  prefix cannot drift, a runaway publisher is reported (latched per topic)
+  when no onPublishRate listener is registered, still-open requests are
+  counted when the shutdown budget closes them, and a throw out of the
+  shutdown sequence itself exits with status 1 instead of leaving a
+  half-drained server running. A test pins all of it: emit sites, source
+  paths, anchors and the rendered docs.
 
 - The golden gate: an AST platform-surface parity test against the lead
   adapter (fails on a missing key AND on a missing oracle checkout), the wire

@@ -6,6 +6,7 @@
 
 import process from 'node:process';
 import { env } from './env.js';
+import { ADAPTER_ERROR_IDS, adapterConsoleLine, adapterErrorMessage } from './error-registry.js';
 
 /**
  * Parse an integer env var strictly: '2.5', '3workers' and '1e2' are fatal
@@ -45,11 +46,11 @@ const shutdown_delay = parseIntEnv('SHUTDOWN_DELAY_MS', env('SHUTDOWN_DELAY_MS',
 // workers, and getting one worker with no message is a capacity
 // misconfiguration nobody notices until saturation.
 if (env('CLUSTER_WORKERS', '')) {
-	throw new Error(
-		'[svelte-adapter-ws] CLUSTER_WORKERS is not supported by this adapter. ' +
-		'Run one process per core under your process manager (systemd template ' +
+	throw new Error(adapterErrorMessage(
+		ADAPTER_ERROR_IDS.CLUSTER_CONFIG_WORKERS,
+		' Run one process per core under your process manager (systemd template ' +
 		'units, PM2, container replicas) behind a load balancer, or unset the variable.'
-	);
+	));
 }
 
 /** @type {'boot' | 'running' | 'shutting-down'} */
@@ -71,7 +72,7 @@ async function runShutdownCleanup(reason) {
 		try {
 			await listener(reason);
 		} catch (err) {
-			console.error('[svelte-adapter-ws] sveltekit:shutdown listener failed:', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW), err);
 		}
 	}
 }
@@ -113,13 +114,27 @@ async function performShutdown(signal, handler) {
 		const outcome = await Promise.race([hooks, deadline]);
 		if (timer) clearTimeout(timer); // determinism-allow: pairs with the shutdown budget above
 		if (outcome === EXPIRED) {
-			console.error('[svelte-adapter-ws] shutdown cleanup exceeded the budget; draining now.');
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED));
 		}
 	} else {
 		await hooks;
 	}
 	await handler.shutdown({ timeoutMs: shutdown_timeout * 1000 });
 	process.exit(0);
+}
+
+/**
+ * @param {string} signal
+ * @param {typeof import('./handler.js')} handler
+ */
+function dispatchShutdown(signal, handler) {
+	// A throw out of the sequence's own machinery must still end the process:
+	// an unhandled rejection here would leave a half-drained server running
+	// with readiness already flipped.
+	performShutdown(signal, handler).catch((err) => {
+		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_FAILED), err);
+		process.exit(1);
+	});
 }
 
 const handlerPromise = (async () => {
@@ -130,7 +145,7 @@ const handlerPromise = (async () => {
 	await handler.start(host, port);
 	phase = 'running';
 	if (latchedSignal !== null) {
-		void performShutdown(latchedSignal, handler);
+		dispatchShutdown(latchedSignal, handler);
 	}
 	return handler;
 })();
@@ -147,7 +162,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 			console.error(`[svelte-adapter-ws] second ${signal} during shutdown; exiting immediately.`);
 			process.exit(1);
 		}
-		void handlerPromise.then((handler) => performShutdown(signal, handler));
+		void handlerPromise.then((handler) => dispatchShutdown(signal, handler));
 	});
 }
 

@@ -7,6 +7,7 @@
 // the warmup pass, so a balancer never routes a cold instance.
 
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 import { monotonicNow, setTimer, clearTimer } from '../runtime.js';
 import { counters } from './state.js';
 import { is_tls } from './config.js';
@@ -164,6 +165,12 @@ async function performShutdown(opts) {
 
 	// Whatever is still open after the budget is cut off; a truncated exchange
 	// is the documented cost of the deadline expiring.
+	if (counters.inFlightCount > 0) {
+		console.error(adapterConsoleLine(
+			ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
+			`${counters.inFlightCount} still open`
+		));
+	}
 	server.closeAllConnections?.();
 	await closed;
 	setLifecycleState('closed');

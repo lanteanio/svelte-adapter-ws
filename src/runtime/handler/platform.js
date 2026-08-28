@@ -80,7 +80,7 @@ async function runUserSubscribeGate(facade, topic) {
 		try {
 			result = await wsModule.subscribeBatch(facade, [topic], { platform: facade.getUserData()[WS_PLATFORM] });
 		} catch (err) {
-			console.error('[adapter-ws] subscribeBatch hook threw:', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_HOOK), err);
 			return 'INTERNAL_ERROR';
 		}
 		try {
@@ -91,7 +91,7 @@ async function runUserSubscribeGate(facade, topic) {
 			}
 			return null;
 		} catch (err) {
-			console.error('[adapter-ws] subscribeBatch result read threw:', err);
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_RESULT), err);
 			return 'INTERNAL_ERROR';
 		}
 	}
@@ -102,7 +102,7 @@ async function runUserSubscribeGate(facade, topic) {
 		if (typeof result === 'string') return result;
 		return null;
 	} catch (err) {
-		console.error('[adapter-ws] subscribe hook threw:', err);
+		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_HOOK), err);
 		return 'INTERNAL_ERROR';
 	}
 }
@@ -232,11 +232,12 @@ function publish(topic, event, data, options) {
 	const seq = stampSeqValue(seqOption, topicSeqs, topic);
 	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
 		_warnedTopicSeqCardinality = true;
-		console.warn(
-			'[svelte-adapter-ws] the per-topic seq registry reached ' + TOPIC_SEQS_WARN_THRESHOLD +
+		console.warn(adapterConsoleLine(
+			ADAPTER_ERROR_IDS.PRESSURE_TOPIC_REGISTRY,
+			TOPIC_SEQS_WARN_THRESHOLD +
 			' topics. High-cardinality topic names (per-user, per-request) grow this registry ' +
 			'without bound; prefer bounded topic names or publish with { seq: false }.'
-		);
+		));
 	}
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
 	const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, jitterMs);
