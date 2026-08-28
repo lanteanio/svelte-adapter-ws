@@ -66,6 +66,7 @@
 	"devDependencies": {
 		"@arethetypeswrong/cli": "^0.18.5",
 		"@sveltejs/kit": "^2.0.0",
+		"acorn": "^8.18.0",
 		"publint": "^0.3.22",
 		"vitest": "^4.0.18"
 	}

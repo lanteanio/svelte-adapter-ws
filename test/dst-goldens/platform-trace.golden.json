@@ -1,0 +1,57 @@
+{
+	"schemaVersion": 1,
+	"trace": {
+		"alpha": [
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":1},\"seq\":1}",
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":2},\"seq\":2,\"j\":250}",
+			"{\"topic\":\"metrics\",\"event\":\"gauge\",\"data\":42}",
+			"{\"topic\":\"room\",\"event\":\"a\",\"data\":1,\"seq\":3}",
+			"{\"topic\":\"metrics\",\"event\":\"b\",\"data\":2,\"seq\":1}",
+			"{\"type\":\"batch\",\"events\":[{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"x\",\"seq\":4},{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"y\",\"seq\":5}]}",
+			"{\"type\":\"wire-id\",\"topic\":\"room\",\"id\":1}",
+			"hex:030101065b22706f73222c7b2278223a312c2279223a327d5d",
+			"hex:030101075b22706f73222c7b2278223a332c2279223a347d5d",
+			"{\"type\":\"wire-id\",\"topic\":\"metrics\",\"id\":2}",
+			"hex:030102005b22646972656374222c2277697265225d",
+			"{\"topic\":\"room\",\"event\":\"move\",\"data\":{\"x\":9},\"seq\":8,\"id\":\"input-1\"}",
+			"{\"topic\":\"room\",\"event\":\"cursor\",\"data\":[1,2]}",
+			"{\"type\":\"reconnect\",\"windowMs\":4000}"
+		],
+		"beta": [
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":1},\"seq\":1}",
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":2},\"seq\":2,\"j\":250}",
+			"{\"topic\":\"room\",\"event\":\"a\",\"data\":1,\"seq\":3}",
+			"{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"x\",\"seq\":4}",
+			"{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"y\",\"seq\":5}",
+			"{\"topic\":\"room\",\"event\":\"pos\",\"data\":{\"x\":1,\"y\":2},\"seq\":6}",
+			"{\"topic\":\"room\",\"event\":\"pos\",\"data\":{\"x\":3,\"y\":4},\"seq\":7}",
+			"{\"topic\":\"room\",\"event\":\"whisper\",\"data\":\"psst\"}",
+			"{\"topic\":\"room\",\"event\":\"move\",\"data\":{\"x\":9},\"seq\":8,\"id\":\"input-1\"}",
+			"{\"type\":\"reconnect\",\"windowMs\":4000}"
+		],
+		"gamma": [
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":1},\"seq\":1}",
+			"{\"topic\":\"room\",\"event\":\"tick\",\"data\":{\"n\":2},\"seq\":2,\"j\":250}",
+			"{\"topic\":\"room\",\"event\":\"a\",\"data\":1,\"seq\":3}",
+			"{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"x\",\"seq\":4}",
+			"{\"topic\":\"room\",\"event\":\"burst\",\"data\":\"y\",\"seq\":5}",
+			"{\"topic\":\"room\",\"event\":\"pos\",\"data\":{\"x\":1,\"y\":2},\"seq\":6}",
+			"{\"topic\":\"room\",\"event\":\"pos\",\"data\":{\"x\":3,\"y\":4},\"seq\":7}",
+			"{\"topic\":\"room\",\"event\":\"targeted\",\"data\":1}",
+			"{\"type\":\"reconnect\",\"windowMs\":4000}"
+		]
+	},
+	"topicSeqs": [
+		[
+			"metrics",
+			1
+		],
+		[
+			"room",
+			8
+		]
+	],
+	"topicEpoch": 1229806541,
+	"connections": 3,
+	"subscribers": 3
+}

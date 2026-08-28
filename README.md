@@ -169,9 +169,18 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `maxBackpressure` ceiling, and recover to a clean snapshot - a zero stub
    fails the bench.
 
-6. **Golden gate** (not started): the transport-independent DST goldens
-   reproduced under this backend, and the `PLATFORM_KEYS` parity site added.
-   Same trace, same wire revision, or it does not ship.
+6. **Golden gate** (done): the platform-surface parity site reads both
+   adapters' platform object literals by AST and fails when a key the lead
+   carries is missing here - and it fails loudly when the lead checkout is
+   absent, because a gate that skips is not a gate (`UWS_SRC` names the
+   checkout). The wire revision is pinned byte-identical against the lead's
+   `protocol.schema.json`, and the frame layout against the family
+   conformance vector. The deterministic golden trace runs the REAL built
+   runtime platform under a seeded seam and a virtual clock over scripted
+   connections and pins every emitted frame - JSON envelopes, batch frames,
+   wire-id announces, 0x03 bytes, seq continuity across lanes - against a
+   committed corpus, byte-for-byte (`test/dst-goldens/`; regenerate
+   deliberately with `UPDATE_GOLDENS=1` and review the diff).
 
 ## Deployment
 

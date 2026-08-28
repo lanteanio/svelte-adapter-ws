@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The golden gate: an AST platform-surface parity test against the lead
+  adapter (fails on a missing key AND on a missing oracle checkout), the wire
+  revision pinned byte-identical to the lead protocol.schema.json, and a
+  deterministic golden trace - the real built runtime platform under a seeded
+  seam and virtual clock, every emitted frame pinned byte-for-byte against a
+  committed corpus under test/dst-goldens/.
+
 - First-class in-process TLS: PEM pairs with comma-separated multi-cert SNI
   (per-name contexts from each cert SAN or the SSL_SNI_HOSTS override),
   PKCS#12 bundles via SSL_PFX/SSL_PFX_PASSPHRASE, OCSP stapling from an
