@@ -33,7 +33,12 @@ import { now, monotonicNow, randomFloat, randomU32, randomUuid, randomBytes, set
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
-import { counters, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { buildBinaryFrame } from '../wire.js';
+import { capCounts, counters, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
+import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
+import { registerWireCodec } from './codec-registry.js';
+import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
 import { captureResumeFrame, resumeCaptureActive } from './resume-capture.js';
 import { bumpOut } from './conn-stats.js';
@@ -129,6 +134,76 @@ function fanOut(topic, envelope, excludeWs, compress) {
 		}
 	}
 	return sent;
+}
+
+/**
+ * Deliver one wire event to one connection: the binary frame when its caps
+ * and codec state allow, the JSON envelope otherwise. Returns the tri-state
+ * send result, or 3 when the socket was closed (the caller decides whether a
+ * thrown send counts as delivery).
+ *
+ * @param {object} facade
+ * @param {string} topic
+ * @param {string} event
+ * @param {unknown} data
+ * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object } | null} wire
+ * @param {string} jsonEnvelope
+ * @param {number} seq
+ * @param {boolean} compress
+ * @returns {number}
+ */
+function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, compress) {
+	let ud;
+	try {
+		ud = /** @type {any} */ (facade).getUserData();
+	} catch {
+		counters.closedWsAborts++;
+		return 3;
+	}
+	const sendJson = () => {
+		try {
+			const r = /** @type {any} */ (facade).send(jsonEnvelope, false, compress);
+			bumpOut(ud, jsonEnvelope);
+			return r;
+		} catch {
+			counters.closedWsAborts++;
+			return 3;
+		}
+	};
+	const caps = ud[WS_CAPS];
+	if (!wire || typeof wire.capability !== 'string' || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability)) {
+		return sendJson();
+	}
+	const state = wire.state ? ensureWireState(facade, ud, wire) : null;
+	if (wire.state && state === null) return sendJson();
+	let payload = null;
+	try {
+		payload = wire.encode(event, data, state ?? undefined);
+	} catch {
+		payload = null;
+	}
+	if (payload == null) return sendJson();
+	const id = ensureWireId(facade, ud, topic);
+	if (id === -1) {
+		poisonWireState(facade, ud, wire.capability);
+		return sendJson();
+	}
+	const schemaVersion = state && typeof (/** @type {any} */ (state).schemaVersion) === 'number'
+		? /** @type {any} */ (state).schemaVersion
+		: wire.schemaVersion;
+	let result;
+	try {
+		result = /** @type {any} */ (facade).send(buildBinaryFrame(schemaVersion, id, seq, payload), true, compress);
+		bumpOut(ud, payload);
+	} catch {
+		counters.closedWsAborts++;
+		return 3;
+	}
+	// A dropped STATEFUL frame desyncs the decoder forever; JSON is the
+	// recovery tier. A dropped stateless frame advances no state and is not
+	// poisoned.
+	if (result === 2 && wire.state) poisonWireState(facade, ud, wire.capability);
+	return result;
 }
 
 /**
@@ -343,60 +418,235 @@ export const platform = {
 		return results;
 	},
 
-	// Binary wire delegation tier: a JSON envelope is a documented
-	// representation of every wire event (a client must accept it at any
-	// time), so until the 0x03 fan-out lands these deliver the JSON form
-	// with identical option semantics.
-	publishWire(topic, event, data, _wire, options) {
-		return publish(topic, event, data, /** @type {any} */ (options));
+	/**
+	 * Publish one event with a binary codec: subscribers that advertised the
+	 * codec's capability receive the `0x03` frame, everyone else the JSON
+	 * envelope. Compression is OFF by default on the wire lanes.
+	 *
+	 * @param {string} topic
+	 * @param {string} event
+	 * @param {unknown} data
+	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
+	 * @param {{ seq?: boolean | number, relay?: boolean, compress?: boolean, excludeWs?: object } | undefined} [options]
+	 * @returns {boolean}
+	 */
+	publishWire(topic, event, data, wire, options) {
+		const seqOption = options != null ? options.seq : undefined;
+		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
+		const excludeWs = (options && options.excludeWs) || null;
+		const seq = stampSeqValue(seqOption, topicSeqs, topic);
+		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
+
+		// JSON fast path: nobody on this worker advertised the capability.
+		if (!wire || typeof wire.capability !== 'string' || !capCounts.has(wire.capability)) {
+			return fanOut(topic, envelope, excludeWs, compress);
+		}
+
+		if (!wire.state) {
+			const payload = encodeStatelessWirePayload(wire, event, data);
+			const subscribers = subscribersOf(topic);
+			if (!subscribers) return false;
+			const targets = [];
+			for (const rawWs of subscribers) {
+				if (rawWs.readyState !== 1) continue;
+				const facade = wsWrappers.get(rawWs);
+				if (facade && facade !== excludeWs && rawWs !== excludeWs) targets.push(facade);
+			}
+			return deliverStatelessWireFanout(wire, payload, {
+				topic,
+				envelope,
+				seq: seq ?? 0,
+				excludeWs: undefined,
+				connections: targets,
+				ensureId: ensureWireId,
+				isPoisoned: wireStatePoisoned,
+				poison: poisonWireState,
+				compress,
+				counters
+			});
+		}
+
+		// Stateful: encode per connection against its own codec state.
+		const subscribers = subscribersOf(topic);
+		if (!subscribers) return false;
+		let delivered = false;
+		for (const rawWs of subscribers) {
+			if (rawWs.readyState !== 1) continue;
+			const facade = wsWrappers.get(rawWs);
+			if (!facade || facade === excludeWs || rawWs === excludeWs) continue;
+			const result = deliverWireToOne(facade, topic, event, data, wire, envelope, seq ?? 0, compress);
+			if (result !== 3) delivered = true;
+		}
+		return delivered;
 	},
-	sendWire(ws, topic, event, data, _wire) {
-		return send(ws, topic, event, data);
+
+	/**
+	 * @param {object} ws
+	 * @param {string} topic
+	 * @param {string} event
+	 * @param {unknown} data
+	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
+	 * @param {{ compress?: boolean } | undefined} [options]
+	 * @returns {number} 0 | 1 | 2
+	 */
+	sendWire(ws, topic, event, data, wire, options) {
+		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
+		const payload = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(data ?? null) + '}';
+		const result = deliverWireToOne(ws, topic, event, data, wire, payload, 0, compress);
+		return result === 3 ? 2 : result;
 	},
-	publishWireBatch(topic, event, entries, _wire, options) {
-		if (!Array.isArray(entries) || entries.length === 0) return false;
+
+	/**
+	 * @param {string} topic
+	 * @param {string} event
+	 * @param {Array<{ data: unknown, excludeWs?: object, seq?: number }>} entries
+	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
+	 * @param {{ seq?: boolean | number, relay?: boolean, compress?: boolean, excludeWs?: object } | undefined} [options]
+	 * @returns {boolean}
+	 */
+	publishWireBatch(topic, event, entries, wire, options) {
 		const opts = options == null
 			? options
 			: { seq: options.seq, relay: options.relay, compress: options.compress, excludeWs: options.excludeWs, jitterMs: options.jitterMs };
 		// A batch-level numeric seq would stamp every entry identically.
 		if (opts && typeof opts.seq === 'number') throwInvalidSeq(opts.seq);
+		if (!Array.isArray(entries) || entries.length === 0) return false;
+		const compress = WS_COMPRESSION_ON && Boolean(opts && opts.compress === true);
+		const sharedExclude = (opts && opts.excludeWs) || null;
 		const count = entries.length;
+		// One read per application-owned field, up front: the JSON envelopes
+		// and the codec must see the same values under one seq.
 		const datas = new Array(count);
 		const excludes = new Array(count);
-		/** @type {Array<number | undefined> | null} */
-		let entrySeqs = null;
+		const seqs = new Array(count);
+		const envelopes = new Array(count);
 		for (let i = 0; i < count; i++) {
 			const entry = entries[i];
 			datas[i] = entry.data;
 			excludes[i] = entry.excludeWs;
 			const entrySeq = entry.seq;
-			if (typeof entrySeq === 'number') {
-				if (!Number.isInteger(entrySeq) || entrySeq < 1) throwInvalidSeq(entrySeq);
-				if (entrySeqs === null) entrySeqs = new Array(count);
-				entrySeqs[i] = entrySeq;
-			}
+			if (typeof entrySeq === 'number' && (!Number.isInteger(entrySeq) || entrySeq < 1)) throwInvalidSeq(entrySeq);
+			seqs[i] = stampSeqValue(typeof entrySeq === 'number' ? entrySeq : undefined, topicSeqs, topic) ?? 0;
+			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
 		}
-		let ok = false;
+		if (resumeCaptureActive()) {
+			for (let i = 0; i < count; i++) captureResumeFrame(topic, envelopes[i]);
+		}
+		const subscribers = subscribersOf(topic);
+		if (!subscribers) return false;
+		const capable = capCounts.has(wire?.capability);
+		let delivered = false;
+		for (const rawWs of subscribers) {
+			if (rawWs.readyState !== 1) continue;
+			const facade = wsWrappers.get(rawWs);
+			if (!facade || facade === sharedExclude || rawWs === sharedExclude) continue;
+			// Per-entry exclusion: a connection excluded from some entries gets
+			// its own filtered batch.
+			/** @type {number[] | null} */
+			let keep = null;
+			for (let i = 0; i < count; i++) {
+				const ex = excludes[i];
+				if (ex !== undefined && (ex === facade || ex === rawWs)) {
+					if (keep === null) {
+						keep = [];
+						for (let j = 0; j < i; j++) keep.push(j);
+					}
+				} else if (keep !== null) {
+					keep.push(i);
+				}
+			}
+			const idx = keep === null ? null : keep;
+			const connDatas = idx === null ? datas : idx.map((i) => datas[i]);
+			if (connDatas.length === 0) continue;
+			const connSeqs = idx === null ? seqs : idx.map((i) => seqs[i]);
+			const connEnvelopes = idx === null ? envelopes : idx.map((i) => envelopes[i]);
+			let ud = null;
+			try { ud = /** @type {any} */ (facade).getUserData(); } catch { counters.closedWsAborts++; continue; }
+			const caps = ud[WS_CAPS];
+			if (!capable || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability)) {
+				let ok = false;
+				try {
+					for (const env of connEnvelopes) {
+						if (/** @type {any} */ (facade).send(env, false, compress) !== 2) ok = true;
+						bumpOut(ud, env);
+					}
+				} catch { counters.closedWsAborts++; continue; }
+				if (ok) delivered = true;
+				continue;
+			}
+			const state = ensureWireState(facade, ud, wire);
+			const result = deliverStatefulWireBatch({
+				wire,
+				event,
+				datas: connDatas,
+				envelopes: connEnvelopes,
+				seqs: connSeqs,
+				state: state ?? {},
+				ws: facade,
+				ud,
+				topic,
+				ensureId: ensureWireId,
+				poison: poisonWireState,
+				compress,
+				counters
+			});
+			if (result !== 3) delivered = true;
+		}
+		return delivered;
+	},
+
+	/**
+	 * @param {object} ws
+	 * @param {string} topic
+	 * @param {string} event
+	 * @param {Array<{ data: unknown, seq?: number }>} entries
+	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
+	 * @returns {number}
+	 */
+	sendWireBatch(ws, topic, event, entries, wire) {
+		if (!Array.isArray(entries) || entries.length === 0) return 1;
+		let ud = null;
+		try { ud = /** @type {any} */ (ws).getUserData(); } catch { counters.closedWsAborts++; return 2; }
+		const count = entries.length;
+		const datas = new Array(count);
+		const seqs = new Array(count);
+		const envelopes = new Array(count);
 		for (let i = 0; i < count; i++) {
-			const entrySeq = entrySeqs === null ? undefined : entrySeqs[i];
-			let per = opts;
-			if (excludes[i] !== undefined || entrySeq !== undefined) {
-				per = { ...(opts || {}) };
-				if (excludes[i] !== undefined) per.excludeWs = excludes[i];
-				if (entrySeq !== undefined) per.seq = entrySeq;
-			}
-			ok = publish(topic, event, datas[i], /** @type {any} */ (per)) || ok;
+			datas[i] = entries[i].data;
+			seqs[i] = typeof entries[i].seq === 'number' ? entries[i].seq : 0;
+			envelopes[i] = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
 		}
-		return ok;
-	},
-	sendWireBatch(ws, topic, event, entries, _wire) {
-		let result = 1;
-		for (let i = 0; i < entries.length; i++) {
-			result = send(ws, topic, event, entries[i].data);
+		const caps = ud[WS_CAPS];
+		if (!wire || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability)) {
+			let result = 1;
+			try {
+				for (const env of envelopes) {
+					result = /** @type {any} */ (ws).send(env, false, false);
+					bumpOut(ud, env);
+				}
+			} catch { counters.closedWsAborts++; return 2; }
+			return result;
 		}
-		return result;
+		const state = ensureWireState(ws, ud, wire);
+		const result = deliverStatefulWireBatch({
+			wire,
+			event,
+			datas,
+			envelopes,
+			seqs,
+			state: state ?? {},
+			ws,
+			ud,
+			topic,
+			ensureId: ensureWireId,
+			poison: poisonWireState,
+			counters
+		});
+		return result === 3 ? 2 : result;
 	},
-	registerWireCodec(_wire) {},
+
+	registerWireCodec,
 
 	send,
 
@@ -762,14 +1012,32 @@ export const platform = {
 		if (resumeCaptureActive()) captureResumeFrame(topic, env);
 		const subscribers = subscribersOf(topic);
 		let delivered = 0;
+		// The compact fan-out payload is shared by every capable recipient;
+		// built lazily so a JSON-only room pays nothing for it.
+		/** @type {Uint8Array | null} */
+		let fanoutPayload = null;
+		const anyCapable = capCounts.has(GAME_FANOUT_CAP);
 		if (subscribers) {
 			for (const rawWs of subscribers) {
 				const facade = wsWrappers.get(rawWs);
 				if (rawWs === senderWs || facade === senderWs) continue;
 				if (rawWs.readyState !== OPEN || !facade) continue;
 				try {
+					const ud = /** @type {any} */ (facade).getUserData();
+					const caps = ud[WS_CAPS];
+					if (anyCapable && caps && caps.has(GAME_FANOUT_CAP) && !wireStatePoisoned(ud, GAME_FANOUT_CAP)) {
+						if (fanoutPayload === null) fanoutPayload = encodeGameFanoutPayload(event, data, id);
+						const wid = ensureWireId(facade, ud, topic);
+						if (wid !== -1) {
+							/** @type {any} */ (facade).send(buildBinaryFrame(GAME_FANOUT_SCHEMA_VERSION, wid, seq ?? 0, fanoutPayload), true, false);
+							bumpOut(ud, fanoutPayload);
+							delivered++;
+							continue;
+						}
+						poisonWireState(facade, ud, GAME_FANOUT_CAP);
+					}
 					/** @type {any} */ (facade).send(env, false, false);
-					bumpOut(/** @type {any} */ (facade).getUserData(), env);
+					bumpOut(ud, env);
 					delivered++;
 				} catch {
 					counters.closedWsAborts++;

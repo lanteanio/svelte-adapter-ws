@@ -42,7 +42,10 @@ import { now, monotonicNow, randomUuid, wallEpoch, setTimer, setIntervalTimer, c
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
-import { counters, subscribeAuth, wsConnections, wsWrappers } from './state.js';
+import { capCounts, counters, subscribeAuth, wsConnections, wsWrappers } from './state.js';
+import { detachWireStates } from './wire-state.js';
+import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
+import { registerGameIngress } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
 import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
@@ -107,6 +110,10 @@ if (wsModule.admin) {
 }
 
 setStatsEnabled(!!wsModule.close);
+
+// The client-relay binary twin: a `wire.ingress:1` connection can bind an id
+// to kind `game:1` and publish game frames as `0x03`.
+registerGameIngress();
 
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
 
@@ -421,6 +428,17 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 	const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(/** @type {any} */ (raw));
 	bumpIn(userData, buf);
 
+	// Binary ingress (client-to-server 0x03): an ingress-capable connection's
+	// id-addressed binary frames decode and route ahead of the JSON control
+	// block and the app hook. Only an actual 0x03 frame pays the cap lookup.
+	if (isBinary && buf[0] === 0x03) {
+		const icaps = userData[WS_CAPS];
+		if (icaps !== undefined && icaps.has(WIRE_INGRESS_CAP)) {
+			await runAdmittedMessageWork(messageAdmission, facade, { data: buf, platform: userData[WS_PLATFORM] }, runIngressWork, rejectApplicationMessage);
+			return;
+		}
+	}
+
 	// Oversized control-shaped frame: reject explicitly instead of a silent
 	// fall-through.
 	if (!isBinary && buf.byteLength >= 8192 && buf[3] === 0x79 /* 'y' in {"type" */) {
@@ -459,7 +477,16 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				for (let i = 0; i < msg.caps.length; i++) {
 					if (typeof msg.caps[i] === 'string') caps.add(msg.caps[i]);
 				}
+				// A re-sent hello REPLACES the cap set; the live per-capability
+				// counts follow the diff.
+				capCounts.adjust(userData[WS_CAPS], caps);
 				userData[WS_CAPS] = caps;
+				// Opt-in confirm for binary ingress (mirror of lease-ok).
+				if (caps.has(WIRE_INGRESS_CAP)) {
+					const okFrame = ingressOkFrame();
+					try { rawWs.send(okFrame); } catch { /* closed */ }
+					bumpOut(userData, okFrame);
+				}
 				// Only the first hello allocates the lease slot and emits the
 				// first window, so a re-sent hello does not reset the gate.
 				if (caps.has('lease') && !userData[WS_LEASE]) {
@@ -490,6 +517,16 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				await handleWholeSessionResume(rawWs, facade, userData, msg);
 				return;
 			}
+			if (msg.type === 'ingress-bind' && typeof msg.id === 'number' && typeof msg.kind === 'string') {
+				// Client binds a client-allocated ingress id to a decode+route
+				// destination. Unknown kind: no bind, no ack, JSON fallback.
+				if (bindIngress(userData, facade, msg.id, msg.kind, msg.target)) {
+					const boundFrame = ingressBoundFrame(msg.id);
+					try { rawWs.send(boundFrame); } catch { /* closed */ }
+					bumpOut(userData, boundFrame);
+				}
+				return;
+			}
 			if (msg.type === 'request-n') {
 				const slot = userData[WS_LEASE];
 				if (slot) {
@@ -515,6 +552,11 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 
 	const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 	await runAdmittedMessageHook(messageAdmission, wsModule.message, facade, { data: arrayBuffer, isBinary, msg, platform: userData[WS_PLATFORM] }, rejectApplicationMessage);
+}
+
+/** @param {any} facade @param {any} context */
+function runIngressWork(facade, context) {
+	return dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform);
 }
 
 /** @param {any} facade @param {any} context */
@@ -969,6 +1011,9 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 		}
 	}
 	if (userData[WS_LEASE]) userData[WS_LEASE] = undefined;
+	capCounts.adjust(userData[WS_CAPS], null);
+	userData[WS_CAPS] = undefined;
+	detachWireStates(facade, userData);
 	unregisterSocket(rawWs);
 	wsConnections.delete(facade);
 	wsWrappers.delete(rawWs);

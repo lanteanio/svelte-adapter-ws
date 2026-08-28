@@ -59,6 +59,10 @@ export const reconnect_dispersal_ms = Number.isFinite(_reconnect_dispersal_raw) 
 	? _reconnect_dispersal_raw
 	: 5000;
 
+// WS_DEBUG=1 enables per-event logging for the wire lanes. Read once at
+// module load so it is never sampled inside a hot callback.
+export const wsDebug = env('WS_DEBUG', '') === '1';
+
 let warnedUntrustedClaim = false;
 /**
  * One-shot warning for an address claim arriving from an untrusted peer.

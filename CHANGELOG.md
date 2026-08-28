@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The binary wire: `0x03` frames for capability-advertising subscribers with
+  the `wire-id` announce ordered before the first frame, per-connection topic
+  ids and codec state, the stateful-drop poison rule (backpressure-shed
+  stateful frames degrade that capability to JSON until reconnect), batch
+  encode with per-entry fallback, the `wire.ingress:1` client-to-server lane
+  with the `game:1` twin and compact `game.fanout:1` egress, and live
+  per-capability connection counts so a binary publish skips the walk when
+  nobody advertises the codec. The frame layout is pinned against the family
+  conformance vector in `test-vectors/binary.json`.
+
 - Managed WebSocket drain on shutdown: new upgrades are refused the moment
   drain begins, live clients receive the reconnect advisory with the
   `RECONNECT_DISPERSAL_MS` dispersal window (default 5000ms; 0 closes without

@@ -134,8 +134,19 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    and a 1001 close, and whatever ignores the close frame past the budget is
    terminated.
 
-4. **Binary wire** (not started): the `0x03` frame fan-out, per-connection topic
-   ids, per-connection codec state, resume and seq stamping.
+4. **Binary wire** (done): the `0x03` frame fan-out for capability-advertising
+   subscribers with the `wire-id` announce ordered on the same socket before
+   the first frame, per-connection topic ids (monotonic from 1, never
+   reclaimed), per-connection codec state attached once per capability and
+   detached on close, the stateful-drop poison rule (a frame shed past
+   `maxBackpressure` degrades that capability to JSON until reconnect - a
+   stateful decoder cannot resync in-band), the shared batch encode with
+   per-entry JSON fallback, the client-to-server ingress lane
+   (`wire.ingress:1`, `ingress-bind`/`ingress-bound`, the `game:1` twin
+   routed through the publish grant) and the compact `game.fanout:1` egress.
+   The frame layout is pinned against the family conformance vector
+   (`test-vectors/binary.json`), varints decoded with division so shared ids
+   above 2^32 survive. Seq values ride both representations from one stamp.
 
 5. **Pressure and protection parity** (not started): real `bufferedAmount`-driven
    backpressure with a drain pump, and a `platform.pressure` snapshot with the

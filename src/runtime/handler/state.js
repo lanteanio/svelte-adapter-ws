@@ -67,3 +67,15 @@ export const subscribeAuth = {
 	enabled: false,
 	strict: false
 };
+
+/** Cache of `{"topic":...,"event":...` envelope prefixes. @type {Map<string, string>} */
+export const envelopePrefixCache = new Map();
+
+import { createCapCounts } from '../wire.js';
+
+/**
+ * Live per-capability connection counts, adjusted on hello and close, so the
+ * binary publish path can skip the whole subscriber walk when nobody
+ * advertises a capability.
+ */
+export const capCounts = createCapCounts();
