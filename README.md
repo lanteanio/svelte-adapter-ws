@@ -127,6 +127,12 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    admission ceilings, egress, pressure tuning, posture) refuse the build
    loudly. The binary `0x03` lanes currently deliver the JSON representation
    of each event - a form the wire protocol requires every client to accept.
+   Graceful shutdown drains live sockets itself (`http.close()` never
+   completes while one is open): new upgrades are refused the moment drain
+   begins, every client gets the reconnect advisory with the
+   `RECONNECT_DISPERSAL_MS` window (default 5000, 0 disables the advisory)
+   and a 1001 close, and whatever ignores the close frame past the budget is
+   terminated.
 
 4. **Binary wire** (not started): the `0x03` frame fan-out, per-connection topic
    ids, per-connection codec state, resume and seq stamping.

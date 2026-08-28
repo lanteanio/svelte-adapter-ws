@@ -26,10 +26,28 @@ import { declareSingleValuedProxyHeaders } from './utils/request-headers.js';
 import { cacheDir, clientDir, prerenderedDir, _t_static } from './handler/static-assets.js';
 import { staticCache } from './handler/state.js';
 import { handleRequest, installRealtimeRoutes } from './handler/request.js';
-import { start as lifecycleStart, shutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
+import { start as lifecycleStart, shutdown as lifecycleShutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
+import { reconnect_dispersal_ms } from './handler/config.js';
 
-export { shutdown, beginDrain, lifecycleState, isDraining, platform };
+export { beginDrain, lifecycleState, isDraining, platform };
+
+/**
+ * Graceful shutdown, realtime included: readiness flips, live WebSockets are
+ * advised and closed within the budget, then the HTTP drain runs.
+ * @param {{ timeoutMs?: number }} [opts]
+ */
+export async function shutdown(opts = {}) {
+	beginDrain();
+	if (realtime) {
+		const budget = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 30_000;
+		await realtime.drainSockets({
+			dispersalMs: reconnect_dispersal_ms,
+			deadlineMs: budget
+		});
+	}
+	return lifecycleShutdown(opts);
+}
 
 // - Configuration validation -------------------------------------------------
 

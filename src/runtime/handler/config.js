@@ -46,6 +46,19 @@ if (env('PROXY_PROTOCOL', '') === '1') {
 	);
 }
 
+/**
+ * Graceful-shutdown reconnect dispersal window in ms. When > 0, the drain
+ * advises every connected client to reconnect on a jittered schedule in
+ * [0, RECONNECT_DISPERSAL_MS) before closing it, so a draining node's clients
+ * scatter instead of all reconnecting in one backoff window and stampeding
+ * the replacement. Default 5000 (zero-config gets the good behavior); 0
+ * restores the plain close-only drain.
+ */
+const _reconnect_dispersal_raw = parseInt(env('RECONNECT_DISPERSAL_MS', '5000'), 10);
+export const reconnect_dispersal_ms = Number.isFinite(_reconnect_dispersal_raw) && _reconnect_dispersal_raw >= 0
+	? _reconnect_dispersal_raw
+	: 5000;
+
 let warnedUntrustedClaim = false;
 /**
  * One-shot warning for an address claim arriving from an untrusted peer.

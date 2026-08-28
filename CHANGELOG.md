@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Managed WebSocket drain on shutdown: new upgrades are refused the moment
+  drain begins, live clients receive the reconnect advisory with the
+  `RECONNECT_DISPERSAL_MS` dispersal window (default 5000ms; 0 closes without
+  the advisory) and a 1001 close, close handshakes are awaited within the
+  shutdown budget, and sockets that ignore the close frame are terminated -
+  after which the HTTP listener close can actually complete.
+
 - The JSON realtime lane: WebSocket upgrades over `node:http` with async
   admission, origin policy, per-IP sliding-window rate limits, upgrade
   timeout, and validated custom 101 headers; a socket facade that synthesizes

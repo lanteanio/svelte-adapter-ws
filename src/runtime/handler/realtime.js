@@ -38,7 +38,7 @@ import {
 	createLeaseState, leaseGrantFrame, leaseReportedSaturation,
 	controlFrameTooLargeFrame, DEFAULT_GRANT
 } from '../wire.js';
-import { now, randomUuid, wallEpoch, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
+import { now, monotonicNow, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
@@ -1159,4 +1159,38 @@ export async function fireShutdownOnce() {
 /** @returns {string} the configured WebSocket path (for the 426 route) */
 export function wsPath() {
 	return WS_PATH;
+}
+
+/**
+ * Managed WebSocket drain: `http.close()` never completes while a socket is
+ * open and live sockets keep working after it, so shutdown closes them
+ * itself. With a dispersal window the reconnect advisory scatters the herd
+ * and closes each socket with 1001; without one every socket is closed
+ * directly. Sockets that ignore the close frame past the deadline are
+ * terminated.
+ *
+ * @param {{ dispersalMs: number, deadlineMs: number, pollMs?: number }} opts
+ * @returns {Promise<void>}
+ */
+export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50 }) {
+	if (wsConnections.size === 0) return;
+	if (dispersalMs > 0) {
+		platform.adviseReconnect({ windowMs: dispersalMs, close: true });
+	} else {
+		for (const facade of [...wsConnections]) {
+			try { /** @type {any} */ (facade).end(1001, 'Server draining'); } catch { /* already gone */ }
+		}
+	}
+	// Wait for the close handshakes to land, bounded by the deadline; then
+	// terminate whatever is still holding a socket open.
+	const start = monotonicNow();
+	while (wsConnections.size > 0 && monotonicNow() - start < deadlineMs) {
+		await new Promise((resolve) => {
+			const timer = setTimer(resolve, pollMs);
+			if (typeof timer?.unref === 'function') timer.unref();
+		});
+	}
+	for (const facade of [...wsConnections]) {
+		try { /** @type {any} */ (facade).close(); } catch { /* already gone */ }
+	}
 }
