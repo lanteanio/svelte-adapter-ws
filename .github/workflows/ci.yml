@@ -7,6 +7,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Test suite and golden gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The parity gate reads the lead adapter's source as its oracle and
+      # FAILS when the checkout is missing, so CI must provide it. UWS_SRC
+      # points the gate at this checkout explicitly.
+      - uses: actions/checkout@v4
+        with:
+          repository: lanteanio/svelte-adapter-uws
+          path: uws-oracle
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run the suite
+        run: npm test
+        env:
+          UWS_SRC: ${{ github.workspace }}/uws-oracle
+
   probe:
     name: API probe (Node)
     runs-on: ubuntu-latest

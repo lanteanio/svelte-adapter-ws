@@ -174,8 +174,16 @@ async function runTrace() {
 describe('deterministic platform golden trace', () => {
 	it('reproduces the committed corpus byte-for-byte', async () => {
 		const { serialized, fingerprint } = await runTrace();
-		if (process.env.UPDATE_GOLDENS === '1' || !existsSync(goldenPath)) {
+		if (process.env.UPDATE_GOLDENS === '1') {
 			writeFileSync(goldenPath, serialized);
+		}
+		// A missing corpus fails loud instead of blessing whatever this run
+		// produced: regeneration is only ever the explicit UPDATE_GOLDENS act.
+		if (!existsSync(goldenPath)) {
+			throw new Error(
+				`golden trace corpus missing at ${goldenPath}; ` +
+				'run UPDATE_GOLDENS=1 vitest run test/golden-trace.test.js and review the diff.'
+			);
 		}
 		const golden = readFileSync(goldenPath, 'utf8');
 		expect(fingerprint).toBe(fnv32(golden));

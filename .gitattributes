@@ -3,3 +3,9 @@
 # so line-ending normalization on checkout would fail the gate on every fresh
 # clone.
 protocol.schema.json -text
+
+# The conformance vector and the golden trace corpus are byte-compared by
+# their tests; a CRLF smudge on a fresh autocrlf clone would fail both gates
+# on bytes git invented.
+test-vectors/*.json -text
+test/dst-goldens/*.json -text
