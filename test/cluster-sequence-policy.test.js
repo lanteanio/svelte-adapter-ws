@@ -193,11 +193,16 @@ describe('cluster sequence authority policy', () => {
 		expect(wireBatch.indexOf('assertBatchEntrySequenceAuthority(opts)'),
 			'the entry pre-read pass must vet per-entry authority before the stamping pass')
 			.toBeLessThan(wireBatch.indexOf('stampSeqValue(entrySeqs'));
+		// The stamp draws from the batch options when an entry carries no
+		// explicit seq: `{ seq: false }` - the one spelling a clustered batch
+		// may carry - must stamp nothing, not quietly advance the per-worker
+		// counter it renounced and relay the forked number cluster-wide.
+		expect(wireBatch).toContain(': (opts != null ? opts.seq : undefined)');
 		expect(wireBatch).toContain('throwInvalidSeq(');
 		// batch() snapshots each message's option fields once and judges the
 		// snapshot, then hands publish() the SAME snapshot - so the atomic
 		// pre-pass and the per-message stamp cannot disagree.
-		expect(loopBatch).toContain(': { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };');
+		expect(loopBatch).toContain(': { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };');
 		expect(loopBatch).toContain('assertClusterSequenceAuthority(snap);');
 		expect(loopBatch.indexOf('assertClusterSequenceAuthority(snap);'),
 			'batch must vet every snapshot before the first publish')

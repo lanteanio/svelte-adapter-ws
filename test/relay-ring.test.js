@@ -441,7 +441,7 @@ describe('cross-thread (real worker_threads)', () => {
 			`
 			const { workerData, parentPort } = require('node:worker_threads');
 			Promise.all([import(${JSON.stringify(relayUrl)}), import(${JSON.stringify(ringUrl)}), import(${JSON.stringify(stateUrl)})]).then(([relay, ring, state]) => {
-				state.streamTracking.enabled = true; // what handler.js does when the cross-worker reporter is configured
+				state.streamTracking.enabled = true; // what a configured cross-worker reporter arms
 				relay.setRelayRingWriter(new ring.RingWriter(workerData.up));
 				relay.batchRelay('game:7', '{"event":"update","data":{"x":1}}', true, 11, 'smooth.protocol:1', 'update', { x: 1 });
 				relay.batchRelay('game:7', '{"event":"update","data":{"x":2}}', false, 12, undefined, undefined, undefined);
@@ -515,7 +515,7 @@ describe('cross-thread (real worker_threads)', () => {
 			`
 			const { workerData, parentPort, threadId } = require('node:worker_threads');
 			Promise.all([import(${JSON.stringify(relayUrl)}), import(${JSON.stringify(ringUrl)}), import(${JSON.stringify(stateUrl)})]).then(([relay, ring, state]) => {
-				state.streamTracking.enabled = true; // what handler.js does when the cross-worker reporter is configured
+				state.streamTracking.enabled = true; // what a configured cross-worker reporter arms
 				relay.setRelayRingWriter(new ring.RingWriter(workerData.up));
 				// Two interleaved topics, so a per-topic (not global) ordinal is proven.
 				for (let i = 1; i <= 4; i++) {
@@ -688,7 +688,7 @@ describe('cross-thread (real worker_threads)', () => {
 			`
 			const { workerData, parentPort } = require('node:worker_threads');
 			Promise.all([import(${JSON.stringify(relayUrl)}), import(${JSON.stringify(ringUrl)}), import(${JSON.stringify(stateUrl)})]).then(([relay, ring, state]) => {
-				state.streamTracking.enabled = true; // what handler.js does when the cross-worker reporter is configured
+				state.streamTracking.enabled = true; // what a configured cross-worker reporter arms
 				relay.setRelayRingWriter(new ring.RingWriter(workerData.up));
 				// One tick: a publish (deferred) then a publishBatched (synchronous),
 				// same topic. The batch is deliberately larger than the receiver's

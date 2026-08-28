@@ -605,10 +605,9 @@ if (is_primary) {
 				// Batched relay: one postMessage per microtask from the
 				// publishing worker. Forward each message individually so
 				// receiving workers use the same single-message 'publish' path
-				// in their relayPublish handler. The stamped seq rides along so
-				// the receiver can advance without re-parsing the envelope, and
-				// the sender's origin/ordinal/birth so a receiver can tell
-				// whether the stream it is being handed has a hole in it.
+				// in their relayPublish handler. The stamped seq and the
+				// sender's origin/ordinal/birth ride along as frame metadata
+				// for the receive side.
 				for (const { topic, envelope, compress, seq, capability, event, data, origin, ord, birth } of msg.messages) {
 					const relay = { type: 'publish', topic, envelope, compress, seq, capability, event, data, origin, ord, birth };
 					for (const [w, m] of workers) {

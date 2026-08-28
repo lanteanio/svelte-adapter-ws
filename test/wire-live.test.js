@@ -68,6 +68,11 @@ export async function message(ws, { data, msg, platform }) {
 		platform.sendWire(ws, cmd.topic, cmd.event, cmd.data, statelessCodec);
 	} else if (cmd.cmd === 'grant') {
 		platform.grantPublish(ws, cmd.topic);
+	} else if (cmd.cmd === 'publishWireBatch') {
+		platform.publishWireBatch(cmd.topic, cmd.event, cmd.entries, statelessCodec, cmd.options);
+	} else if (cmd.cmd === 'batch') {
+		platform.batch([{ topic: cmd.topic, event: cmd.event, data: cmd.data,
+			options: cmd.excludeSelf ? { excludeWs: ws } : undefined }]);
 	}
 }
 `;
@@ -244,5 +249,54 @@ describe('binary ingress (game twin)', () => {
 		expect(denied.json.reason).toBe('FORBIDDEN');
 		expect(denied.json.id).toBe(9);
 		sender.close();
+	});
+});
+
+describe('publish option contracts', () => {
+	it('publishWireBatch under { seq: false } stamps nothing and leaves the counter untouched', async () => {
+		const sub = connect();
+		await sub.open();
+		sub.send({ type: 'subscribe', topic: 'noseq.room', ref: 1 });
+		await sub.next((f) => f.json?.type === 'subscribed');
+
+		sub.send(JSON.stringify({
+			cmd: 'publishWireBatch', topic: 'noseq.room', event: 'tick',
+			entries: [{ data: 1 }, { data: 2 }], options: { seq: false }
+		}));
+		const first = await sub.next((f) => f.json?.event === 'tick' && f.json?.data === 1);
+		const second = await sub.next((f) => f.json?.event === 'tick' && f.json?.data === 2);
+		// The batch renounced the counter: no seq on the wire...
+		expect(first.json.seq).toBeUndefined();
+		expect(second.json.seq).toBeUndefined();
+
+		// ...and no counter advance behind the scenes: the topic's first
+		// SEQUENCED publish still stamps 1.
+		sub.send(JSON.stringify({ cmd: 'publishWire', topic: 'noseq.room', event: 'stamped', data: null }));
+		const stamped = await sub.next((f) => f.json?.event === 'stamped');
+		expect(stamped.json.seq).toBe(1);
+		sub.close();
+	});
+
+	it('batch() honors per-message excludeWs (sender echo suppression)', async () => {
+		const sender = connect();
+		const other = connect();
+		await sender.open();
+		await other.open();
+		sender.send({ type: 'subscribe', topic: 'echo.room', ref: 1 });
+		other.send({ type: 'subscribe', topic: 'echo.room', ref: 1 });
+		await sender.next((f) => f.json?.type === 'subscribed');
+		await other.next((f) => f.json?.type === 'subscribed');
+
+		sender.send(JSON.stringify({ cmd: 'batch', topic: 'echo.room', event: 'move', data: { x: 1 }, excludeSelf: true }));
+		// The other subscriber receives the excluded event; the sender only
+		// ever sees the marker published after it, proving the exclusion
+		// rather than racing a delivery that had not arrived yet.
+		const atOther = await other.next((f) => f.json?.event === 'move');
+		expect(atOther.json.data).toEqual({ x: 1 });
+		sender.send(JSON.stringify({ cmd: 'batch', topic: 'echo.room', event: 'marker', data: null }));
+		await sender.next((f) => f.json?.event === 'marker');
+		expect(sender.frames.some((f) => f.json?.event === 'move')).toBe(false);
+		sender.close();
+		other.close();
 	});
 });

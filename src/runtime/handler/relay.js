@@ -127,9 +127,8 @@ function refuseRelayFrame(lane, topic, bytes) {
  *   worker boundary so a relayed frame compresses on the receiving worker the
  *   same way it did locally. Absent (e.g. publishWire callers) -> uncompressed.
  * @param {number | null} [seq] - The stamped per-topic seq, carried as explicit
- *   metadata so the receiving worker advances its delivered-seq tracker without
- *   re-parsing the envelope string. Null/absent (a {seq:false} publish) leaves
- *   the topic out of the receiver's convergence comparison.
+ *   frame metadata so a receiver can consume it without re-parsing the
+ *   envelope string. Null/absent for a {seq:false} publish.
  * @param {string} [capability] - A wire codec's capability token, carried so a
  *   receiving worker with binary subscribers can re-derive the codec from its
  *   registry and re-encode binary locally instead of delivering the JSON envelope.

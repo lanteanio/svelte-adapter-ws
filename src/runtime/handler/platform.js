@@ -426,11 +426,13 @@ export const platform = {
 		const msgSeqs = new Array(messages.length);
 		const msgRelays = new Array(messages.length);
 		const msgJitters = new Array(messages.length);
+		const msgExcludes = new Array(messages.length);
 		for (let i = 0; i < messages.length; i++) {
 			const o = /** @type {any} */ (messages[i].options);
 			const seqOption = o != null ? o.seq : undefined;
 			const relayOption = o != null ? o.relay : undefined;
 			msgJitters[i] = o != null ? o.jitterMs : undefined;
+			msgExcludes[i] = o != null ? o.excludeWs : undefined;
 			assertClusterSequenceAuthorityValues(seqOption, relayOption);
 			msgSeqs[i] = seqOption;
 			msgRelays[i] = relayOption;
@@ -466,7 +468,8 @@ export const platform = {
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
 				publish(m.topic, m.event, m.data, /** @type {any} */ ({
-					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i], compress: compressOptIn
+					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i],
+					excludeWs: msgExcludes[i], compress: compressOptIn
 				}));
 			}
 			return;
@@ -521,7 +524,7 @@ export const platform = {
 			const o = /** @type {any} */ (messages[i].options);
 			const snap = o == null
 				? o
-				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };
+				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };
 			assertClusterSequenceAuthority(snap);
 			snapshots[i] = snap;
 		}
@@ -715,7 +718,12 @@ export const platform = {
 		const seqs = new Array(count);
 		const envelopes = new Array(count);
 		for (let i = 0; i < count; i++) {
-			seqs[i] = stampSeqValue(entrySeqs[i], topicSeqs, topic) ?? 0;
+			// An explicit entry seq is authoritative for its entry; every other
+			// entry draws from the batch options, so `{ seq: false }` - the one
+			// spelling a clustered batch may carry - really stamps nothing
+			// instead of quietly advancing the per-worker counter it renounced
+			// and relaying the forked number cluster-wide.
+			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
 		}
 		// Cross-worker relay: one relay envelope per entry, exactly as N
