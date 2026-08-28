@@ -205,6 +205,33 @@ describe('native TLS', () => {
 		expect(renewed?.peerCert.subject.CN).toBe('sni.example');
 	}, 15000);
 
+	it('swaps the renewed certificate on reloadTls() without a watcher event', async () => {
+		// The cluster shape: the primary owns the directory watch and posts
+		// tls-reload; the worker's runtime routes that message into
+		// handler.reloadTls(). Driving the export directly proves the swap
+		// works with no fs watcher involved on this thread.
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsmsg-'));
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T10_', {
+			SSL_CERT: certPath,
+			SSL_KEY: keyPath
+		});
+		const before = await tlsGet(rt.port, '/healthz');
+		expect(before.peerCert.subject.CN).toBe('localhost');
+
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
+		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
+		rt.handler.reloadTls();
+
+		const after = await tlsGet(rt.port, '/healthz');
+		expect(after.peerCert.subject.CN).toBe('sni.example');
+	});
+
 	it('selects a wildcard SAN certificate for names under it, one label deep', async () => {
 		const rt = await bootTls('SAW_T8_', {
 			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'wild.crt')}`,

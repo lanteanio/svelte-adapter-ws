@@ -9,6 +9,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
+import { isMainThread } from 'node:worker_threads';
 import { X509Certificate } from 'node:crypto';
 import {
 	ssl_cert, ssl_key, ssl_pfx, ssl_pfx_passphrase, ssl_watch,
@@ -175,34 +176,57 @@ export function createTlsServer(handleRequest) {
 	}
 
 	if (ssl_watch) {
-		armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts);
+		const reload = buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts);
+		reloadNow = reload;
+		server.once('close', () => {
+			if (reloadNow === reload) reloadNow = null;
+		});
+		// In a worker thread the cluster PRIMARY owns the cert-directory watch
+		// and broadcasts a reload message the runtime routes into reloadTls();
+		// arming a second watch per worker would fire N debounced reloads for
+		// one renewal. The single-process server watches here.
+		if (isMainThread) armHotReload(server, pairs, reload);
 	}
 
 	return server;
 }
 
 /**
- * Watch every certificate-bearing file and swap contexts on a debounced
- * change. The change gate is the certificate fingerprint, baselined at boot:
- * a watcher event that did not actually change the served cert (an atomic
- * rename storm, a touch) swaps nothing.
+ * The reload action for the CURRENT TLS server, or null when no TLS server
+ * with hot-reload is up. A holder rather than a per-call lookup so the
+ * message entry point below stays a two-line branch.
+ * @type {(() => void) | null}
+ */
+let reloadNow = null;
+
+/**
+ * Message-driven certificate reload: the worker half of the cluster's
+ * hot-reload broadcast. The primary watches the cert directory (it already
+ * debounced the change burst) and posts `tls-reload`; the runtime routes that
+ * message here and this worker swaps its own secure context - the identical
+ * fingerprint-gated swap the single-process watch drives. No-op when the
+ * server is not TLS or SSL_WATCH=0 (every thread reads the same env, so an
+ * opted-out worker ignores the broadcast the way an opted-out single-process
+ * server never watches).
+ */
+export function reloadTls() {
+	if (reloadNow !== null) reloadNow();
+}
+
+/**
+ * Build the context-swap action for a debounced change or a primary reload
+ * broadcast. The change gate is the certificate fingerprint, baselined at
+ * boot: an event that did not actually change the served cert (an atomic
+ * rename storm, a touch, an unchanged-cert broadcast) swaps nothing.
  *
  * @param {import('node:https').Server} server
  * @param {{ cert: string, key: string }[]} pairs
  * @param {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} sniPairs
  * @param {string[][]} overrideGroups - SSL_SNI_HOSTS groups, indexed like sniPairs
  * @param {Map<string, import('node:tls').SecureContext>} sniContexts
+ * @returns {() => void}
  */
-function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
-	const watchedFiles = ssl_pfx
-		? [ssl_pfx]
-		: pairs.flatMap((p) => [p.cert, p.key]);
-	// Watch the containing DIRECTORIES, deduped: certbot renews by writing
-	// into archive/ and re-pointing the live/ symlink, and cert-manager swaps
-	// an atomic ..data symlink - neither touches the watched file's inode, so
-	// a per-file watch misses the canonical renewal shapes.
-	const watchedDirs = [...new Set(watchedFiles.map((file) => path.dirname(file)))];
-
+function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	/** @type {string | null} */
 	let servedFingerprint = null;
 	if (!ssl_pfx) {
@@ -213,10 +237,7 @@ function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		}
 	}
 
-	/** @type {any} */
-	let debounce = null;
-	const reload = () => {
-		debounce = null;
+	return () => {
 		try {
 			if (ssl_pfx) {
 				server.setSecureContext({ pfx: fs.readFileSync(ssl_pfx), passphrase: ssl_pfx_passphrase || undefined });
@@ -260,9 +281,37 @@ function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 			console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
 		} catch (err) {
 			// A renewal mid-write can present a torn pair; the next watcher
-			// event retries. The served context stays on the previous cert.
+			// event (or reload broadcast) retries. The served context stays on
+			// the previous cert.
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_RELOAD_SKIPPED), err);
 		}
+	};
+}
+
+/**
+ * Watch every certificate-bearing directory and drive `reload` on a debounced
+ * change. Main-thread only: in a cluster the primary owns the one watch and
+ * fans the change out by message.
+ *
+ * @param {import('node:https').Server} server
+ * @param {{ cert: string, key: string }[]} pairs
+ * @param {() => void} reload
+ */
+function armHotReload(server, pairs, reload) {
+	const watchedFiles = ssl_pfx
+		? [ssl_pfx]
+		: pairs.flatMap((p) => [p.cert, p.key]);
+	// Watch the containing DIRECTORIES, deduped: certbot renews by writing
+	// into archive/ and re-pointing the live/ symlink, and cert-manager swaps
+	// an atomic ..data symlink - neither touches the watched file's inode, so
+	// a per-file watch misses the canonical renewal shapes.
+	const watchedDirs = [...new Set(watchedFiles.map((file) => path.dirname(file)))];
+
+	/** @type {any} */
+	let debounce = null;
+	const fire = () => {
+		debounce = null;
+		reload();
 	};
 
 	/** @type {import('node:fs').FSWatcher[]} */
@@ -282,7 +331,7 @@ function armHotReload(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		try {
 			const watcher = fs.watch(dir, { persistent: false }, () => {
 				if (debounce !== null) clearTimer(debounce);
-				debounce = setTimer(reload, ssl_reload_debounce_ms);
+				debounce = setTimer(fire, ssl_reload_debounce_ms);
 				if (typeof debounce?.unref === 'function') debounce.unref();
 			});
 			// A watcher can error after arming (directory removed, EPERM on

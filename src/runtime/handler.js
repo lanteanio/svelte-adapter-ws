@@ -114,9 +114,22 @@ console.log(`[svelte-adapter-ws] Static files indexed in ${(monotonicNow() - _t_
 
 // - Server construction ------------------------------------------------------
 
-export const server = is_tls
-	? (await import('./handler/tls.js')).createTlsServer(handleRequest)
+// Dynamic so a plain-HTTP build never evaluates the TLS import graph; the
+// module reference is retained for the message-driven reload below.
+const tlsModule = is_tls ? await import('./handler/tls.js') : null;
+
+export const server = tlsModule
+	? tlsModule.createTlsServer(handleRequest)
 	: http.createServer(handleRequest);
+
+/**
+ * Message-driven certificate reload: the cluster primary watches the cert
+ * directory and broadcasts; each worker swaps its own secure context here.
+ * No-op on a non-TLS server.
+ */
+export function reloadTls() {
+	tlsModule?.reloadTls();
+}
 
 // - Realtime lane ------------------------------------------------------------
 
