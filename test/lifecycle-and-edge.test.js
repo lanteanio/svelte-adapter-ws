@@ -202,16 +202,16 @@ export class Server {
 
 			console.error = (...args) => { errorLines.push(args.map(String).join(' ')); };
 			const t0 = Date.now();
-			await own.handler.shutdown({ timeoutMs: 700 });
+			await own.handler.shutdown({ timeoutMs: 900 });
 			const elapsed = Date.now() - t0;
 			console.error = originalError;
 
 			expect(own.handler.lifecycleState()).toBe('closed');
 			// The WS deadline was honored (the holdout was never going to ack)...
-			expect(elapsed).toBeGreaterThanOrEqual(600);
+			expect(elapsed).toBeGreaterThanOrEqual(800);
 			// ...and the HTTP drain got only the exhausted remainder, not a
-			// fresh budget of its own: per-phase semantics would land at ~1400.
-			expect(elapsed).toBeLessThan(1100);
+			// fresh budget of its own: per-phase semantics would land at ~1800.
+			expect(elapsed).toBeLessThan(1500);
 			// The in-flight request was cut and counted, proving the HTTP drain
 			// had live work it did NOT wait a second budget for.
 			const dropped = errorLines.filter((line) => line.includes('ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED'));

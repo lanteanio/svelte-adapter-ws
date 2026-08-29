@@ -188,11 +188,19 @@ export function createCertWatcher(config) {
 			// to the caller, whose degraded-state reporting owns the "renewals
 			// here are no longer seen" consequence.
 			if (watcher && typeof watcher.on === 'function') {
-				watcher.on('error', (/** @type {unknown} */ err) => {
-					const dead = watcher;
-					watcher = null;
-					try { dead.close(); } catch { /* already closed */ }
-					if (config.onError) config.onError(err);
+				// `self` pins the instance this listener belongs to: an error
+				// queued on a closed watcher can fire after stop()/start() has
+				// armed a replacement, and it must not null or close the live
+				// one. The callback is guarded because a throw here escapes
+				// the emitter and takes the process down - the exact outcome
+				// this handler exists to prevent.
+				const self = watcher;
+				self.on('error', (/** @type {unknown} */ err) => {
+					if (watcher === self) watcher = null;
+					try { self.close(); } catch { /* already closed */ }
+					if (config.onError) {
+						try { config.onError(err); } catch { /* reporting must not kill the watch owner */ }
+					}
 				});
 			}
 		},

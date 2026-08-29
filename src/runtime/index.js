@@ -947,8 +947,10 @@ if (is_primary) {
 		// the budget: it is a wait the operator asked for, not work that can
 		// overrun. Under SHUTDOWN_TIMEOUT=0 every phase runs unbounded; the
 		// second-signal force-exit is the escape hatch.
+		// Monotonic anchor: a wall-clock step during the hooks phase must not
+		// stretch or collapse what the drains have left.
 		const budgetMs = shutdown_timeout * 1000;
-		const deadlineAt = budgetMs > 0 ? Date.now() + budgetMs : null; // determinism-allow: process-level shutdown budget, outside the replayable runtime
+		const deadlineAt = budgetMs > 0 ? monotonicNow() + budgetMs : null;
 		const hooks = (async () => {
 			await runShutdownCleanup(signal);
 			await handler.runAppShutdownHook?.();
@@ -975,7 +977,7 @@ if (is_primary) {
 		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
 		// must cut the drains immediately, not unbound them.
 		await handler.shutdown({
-			timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - Date.now()) : 0 // determinism-allow: remaining shutdown budget, outside the replayable runtime
+			timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
 		});
 		process.exit(0);
 	}

@@ -1510,13 +1510,20 @@ export function relayPublishBatched(events, compress) {
 	// return matters in production, where fatal defers the exit past this
 	// frame: the batch is the fault unit and none of it may be delivered.
 	for (let i = 0; i < events.length; i++) {
-		const topicOk = typeof events[i].topic === 'string';
-		const envOk = typeof events[i].env === 'string' && events[i].env.length > 0;
-		fatal(topicOk, 'relay.batched-topic-type', { index: i, topic: typeof events[i].topic });
+		const entry = events[i];
+		// A lost element (null/undefined entry) is the most plausible
+		// serialization fault of all and must reach the same hard tier, not
+		// throw a raw TypeError out of the message handler.
+		const entryOk = entry !== null && typeof entry === 'object';
+		const topicOk = entryOk && typeof entry.topic === 'string';
+		const envOk = entryOk && typeof entry.env === 'string' && entry.env.length > 0;
+		fatal(topicOk, 'relay.batched-topic-type', {
+			index: i, topic: entryOk ? typeof entry.topic : String(entry)
+		});
 		fatal(envOk, 'relay.batched-env-type', {
 			index: i,
-			envType: typeof events[i].env,
-			envLen: envOk ? events[i].env.length : null
+			envType: entryOk ? typeof entry.env : String(entry),
+			envLen: envOk ? entry.env.length : null
 		});
 		if (!topicOk || !envOk) return;
 	}

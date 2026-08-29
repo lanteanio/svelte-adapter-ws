@@ -5,6 +5,8 @@
 // against THIS worker's subscriber set.
 
 import WebSocket from 'ws';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 import { parseBinaryFrame } from '../src/runtime/wire.js';
@@ -251,6 +253,47 @@ describe('relayPublishBatched', () => {
 		// Nothing reached the subscriber from either refused batch.
 		await new Promise((r) => setTimeout(r, 50));
 		expect(sub.frames.some((f) => f.json?.event === 'ok' || f.json?.event === 'bad')).toBe(false);
+		sub.close();
+	});
+
+	it('production tier: the refused batch delivers nothing in the frame before the deferred exit', async () => {
+		// In test env fatal throws, so the early return after a failed vet is
+		// production-only code. Exercise it for real: the assertions module
+		// re-reads the env per call and takes an injectable exit sink for
+		// exactly this. A lost element (null entry) is the corruption shape.
+		const assertions = await import(pathToFileURL(join(payload.dir, 'utils', 'assertions.js')).href);
+		const sub = connect();
+		await sub.open();
+		await subscribed(sub, 'relay.p1');
+
+		/** @type {number[]} */
+		const exits = [];
+		assertions.setFatalSink({ exit: (code) => { exits.push(code); } });
+		const savedVitest = process.env.VITEST;
+		const savedNodeEnv = process.env.NODE_ENV;
+		delete process.env.VITEST;
+		process.env.NODE_ENV = 'production';
+		try {
+			expect(() => rt.handler.relayPublishBatched([
+				{ topic: 'relay.p1', env: '{"topic":"relay.p1","event":"leak","data":null,"seq":9}', seq: 9 },
+				null
+			], false)).not.toThrow();
+			// The exit is DEFERRED to a microtask, so the sink must stay
+			// installed across the settle; resetting it earlier would hand the
+			// exit back to the real process.exit under vitest.
+			await new Promise((r) => setTimeout(r, 50));
+		} finally {
+			if (savedVitest !== undefined) process.env.VITEST = savedVitest;
+			if (savedNodeEnv !== undefined) process.env.NODE_ENV = savedNodeEnv;
+			else delete process.env.NODE_ENV;
+			assertions.resetFatalSink();
+		}
+		// One deferred exit per failed check (the null entry fails both), all
+		// with the invariant-violation code, and the well-formed first entry
+		// was NOT delivered while the process died.
+		expect(exits.length).toBeGreaterThan(0);
+		expect(exits.every((code) => code === 78)).toBe(true);
+		expect(sub.frames.some((f) => f.json?.event === 'leak')).toBe(false);
 		sub.close();
 	});
 });
