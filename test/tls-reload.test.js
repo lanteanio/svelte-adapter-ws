@@ -148,6 +148,34 @@ describe('createCertWatcher (injected clock + fs)', () => {
 		const w = createCertWatcher({ certPath: '/no/such/dir/live.crt', onChange: () => {}, watchFs });
 		expect(() => w.start()).toThrow(/ENOENT/);
 	});
+
+	it("a post-arm watcher 'error' closes the watcher and reaches onError instead of the process", () => {
+		// An FSWatcher can error AFTER arming (directory removed by a renewal's
+		// symlink swap, EPERM on teardown). With no 'error' listener node throws
+		// from the emitter and the primary - and every worker thread - dies over
+		// a lost watch. The watcher must consume the event, close itself, and
+		// hand the error to the caller's degraded-state reporting.
+		const handlers = new Map();
+		let closed = 0;
+		const fakeWatcher = {
+			on(event, cb) { handlers.set(event, cb); },
+			close() { closed++; }
+		};
+		const watchFs = () => fakeWatcher;
+		const errors = [];
+		const w = createCertWatcher({ certPath: '/certs/live.crt', onChange: () => {}, onError: (err) => { errors.push(err); }, watchFs });
+		w.start();
+		expect(handlers.has('error')).toBe(true);
+
+		const boom = Object.assign(new Error('EPERM: operation not permitted, watch'), { code: 'EPERM' });
+		expect(() => handlers.get('error')(boom)).not.toThrow();
+		expect(errors).toEqual([boom]);
+		expect(closed).toBe(1);
+		// The dead watcher is forgotten: stop() does not double-close it, and a
+		// fresh start() may arm a replacement.
+		w.stop();
+		expect(closed).toBe(1);
+	});
 });
 
 // The cluster-primary reload action: an UNCONDITIONAL broadcast to every worker

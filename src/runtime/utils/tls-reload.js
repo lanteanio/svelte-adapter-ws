@@ -156,7 +156,7 @@ export function certExpiryAlert(state, now, withinMs = CERT_EXPIRY_ALERT_MS) {
  * debounce is deterministic under test and routed through the injectable
  * timer.
  *
- * @param {{ certPath: string, onChange: () => void, dir?: string, debounceMs?: number, watchFs?: typeof import('node:fs').watch, setTimer?: Function, clearTimer?: Function }} config
+ * @param {{ certPath: string, onChange: () => void, onError?: (err: unknown) => void, dir?: string, debounceMs?: number, watchFs?: typeof import('node:fs').watch, setTimer?: Function, clearTimer?: Function }} config
  * @returns {{ start: () => void, stop: () => void }}
  */
 export function createCertWatcher(config) {
@@ -180,6 +180,21 @@ export function createCertWatcher(config) {
 			if (watcher) return;
 			// persistent:false so the watcher never holds the event loop open.
 			watcher = watchFs(dir, { persistent: false }, () => schedule());
+			// A watcher can error after arming (directory removed by a
+			// cert-manager ..data swap, EPERM on teardown, an unmounted secret
+			// volume); an unhandled watcher 'error' event would take the whole
+			// primary down - and every worker thread with it - over a lost
+			// WATCH, not a lost cert. Close the dead watcher and hand the error
+			// to the caller, whose degraded-state reporting owns the "renewals
+			// here are no longer seen" consequence.
+			if (watcher && typeof watcher.on === 'function') {
+				watcher.on('error', (/** @type {unknown} */ err) => {
+					const dead = watcher;
+					watcher = null;
+					try { dead.close(); } catch { /* already closed */ }
+					if (config.onError) config.onError(err);
+				});
+			}
 		},
 		stop() {
 			if (timer) { clearTimer(timer); timer = null; }

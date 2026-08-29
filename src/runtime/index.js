@@ -783,7 +783,15 @@ if (is_primary) {
 					certPath: identity_cert_path || watched_files[0],
 					dir,
 					debounceMs: ssl_reload_debounce_ms,
-					onChange: onCertChange
+					onChange: onCertChange,
+					// Post-arm watcher death (directory removed, EPERM): the
+					// watcher closes itself; renewals landing in this directory
+					// are no longer seen, which is the same degraded state as a
+					// watcher that never armed.
+					onError: (err) => {
+						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), /** @type {any} */ (err)?.message || err);
+						primaryTlsDegraded(`the certificate watch on ${dir} stopped`);
+					}
 				});
 				watcher.start();
 				primaryCertWatchers.push(watcher);
