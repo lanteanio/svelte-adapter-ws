@@ -11,7 +11,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.listen.failed: Failed to bind 
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.lifecycle event=runtime.listen.failed severity=error] Failed to bind 
 ```
 
 **Cause.** The configured address or port could not be bound, or the process lacks permission.
@@ -83,7 +83,7 @@ Severity: warn
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.warmup.render-failed: A boot warmup render failed; readiness proceeds without it.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.warmup event=runtime.warmup.render-failed severity=warn] A boot warmup render failed; readiness proceeds without it.
 ```
 
 **Cause.** Rendering a configured warmup path through the SSR engine during boot threw. The warmup runs the app's own server hooks and load functions for that path, so the throw is almost always in application boot-path code (a load that assumes a real request header, a resource not ready at boot), not in the adapter.
@@ -101,7 +101,7 @@ Severity: warn
 Log line begins:
 
 ```
-[svelte-adapter-ws] pressure.runaway-publisher: A publisher crossed a configured per-topic pressure threshold.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.runaway-publisher severity=warn] A publisher crossed a configured per-topic pressure threshold.
 ```
 
 **Cause.** One topic exceeded its configured publish pressure threshold. The event is emitted only when no onPublishRate listener is registered, and it is latched per topic: one line when the topic crosses the threshold, re-armed only after the topic stays below it for a minute of consecutive samples.
@@ -155,7 +155,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.authenticate.failed: The WebSocket authentication endpoint failed.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.authenticate event=runtime.authenticate.failed severity=error] The WebSocket authentication endpoint failed.
 ```
 
 **Cause.** The application `authenticate` export threw or rejected while answering its HTTP POST endpoint, which the client posts to before opening its WebSocket.
@@ -173,7 +173,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.ssr.failed: SvelteKit request handling failed.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.ssr event=runtime.ssr.failed severity=error] SvelteKit request handling failed.
 ```
 
 **Cause.** The SvelteKit server handler threw while rendering or handling a request.
@@ -191,7 +191,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.websocket-upgrade.failed: The WebSocket upgrade hook failed.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-upgrade event=runtime.websocket-upgrade.failed severity=error] The WebSocket upgrade hook failed.
 ```
 
 **Cause.** The application upgrade hook threw while a client was being upgraded.
@@ -209,7 +209,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] runtime.websocket-attribution.failed: The WebSocket attribution hook failed; the connection was refused at open.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-attribution event=runtime.websocket-attribution.failed severity=error] The WebSocket attribution hook failed; the connection was refused at open.
 ```
 
 **Cause.** The handler module's `attribution` export threw, returned a promise, returned a misshaped result, or returned an id outside the allowed form (a string of [a-zA-Z0-9_-], at most 64 characters).
@@ -425,7 +425,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] cluster.worker-error: A worker thread reported an error.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster event=cluster.worker-error severity=error] A worker thread reported an error.
 ```
 
 **Cause.** A worker thread emitted an error event to the primary, which usually means it threw outside a request or failed during startup.
@@ -497,7 +497,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] cluster-relay.up-spill-overflow: This worker could not hand its relay backlog to the primary within its spill ceiling and is exiting to be replaced.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.up-spill-overflow severity=error] This worker could not hand its relay backlog to the primary within its spill ceiling and is exiting to be replaced.
 ```
 
 **Cause.** The worker queued more relay bytes, or held them longer, than its spill ceiling allows while waiting on the primary.
@@ -515,7 +515,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] cluster-relay.frame-oversized: A worker sent a relay frame larger than this process will reassemble; its relay stream was stopped.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.frame-oversized severity=error] A worker sent a relay frame larger than this process will reassemble; its relay stream was stopped.
 ```
 
 **Cause.** A worker declared a relay frame above the reassembly ceiling, which is four times the configured relay frame ceiling. Either the ceiling is set far below real payloads, or the stream is corrupt.
@@ -533,7 +533,7 @@ Severity: warn
 Log line begins:
 
 ```
-[svelte-adapter-ws] cluster-relay.frame-refused: A publish was too large for the cluster relay and was not sent to other workers. Local subscribers received it.
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.frame-refused severity=warn] A publish was too large for the cluster relay and was not sent to other workers. Local subscribers received it.
 ```
 
 **Cause.** A publish exceeded the configured relay frame ceiling for cross-worker delivery.
@@ -761,4 +761,166 @@ Log line begins:
 **Automatic recovery.** None. Live delivery continues; the missed range is not retried.
 
 **What to do.** Fix the hook or make it fail closed for the topics it cannot serve. A hook that throws for a topic it does not own should return an empty result for it instead.
+
+## ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] operational event dropped, invalid record shape
+```
+
+**Cause.** Something emitted an operational diagnostic the runtime could not build a record from - a malformed event name, an unknown severity or data class, or a bad timestamp. A field that cannot be SERIALIZED is a different, quieter failure: the renderer absorbs it by printing the envelope with the attributes stripped, so the event still appears minus its attributes and no error line prints - the render path reports only its own total collapse (see ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE).
+
+**Consequence.** That diagnostic is DROPPED: it reaches neither the configured sink nor the log, so the failure it was reporting leaves no structured trace. Everything else keeps emitting normally.
+
+**Automatic recovery.** None for the dropped record. Telemetry deliberately never throws, so the emitting path continued as if it had been reported.
+
+**What to do.** Read the event name printed with this line and fix the emitter. If it is application or plugin code calling the diagnostic surface, check the record against the documented shape.
+
+## ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] diagnostic render failed: 
+```
+
+**Cause.** Formatting an operational diagnostic threw, and formatting it again with the attributes stripped threw as well. That SECOND failure is what makes this environmental rather than a bad record: the strip leaves only fields createDiagnostic produced and validated itself, every one a bounded string or number - the message is cut to 512 characters at creation - so no record this runtime accepted can fail the retry. What can fail it is the JSON serialization the format is built on: a replaced or wrapped `JSON.stringify`, a `toJSON` added to `Object.prototype`, an instrumentation agent that patched either. A value in the ATTRIBUTES that cannot be serialized is absorbed by the retry and never reaches this line, and a console that refuses the finished text prints the diagnostic-console-write line instead.
+
+**Consequence.** That diagnostic is lost. How much goes with it depends on what the serialization refuses: one that fails outright takes the whole operational stream, and one that refuses only certain shapes - a wrapper scrubbing a field, a size ceiling - takes every diagnostic matching that shape and lets the rest through. So a log that still carries other events does NOT mean this was isolated to the record named here; it means the refusal is selective. The request path is unaffected either way: the failure is contained so telemetry cannot take a worker down with it.
+
+**Automatic recovery.** None for the lost record, and a later diagnostic printing normally is not recovery - under a selective refusal the ones that do not match keep working throughout, which is exactly what makes the gap easy to miss. Nothing is retried and nothing is unregistered; each event is formatted independently and meets the same serialization.
+
+**What to do.** Do not start at the emitter or the record - neither can produce this line. Look for what changed this process's JSON serialization: an APM or instrumentation agent, a polyfill, a test harness stubbing `JSON.stringify`, or a dependency that added `toJSON` to `Object.prototype`. Do NOT clear it on `JSON.stringify({})` alone: a selective wrapper returns `{}` for that and still refuses the shape that produced this line. Serialize a record of the shape the RETRY formats - the diagnostic envelope with no attributes, every field a bounded string or number - and compare that with the trivial case; a difference between them IS the wrapper. Do not test the event's own attributes: an attribute that cannot be serialized is absorbed by the retry and never produces this line, so a throw from serializing them proves nothing about this failure and reads as a wrapper that is not there. The event name on the line is what was in flight, not a suspect.
+
+## ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] diagnostic rendered but the console refused it: 
+```
+
+**Cause.** The diagnostic formatted correctly and the console method carrying its severity threw when handed the finished line. The record is not the suspect here: a console replaced or wrapped by the host, or one whose write end has gone, refuses a well-formed string exactly the same way.
+
+**Consequence.** That one diagnostic is lost, and so is every later one carried by the SAME console method for as long as it keeps throwing - this is a broken channel rather than a bad value, so it does not stop at the record that revealed it. The mapping is not one method per severity: debug, info, and warn ride their own methods, while error and fatal share console.error, so a broken error channel loses both and a fatal line missing from the log means console.error is broken. Severities riding other methods are unaffected, and this line itself is written through console.error, which is a different method in every case but a failing error or fatal channel.
+
+**Automatic recovery.** None, and none is attempted: nothing re-routes a severity to another method, because silently moving warnings into the error stream would corrupt the log an operator reads.
+
+**What to do.** Look at the console rather than the emitter - specifically anything in the deployment that replaces, wraps, or proxies it (a log shipper, an APM agent, a test harness stub). The event name on the line says what was being reported when it went; the severity that is missing from the log tells you which method is broken. If nothing wraps the console, check whether its destination still exists - a closed pipe or a full stream refuses writes the same way.
+
+## ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] operational sink failed and its failure notice could not be built: 
+```
+
+**Cause.** A configured operational event sink threw, the console fallback printed the original event in its place, and then BUILDING the record that announces the sink failure threw. Only the wall clock the notice stamps can do that: every other field is a constant or a value read off the already-validated original record, and a clock either throws or returns a timestamp the shape accepts - no clock RETURN value can be rejected. The console is not implicated: this very line is written through it.
+
+**Consequence.** One record is lost, and it is the notice, not the event. The event named on this line was printed by the console fallback immediately above it, so the telemetry the sink was carrying is in the log; what is missing is the machine-readable statement that the sink is broken, which is what a collector watching for sink health would have keyed on.
+
+**Automatic recovery.** None for the lost notice. The sink is not unregistered and is called again for the next event. This line is inherently intermittent: it needs the same clock to succeed for the event's own record and then fail for the notice moments later, so a clock broken outright does not keep printing it - the next emission dies earlier, at record construction, and prints the record-shape line instead.
+
+**What to do.** Two independent things failed and both are worth a look. The sink is the deployment-supplied component that failed first, and the event name on the line says what it was carrying. The notice failure is separate and is the adapter-side wall clock - an injected clock that throws intermittently, or an async sink rejection settling after the clock broke. A deployment that has not injected a clock should treat this half as a defect worth reporting.
+
+## ADAPTER-ERR-METRICS-MODULE-SHAPE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got 
+```
+
+**Cause.** The export the build SELECTED from the module named by `websocket.metrics` cannot carry instrument factories. This is a statement about that one value, not about the module: the build takes the first of `default`, `metrics` and `registry` that is not nullish and forwards it without validating its shape, so a module carrying a perfectly good `metrics` registry prints this line whenever a primitive `default` sits in front of it.
+
+**Consequence.** Metrics are disabled for the whole worker: no instrument is ever created, so the adapter series are ABSENT from the scrape rather than present at zero. Dashboards read as no data and alerts that fire on a threshold never fire at all.
+
+**Automatic recovery.** None. The runtime keeps serving traffic with metrics off - the alternative is a boot failure naming neither metrics nor the option that caused it.
+
+**What to do.** The guard accepts any object or function, so what printed this is a PRIMITIVE - the `got` value on the line says which type. Export the registry itself under any one of the three names the build reads, which it tries in order: `default`, then `metrics`, then `registry`. The first one that is not nullish wins, so a primitive `default` masks a perfectly good named `metrics` beside it and is worth ruling out first.
+
+## ADAPTER-ERR-METRICS-INSTRUMENT
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] a metrics instrument threw; further errors from it are suppressed
+```
+
+**Cause.** Recording a value threw. The containment wraps the adapter's own mirror of the instrument, so the throw is usually from the registry module the `websocket.metrics` option names, but adapter code runs first on that path and a failure there surfaces the same way.
+
+**Consequence.** Where the value ends up depends on which side threw. The adapter records into its own mirror BEFORE delegating, so a throw from the configured registry loses the value only from that registry's scrape - `metricsSnapshot()` still has it. Every later call is attempted again, the containment being per call, so an instrument that throws for one label set or one transient keeps recording the rest; but the failures are printed once and then suppressed, so nothing tells you whether it kept failing. A series that stops moving reads as an idle server rather than a broken instrument.
+
+**Automatic recovery.** The throw is contained per call, so the request or frame that triggered it completes normally, and a transient failure self-heals on the next call.
+
+**What to do.** Read the error printed with this line - it is the original throw, and its stack says which side failed. Label cardinality and type mismatches in the registry module are the usual causes.
+
+## ADAPTER-ERR-POSTURE-EXPORT-DISABLED
+
+Severity: warn
+
+Log line begins:
+
+```
+[ws] posture export disabled: 
+```
+
+**Cause.** The posture export socket could not listen on its configured path, or its socket failed later in its life; the line says which. A stale socket file is removed automatically before every listen attempt, so the listen shape means a permission denial (including a stale path the process could not remove), a missing parent directory, or a Windows named pipe already taken.
+
+**Consequence.** The worker keeps serving traffic, but nothing can read its live pressure posture over that socket: an external supervisor watching it sees a connection failure rather than a posture, and any shedding decision built on it stops updating. A failed listen never had readers to lose; a later socket error drops whichever readers were connected.
+
+**Automatic recovery.** None. The export is not retried for the life of the worker.
+
+**What to do.** Read the shape on the line. For a failed listen, fix the directory permissions, create the missing parent directory, or point the export at a free path, then restart the worker - removing a stale socket file by hand is not the repair, because the runtime already removes one before every listen. For a later socket error the export is down until restart; its consumers key on the 1 Hz cadence stopping either way.
+
+## ADAPTER-ERR-UPGRADE-DEFERRED
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] a deferred upgrade failed
+```
+
+**Cause.** A WebSocket upgrade held back by the admission queue threw when it was finally completed, after the client had already passed admission.
+
+**Consequence.** That one client never connects. Its response is left unfinished rather than refused, so it typically waits out its own timeout instead of seeing an error, and it retries as if the server were briefly unavailable. The admission slot it held is released, and the other upgrades in the same drain still run.
+
+**Automatic recovery.** None for that connection; the client reconnects on its own schedule.
+
+**What to do.** Read the error printed with this line. Its source cannot be your upgrade hook - the hook had already resolved before the completion was deferred; what runs here is the socket write, the upgrade handshake, the permit bookkeeping, and, on the fast path, the tracing hook. A repeated throw usually means sockets are dying in the queue before their turn comes - the admission backlog is holding upgrades longer than clients wait.
+
+## ADAPTER-ERR-WAITING-ROOM-FALLBACK
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] the waiting-room renderer failed; serving the built-in English page instead
+```
+
+**Cause.** The module named by `waitingRoom.renderer` threw, or returned a result the runtime could not accept, while rendering the over-capacity page.
+
+**Consequence.** The visitor turned away by that request receives the built-in English page instead of the rendered one, so localization, branding and any per-request content are lost for it. The capacity decision itself is unaffected. The line prints once per worker, so a renderer that keeps failing reports only the first one.
+
+**Automatic recovery.** The renderer is called again on the next request, so a failure that depends on the request self-heals; a renderer that always throws serves the built-in page every time.
+
+**What to do.** Fix the renderer and redeploy. A renderer must return a complete document meeting the accessible baseline, which is validated on the first successful render rather than at build time; when the baseline is what failed the error printed with this line names the requirement, and for any other throw it is the renderer's own error.
 

@@ -70,10 +70,15 @@ describe('error catalog', () => {
 	it('documents prefixes in the shape their emitter actually prints', () => {
 		for (const entry of ADAPTER_ERROR_REGISTRY) {
 			if (entry.emission === 'direct') {
-				// emitOperationalEvent prints `[source] <event>: <message>`; a
-				// prefix that starts any other way is a line nothing prints.
+				// emitOperationalEvent prints the family's canonical diagnostic
+				// head; a prefix that starts any other way is a line nothing
+				// prints, and one whose fields disagree with the entry's own
+				// component/event/severity is a line grep can never match.
 				expect(
-					entry.messagePrefix.startsWith(`[svelte-adapter-ws] ${entry.event}: `),
+					entry.messagePrefix.startsWith(
+						`[lantean/diagnostic source=svelte-adapter-ws component=${entry.component} ` +
+						`event=${entry.event} severity=${entry.severity}] `
+					),
 					`${entry.id} documents a prefix its emitter never prints: ${entry.messagePrefix}`
 				).toBe(true);
 			}

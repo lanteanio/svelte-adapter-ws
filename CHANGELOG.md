@@ -197,7 +197,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `./client` subpath: the browser realtime client, carried verbatim from
   the family source with its store bindings and test suite.
 
+- The full `./plugins/*` surface: replay, presence, channels, throttle,
+  ratelimit, cursor, middleware, queue, groups, lock, session, dedup, crdt
+  (with `/replica` and `/channel`), smooth (with `/random`) and webhooks -
+  25 subpaths, server and client halves, carried verbatim with their test
+  suites (~1400 tests). The crdt plugin brings `yjs` into dependencies.
+  Shipped plugin type files spell the socket parameter `object`, matching
+  this adapter's platform types.
+
+- The `./observability` subpath: the observability manifest and contract,
+  the canonical diagnostic record surface (`createDiagnostic`,
+  `parseDiagnostic`, `formatDiagnostic`, `setOperationalEventSink`) and the
+  W3C trace-context helpers.
+
 ### Changed
+
+- Operational log lines now print the family's canonical diagnostic shape
+  (`[lantean/diagnostic source=... component=... event=... severity=...]`
+  followed by the message and the full JSON record) instead of the shorter
+  `[svelte-adapter-ws] <event>: <message>` form, so one collector rule
+  parses both adapters and `parseDiagnostic` round-trips this adapter's own
+  output. A process-wide operational event sink (`setOperationalEventSink`)
+  can capture the structured records before they reach the console.
 
 - `SHUTDOWN_TIMEOUT` bounds the whole teardown sequence - app shutdown hooks,
   the WebSocket drain and the HTTP in-flight drain now share the one budget
