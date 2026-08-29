@@ -231,6 +231,28 @@ describe('relayPublishBatched', () => {
 		only1.close();
 		only2.close();
 	});
+
+	it('refuses a batch carrying one malformed entry before any entry fans out (hard tier, like the single lane)', async () => {
+		const sub = connect();
+		await sub.open();
+		await subscribed(sub, 'relay.c1');
+
+		// Entry 1 is corrupt (env lost in serialization). The whole batch is the
+		// fault unit: the sibling's serialization is broken, so entry 0 - itself
+		// well-formed - must not be delivered either.
+		expect(() => rt.handler.relayPublishBatched([
+			{ topic: 'relay.c1', env: '{"topic":"relay.c1","event":"ok","data":null,"seq":1}', seq: 1 },
+			{ topic: 'relay.c1', env: undefined, seq: 2 }
+		], false)).toThrow(/relay\.batched-env-type/);
+		expect(() => rt.handler.relayPublishBatched([
+			{ topic: 42, env: '{"topic":"relay.c1","event":"bad","data":null,"seq":3}', seq: 3 }
+		], false)).toThrow(/relay\.batched-topic-type/);
+
+		// Nothing reached the subscriber from either refused batch.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(sub.frames.some((f) => f.json?.event === 'ok' || f.json?.event === 'bad')).toBe(false);
+		sub.close();
+	});
 });
 
 /** Assert no frame for `topic` reached this client. */

@@ -30,7 +30,7 @@ import {
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
-import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
+import { readAssertionCounts, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
@@ -1465,6 +1465,10 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 		envelopeType: typeof envelope,
 		envelopeLen: typeof envelope === 'string' ? envelope.length : null
 	});
+	// Production fatal defers the exit past this frame, so without this return
+	// the dying frame would still hand the garbage to every local subscriber -
+	// the one outcome the escalation exists to prevent.
+	if (typeof topic !== 'string' || typeof envelope !== 'string' || envelope.length === 0) return;
 	// Codec-aware relay: a set `capability` always travels with its payload
 	// and only for a codec the origin found in its registry; the gate keys on
 	// `capability` alone, not on `data`, because a codec may legitimately
@@ -1499,12 +1503,23 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
  */
 export function relayPublishBatched(events, compress) {
 	if (!Array.isArray(events) || events.length === 0) return;
-	assert(typeof events[0].topic === 'string', 'relay.batched-topic-type', {
-		first: typeof events[0].topic
-	});
-	assert(typeof events[0].env === 'string', 'relay.batched-env-type', {
-		first: typeof events[0].env
-	});
+	// Hard tier, same trust class as relayPublish above: a malformed entry
+	// from a sibling worker means the batched-lane serialization itself is
+	// broken, and one systematic fault can corrupt any entry, not just the
+	// first - so every entry is vetted before any of them fans out. The
+	// return matters in production, where fatal defers the exit past this
+	// frame: the batch is the fault unit and none of it may be delivered.
+	for (let i = 0; i < events.length; i++) {
+		const topicOk = typeof events[i].topic === 'string';
+		const envOk = typeof events[i].env === 'string' && events[i].env.length > 0;
+		fatal(topicOk, 'relay.batched-topic-type', { index: i, topic: typeof events[i].topic });
+		fatal(envOk, 'relay.batched-env-type', {
+			index: i,
+			envType: typeof events[i].env,
+			envLen: envOk ? events[i].env.length : null
+		});
+		if (!topicOk || !envOk) return;
+	}
 	const compressGated = WS_COMPRESSION_ON && compress === true;
 
 	const firstTopic = events[0].topic;
