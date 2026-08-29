@@ -292,16 +292,14 @@ export default function (opts = {}) {
 		}
 	}
 
-	// The tracing lane has not shipped in this adapter. A config that sets it
-	// expects behavior this build cannot deliver, so the build refuses loudly
-	// instead of dropping the option on the floor.
-	if (opts.tracing != null) {
+	const tracingOption = opts.tracing;
+	if (tracingOption != null && (typeof tracingOption !== 'string' || tracingOption.trim() === '')) {
 		throw new Error(
-			'[adapter-ws] The tracing option is not available yet in svelte-adapter-ws. ' +
-			'Remove the option, or instrument via OpenTelemetry auto-instrumentation, which ' +
-			'hooks node:http directly.'
+			"tracing must be a non-empty module path string (e.g. './src/lib/server/tracing.js') " +
+			'whose default or named tracing export implements startSpan(name, options).'
 		);
 	}
+	const tracingPath = typeof tracingOption === 'string' ? tracingOption.trim() : null;
 
 	// Normalize websocket config: true -> {}, false/undefined -> null
 	const websocket =
@@ -677,9 +675,27 @@ export default function (opts = {}) {
 				out + '/trace-context.js',
 				readFileSync(new URL('./trace-context.js', import.meta.url), 'utf8')
 			);
-			// The tracing provider stub keeps the bridge import resolvable; the
-			// tracing option itself is refused until its lane ships.
-			writeFileSync(out + '/tracing-provider.js', 'export default null;\n');
+			// The tracing provider: the configured module is bundled through
+			// esbuild (resolving SvelteKit aliases and TS) behind a wrapper that
+			// validates the export shape at boot; a null stub keeps the bridge
+			// import resolvable when the option is unset.
+			if (tracingPath) {
+				const tracingEntry = `${tmp}/tracing-provider-entry-src.js`;
+				writeFileSync(
+					tracingEntry,
+					`import * as m from ${JSON.stringify(path.resolve(tracingPath))};\n` +
+					'const pick = (ns) => ns.default ?? ns.tracing ?? ns.provider ?? null;\n' +
+					'const selected = pick(m);\n' +
+					"if (!selected || typeof selected.startSpan !== 'function') {\n" +
+					"  throw new Error('[adapter-ws] configured tracing module must export a provider with startSpan(name, options).');\n" +
+					'}\n' +
+					'export default selected;\n'
+				);
+				await esbuildServerModule(builder, tracingEntry, out + '/tracing-provider.js');
+				builder.log.minor(`Tracing provider: ${tracingPath}`);
+			} else {
+				writeFileSync(out + '/tracing-provider.js', 'export default null;\n');
+			}
 
 			// Runtime-readable identity metadata. Keep this as package/schema
 			// files beside the copied runtime rather than compiling version

@@ -182,6 +182,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timer read under `src/` must go through the injectable runtime module, or the
   scan fails naming the raw call site.
 
+- The `tracing` adapter option: point it at a server module exporting a
+  vendor-neutral `startSpan(name, options)` provider and the runtime opens
+  spans for SSR, static and prerendered serving, WebSocket upgrades (with
+  per-rejection admission spans) and per-message hooks, threads the W3C
+  context from the upgrade request into the connection, and serves it back
+  through `platform.trace` / `platform.traceContext`. The provider module is
+  bundled at build time behind a shape validator; without the option every
+  tracing path costs one boolean test.
+
+- The `./safe-url` subpath: the family SSRF validator, carried verbatim with
+  its test suite.
+
+- The `./client` subpath: the browser realtime client, carried verbatim from
+  the family source with its store bindings and test suite.
+
 ### Changed
 
 - `SHUTDOWN_TIMEOUT` bounds the whole teardown sequence - app shutdown hooks,

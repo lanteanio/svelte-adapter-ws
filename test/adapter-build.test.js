@@ -123,9 +123,21 @@ beforeAll(async () => {
 	writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({
 		name: 'fake-app', private: true, type: 'module', dependencies: {}
 	}));
+	// A recording tracing provider: spans land on a global the booted runtime
+	// shares with this test process, proving the configured module is bundled,
+	// loaded, and armed - not just copied.
+	writeFileSync(path.join(appDir, 'tracing-fixture.js'), [
+		'export default {',
+		'	startSpan(name, options) {',
+		'		(globalThis.__traceSpans ??= []).push({ name, kind: options?.kind });',
+		"		return { spanContext: () => ({ traceId: 'ab'.repeat(16), spanId: 'cd'.repeat(8), traceFlags: 1 }), end() {} };",
+		'	}',
+		'};',
+		''
+	].join('\n'));
 	// adapt() reads package.json, the out path and hook candidates from cwd.
 	process.chdir(appDir);
-	const instance = adapter({ out, websocket: {} });
+	const instance = adapter({ out, websocket: {}, tracing: './tracing-fixture.js' });
 	await instance.adapt(makeBuilder());
 	process.chdir(originalCwd);
 
@@ -143,7 +155,21 @@ afterAll(async () => {
 	if (handler) await handler.shutdown({ timeoutMs: 2000 });
 	delete process.env.PORT;
 	delete process.env.ORIGIN;
-	rmSync(appDir, { recursive: true, force: true });
+	// esbuild keeps a service child whose cwd is inside appDir (adapt() chdirs
+	// there), and Windows refuses to delete a directory that is any process's
+	// cwd - stop the service before removing the tree.
+	try {
+		const esbuild = await import('esbuild');
+		await esbuild.stop?.();
+	} catch { /* esbuild not resolvable - nothing to stop */ }
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			rmSync(appDir, { recursive: true, force: true });
+			break;
+		} catch {
+			await new Promise((r) => setTimeout(r, 200));
+		}
+	}
 });
 
 /** @param {string} reqPath */
@@ -161,6 +187,22 @@ describe('adapter build output', () => {
 		]) {
 			expect(existsSync(path.join(out, rel)), `${rel} missing from build output`).toBe(true);
 		}
+	});
+
+	it('bundles the configured tracing provider and arms it in the booted runtime', async () => {
+		// The emitted provider is the BUNDLED user module behind its shape
+		// validator, not the null stub.
+		const provider = readFileSync(path.join(out, 'tracing-provider.js'), 'utf8');
+		expect(provider).toContain('startSpan');
+		expect(provider).not.toBe('export default null;\n');
+		// A served request produces spans through the provider: the recording
+		// fixture and this test share one process, so arming is observable.
+		const before = (globalThis.__traceSpans ?? []).length;
+		const res = await get('/api/echo');
+		expect(res.status).toBe(200);
+		const spans = globalThis.__traceSpans ?? [];
+		expect(spans.length).toBeGreaterThan(before);
+		expect(typeof spans[spans.length - 1].name).toBe('string');
 	});
 
 	it('leaves no placeholder unreplaced in the copied runtime', () => {

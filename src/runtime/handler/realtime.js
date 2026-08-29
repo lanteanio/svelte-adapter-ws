@@ -29,6 +29,7 @@ import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
 import { createSlidingWindowLimiter } from '../utils/rate-limiter.js';
+import { activeTraceContext, extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import {
 	createMessageAdmission, runAdmittedMessageHook, runAdmittedMessageWork, messageOverloadedFrame
@@ -193,6 +194,26 @@ wss.on('headers', (headers, req) => {
  * @param {string} text
  * @param {string} [extraHeader]
  */
+/**
+ * One span per REJECTED admission, so a trace shows why a socket never
+ * opened. Fires only with a provider armed; accepted upgrades get their span
+ * around the upgrade itself.
+ * @param {Record<string, string> | null} headers
+ * @param {string} reason
+ */
+function traceUpgradeRejection(headers, reason) {
+	if (!tracingEnabled) return;
+	traceOperation('adapter.websocket.admission', {
+		kind: 'server',
+		parent: headers === null ? null : extractTraceContext(headers),
+		attributes: {
+			'network.protocol.name': 'websocket',
+			'admission.outcome': 'rejected',
+			'admission.reason': reason
+		}
+	}, () => undefined);
+}
+
 function refuseUpgrade(socket, status, text, extraHeader) {
 	const line = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 429: 'Too Many Requests', 500: 'Internal Server Error', 503: 'Service Unavailable', 504: 'Gateway Timeout' }[status] || 'Error';
 	try {
@@ -240,14 +261,17 @@ export async function handleUpgrade(req, socket, head) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
+		traceUpgradeRejection(null, 'duplicate_header');
 		refuseUpgrade(socket, 400, 'Bad Request');
 		return;
 	}
+	const wsTraceParent = extractTraceContext(headers);
 
 	const direct = req.socket?.remoteAddress || '';
 	const clientIp = resolveClientIp(direct, headers, direct);
 
 	if (upgradeRateLimiter.exceeded(clientIp, now())) {
+		traceUpgradeRejection(headers, 'ip_rate_limit');
 		refuseUpgrade(socket, 429, 'Too Many Requests');
 		return;
 	}
@@ -265,11 +289,16 @@ export async function handleUpgrade(req, socket, head) {
 		isTls: is_tls,
 		hasUpgradeHook: !!wsModule.upgrade
 	})) {
+		traceUpgradeRejection(headers, 'bad_origin');
 		refuseUpgrade(socket, 403, 'Origin not allowed');
 		return;
 	}
 
 	const wsRequestId = resolveRequestId(headers['x-request-id']) || randomUuid();
+
+	// The connection inherits the upgrade request's trace context; a span
+	// started around the upgrade hook below refines it to the hook's own.
+	let connectionTraceContext = wsTraceParent;
 
 	let userData = {};
 	if (wsModule.upgrade) {
@@ -278,14 +307,24 @@ export async function handleUpgrade(req, socket, head) {
 		let timedOut = false;
 		let timer = null;
 		try {
-			const hookRun = Promise.resolve(wsModule.upgrade({
-				headers,
-				cookies: parseCookies(headers['cookie']),
-				url,
-				remoteAddress: clientIp,
-				requestId: wsRequestId,
-				traceContext: null
-			}));
+			const callUpgradeHook = () => {
+				connectionTraceContext = activeTraceContext() ?? wsTraceParent;
+				return wsModule.upgrade({
+					headers,
+					cookies: parseCookies(headers['cookie']),
+					url,
+					remoteAddress: clientIp,
+					requestId: wsRequestId,
+					traceContext: connectionTraceContext
+				});
+			};
+			const hookRun = Promise.resolve(tracingEnabled
+				? traceOperation('adapter.websocket.upgrade', {
+					kind: 'server',
+					parent: wsTraceParent,
+					attributes: { 'network.protocol.name': 'websocket' }
+				}, callUpgradeHook)
+				: callUpgradeHook());
 			const TIMEOUT = Symbol('timeout');
 			const deadline = new Promise((resolve) => {
 				timer = setTimeout(() => { timedOut = true; resolve(TIMEOUT); }, UPGRADE_TIMEOUT_S * 1000); // determinism-allow: admission deadline over a real socket, outside the replayable engine
@@ -294,10 +333,12 @@ export async function handleUpgrade(req, socket, head) {
 			const result = await Promise.race([hookRun, deadline]);
 			if (timer) clearTimeout(timer); // determinism-allow: pairs with the admission deadline above
 			if (result === TIMEOUT) {
+				traceUpgradeRejection(headers, 'auth_timeout');
 				refuseUpgrade(socket, 504, 'Upgrade timed out');
 				return;
 			}
 			if (result === false) {
+				traceUpgradeRejection(headers, 'auth_rejected');
 				refuseUpgrade(socket, 401, 'Unauthorized');
 				return;
 			}
@@ -322,6 +363,7 @@ export async function handleUpgrade(req, socket, head) {
 					message: 'The WebSocket upgrade hook failed.',
 					attributes: { requestId: wsRequestId, error: diagnosticError(err) }
 				});
+				traceUpgradeRejection(headers, 'hook_error');
 				refuseUpgrade(socket, 500, 'Internal Server Error', 'X-Request-ID: ' + wsRequestId);
 			}
 			return;
@@ -339,7 +381,7 @@ export async function handleUpgrade(req, socket, head) {
 		const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 		const merged = { remoteAddress, .../** @type {any} */ (userData) };
 		try {
-			openConnection(ws, merged, wsRequestId);
+			openConnection(ws, merged, wsRequestId, connectionTraceContext);
 		} catch (err) {
 			// A failure between accept and full registration must tear the
 			// socket down completely - a half-registered connection would sit
@@ -367,7 +409,7 @@ export async function handleUpgrade(req, socket, head) {
  * @param {any} userData
  * @param {string} requestId
  */
-function openConnection(rawWs, userData, requestId) {
+function openConnection(rawWs, userData, requestId, connectionTraceContext = null) {
 	// The error listener attaches before anything can close the socket - a
 	// peer RST during setup must never become an uncaught emitter throw.
 	rawWs.on('error', (err) => {
@@ -380,6 +422,9 @@ function openConnection(rawWs, userData, requestId) {
 
 	const wsPlatform = Object.create(platform);
 	wsPlatform.requestId = requestId;
+	// The platform's traceContext getter falls back to this when no operation
+	// span is active, so message hooks parent onto the connection's context.
+	Object.defineProperty(wsPlatform, 'connectionTraceContext', { value: connectionTraceContext });
 	userData[WS_PLATFORM] = wsPlatform;
 
 	const facade = wrapWebSocket(rawWs, userData, {
@@ -1134,12 +1179,27 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 export function tryAuthenticateRoute(req, res, pathname) {
 	if (pathname !== WS_AUTH_PATH) return false;
 	if (!wsModule.authenticate) return false;
-	void runAuthenticateRoute(req, res).catch(() => {
+	const authenticate = () => runAuthenticateRoute(req, res).catch(() => {
 		if (!res.headersSent) {
 			res.writeHead(500, { 'content-type': 'text/plain' });
 			res.end('Internal Server Error');
 		}
 	});
+	if (tracingEnabled) {
+		void traceOperation('adapter.http.websocket-authenticate', {
+			kind: 'server',
+			parent: extractTraceContext({
+				traceparent: /** @type {string} */ (req.headers['traceparent']),
+				tracestate: /** @type {string} */ (req.headers['tracestate'])
+			}),
+			attributes: {
+				'http.request.method': req.method || 'POST',
+				'network.protocol.name': 'http'
+			}
+		}, authenticate);
+	} else {
+		void authenticate();
+	}
 	return true;
 }
 

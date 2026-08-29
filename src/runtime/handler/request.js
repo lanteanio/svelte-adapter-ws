@@ -11,6 +11,7 @@ import { serveStatic, tryPrerendered } from './static-assets.js';
 import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500 } from './http-helpers.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
+import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { lifecycleState, requestDone } from './lifecycle.js';
 
 const IS_WIN32 = process.platform === 'win32';
@@ -97,7 +98,7 @@ export function handleRequest(req, res) {
 		const entry = staticCache.get(pathname);
 		if (entry) {
 			const h = req.headers;
-			serveStatic(
+			const serve = () => serveStatic(
 				res,
 				entry,
 				/** @type {string} */ (h['accept-encoding']) || '',
@@ -107,6 +108,18 @@ export function handleRequest(req, res) {
 				/** @type {string} */ (h['if-range']) || '',
 				/** @type {string} */ (h['if-modified-since']) || ''
 			);
+			if (tracingEnabled) {
+				traceOperation('adapter.http.static', {
+					kind: 'server',
+					parent: extractTraceContext({
+						traceparent: /** @type {string} */ (h['traceparent']),
+						tracestate: /** @type {string} */ (h['tracestate'])
+					}),
+					attributes: { 'http.request.method': method, 'http.route.type': 'static' }
+				}, serve);
+			} else {
+				serve();
+			}
 			return;
 		}
 	}
@@ -152,7 +165,7 @@ export function handleRequest(req, res) {
 	// and static assets reachable only under a percent-encoded spelling.
 	if (isGetLike) {
 		const h = req.headers;
-		const served = tryPrerendered(
+		const serve = () => tryPrerendered(
 			res,
 			pathname,
 			search,
@@ -163,6 +176,16 @@ export function handleRequest(req, res) {
 			/** @type {string} */ (h['if-range']) || '',
 			/** @type {string} */ (h['if-modified-since']) || ''
 		);
+		const served = tracingEnabled
+			? traceOperation('adapter.http.prerendered', {
+				kind: 'server',
+				parent: extractTraceContext({
+					traceparent: /** @type {string} */ (h['traceparent']),
+					tracestate: /** @type {string} */ (h['tracestate'])
+				}),
+				attributes: { 'http.request.method': method, 'http.route.type': 'prerendered' }
+			}, serve)
+			: serve();
 		if (served) return;
 	}
 

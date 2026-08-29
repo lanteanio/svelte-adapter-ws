@@ -9,6 +9,7 @@ import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted
 import { platform } from './platform.js';
 import { isDedupBufferable } from './ssr-dedup.js';
 import { acceptsCoding } from './static-assets.js';
+import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
 /* global ENV_PREFIX */
 /* global WS_OPTIONS */
@@ -213,7 +214,22 @@ async function writeResponse(res, response, state, acceptEncoding) {
  * @param {{ aborted: boolean }} state
  * @param {string} [directAddress] - direct socket peer; decides ADDRESS_HEADER trust
  */
-export async function handleSSR(req, res, headers, remoteAddress, state, directAddress = remoteAddress) {
+export function handleSSR(req, res, headers, remoteAddress, state, directAddress = remoteAddress) {
+	if (!tracingEnabled) {
+		return handleSSRTraced(req, res, headers, remoteAddress, state, directAddress, null);
+	}
+	return traceOperation('adapter.http.ssr', {
+		kind: 'server',
+		parent: extractTraceContext(headers),
+		attributes: {
+			'http.request.method': req.method,
+			'network.protocol.name': 'http'
+		}
+	}, (span) => handleSSRTraced(req, res, headers, remoteAddress, state, directAddress, span));
+}
+
+/** @param {unknown} span the active tracing span, or null without a provider */
+async function handleSSRTraced(req, res, headers, remoteAddress, state, directAddress, span) {
 	const requestId = resolveRequestId(headers['x-request-id']) || randomUuid();
 	try {
 		const base_origin = origin || get_origin(headers);
@@ -478,6 +494,7 @@ export async function handleSSR(req, res, headers, remoteAddress, state, directA
 		}
 		await writeResponse(res, response, state, respAcceptEncoding);
 	} catch (err) {
+		try { span?.recordException?.(err); } catch {}
 		if (state.aborted) return;
 		emitOperationalEvent({
 			source: 'svelte-adapter-ws',

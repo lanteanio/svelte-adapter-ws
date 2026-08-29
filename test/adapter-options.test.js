@@ -33,7 +33,15 @@ describe('adapter factory options', () => {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}
-		expect(() => adapter({ tracing: './src/lib/tracing.js' })).toThrow(/tracing option is not available yet/);
+	});
+
+	it('accepts the tracing option as a module path and refuses other shapes at factory time', () => {
+		expect(() => adapter({ tracing: './src/lib/server/tracing.js' })).not.toThrow();
+		expect(() => adapter({ tracing: undefined })).not.toThrow();
+		expect(() => adapter({ tracing: '' })).toThrow(/non-empty module path/);
+		expect(() => adapter({ tracing: '   ' })).toThrow(/non-empty module path/);
+		expect(() => adapter({ tracing: () => {} })).toThrow(/non-empty module path/);
+		expect(() => adapter({ tracing: 42 })).toThrow(/non-empty module path/);
 	});
 
 	it('validates the cluster build options at factory time', () => {

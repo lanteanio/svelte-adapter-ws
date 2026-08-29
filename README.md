@@ -82,12 +82,21 @@ the build loudly rather than silently no-op'ing.
 
 Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `healthCheckPath`, `readinessCheckPath`, `staticHeaders`,
-`staticCacheControl`, `staticDotfiles`, `warmup`, and the `websocket` block
-(`handler`, `path`, `authPath`, `maxPayloadLength`, `idleTimeout`,
-`maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
+`staticCacheControl`, `staticDotfiles`, `warmup`, `tracing`, and the
+`websocket` block (`handler`, `path`, `authPath`, `maxPayloadLength`,
+`idleTimeout`, `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `messageAdmission`,
 `pressure`, `primaryInit`, `workers`, and the shared policy flags). The typed
 surface in `src/index.d.ts` is the reference.
+
+Tracing is opt-in and vendor-neutral: point `tracing` at a server module whose
+default (or named `tracing`/`provider`) export implements
+`startSpan(name, options)` - an OpenTelemetry adapter fits in a dozen lines.
+With a provider configured, the runtime opens spans for SSR, static and
+prerendered serving, WebSocket upgrades and per-message hooks, propagates W3C
+`traceparent`/`tracestate` from the request into the connection, and exposes
+the active context as `platform.trace` / `platform.traceContext`. Without the
+option the tracing paths cost one boolean test.
 
 Runtime environment (prefix configurable via the `envPrefix` option):
 
