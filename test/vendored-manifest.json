@@ -1,0 +1,213 @@
+[
+	{
+		"file": "src/client-runtime.js"
+	},
+	{
+		"file": "src/client.d.ts"
+	},
+	{
+		"file": "src/client.js"
+	},
+	{
+		"file": "src/observability.d.ts"
+	},
+	{
+		"file": "src/observability.generated.d.ts"
+	},
+	{
+		"file": "src/observability.js"
+	},
+	{
+		"file": "src/runtime/audit-snapshot.js"
+	},
+	{
+		"file": "src/runtime/auditor.js"
+	},
+	{
+		"file": "src/runtime/diagnostic-format.js"
+	},
+	{
+		"file": "src/runtime/divergence-diagnostics.js"
+	},
+	{
+		"file": "src/runtime/handler/cohort.js"
+	},
+	{
+		"file": "src/runtime/handler/egress-budget.js"
+	},
+	{
+		"file": "src/runtime/handler/metrics-snapshot.js"
+	},
+	{
+		"file": "src/runtime/handler/pressure-metrics.js"
+	},
+	{
+		"file": "src/runtime/invariants.js",
+		"adaptations": [
+			{
+				"lead": "(see handler/state.js `recordOriginStream`)",
+				"ours": "(see the lead adapter's handler/state.js `recordOriginStream`)"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/leak-detect.js"
+	},
+	{
+		"file": "src/runtime/leak-probes.js"
+	},
+	{
+		"file": "src/runtime/metrics-bridge.js"
+	},
+	{
+		"file": "src/runtime/metrics-collector.js"
+	},
+	{
+		"file": "src/runtime/observability-manifest.js"
+	},
+	{
+		"file": "src/runtime/sim-cluster.js",
+		"adaptations": [
+			{
+				"lead": "(handler.js imports uWS + build-virtual modules at module scope",
+				"ours": "(handler.js imports node:http + build-virtual modules at module scope"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/sim-core.js",
+		"adaptations": [
+			{
+				"lead": "real uWS in createTestServer",
+				"ours": "real ws in createTestServer"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/state-hash-detector.js"
+	},
+	{
+		"file": "src/runtime/steadystate.js"
+	},
+	{
+		"file": "src/runtime/transport-metrics.js"
+	},
+	{
+		"file": "src/runtime/utils/address.js",
+		"adaptations": [
+			{
+				"lead": " * IPv4-in-IPv6 to defeat smuggling - is the canonical\n * `svelte-adapter-ws/safe-url`, and there is intentionally one copy of that",
+				"ours": " * IPv4-in-IPv6 to defeat smuggling - is\n * `svelte-adapter-ws/safe-url`, and there is intentionally one copy of that"
+			},
+			{
+				"lead": " * back (`getRemoteAddressAsText`), which is OS-produced and never",
+				"ours": " * back (`socket.remoteAddress`), which is OS-produced and never"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/utils/chaos.js"
+	},
+	{
+		"file": "src/runtime/utils/connection-permit.js"
+	},
+	{
+		"file": "src/runtime/utils/cookies-string.js"
+	},
+	{
+		"file": "src/runtime/utils/egress-account.js"
+	},
+	{
+		"file": "src/runtime/utils/metrics-merge.js"
+	},
+	{
+		"file": "src/runtime/utils/metrics.js"
+	},
+	{
+		"file": "src/runtime/utils/observability-privacy.js"
+	},
+	{
+		"file": "src/runtime/utils/posture-export.js"
+	},
+	{
+		"file": "src/runtime/utils/upgrade-admission.js"
+	},
+	{
+		"file": "src/runtime/utils/waiting-room-template.js"
+	},
+	{
+		"file": "src/runtime/waiting-room-renderer-bridge.js"
+	},
+	{
+		"file": "src/safe-url.d.ts"
+	},
+	{
+		"file": "src/safe-url.js",
+		"adaptations": [
+			{
+				"lead": " * This is the single canonical copy for the ecosystem: it lives here in the\n * adapter (the layer every package depends on) and is re-exported by\n * `svelte-adapter-ws-extensions/safe-url`; `svelte-realtime` imports it\n * directly. There is intentionally no second copy to drift.",
+				"ours": " * The ecosystem's canonical copy lives in svelte-adapter-uws (the lead\n * adapter); this package carries the same validator so `./safe-url` resolves\n * identically whichever adapter an app installs. The family conformance\n * suite holds the two in lockstep."
+			}
+		]
+	},
+	{
+		"file": "test/auditor-safety.test.js"
+	},
+	{
+		"file": "test/auditor-snapshot.test.js"
+	},
+	{
+		"file": "test/auditor.test.js"
+	},
+	{
+		"file": "test/client-binary.test.js"
+	},
+	{
+		"file": "test/client-offline.test.js"
+	},
+	{
+		"file": "test/client-reconnect-advisory.test.js"
+	},
+	{
+		"file": "test/client-suspend.test.js"
+	},
+	{
+		"file": "test/client.test.js"
+	},
+	{
+		"file": "test/connection-permit-carrier.test.js"
+	},
+	{
+		"file": "test/divergence-diagnostics.test.js"
+	},
+	{
+		"file": "test/egress-account.test.js"
+	},
+	{
+		"file": "test/invariants.test.js"
+	},
+	{
+		"file": "test/leak-auditor.test.js"
+	},
+	{
+		"file": "test/leak-detect.test.js"
+	},
+	{
+		"file": "test/observability-privacy.test.js"
+	},
+	{
+		"file": "test/os-posture.test.js"
+	},
+	{
+		"file": "test/safe-url.test.js"
+	},
+	{
+		"file": "test/sim-core.test.js"
+	},
+	{
+		"file": "test/state-hash-detector.test.js"
+	},
+	{
+		"file": "test/transport-metrics.test.js"
+	}
+]

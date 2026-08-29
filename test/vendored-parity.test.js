@@ -6,7 +6,8 @@
 // only here. Like the platform parity gate, a missing lead checkout FAILS
 // rather than skips: a drift gate without its oracle is not a gate.
 //
-// Recording an adaptation: add `{ lead, ours }` to the file's entry - `lead`
+// The manifest lives in test/vendored-manifest.json: one entry per vendored
+// file, optionally with recorded `{ lead, ours }` adaptation hunks - `lead`
 // is the exact text as it appears AFTER the package-name substitution, and
 // `ours` is what this repo carries instead. Keep adaptations to what MUST
 // differ (a header paragraph whose claim would be untrue here, an import
@@ -29,27 +30,9 @@ const uwsRoot = process.env.UWS_SRC || path.resolve(repoRoot, '..', 'svelte-adap
  */
 
 /** @type {VendoredEntry[]} */
-const VENDORED = [
-	{
-		file: 'src/safe-url.js',
-		adaptations: [
-			{
-				lead:
-					' * This is the single canonical copy for the ecosystem: it lives here in the\n' +
-					' * adapter (the layer every package depends on) and is re-exported by\n' +
-					' * `svelte-adapter-ws-extensions/safe-url`; `svelte-realtime` imports it\n' +
-					' * directly. There is intentionally no second copy to drift.',
-				ours:
-					' * The ecosystem\'s canonical copy lives in svelte-adapter-uws (the lead\n' +
-					' * adapter); this package carries the same validator so `./safe-url` resolves\n' +
-					' * identically whichever adapter an app installs. The family conformance\n' +
-					' * suite holds the two in lockstep.'
-			}
-		]
-	},
-	{ file: 'src/safe-url.d.ts' },
-	{ file: 'test/safe-url.test.js' }
-];
+const VENDORED = JSON.parse(
+	readFileSync(path.join(repoRoot, 'test', 'vendored-manifest.json'), 'utf8')
+);
 
 /** @param {string} raw */
 function normalize(raw) {
