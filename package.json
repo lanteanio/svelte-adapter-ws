@@ -26,6 +26,10 @@
 		"./connection": {
 			"types": "./src/connection.d.ts",
 			"default": "./src/connection.js"
+		},
+		"./safe-url": {
+			"types": "./src/safe-url.d.ts",
+			"default": "./src/safe-url.js"
 		}
 	},
 	"files": [
