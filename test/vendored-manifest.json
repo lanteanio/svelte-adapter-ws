@@ -18,6 +18,364 @@
 		"file": "src/observability.js"
 	},
 	{
+		"file": "src/plugins/_shared/sensitive.js"
+	},
+	{
+		"file": "src/plugins/channels/client.d.ts"
+	},
+	{
+		"file": "src/plugins/channels/client.js"
+	},
+	{
+		"file": "src/plugins/channels/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "WebSocket<any>",
+				"ours": "object",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/plugins/channels/server.js"
+	},
+	{
+		"file": "src/plugins/crdt/channel.d.ts"
+	},
+	{
+		"file": "src/plugins/crdt/channel.js"
+	},
+	{
+		"file": "src/plugins/crdt/client.d.ts"
+	},
+	{
+		"file": "src/plugins/crdt/client.js"
+	},
+	{
+		"file": "src/plugins/crdt/codec.js",
+		"adaptations": [
+			{
+				"lead": "(e.g. `svelte-adapter-ws-extensions/redis/crdt`)",
+				"ours": "(e.g. `svelte-adapter-uws-extensions/redis/crdt`)"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/crdt/replica.d.ts"
+	},
+	{
+		"file": "src/plugins/crdt/replica.js"
+	},
+	{
+		"file": "src/plugins/crdt/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "(`svelte-adapter-ws-extensions/redis/crdt`) builds",
+				"ours": "(`svelte-adapter-uws-extensions/redis/crdt`) builds"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/crdt/server.js",
+		"adaptations": [
+			{
+				"lead": "(`svelte-adapter-ws-extensions/redis/crdt`) so the in-memory",
+				"ours": "(`svelte-adapter-uws-extensions/redis/crdt`) so the in-memory"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/cursor/client.d.ts"
+	},
+	{
+		"file": "src/plugins/cursor/client.js"
+	},
+	{
+		"file": "src/plugins/cursor/codec.js"
+	},
+	{
+		"file": "src/plugins/cursor/cursor-worker.js"
+	},
+	{
+		"file": "src/plugins/cursor/decode.d.ts"
+	},
+	{
+		"file": "src/plugins/cursor/decode.js"
+	},
+	{
+		"file": "src/plugins/cursor/render/canvas2d.js"
+	},
+	{
+		"file": "src/plugins/cursor/render/index.js"
+	},
+	{
+		"file": "src/plugins/cursor/render/webgl2.js"
+	},
+	{
+		"file": "src/plugins/cursor/render/webgpu.js"
+	},
+	{
+		"file": "src/plugins/cursor/server.d.ts",
+		"adaptations": [
+			{
+				"lead": " * `svelte-adapter-ws-extensions/redis/cursor`) builds the IDENTICAL codec from",
+				"ours": " * `svelte-adapter-uws-extensions/redis/cursor`) builds the IDENTICAL codec from"
+			},
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "WebSocket<any>",
+				"ours": "object",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/plugins/cursor/server.js",
+		"adaptations": [
+			{
+				"lead": "// (svelte-adapter-ws-extensions redis/cursor) builds the identical codec.",
+				"ours": "// (svelte-adapter-uws-extensions redis/cursor) builds the identical codec."
+			},
+			{
+				"lead": " * dictionary). Exported so the cluster-backed variant (svelte-adapter-ws-",
+				"ours": " * dictionary). Exported so the cluster-backed variant (svelte-adapter-uws-"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/dedup/server.d.ts"
+	},
+	{
+		"file": "src/plugins/dedup/server.js"
+	},
+	{
+		"file": "src/plugins/groups/client.d.ts"
+	},
+	{
+		"file": "src/plugins/groups/client.js"
+	},
+	{
+		"file": "src/plugins/groups/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "WebSocket<any>",
+				"ours": "object",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/plugins/groups/server.js"
+	},
+	{
+		"file": "src/plugins/lock/server.d.ts"
+	},
+	{
+		"file": "src/plugins/lock/server.js"
+	},
+	{
+		"file": "src/plugins/middleware/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "import type { Platform } from '../../index.js';\nimport type { WebSocket } from 'uWebSockets.js';",
+				"ours": "import type { Platform } from '../../index.js';"
+			},
+			{
+				"lead": "\tws: WebSocket<any>;",
+				"ours": "\tws: object;"
+			},
+			{
+				"lead": "\t\tws: WebSocket<any>,",
+				"ours": "\t\tws: object,"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/middleware/server.js"
+	},
+	{
+		"file": "src/plugins/presence/client.d.ts"
+	},
+	{
+		"file": "src/plugins/presence/client.js",
+		"adaptations": [
+			{
+				"lead": "in svelte-adapter-ws-extensions) emits",
+				"ours": "in svelte-adapter-uws-extensions) emits"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/presence/codec.js"
+	},
+	{
+		"file": "src/plugins/presence/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "`svelte-adapter-ws-extensions/redis/presence`)",
+				"ours": "`svelte-adapter-uws-extensions/redis/presence`)"
+			},
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "WebSocket<any>",
+				"ours": "object",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/plugins/presence/server.js",
+		"adaptations": [
+			{
+				"lead": "variant in svelte-adapter-ws-extensions.",
+				"ours": "variant in svelte-adapter-uws-extensions."
+			},
+			{
+				"lead": "(`svelte-adapter-ws-extensions`",
+				"ours": "(`svelte-adapter-uws-extensions`"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/queue/server.d.ts"
+	},
+	{
+		"file": "src/plugins/queue/server.js"
+	},
+	{
+		"file": "src/plugins/ratelimit/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "\tkeyBy?: 'ip' | 'connection' | ((ws: import('uWebSockets.js').WebSocket<UserData>) => string);",
+				"ours": "\tkeyBy?: 'ip' | 'connection' | ((ws: object) => string);"
+			},
+			{
+				"lead": "\ttenant?: (ws: import('uWebSockets.js').WebSocket<UserData>) => string | null | undefined;",
+				"ours": "\ttenant?: (ws: object) => string | null | undefined;"
+			},
+			{
+				"lead": "\tconsume(ws: import('uWebSockets.js').WebSocket<any>, cost?: number): ConsumeResult;",
+				"ours": "\tconsume(ws: object, cost?: number): ConsumeResult;"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/ratelimit/server.js",
+		"adaptations": [
+			{
+				"lead": "\t// budget: getUserData() is a native uWS call, and paying it per consume",
+				"ours": "\t// budget: in the lead uWS adapter getUserData() is a native call, and paying it per consume"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/replay/client.d.ts"
+	},
+	{
+		"file": "src/plugins/replay/client.js"
+	},
+	{
+		"file": "src/plugins/replay/server.d.ts",
+		"adaptations": [
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "WebSocket<any>",
+				"ours": "object",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/plugins/replay/server.js",
+		"adaptations": [
+			{
+				"lead": " * svelte-adapter-ws-extensions is the clustered form.",
+				"ours": " * svelte-adapter-uws-extensions is the clustered form."
+			},
+			{
+				"lead": "'shared-backend replay from svelte-adapter-ws-extensions, or run a ' +",
+				"ours": "'shared-backend replay from svelte-adapter-uws-extensions, or run a ' +"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/session/server.d.ts"
+	},
+	{
+		"file": "src/plugins/session/server.js"
+	},
+	{
+		"file": "src/plugins/smooth/cell-codec.js"
+	},
+	{
+		"file": "src/plugins/smooth/client.d.ts"
+	},
+	{
+		"file": "src/plugins/smooth/client.js",
+		"adaptations": [
+			{
+				"lead": "export const SMOOTH_FRESHNESS = Symbol.for('svelte-adapter-ws.smooth.freshness');",
+				"ours": "export const SMOOTH_FRESHNESS = Symbol.for('svelte-adapter-uws.smooth.freshness');"
+			}
+		]
+	},
+	{
+		"file": "src/plugins/smooth/clock.js"
+	},
+	{
+		"file": "src/plugins/smooth/codec.js"
+	},
+	{
+		"file": "src/plugins/smooth/interpolate.js"
+	},
+	{
+		"file": "src/plugins/smooth/predict.js"
+	},
+	{
+		"file": "src/plugins/smooth/random.d.ts"
+	},
+	{
+		"file": "src/plugins/smooth/random.js"
+	},
+	{
+		"file": "src/plugins/smooth/server.d.ts"
+	},
+	{
+		"file": "src/plugins/smooth/server.js"
+	},
+	{
+		"file": "src/plugins/throttle/server.d.ts"
+	},
+	{
+		"file": "src/plugins/throttle/server.js"
+	},
+	{
+		"file": "src/plugins/webhooks/controls.js"
+	},
+	{
+		"file": "src/plugins/webhooks/server.d.ts"
+	},
+	{
+		"file": "src/plugins/webhooks/server.js"
+	},
+	{
 		"file": "src/runtime/audit-snapshot.js"
 	},
 	{
@@ -25,6 +383,19 @@
 	},
 	{
 		"file": "src/runtime/diagnostic-format.js"
+	},
+	{
+		"file": "src/runtime/diagnostic.js",
+		"adaptations": [
+			{
+				"lead": "\t['extensions', ['svelte-adapter-ws-extensions', 'runtime.extensions', 'diagnostic.legacy', 'warn']],\n\t['extensions/assert', ['svelte-adapter-ws-extensions', 'runtime.assertion', 'invariant.violated', 'warn']],\n\t['extensions/fatal', ['svelte-adapter-ws-extensions', 'runtime.assertion', 'invariant.violated', 'fatal']],\n\t['extensions/devAssert', ['svelte-adapter-ws-extensions', 'runtime.assertion', 'invariant.violated', 'error']],\n\t['redis', ['svelte-adapter-ws-extensions', 'runtime.redis', 'diagnostic.legacy', 'warn']],\n\t['redis replay', ['svelte-adapter-ws-extensions', 'runtime.redis.replay', 'diagnostic.legacy', 'warn']],\n\t['redis stream replay', ['svelte-adapter-ws-extensions', 'runtime.redis.stream-replay', 'diagnostic.legacy', 'warn']],\n\t['postgres', ['svelte-adapter-ws-extensions', 'runtime.postgres', 'diagnostic.legacy', 'warn']],\n\t['postgres replay', ['svelte-adapter-ws-extensions', 'runtime.postgres.replay', 'diagnostic.legacy', 'warn']],\n\t['postgres tasks', ['svelte-adapter-ws-extensions', 'runtime.postgres.tasks', 'diagnostic.legacy', 'warn']],\n\t['publish-rate', ['svelte-adapter-ws-extensions', 'runtime.redis.publish-rate', 'diagnostic.legacy', 'warn']],",
+				"ours": "\t['extensions', ['svelte-adapter-uws-extensions', 'runtime.extensions', 'diagnostic.legacy', 'warn']],\n\t['extensions/assert', ['svelte-adapter-uws-extensions', 'runtime.assertion', 'invariant.violated', 'warn']],\n\t['extensions/fatal', ['svelte-adapter-uws-extensions', 'runtime.assertion', 'invariant.violated', 'fatal']],\n\t['extensions/devAssert', ['svelte-adapter-uws-extensions', 'runtime.assertion', 'invariant.violated', 'error']],\n\t['redis', ['svelte-adapter-uws-extensions', 'runtime.redis', 'diagnostic.legacy', 'warn']],\n\t['redis replay', ['svelte-adapter-uws-extensions', 'runtime.redis.replay', 'diagnostic.legacy', 'warn']],\n\t['redis stream replay', ['svelte-adapter-uws-extensions', 'runtime.redis.stream-replay', 'diagnostic.legacy', 'warn']],\n\t['postgres', ['svelte-adapter-uws-extensions', 'runtime.postgres', 'diagnostic.legacy', 'warn']],\n\t['postgres replay', ['svelte-adapter-uws-extensions', 'runtime.postgres.replay', 'diagnostic.legacy', 'warn']],\n\t['postgres tasks', ['svelte-adapter-uws-extensions', 'runtime.postgres.tasks', 'diagnostic.legacy', 'warn']],\n\t['publish-rate', ['svelte-adapter-uws-extensions', 'runtime.redis.publish-rate', 'diagnostic.legacy', 'warn']],"
+			},
+			{
+				"lead": "\t\tfields = ['svelte-adapter-ws-extensions', `runtime.${match[1].replace('/', '.')}`, 'diagnostic.legacy', defaultSeverity];",
+				"ours": "\t\tfields = ['svelte-adapter-uws-extensions', `runtime.${match[1].replace('/', '.')}`, 'diagnostic.legacy', defaultSeverity];"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/divergence-diagnostics.js"
@@ -40,6 +411,9 @@
 	},
 	{
 		"file": "src/runtime/handler/pressure-metrics.js"
+	},
+	{
+		"file": "src/runtime/handler/shared-wire-id.js"
 	},
 	{
 		"file": "src/runtime/invariants.js",
@@ -151,6 +525,19 @@
 		]
 	},
 	{
+		"file": "test/_helpers.js",
+		"adaptations": [
+			{
+				"lead": " * Plugin servers expect a uWS / vite wrapper-shaped WebSocket and a",
+				"ours": " * Plugin servers expect a ws facade / vite wrapper-shaped WebSocket and a"
+			},
+			{
+				"lead": " * Create a mock WebSocket that mimics the uWS / vite wrapper API.",
+				"ours": " * Create a mock WebSocket that mimics the ws facade / vite wrapper API."
+			}
+		]
+	},
+	{
 		"file": "test/auditor-safety.test.js"
 	},
 	{
@@ -160,7 +547,13 @@
 		"file": "test/auditor.test.js"
 	},
 	{
+		"file": "test/channels.test.js"
+	},
+	{
 		"file": "test/client-binary.test.js"
+	},
+	{
+		"file": "test/client-import-graph.test.js"
 	},
 	{
 		"file": "test/client-offline.test.js"
@@ -178,10 +571,46 @@
 		"file": "test/connection-permit-carrier.test.js"
 	},
 	{
+		"file": "test/crdt-channel.test.js"
+	},
+	{
+		"file": "test/crdt-codec.test.js"
+	},
+	{
+		"file": "test/crdt-replica.test.js"
+	},
+	{
+		"file": "test/cursor-decode.test.js"
+	},
+	{
+		"file": "test/cursor-handle.test.js"
+	},
+	{
+		"file": "test/cursor-render.test.js"
+	},
+	{
+		"file": "test/cursor-viewport-client.test.js"
+	},
+	{
+		"file": "test/cursor-worker.test.js"
+	},
+	{
+		"file": "test/cursor-you.test.js"
+	},
+	{
+		"file": "test/cursor.test.js"
+	},
+	{
+		"file": "test/dedup.test.js"
+	},
+	{
 		"file": "test/divergence-diagnostics.test.js"
 	},
 	{
 		"file": "test/egress-account.test.js"
+	},
+	{
+		"file": "test/groups.test.js"
 	},
 	{
 		"file": "test/invariants.test.js"
@@ -193,21 +622,126 @@
 		"file": "test/leak-detect.test.js"
 	},
 	{
+		"file": "test/lock.test.js"
+	},
+	{
+		"file": "test/middleware.test.js"
+	},
+	{
 		"file": "test/observability-privacy.test.js"
 	},
 	{
 		"file": "test/os-posture.test.js"
 	},
 	{
+		"file": "test/plugin-cluster-authority.test.js",
+		"adaptations": [
+			{
+				"lead": "// in test/cluster-sequence-policy-real.test.js (group-roundtrip and",
+				"ours": "// in the lead adapter's test/cluster-sequence-policy-real.test.js (group-roundtrip and"
+			}
+		]
+	},
+	{
+		"file": "test/presence-client.test.js"
+	},
+	{
+		"file": "test/presence-codec.test.js"
+	},
+	{
+		"file": "test/presence-heartbeat-recovery.test.js"
+	},
+	{
+		"file": "test/presence.test.js"
+	},
+	{
+		"file": "test/queue.test.js"
+	},
+	{
+		"file": "test/ratelimit.test.js"
+	},
+	{
+		"file": "test/replay.test.js"
+	},
+	{
 		"file": "test/safe-url.test.js"
+	},
+	{
+		"file": "test/session.test.js"
 	},
 	{
 		"file": "test/sim-core.test.js"
 	},
 	{
+		"file": "test/smooth-authority.test.js"
+	},
+	{
+		"file": "test/smooth-cell-codec.test.js"
+	},
+	{
+		"file": "test/smooth-channel.test.js"
+	},
+	{
+		"file": "test/smooth-clock.test.js"
+	},
+	{
+		"file": "test/smooth-codec.test.js"
+	},
+	{
+		"file": "test/smooth-cursor-worker.test.js"
+	},
+	{
+		"file": "test/smooth-events.test.js"
+	},
+	{
+		"file": "test/smooth-interpolate.test.js"
+	},
+	{
+		"file": "test/smooth-local-motion.test.js"
+	},
+	{
+		"file": "test/smooth-noecho.test.js"
+	},
+	{
+		"file": "test/smooth-predict.test.js",
+		"adaptations": [
+			{
+				"lead": "import { createSeededRng } from '../src/sim.js';",
+				"ours": "import { createSeededRng } from '../src/runtime/sim-core.js';"
+			}
+		]
+	},
+	{
+		"file": "test/smooth-random.test.js"
+	},
+	{
+		"file": "test/smooth-wire-batch.test.js"
+	},
+	{
+		"file": "test/smooth-wire-view.test.js"
+	},
+	{
+		"file": "test/smooth-wire.test.js"
+	},
+	{
 		"file": "test/state-hash-detector.test.js"
 	},
 	{
+		"file": "test/throttle.test.js"
+	},
+	{
 		"file": "test/transport-metrics.test.js"
+	},
+	{
+		"file": "test/webhooks-controls.test.js"
+	},
+	{
+		"file": "test/webhooks-delivery.test.js"
+	},
+	{
+		"file": "test/webhooks-destination.test.js"
+	},
+	{
+		"file": "test/webhooks.test.js"
 	}
 ]

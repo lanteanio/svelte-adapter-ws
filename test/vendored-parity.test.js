@@ -62,7 +62,12 @@ describe('vendored files stay byte-identical to the lead', () => {
 					`recorded adaptation no longer matches the lead in ${entry.file}; ` +
 					're-derive it from the current lead source'
 				).toBe(true);
-				expected = expected.replace(adaptation.lead, adaptation.ours);
+				// `all` marks a hunk that recurs (a renamed type used many
+				// times); default is exactly-once so an unexpected repeat of a
+				// single-site hunk still fails.
+				expected = adaptation.all
+					? expected.replaceAll(adaptation.lead, adaptation.ours)
+					: expected.replace(adaptation.lead, adaptation.ours);
 			}
 			expect(normalize(readFileSync(oursPath, 'utf8'))).toBe(expected);
 		});

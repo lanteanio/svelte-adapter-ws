@@ -1,0 +1,791 @@
+// Client-side tests for createCrdtChannel: the sync-on-open two-way
+// state-vector exchange (server diff applied, offline edits uploaded), local
+// write forwarding with origin tagging (no echo), the binary sink path and
+// the JSON-envelope path converging on one apply, pre-sync frame buffering,
+// the pending-structs loss detector, read-only enforcement, facet change
+// notifications, and teardown. The transport is injected (scripted sync
+// replies, recorded uploads); inbound frames are driven through the singleton
+// connection's mocked socket, the same harness shape as smooth-channel.test.js.
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import * as Y from 'yjs';
+
+class MockWebSocket {
+	static CONNECTING = 0;
+	static OPEN = 1;
+	static CLOSING = 2;
+	static CLOSED = 3;
+	constructor(url) {
+		this.url = url;
+		this.readyState = MockWebSocket.CONNECTING;
+		this._sent = [];
+		this.binaryType = 'blob';
+		MockWebSocket._last = this;
+		queueMicrotask(() => {
+			if (this.readyState === MockWebSocket.CONNECTING) {
+				this.readyState = MockWebSocket.OPEN;
+				this.onopen?.();
+			}
+		});
+	}
+	send(data) {
+		this._sent.push(data);
+	}
+	close(code = 1000, reason = '') {
+		this.readyState = MockWebSocket.CLOSED;
+		this.onclose?.({ code, reason });
+	}
+	emit(obj) {
+		this.onmessage?.({ data: JSON.stringify(obj) });
+	}
+	emitBinary(frame) {
+		const buf = frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
+		this.onmessage?.({ data: buf });
+	}
+}
+
+globalThis.WebSocket = /** @type {any} */ (MockWebSocket);
+globalThis.window = /** @type {any} */ ({ location: { protocol: 'http:', host: 'localhost:5173' } });
+
+const clientModule = await import('../src/client.js');
+const { createCrdtChannel } = await import('../src/plugins/crdt/channel.js');
+const { encodeCrdt, CRDT_SCHEMA_VERSION } = await import('../src/plugins/crdt/codec.js');
+const { CRDT_TOPIC_PREFIX } = await import('../src/plugins/crdt/client.js');
+const { buildBinaryFrame } = await import('../src/runtime/wire.js');
+
+const flush = (ms = 15) => new Promise((r) => setTimeout(r, ms));
+
+let topicCounter = 0;
+
+/**
+ * A scripted server: a real Y.Doc replica behind a canned transport. The sync
+ * reply carries the missing-structs diff against the client's vector plus the
+ * server's own vector, exactly the live wire contract.
+ */
+function makeServer(overrides = {}) {
+	const name = 'doc-' + topicCounter++;
+	const doc = new Y.Doc();
+	const s = {
+		name,
+		doc,
+		uploads: [],
+		syncs: [],
+		closed: 0,
+		access: { read: true, write: true, comment: false },
+		transport: {
+			sendUpdate(bytes) {
+				s.uploads.push(bytes);
+				Y.applyUpdate(doc, new Uint8Array(bytes));
+			},
+			sync(sv) {
+				s.syncs.push(sv);
+				if (overrides.sync) return overrides.sync(sv);
+				return Promise.resolve({
+					topic: name,
+					access: s.access,
+					diff: Array.from(Y.encodeStateAsUpdate(doc, new Uint8Array(sv))),
+					sv: Array.from(Y.encodeStateVector(doc))
+				});
+			},
+			close() {
+				s.closed++;
+			}
+		}
+	};
+	return s;
+}
+
+const wire = (s) => CRDT_TOPIC_PREFIX + s.name;
+
+/** Encode one update as a binary crdt frame for a known wire id. */
+function crdtFrame(wireId, bytes, seq = 1) {
+	const payload = encodeCrdt('crdt', { op: 'update', bytes });
+	return buildBinaryFrame(CRDT_SCHEMA_VERSION, wireId, seq, payload);
+}
+
+/** Capture the incremental update for one transaction on a doc. */
+function captureUpdate(doc, fn) {
+	let update = null;
+	const grab = (u) => { update = u; };
+	doc.on('update', grab);
+	doc.transact(fn);
+	doc.off('update', grab);
+	return update;
+}
+
+beforeEach(async () => {
+	try {
+		clientModule.connect().close();
+	} catch {
+		/* no singleton yet */
+	}
+	MockWebSocket._last = null;
+	await flush(2);
+});
+
+describe('option validation', () => {
+	it('rejects a missing or malformed transport', () => {
+		expect(() => createCrdtChannel()).toThrow('options object');
+		expect(() => createCrdtChannel({})).toThrow('transport');
+		expect(() => createCrdtChannel({ transport: { sendUpdate() {} } })).toThrow('transport');
+	});
+});
+
+describe('sync lifecycle', () => {
+	it('syncs on open, applies the server diff, binds the topic, surfaces access', async () => {
+		const s = makeServer();
+		s.doc.getMap('root').set('title', 'hello');
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		expect(s.syncs.length).toBe(1);
+		expect(ch.topic).toBe(wire(s));
+		expect(ch.synced).toBe(true);
+		expect(ch.degraded).toBe(false);
+		expect(ch.access).toEqual({ read: true, write: true, comment: false });
+		expect(ch.readOnly).toBe(false);
+		expect(ch.map().get('title')).toBe('hello');
+		ch.destroy();
+	});
+
+	it('uploads pre-sync local edits as one diff (the offline flush)', async () => {
+		const s = makeServer();
+		s.doc.getMap('root').set('server', 1);
+		const ch = createCrdtChannel({ transport: s.transport });
+		// Edit before the first sync resolves: no individual frame may be
+		// sent; the sync exchange uploads everything the server lacks.
+		ch.map().set('local', 2);
+		await flush();
+		expect(ch.map().get('server')).toBe(1);
+		expect(s.doc.getMap('root').get('local')).toBe(2);
+		expect(s.uploads.length).toBe(1); // exactly the one merged exchange blob
+		ch.destroy();
+	});
+
+	it('skips the upload entirely when the server lacks nothing', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		expect(s.uploads.length).toBe(0); // empty diff is not sent
+		ch.destroy();
+	});
+
+	it('reports degraded on a failed sync and recovers on the next resync', async () => {
+		let fail = true;
+		const s = makeServer({
+			sync(sv) {
+				if (fail) return Promise.reject(new Error('boom'));
+				return Promise.resolve({
+					topic: s.name,
+					access: s.access,
+					diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+					sv: Array.from(Y.encodeStateVector(s.doc))
+				});
+			}
+		});
+		const states = [];
+		const ch = createCrdtChannel({ transport: s.transport });
+		ch.onState((st) => states.push({ ...st }));
+		await flush();
+		expect(ch.degraded).toBe(true);
+		expect(ch.synced).toBe(false);
+		fail = false;
+		ch.resync();
+		await flush();
+		expect(ch.degraded).toBe(false);
+		expect(ch.synced).toBe(true);
+		expect(states.some((st) => st.degraded)).toBe(true);
+		expect(states[states.length - 1]).toMatchObject({ synced: true, degraded: false });
+		ch.destroy();
+	});
+
+	it('dedupes a second resync while one is in flight, and re-fires after it settles', async () => {
+		let hang = false;
+		let resolveHang;
+		const s = makeServer({
+			sync(sv) {
+				if (hang) return new Promise((r) => { resolveHang = r; });
+				return Promise.resolve({
+					topic: s.name,
+					access: s.access,
+					diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+					sv: Array.from(Y.encodeStateVector(s.doc))
+				});
+			}
+		});
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		expect(s.syncs.length).toBe(1); // the open sync
+		// A manual resync issues sync #2 (which hangs); a second resync while
+		// it is in flight on the same connection is deduped, NOT a third call.
+		hang = true;
+		ch.resync();
+		ch.resync();
+		await flush();
+		expect(s.syncs.length).toBe(2);
+		// Settling the in-flight sync clears the per-generation guard, so the
+		// next resync fires again - the channel is never wedged behind a
+		// completed (or slow) request.
+		hang = false;
+		resolveHang({ topic: s.name, access: s.access, diff: [], sv: [] });
+		await flush();
+		ch.resync();
+		await flush();
+		expect(s.syncs.length).toBe(3);
+		ch.destroy();
+	});
+});
+
+describe('steady state', () => {
+	it('forwards each local transaction upstream and never echoes a remote apply', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const before = s.uploads.length;
+		ch.map().set('a', 1);
+		expect(s.uploads.length).toBe(before + 1);
+		expect(s.doc.getMap('root').get('a')).toBe(1);
+
+		// A remote update applies to the local replica but is NOT re-sent.
+		MockWebSocket._last.emit({ type: 'wire-id', topic: wire(s), id: 9 });
+		const peer = new Y.Doc();
+		Y.applyUpdate(peer, Y.encodeStateAsUpdate(s.doc));
+		const u = captureUpdate(peer, () => peer.getMap('root').set('b', 2));
+		const sent = s.uploads.length;
+		MockWebSocket._last.emitBinary(crdtFrame(9, u));
+		await flush(2);
+		expect(ch.map().get('b')).toBe(2);
+		expect(s.uploads.length).toBe(sent);
+		ch.destroy();
+	});
+
+	it('applies the JSON envelope path identically (poisoned/non-binary tier)', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const peer = new Y.Doc();
+		const u = captureUpdate(peer, () => peer.getMap('root').set('via-json', true));
+		MockWebSocket._last.emit({ topic: wire(s), event: 'crdt', data: { op: 'update', bytes: Array.from(u) } });
+		await flush(2);
+		expect(ch.map().get('via-json')).toBe(true);
+		ch.destroy();
+	});
+
+	it('batches transact() mutations into one wire update', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const before = s.uploads.length;
+		const m = ch.map();
+		ch.transact(() => {
+			m.set('x', 1);
+			m.set('y', 2);
+		});
+		expect(s.uploads.length).toBe(before + 1);
+		expect(s.doc.getMap('root').toJSON()).toMatchObject({ x: 1, y: 2 });
+		ch.destroy();
+	});
+
+	it('buffers frames that race the first sync and replays only its own topic', async () => {
+		let release;
+		const s = makeServer({
+			sync(sv) {
+				return new Promise((resolve) => {
+					release = () =>
+						resolve({
+							topic: s.name,
+							access: s.access,
+							diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+							sv: Array.from(Y.encodeStateVector(s.doc))
+						});
+				});
+			}
+		});
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush(2); // sync now in flight, topic unknown
+		// A frame for OUR topic and one for a stranger topic arrive early.
+		MockWebSocket._last.emit({ type: 'wire-id', topic: wire(s), id: 3 });
+		MockWebSocket._last.emit({ type: 'wire-id', topic: CRDT_TOPIC_PREFIX + 'stranger', id: 4 });
+		const peer = new Y.Doc();
+		const mine = captureUpdate(peer, () => peer.getMap('root').set('early', 'yes'));
+		const strangerDoc = new Y.Doc();
+		const strangers = captureUpdate(strangerDoc, () => strangerDoc.getMap('root').set('not-ours', 1));
+		MockWebSocket._last.emitBinary(crdtFrame(3, mine));
+		MockWebSocket._last.emitBinary(crdtFrame(4, strangers));
+		release();
+		await flush();
+		expect(ch.map().get('early')).toBe('yes');
+		expect(ch.map().get('not-ours')).toBe(undefined);
+		ch.destroy();
+	});
+
+	it('detects a dependency gap (lost frame) and resyncs', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		expect(s.syncs.length).toBe(1);
+		MockWebSocket._last.emit({ type: 'wire-id', topic: wire(s), id: 5 });
+		// Two sequential edits from one peer; deliver only the SECOND - its
+		// dependency is missing, so the channel must schedule a resync.
+		const peer = new Y.Doc();
+		Y.applyUpdate(peer, Y.encodeStateAsUpdate(s.doc));
+		const u1 = captureUpdate(peer, () => peer.getMap('root').set('step', 1));
+		const u2 = captureUpdate(peer, () => peer.getMap('root').set('step', 2));
+		Y.applyUpdate(s.doc, u1);
+		Y.applyUpdate(s.doc, u2);
+		MockWebSocket._last.emitBinary(crdtFrame(5, u2, 2));
+		await flush(2);
+		expect(ch.map().get('step')).toBe(undefined); // pending, not applied
+		await flush(300); // past the pending-resync debounce
+		expect(s.syncs.length).toBe(2);
+		expect(ch.map().get('step')).toBe(2); // the sync diff healed the gap
+		ch.destroy();
+	});
+});
+
+describe('read-only mounts', () => {
+	it('throws on mutation, surfaces readOnly, and skips the sync upload', async () => {
+		const s = makeServer();
+		s.access = { read: true, write: false, comment: false };
+		const ch = createCrdtChannel({ transport: s.transport });
+		// a pre-sync local edit exists, but the reply says write: false - the
+		// exchange must NOT upload it.
+		ch.map().set('local', 1);
+		await flush();
+		expect(ch.readOnly).toBe(true);
+		expect(s.uploads.length).toBe(0);
+		expect(() => ch.map().set('x', 1)).toThrow('read-only');
+		expect(() => ch.array('list').push(1)).toThrow('read-only');
+		expect(() => ch.text('t').insert(0, 'a')).toThrow('read-only');
+		expect(() => ch.transact(() => {})).toThrow('read-only');
+		ch.destroy();
+	});
+});
+
+describe('facets', () => {
+	it('map onChange delivers the changed keys; reads are local-first', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const m = ch.map();
+		const changes = [];
+		const off = m.onChange((keys) => changes.push([...keys].sort()));
+		m.set('a', 1);
+		m.set('b', { nested: true });
+		m.delete('a');
+		expect(changes).toEqual([['a'], ['b'], ['a']]);
+		expect(m.get('b')).toEqual({ nested: true });
+		expect(m.has('a')).toBe(false);
+		expect(m.size).toBe(1);
+		expect(m.toJSON()).toEqual({ b: { nested: true } });
+		off();
+		m.set('c', 3);
+		expect(changes.length).toBe(3);
+		ch.destroy();
+	});
+
+	it('array facet keeps order and reports positional deltas', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const a = ch.array('list');
+		const deltas = [];
+		a.onChange((d) => deltas.push(d));
+		a.push('one', 'two');
+		a.insert(1, 'between');
+		a.delete(0, 1);
+		expect(a.toArray()).toEqual(['between', 'two']);
+		expect(a.length).toBe(2);
+		expect(a.at(0)).toBe('between');
+		expect(deltas.length).toBe(3);
+		expect(deltas[0][0]).toMatchObject({ insert: ['one', 'two'] });
+		ch.destroy();
+	});
+
+	it('text facet supports character-level edits', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('title');
+		let fired = 0;
+		t.onChange(() => fired++);
+		t.insert(0, 'helo');
+		t.insert(2, 'l');
+		t.delete(0, 1);
+		expect(t.toString()).toBe('ello');
+		expect(t.length).toBe(4);
+		expect(fired).toBe(3);
+		ch.destroy();
+	});
+
+	it('fails fast on a container kind conflict', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		ch.map('shared');
+		expect(() => ch.array('shared')).toThrow('one name, one kind');
+		ch.destroy();
+	});
+
+	it('a text range anchor survives a concurrent insert before it (offsets shift, same characters)', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'hello world');
+		const anchor = t.anchorRange(6, 11); // "world"
+		expect(t.resolveRange(anchor)).toEqual({ start: 6, end: 11 });
+		t.insert(0, 'XX '); // three chars inserted before the range
+		expect(t.resolveRange(anchor)).toEqual({ start: 9, end: 14 });
+		expect(t.toString().slice(9, 14)).toBe('world');
+		ch.destroy();
+	});
+
+	it('a text range anchor survives a delete before it', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'hello world');
+		const anchor = t.anchorRange(6, 11); // "world"
+		t.delete(0, 6); // remove "hello "
+		const r = t.resolveRange(anchor);
+		expect(t.toString().slice(r.start, r.end)).toBe('world');
+		ch.destroy();
+	});
+
+	it('an interior insert grows the range to keep covering the original characters', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'ABCD');
+		const anchor = t.anchorRange(1, 3); // "BC"
+		t.insert(2, 'X'); // strictly inside the range, between B and C
+		const r = t.resolveRange(anchor);
+		expect(t.toString().slice(r.start, r.end)).toBe('BXC');
+		ch.destroy();
+	});
+
+	it('an insert exactly at an edge stays outside the range (boundary-stable)', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'ABCD');
+		const anchor = t.anchorRange(1, 3); // "BC"
+		t.insert(3, 'X'); // exactly at the end edge (after C)
+		const r = t.resolveRange(anchor);
+		expect(t.toString().slice(r.start, r.end)).toBe('BC');
+		ch.destroy();
+	});
+
+	it('collapses the range to a caret when the anchored text is deleted', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'hello world');
+		const anchor = t.anchorRange(6, 11); // "world"
+		t.delete(6, 5); // delete the anchored text
+		// yjs anchors stay sticky: the range collapses to a zero-width caret at the
+		// deletion point rather than vanishing - sane selection UX (a caret, not a ghost).
+		expect(t.resolveRange(anchor)).toEqual({ start: 6, end: 6 });
+		ch.destroy();
+	});
+
+	it('resolveRange returns null for a malformed or empty blob (fail-safe)', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'hello');
+		expect(t.resolveRange(new Uint8Array(0))).toBeNull();
+		expect(t.resolveRange(new Uint8Array([0]))).toBeNull();
+		expect(t.resolveRange(/** @type {any} */ ('not-bytes'))).toBeNull();
+		ch.destroy();
+	});
+
+	it('resolveRange returns null (never throws) for a framing-valid blob with a garbage position payload', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const t = ch.text('body');
+		t.insert(0, 'hello');
+		// 4-byte LE length prefix = 2, then two start bytes + an empty end run: this
+		// passes the framing guard but the inner bytes are not a decodable position, so
+		// the yjs decode would throw. The contract is to drop to null, never throw.
+		const framingValidGarbage = new Uint8Array([2, 0, 0, 0, 0, 0]);
+		expect(() => t.resolveRange(framingValidGarbage)).not.toThrow();
+		expect(t.resolveRange(framingValidGarbage)).toBeNull();
+		// A real anchor truncated to lose its end run (a mid-transmission cut) also drops.
+		const full = t.anchorRange(1, 4);
+		const truncated = full.subarray(0, full.length - 1);
+		expect(() => t.resolveRange(truncated)).not.toThrow();
+		ch.destroy();
+	});
+
+	it('a range anchor survives a concurrent edit from another replica', async () => {
+		const s = makeServer();
+		const chA = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const tA = chA.text('body');
+		tA.insert(0, 'hello world');
+		await flush();
+		const anchor = tA.anchorRange(6, 11); // "world"
+		// A second replica of the same document edits before A's selection.
+		const sB = {
+			transport: {
+				sendUpdate(bytes) { Y.applyUpdate(s.doc, new Uint8Array(bytes)); },
+				sync(sv) {
+					return Promise.resolve({
+						topic: s.name + '-b',
+						access: s.access,
+						diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+						sv: Array.from(Y.encodeStateVector(s.doc))
+					});
+				}
+			}
+		};
+		const chB = createCrdtChannel({ transport: sB.transport });
+		await flush();
+		const tB = chB.text('body');
+		expect(tB.toString()).toBe('hello world');
+		tB.insert(0, 'XX '); // B types before A's selection
+		await flush();
+		chA.resync(); // A pulls B's edit and converges
+		await flush();
+		const r = tA.resolveRange(anchor);
+		expect(tA.toString()).toBe('XX hello world');
+		expect(tA.toString().slice(r.start, r.end)).toBe('world');
+		chA.destroy();
+		chB.destroy();
+	});
+
+	it('two channels over two transports converge through the server', async () => {
+		const s = makeServer();
+		const chA = createCrdtChannel({ transport: s.transport });
+		await flush();
+		// second client of the same document: its own transport, same doc
+		const sB = {
+			uploads: 0,
+			transport: {
+				sendUpdate(bytes) {
+					sB.uploads++;
+					Y.applyUpdate(s.doc, new Uint8Array(bytes));
+				},
+				sync(sv) {
+					return Promise.resolve({
+						topic: s.name + '-b', // distinct wire topic name (other connection)
+						access: s.access,
+						diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+						sv: Array.from(Y.encodeStateVector(s.doc))
+					});
+				}
+			}
+		};
+		chA.map().set('from-a', 1);
+		const chB = createCrdtChannel({ transport: sB.transport });
+		await flush();
+		expect(chB.map().get('from-a')).toBe(1); // B's first sync carried A's edit
+		chA.destroy();
+		chB.destroy();
+	});
+});
+
+describe('teardown', () => {
+	it('releases the server reference and stops applying', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		const m = ch.map();
+		ch.destroy();
+		expect(s.closed).toBe(1);
+		MockWebSocket._last.emit({ type: 'wire-id', topic: wire(s), id: 6 });
+		const peer = new Y.Doc();
+		const u = captureUpdate(peer, () => peer.getMap('root').set('late', 1));
+		MockWebSocket._last.emitBinary(crdtFrame(6, u));
+		await flush(2);
+		expect(m.toJSON()).toEqual({});
+	});
+
+	it('does not call close when the channel never synced', async () => {
+		const s = makeServer({ sync: () => Promise.reject(new Error('down')) });
+		const ch = createCrdtChannel({ transport: s.transport });
+		await flush();
+		ch.destroy();
+		expect(s.closed).toBe(0);
+	});
+});
+
+describe('background reconcile (terminal drop)', () => {
+	// The pending-structs detector needs a causally-LATER struct to arrive and
+	// reference the missing one. A TERMINAL drop - the lost fan-out frame was
+	// the last edit to reach this replica - leaves pendingStructs null, so
+	// only the healthy-channel background reconcile can converge it short of a
+	// reconnect. These tests drop the frame by simply never delivering one:
+	// the server doc advances, the client hears nothing.
+
+	it('converges a terminally-dropped update without any reconnect or later edit', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 40 });
+		await flush();
+		expect(ch.synced).toBe(true);
+		expect(s.syncs.length).toBe(1);
+
+		// A peer edit reaches the server; the fan-out frame to THIS client is
+		// dropped (backpressure, poisoned wire state, anything) and the peer
+		// goes idle - no causally-later update will ever flag the gap.
+		s.doc.getText('root').insert(0, 'x');
+		expect(ch.text().toString()).toBe(''); // stale, and pendingStructs is null
+		await flush(5);
+		expect(ch.text().toString()).toBe(''); // the loss detector cannot see it
+
+		// The background reconcile re-runs the state-vector exchange and the
+		// server diff supplies the missing struct. Red without the reconcile:
+		// the replica stays stale forever (only a reconnect would heal it).
+		await flush(250);
+		expect(s.syncs.length).toBeGreaterThan(1);
+		expect(ch.text().toString()).toBe('x');
+		ch.destroy();
+	});
+
+	it('stays quiet while in sync: no uploads, no redundant state callbacks', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 40 });
+		const states = [];
+		ch.onState((st) => states.push({ ...st }));
+		await flush();
+		const settledStates = states.length;
+		await flush(250);
+		expect(s.syncs.length).toBeGreaterThan(1); // ticks ran...
+		expect(s.uploads.length).toBe(0);          // ...but an empty diff is never uploaded
+		expect(states.length).toBe(settledStates); // ...and consumers hear nothing new
+		ch.destroy();
+	});
+
+	it('reconcileIntervalMs: 0 disables the background exchange', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 0 });
+		await flush();
+		s.doc.getText('root').insert(0, 'x');
+		await flush(250);
+		expect(s.syncs.length).toBe(1);         // only the open sync ever ran
+		expect(ch.text().toString()).toBe(''); // the terminal drop stands, as opted into
+		ch.destroy();
+	});
+
+	it('destroy stops the reconcile ticks', async () => {
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 40 });
+		await flush();
+		ch.destroy();
+		const after = s.syncs.length;
+		await flush(250);
+		expect(s.syncs.length).toBe(after); // no tick outlives the channel
+	});
+
+	it('a failed reconcile does not latch degraded: the retry loop clears it without a reconnect', async () => {
+		// The trap: a reconcile-triggered sync fails once (server blip), degraded
+		// latches, and - because synced stays true (outbound edits must not pause
+		// on a healthy socket) - neither the retry loop nor the reconcile chain
+		// (which skips while degraded) would ever run another exchange. The
+		// terminal-drop protection would be silently off until a reconnect, and
+		// downstream health surfaces would read degraded on an open connection
+		// indefinitely.
+		let failOnce = false;
+		const s = makeServer({
+			sync(sv) {
+				if (failOnce) {
+					failOnce = false;
+					return Promise.reject(new Error('blip'));
+				}
+				return Promise.resolve({
+					topic: s.name,
+					access: s.access,
+					diff: Array.from(Y.encodeStateAsUpdate(s.doc, new Uint8Array(sv))),
+					sv: Array.from(Y.encodeStateVector(s.doc))
+				});
+			}
+		});
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 40 });
+		await flush();
+		expect(ch.synced).toBe(true);
+
+		failOnce = true;
+		await flush(120); // a reconcile tick hits the blip
+		expect(ch.degraded).toBe(true);
+		expect(ch.synced).toBe(true); // never paused outbound on the healthy socket
+
+		// The 1s retry owns recovery: degraded clears with no reconnect involved.
+		await flush(1300);
+		expect(ch.degraded).toBe(false);
+		expect(ch.synced).toBe(true);
+		ch.destroy();
+	}, 10000);
+
+	it('a mid-session access change arriving on a healthy reconcile reaches onState', async () => {
+		// The server re-runs the guard on every sync, so the background reconcile
+		// is the standard delivery path for a revocation. The quiet-in-sync
+		// suppression must not swallow it: internal access flips (mutators start
+		// throwing) and the UI must hear about it in the same tick.
+		const s = makeServer();
+		const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: 40 });
+		const states = [];
+		ch.onState((st) => states.push({ ...st }));
+		await flush();
+		expect(ch.readOnly).toBe(false);
+		const settled = states.length;
+
+		s.access = { read: true, write: false, comment: false }; // guard downgraded us
+		await flush(250);
+		expect(ch.readOnly).toBe(true);
+		expect(states.length).toBeGreaterThan(settled); // the change was notified...
+		expect(states[states.length - 1].access).toEqual({ read: true, write: false, comment: false });
+		expect(states[states.length - 1].synced).toBe(true);
+		ch.destroy();
+	});
+
+	it('invalid reconcileIntervalMs falls back to the default cadence; 0 schedules no reconcile timer', async () => {
+		// Injected recording timers (passthrough to the real clock) make the
+		// scheduled delays observable, so "disabled" is distinguishable from
+		// "invalid value silently fell back" without waiting 30 seconds.
+		const { setRuntimeEnv, resetRuntimeEnv } = await import('../src/client-runtime.js');
+		const scheduled = [];
+		const cleared = [];
+		setRuntimeEnv({
+			timers: {
+				set: (cb, ms, ...a) => { const h = setTimeout(cb, ms, ...a); scheduled.push({ ms, h }); return h; },
+				clear: (h) => { cleared.push(h); clearTimeout(h); }
+			}
+		});
+		try {
+			for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, /** @type {any} */ ('20')]) {
+				scheduled.length = 0;
+				const s = makeServer();
+				const ch = createCrdtChannel({ transport: s.transport, reconcileIntervalMs: bad });
+				expect(scheduled.some((t) => t.ms === 30000), `fallback for ${String(bad)}`).toBe(true);
+				ch.destroy();
+			}
+
+			scheduled.length = 0;
+			const s2 = makeServer();
+			const ch2 = createCrdtChannel({ transport: s2.transport, reconcileIntervalMs: 0 });
+			expect(scheduled.some((t) => t.ms === 30000)).toBe(false); // no fallback...
+			expect(scheduled.some((t) => t.ms === 0)).toBe(false);     // ...and no zero-delay chain
+			ch2.destroy();
+
+			// And destroy genuinely CLEARS the pending reconcile timer (not just
+			// suppresses its tick): the handle scheduled with the reconcile
+			// cadence shows up in the cleared list.
+			scheduled.length = 0;
+			cleared.length = 0;
+			const s3 = makeServer();
+			const ch3 = createCrdtChannel({ transport: s3.transport, reconcileIntervalMs: 7777 });
+			const timer = scheduled.find((t) => t.ms === 7777);
+			expect(timer).toBeTruthy();
+			ch3.destroy();
+			expect(cleared).toContain(timer.h);
+		} finally {
+			resetRuntimeEnv();
+		}
+	});
+});

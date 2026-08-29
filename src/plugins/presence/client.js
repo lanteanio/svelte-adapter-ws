@@ -1,0 +1,324 @@
+/**
+ * Client-side presence helper for svelte-adapter-ws.
+ *
+ * Subscribes to the internal `__presence:{topic}` channel and maintains
+ * a live list of who's connected. The server handles join/leave tracking;
+ * this module just keeps the client-side state in sync.
+ *
+ * Defaults to a 90 s `maxAge` sweep: entries that haven't been refreshed
+ * by a heartbeat or diff/state inside the window are removed
+ * from the local map. The in-memory server (and the Redis-backed variant
+ * in svelte-adapter-uws-extensions) emits `{userKey: data}` heartbeats
+ * every 30 s by default, so a still-present user re-appears on the very
+ * next heartbeat - no flicker for live users, and ghost entries from
+ * silent server-side TTL expiry (cluster mass-disconnect, ungraceful
+ * client close) clear within one sweep window.
+ *
+ * Apps that want unbounded retention ("show every user who ever touched
+ * this topic" - admin / audit views) opt out with `maxAge: 0`.
+ *
+ * @module svelte-adapter-ws/plugins/presence/client
+ */
+
+const TOPIC_PREFIX = '__presence:';
+
+import { on, connect, status, registerWireCodec } from '../../client.js';
+import { now, setIntervalTimer, clearIntervalTimer, microtask } from '../../client-runtime.js';
+import { writable } from 'svelte/store';
+import { decodePresence, PRESENCE_CAPABILITY } from './codec.js';
+
+// Opt this connection into binary presence frames: advertise `presence.protocol:1`
+// in the `hello` frame and route inbound `0x03` frames on `__presence:` topics
+// through the presence decoder, which yields the identical { event, data } the
+// JSON path produced - so the store merge logic below is untouched. The codec is
+// stateless (no per-connection dictionary), so there is no `state` factory; the
+// decoder dispatches on the frame's schemaVersion and drops an unknown one.
+// Registered at module load so the first `hello` already carries the capability.
+// Fully transparent: nothing in the presence() store knows whether a frame
+// arrived as a binary `0x03` frame or as JSON.
+registerWireCodec(TOPIC_PREFIX, {
+	capability: PRESENCE_CAPABILITY,
+	capabilities: [PRESENCE_CAPABILITY],
+	decode: decodePresence
+});
+
+/** @type {Map<string, { subscribe: (fn: Function) => (() => void) }>} */
+const presenceStores = new Map();
+
+/**
+ * Push field updates for the current user on a topic.
+ *
+ * Sets one or more fields (a typing flag, a selection range, a status) on the
+ * entry this connection represents, merged field by field on the server and
+ * broadcast to every observer as a presence `diff`. You must already be present
+ * on the topic (subscribed via `on()` / `crud()`, the same requirement as
+ * `presence()`); a push from a connection that has not joined is a silent no-op.
+ * Only changed fields are broadcast. Whether a field is durable or transient is
+ * decided by the server's presence config, not the caller.
+ *
+ * @param {string} topic - Topic the user is present on
+ * @param {Record<string, any>} fields - Fields to set on this user's entry
+ *
+ * @example
+ * ```svelte
+ * <script>
+ *   import { presence, presenceUpdate } from 'svelte-adapter-ws/plugins/presence/client';
+ *
+ *   const users = presence('doc-1');
+ *   function onType() { presenceUpdate('doc-1', { typing: true }); }
+ * </script>
+ * ```
+ */
+export function presenceUpdate(topic, fields) {
+	if (typeof window === 'undefined') return;
+	connect().send({ type: 'presence-update', topic, fields });
+}
+
+/**
+ * Get a reactive store of users present on a topic.
+ *
+ * Returns a readable Svelte store containing an array of user data objects.
+ * The array updates automatically when users join or leave.
+ *
+ * Memoized by topic + maxAge: calling `presence('room', { maxAge: 90000 })`
+ * multiple times (e.g. from `$derived`) returns the same store instance,
+ * preventing flickering.
+ *
+ * You must also subscribe to the topic itself (via `on()`, `crud()`, etc.)
+ * for the server's `subscribe` hook to fire and register your presence.
+ * If you only need to observe presence without joining, use `sync()` on
+ * the server side instead.
+ *
+ * @template T
+ * @param {string} topic - Topic to track presence on
+ * @param {{ maxAge?: number }} [options] - Options
+ * @returns {import('svelte/store').Readable<T[]>}
+ *
+ * @example
+ * ```svelte
+ * <script>
+ *   import { on } from 'svelte-adapter-ws/client';
+ *   import { presence } from 'svelte-adapter-ws/plugins/presence/client';
+ *
+ *   const messages = on('room');
+ *   const users = presence('room');
+ * </script>
+ *
+ * <aside>
+ *   <h3>{$users.length} online</h3>
+ *   {#each $users as user (user.id)}
+ *     <span>{user.name}</span>
+ *   {/each}
+ * </aside>
+ * ```
+ *
+ * @example
+ * ```svelte
+ * <script>
+ *   // Opt out of the default 90 s sweep for an admin / audit view.
+ *   const users = presence('room', { maxAge: 0 });
+ * </script>
+ * ```
+ */
+export function presence(topic, options) {
+	// Default 90 s sweep matches the extensions Redis presence's default
+	// `ttl: 90` (server-side per-field TTL) and gives the in-memory
+	// server's 30 s default heartbeat a 3x safety margin. Apps that want
+	// "show every user who ever touched this topic" (admin/audit views)
+	// opt out with `maxAge: 0`.
+	const maxAge = options?.maxAge ?? 90000;
+	const cacheKey = topic + '\0' + maxAge;
+
+	const cached = presenceStores.get(cacheKey);
+	if (cached) return cached;
+
+	const presenceTopic = TOPIC_PREFIX + topic;
+
+	/** @type {Map<string, any>} */
+	let userMap = new Map();
+	/** @type {Map<string, number>} */
+	const timestamps = new Map();
+	const output = writable(/** @type {any[]} */ ([]));
+
+	let sourceUnsub = /** @type {(() => void) | null} */ (null);
+	let statusUnsub = /** @type {(() => void) | null} */ (null);
+	/** @type {ReturnType<typeof setIntervalTimer> | null} */
+	let sweepTimer = null;
+	let refCount = 0;
+	let cancelled = false;
+
+	function flush() {
+		output.set([...userMap.values()]);
+	}
+
+	function sweep() {
+		if (!maxAge || maxAge <= 0) return;
+		const cutoff = now() - maxAge;
+		let changed = false;
+		for (const [key, ts] of timestamps) {
+			if (ts < cutoff) {
+				timestamps.delete(key);
+				if (userMap.delete(key)) changed = true;
+			}
+		}
+		if (changed) flush();
+	}
+
+	function startListening() {
+		cancelled = false;
+		// Fresh on() call each time - the underlying writable in client.js
+		// is cleaned up on full unsubscribe, so a stale reference would
+		// silently stop receiving events.
+		const source = on(presenceTopic);
+		sourceUnsub = source.subscribe((event) => {
+			if (event === null) return;
+
+			if (event.event === 'state' && event.data && typeof event.data === 'object') {
+				userMap = new Map();
+				timestamps.clear();
+				const ts = now();
+				for (const [key, data] of Object.entries(event.data)) {
+					userMap.set(key, data);
+					timestamps.set(key, ts);
+				}
+				flush();
+				return;
+			}
+
+			if (event.event === 'diff' && event.data && typeof event.data === 'object') {
+				const { joins, leaves, updates } = event.data;
+				const ts = now();
+				let changed = false;
+				// Apply leaves first so a leave-then-rejoin in the same diff
+				// (rare) ends with the user present.
+				if (leaves && typeof leaves === 'object') {
+					for (const key of Object.keys(leaves)) {
+						timestamps.delete(key);
+						if (userMap.delete(key)) changed = true;
+					}
+				}
+				if (joins && typeof joins === 'object') {
+					for (const [key, data] of Object.entries(joins)) {
+						timestamps.set(key, ts);
+						const prev = userMap.get(key);
+						if (prev !== data) {
+							userMap.set(key, data);
+							changed = true;
+						}
+					}
+				}
+				// Field-level updates: merge only the changed fields into the
+				// existing user (typing, selection, a lock map). An update for a
+				// user we have not seen - missed its join / state - is dropped; it
+				// reconciles on the next state / heartbeat. A new object is set so
+				// downstream identity checks see the change. Old servers never send
+				// `updates`; an old client ignores it (the field is inert).
+				if (updates && typeof updates === 'object') {
+					for (const [key, fields] of Object.entries(updates)) {
+						if (!fields || typeof fields !== 'object') continue;
+						const prev = userMap.get(key);
+						if (prev === undefined) continue;
+						userMap.set(key, { ...prev, ...fields });
+						timestamps.set(key, ts);
+						changed = true;
+					}
+				}
+				if (changed) flush();
+				return;
+			}
+
+			if (event.event === 'heartbeat') {
+				const ts = now();
+				let changed = false;
+				if (event.data && typeof event.data === 'object' && !Array.isArray(event.data)) {
+					// New shape: `{userKey: data}` map. Refresh existing AND
+					// re-add any entry that aged out between heartbeats. The
+					// older "refresh existing only" branch (below) could not
+					// recover entries the local sweep had already removed -
+					// once an entry aged out, the next heartbeat couldn't
+					// bring it back and the user stayed missing until a
+					// diff or state arrived.
+					for (const [key, data] of Object.entries(event.data)) {
+						timestamps.set(key, ts);
+						const prev = userMap.get(key);
+						if (prev !== data) {
+							userMap.set(key, data);
+							changed = true;
+						}
+					}
+				} else if (Array.isArray(event.data)) {
+					// Back-compat: keys-only heartbeat (older server). Refresh
+					// existing entries; cannot recover aged-out ones from this
+					// shape. The diff / state reconciliation
+					// path still corrects missing entries on the next event.
+					for (const key of event.data) {
+						if (timestamps.has(key)) {
+							timestamps.set(key, ts);
+						}
+					}
+				}
+				if (changed) flush();
+				return;
+			}
+		});
+
+		if (maxAge > 0) {
+			sweepTimer = setIntervalTimer(sweep, Math.max(maxAge / 2, 1000));
+		}
+
+		// Request a presence snapshot every time the socket opens (initial
+		// connect AND reconnects). Without this, a reconnecting client
+		// missed any diff frames that fired during the disconnect
+		// window and its in-memory map stayed at whatever it last knew.
+		// Symmetric to the cursor plugin's `cursor-snapshot` send.
+		statusUnsub = status.subscribe((s) => {
+			if (s === 'open' && !cancelled) {
+				connect().send({ type: 'presence-snapshot', topic });
+			}
+		});
+	}
+
+	function stopListening() {
+		cancelled = true;
+		if (sourceUnsub) {
+			sourceUnsub();
+			sourceUnsub = null;
+		}
+		if (statusUnsub) {
+			statusUnsub();
+			statusUnsub = null;
+		}
+		if (sweepTimer) {
+			clearIntervalTimer(sweepTimer);
+			sweepTimer = null;
+		}
+		userMap = new Map();
+		timestamps.clear();
+		output.set([]);
+	}
+
+	const store = {
+		subscribe(fn) {
+			if (refCount++ === 0) startListening();
+			const unsub = output.subscribe(fn);
+			return () => {
+				unsub();
+				if (--refCount === 0) {
+					stopListening();
+					presenceStores.delete(cacheKey);
+				}
+			};
+		}
+	};
+
+	presenceStores.set(cacheKey, store);
+
+	// If nothing subscribes before the next microtask, remove the cache entry.
+	// This bounds memory use when code creates presence stores for many distinct
+	// topics and then drops them without ever subscribing.
+	microtask(() => {
+		if (refCount === 0) presenceStores.delete(cacheKey);
+	});
+
+	return store;
+}
