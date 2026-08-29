@@ -297,7 +297,10 @@ if (is_primary) {
 	const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
-	const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+	// SSL_SNI_HOSTS is deliberately NOT read here: its semicolon groups
+	// override the EXTRA certificates' SAN discovery (handler/tls.js), never
+	// the first certificate this identity record describes. The workers parse
+	// it themselves when they build their SNI contexts.
 	// Watch every certificate-bearing DIRECTORY, deduped, exactly as the
 	// single-process watch does (handler/tls.js): certbot renews each domain
 	// on its own schedule and a key can live apart from its cert, so keying
@@ -740,7 +743,7 @@ if (is_primary) {
 			// out, the workers still swap, and the primary simply keeps no
 			// expiry record instead of reporting a spurious read failure on
 			// every successful renewal.
-			source: identity_cert_path ? { certPath: identity_cert_path, hosts: ssl_sni_hosts } : undefined,
+			source: identity_cert_path ? { certPath: identity_cert_path } : undefined,
 			state: primaryTlsState,
 			onError: (err) => { failure = err && err.message ? err.message : String(err); }
 		});
@@ -761,7 +764,7 @@ if (is_primary) {
 		// own reads. Skipped for a PFX bundle, which has no PEM identity to read.
 		if (identity_cert_path) {
 			try {
-				primaryTlsState = readCertIdentity(identity_cert_path, ssl_sni_hosts);
+				primaryTlsState = readCertIdentity(identity_cert_path);
 				primaryTlsHealth.notAfter = primaryTlsState.notAfter;
 				primaryTlsHealth.notAfterText = primaryTlsState.notAfterText;
 			} catch (err) {
