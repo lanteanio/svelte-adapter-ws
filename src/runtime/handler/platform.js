@@ -37,7 +37,7 @@ import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterEr
 import { wsModule } from '../ws-handler-bridge.js';
 import { buildBinaryFrame } from '../wire.js';
 import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
-import { notePublish } from './pressure.js';
+import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, EGRESS_ADMITTED } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
 import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
 import { registerWireCodec, getWireCodec } from './codec-registry.js';
@@ -226,6 +226,63 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
  * @param {{ relay?: boolean, seq?: boolean | number, compress?: boolean, jitterMs?: number, excludeWs?: object } | undefined} [options]
  * @returns {boolean}
  */
+/**
+ * Wire bytes for one text envelope across `recipients`, or 0 while the byte
+ * dimension is unarmed so the hot path never pays the UTF-8 length walk when
+ * the account only counts messages rather than bytes. See `envelopeWireBytes`.
+ *
+ * @param {string} envelope
+ * @param {number} recipients
+ * @returns {number}
+ */
+function chargeableBytes(envelope, recipients) {
+	return envelopeWireBytes(envelope, recipients, egressGate.bytesArmed);
+}
+
+/**
+ * The whole-batch egress decision, taken before any entry is stamped or sent.
+ *
+ * Every topic in the batch admits its own share, and every tenant admits ONCE
+ * against the pooled weight of the topics it owns here - asking per topic
+ * against a window nothing has charged yet would let a batch spanning N topics
+ * of one tenant pass N times against the same allowance. One refusal refuses
+ * the whole batch: a batch that delivered a prefix and refused the tail would
+ * be the mid-batch shedding this budget forbids.
+ *
+ * `sharedRecipients` is the recipient count every entry shares (the all-see-all
+ * fast path dispatches on one topic); pass null to read each topic's own count.
+ *
+ * @param {Array<{ topic: string }>} messages
+ * @param {number | null} sharedRecipients
+ * @returns {boolean}
+ */
+function admitBatchEgress(messages, sharedRecipients) {
+	/** @type {Map<string, number>} */
+	const perTopic = new Map();
+	for (let i = 0; i < messages.length; i++) {
+		perTopic.set(messages[i].topic, (perTopic.get(messages[i].topic) || 0) + 1);
+	}
+	/** @type {Map<string, { m: number, d: number, topic: string }> | null} */
+	const perTenant = egressGate.tenantArmed ? new Map() : null;
+	for (const [t, c] of perTopic) {
+		const recipients = sharedRecipients === null ? numSubscribers(t) : sharedRecipients;
+		const deliveries = c * recipients;
+		if (!admitTopicEgress(t, c, deliveries)) return false;
+		if (perTenant === null) continue;
+		const ten = resolvePublishTenant(t);
+		if (ten === null) continue;
+		const agg = perTenant.get(ten);
+		if (agg === undefined) perTenant.set(ten, { m: c, d: deliveries, topic: t });
+		else { agg.m += c; agg.d += deliveries; }
+	}
+	if (perTenant !== null) {
+		for (const [ten, agg] of perTenant) {
+			if (!admitTenantEgress(ten, agg.topic, agg.m, agg.d)) return false;
+		}
+	}
+	return true;
+}
+
 function publish(topic, event, data, options) {
 	// Read each option exactly once into a local before any validation - a
 	// stateful accessor must not answer validation with one value and the
@@ -236,6 +293,25 @@ function publish(topic, event, data, options) {
 	const jitterOption = options != null ? options.jitterMs : undefined;
 	const excludeWs = (options && options.excludeWs) || null;
 	assertClusterSequenceAuthorityValues(seqOption, relayOption);
+
+	// Egress recipients are the topic's local subscribers, read once per
+	// logical publish, with an excluded socket that holds the topic deducted;
+	// the ceiling decision runs BEFORE the sequence is stamped, so a refused
+	// publish leaves no client-visible seq gap and nothing reaches the fan-out
+	// or the relay.
+	const recipients = excludedRecipient(excludeWs, topic)
+		? Math.max(0, numSubscribers(topic) - 1)
+		: numSubscribers(topic);
+	let egressTenant = null;
+	if (egressGate.armed) {
+		egressTenant = resolvePublishTenant(topic);
+		// EGRESS_ADMITTED marks an event whose batch already decided for the
+		// whole call (publishBatched's slow path). It still charges below -
+		// every event is its own logical publish in the ledger - but
+		// re-deciding here would deliver a prefix of an atomic batch.
+		if (!(options != null && /** @type {any} */ (options)[EGRESS_ADMITTED]) &&
+			!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
+	}
 
 	const seq = stampSeqValue(seqOption, topicSeqs, topic);
 	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
@@ -250,7 +326,11 @@ function publish(topic, event, data, options) {
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
 	const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, jitterMs);
 	fatal(envelope.length > 0, 'envelope.empty', null);
-	notePublish(topic, envelope.length);
+	// The one egress charge for this logical publish: per-topic runaway
+	// stats, worker window counters, and the ceiling account. Wire bytes are
+	// the envelope's UTF-8 encoding times the local recipients.
+	counters.publishCountWindow++;
+	chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
@@ -461,6 +541,12 @@ export const platform = {
 			}
 		}
 		if (!allSameTopic && !allSeeAll) {
+			// The batch is atomic on this path too: admitting per event would
+			// deliver a prefix and refuse the tail, which is the mid-batch
+			// shedding the budget forbids. Each topic carries its own
+			// recipient count here (the paths differ only in dispatch), and a
+			// tenant decides once on everything it owns in the batch.
+			if (egressGate.armed && !admitBatchEgress(messages, null)) return;
 			// Slow-path fallback: per-event publish() so small / disjoint batch
 			// shapes pay no shared-frame machinery. The snapshot, not a spread
 			// of the live options object: publish() consumes exactly the
@@ -469,10 +555,26 @@ export const platform = {
 				const m = messages[i];
 				publish(m.topic, m.event, m.data, /** @type {any} */ ({
 					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i],
-					excludeWs: msgExcludes[i], compress: compressOptIn
+					excludeWs: msgExcludes[i], compress: compressOptIn,
+					[EGRESS_ADMITTED]: true
 				}));
 			}
 			return;
+		}
+		// Egress admission for the whole fast-path batch, before anything is
+		// stamped. In all-see-all every interested subscriber holds every batch
+		// topic, so the dispatch topic's count IS the recipient set for every
+		// topic in the batch; a mixed-topic batch admits each distinct topic's
+		// own share and pools each tenant's, and one refusal refuses the whole
+		// batch (its atomicity contract).
+		const recipients = numSubscribers(messages[0].topic);
+		const gateArmed = egressGate.armed;
+		let egressTenant = null;
+		if (gateArmed) {
+			if (allSameTopic) {
+				egressTenant = resolvePublishTenant(firstTopic);
+				if (!admitPublishEgress(firstTopic, egressTenant, messages.length, messages.length * recipients)) return;
+			} else if (!admitBatchEgress(messages, recipients)) return;
 		}
 		// Fast path: build per-event envelopes (each stamped with its topic's
 		// seq) and a shared batch frame for cap-able subscribers.
@@ -480,12 +582,21 @@ export const platform = {
 		const events = new Array(messages.length);
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
+			counters.publishCountWindow++;
 			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic);
 			events[i] = {
 				topic: m.topic,
 				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null),
 				seq
 			};
+			// One egress charge per logical publish: each batched event is one,
+			// priced at its own envelope's UTF-8 bytes times the shared
+			// recipient set. The batch frame's wrapper bytes are uncharged
+			// overhead, so a tenant pays the same for N events whether the
+			// runtime batches them or not.
+			chargePublishEgress(m.topic,
+				gateArmed ? (allSameTopic ? egressTenant : resolvePublishTenant(m.topic)) : null,
+				1, recipients, events[i].env.length, chargeableBytes(events[i].env, recipients));
 		}
 		// Cross-worker relay: one frame carrying the pre-built per-event
 		// envelopes. The receiving worker re-runs the fast/slow detection
@@ -505,7 +616,6 @@ export const platform = {
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
 		}
-		for (let i = 0; i < events.length; i++) notePublish(events[i].topic, events[i].env.length);
 		deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compressOptIn);
 	},
 
@@ -560,6 +670,22 @@ export const platform = {
 		const isRelay = !!(options && /** @type {any} */ (options)._isRelay);
 		const relaySeqOption = isRelay ? /** @type {any} */ (options)._relaySeq : undefined;
 		if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);
+		// Egress recipients and admission, origin-side only: a relayed frame
+		// was charged once on the worker that published it, and refusing it
+		// here would fork the cluster's delivery. The decision runs before the
+		// stamp, exactly as in publish(); an excluded socket that holds the
+		// topic is not a recipient.
+		let recipients = 0;
+		let egressTenant = null;
+		if (!isRelay) {
+			recipients = numSubscribers(topic);
+			if (excludeOption !== undefined && excludeOption !== null && excludedRecipient(excludeOption, topic)) recipients--;
+			if (egressGate.armed) {
+				egressTenant = resolvePublishTenant(topic);
+				if (!(options && /** @type {any} */ (options)[EGRESS_ADMITTED]) &&
+					!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
+			}
+		}
 		// A relayed frame carries the origin worker's stamp verbatim: the
 		// origin already stamped and counted this publish once, and stamping
 		// again here would fork the topic's sequence per worker.
@@ -567,7 +693,7 @@ export const platform = {
 			? (typeof relaySeqOption === 'number' ? relaySeqOption : null)
 			: stampSeqValue(seqOption, topicSeqs, topic);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
-		if (!isRelay) notePublish(topic, envelope.length);
+		if (!isRelay) counters.publishCountWindow++;
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 		const compressIntent = compressOption === true;
 		const compress = WS_COMPRESSION_ON && compressIntent;
@@ -592,6 +718,9 @@ export const platform = {
 		// Cross-worker subscribers that did still re-encode binary on their
 		// own worker, so the codec carry rides the relay regardless.
 		if (!wire || typeof wire.capability !== 'string' || !capCounts.has(wire.capability)) {
+			// Every local recipient gets the JSON envelope on this exit, so the
+			// charge is the envelope's UTF-8 bytes times the recipient set.
+			if (!isRelay) chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 			const sent = fanOut(topic, envelope, excludeWs, compress);
 			if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
 			return sent || relayed;
@@ -599,6 +728,18 @@ export const platform = {
 
 		if (!wire.state) {
 			const payload = encodeStatelessWirePayload(wire, event, data);
+			// The one egress charge for this logical publish. With a capable
+			// connection live and a payload the codec accepted, the walk's
+			// encoded form is the binary frame and the charge reflects it for
+			// every recipient (a mixed room's JSON-degraded members ride at the
+			// same charged size - the documented approximation that keeps the
+			// charge O(1)); a declined frame delivers the envelope everywhere.
+			if (!isRelay) {
+				const wireBytes = payload != null
+					? binaryFrameChargeBytes(payload.length, seq ?? 0) * recipients
+					: chargeableBytes(envelope, recipients);
+				chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, wireBytes);
+			}
 			if (relayed) {
 				// A declined frame (null payload) declines identically on every
 				// worker, so the codec carry would be dead IPC weight: relay the
@@ -629,7 +770,11 @@ export const platform = {
 			return delivered || relayed;
 		}
 
-		// Stateful: encode per connection against its own codec state.
+		// Stateful: encode per connection against its own codec state. The
+		// charge prices the envelope across recipients - per-connection binary
+		// sizes vary with codec state, and the envelope is both the JSON
+		// degrade form and the stable upper-bound approximation.
+		if (!isRelay) chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 		if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
 		const subscribers = subscribersOf(topic);
 		if (!subscribers) return relayed;
@@ -715,8 +860,35 @@ export const platform = {
 				entrySeqs[i] = entrySeq;
 			}
 		}
+		// Egress admission for the whole batch, before anything is stamped.
+		// Deliveries are counted per RESOLVED entry - the same own-or-default
+		// exclusion resolution delivery performs - so a mid-batch refusal
+		// cannot leave a prefix delivered, and the caller sees one decision.
+		const recipients = numSubscribers(topic);
+		let deliveries = count * recipients;
+		/** @type {number[] | null} */
+		let exDeduct = null;
+		if (recipients > 0) {
+			exDeduct = new Array(count).fill(0);
+			const sharedHolds = sharedExclude !== null && excludedRecipient(sharedExclude, topic);
+			for (let i = 0; i < count; i++) {
+				const own = excludes[i];
+				if (own != null) {
+					if (excludedRecipient(own, topic)) { exDeduct[i] = 1; deliveries--; }
+				} else if (sharedHolds) {
+					exDeduct[i] = 1; deliveries--;
+				}
+			}
+		}
+		let egressTenant = null;
+		if (egressGate.armed) {
+			egressTenant = resolvePublishTenant(topic);
+			if (!admitPublishEgress(topic, egressTenant, count, deliveries)) return false;
+		}
 		const seqs = new Array(count);
 		const envelopes = new Array(count);
+		let batchBytes = 0;
+		let batchWireBytes = 0;
 		for (let i = 0; i < count; i++) {
 			// An explicit entry seq is authoritative for its entry; every other
 			// entry draws from the batch options, so `{ seq: false }` - the one
@@ -725,7 +897,18 @@ export const platform = {
 			// and relaying the forked number cluster-wide.
 			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
+			batchBytes += envelopes[i].length;
+			// Per-entry wire bytes: the envelope's UTF-8 encoding times the
+			// recipients this entry actually reaches (its exclusion deducted).
+			// Charged at the envelope size because the binary batch frame is
+			// recipient-specific, the same rule as publishWire's stateful walk.
+			batchWireBytes += chargeableBytes(envelopes[i], recipients - (exDeduct === null ? 0 : exDeduct[i]));
 		}
+		// One charge for the whole batch - N logical publishes under one
+		// admission decision - taken only after every entry has stamped and
+		// serialised, so an aborted batch never creates the topic's stats.
+		chargePublishEgress(topic, egressTenant, count, deliveries, batchBytes, batchWireBytes);
+		counters.publishCountWindow += count;
 		// Cross-worker relay: one relay envelope per entry, exactly as N
 		// publishWire calls would send - the receive path re-encodes each
 		// entry through publishWire on its own worker, so batching stays a
@@ -742,7 +925,6 @@ export const platform = {
 					relayCap !== undefined ? datas[i] : undefined);
 			}
 		}
-		for (let i = 0; i < count; i++) notePublish(topic, envelopes[i].length);
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < count; i++) captureResumeFrame(topic, envelopes[i]);
 		}
@@ -895,6 +1077,14 @@ export const platform = {
 			if (decision) targets.push(facade);
 		}
 		if (targets.length === 0) return 0;
+		// The egress decision is pre-hoc over the WHOLE recipient set (there
+		// is no mid-walk shedding), and only the filter can name that set.
+		let egressTenant = null;
+		if (egressGate.armed) {
+			egressTenant = resolvePublishTenant(topic);
+			// Refused: nothing is sent and the count says so.
+			if (!admitPublishEgress(topic, egressTenant, 1, targets.length)) return 0;
+		}
 		let count = 0;
 		for (const facade of targets) {
 			try {
@@ -905,6 +1095,10 @@ export const platform = {
 				counters.closedWsAborts++;
 			}
 		}
+		// One egress charge for the delivered set. This lane never feeds the
+		// per-topic runaway stats - those keep meaning publish-family calls -
+		// but its frames are egress like any other.
+		if (count > 0) chargeDirectEgress(topic, egressTenant, count, chargeableBytes(envelope, count));
 		return count;
 	},
 
@@ -969,6 +1163,10 @@ export const platform = {
 				counters.closedWsAborts++;
 			}
 		}
+		// The advisory is operator-lane egress: it carries no topic and no
+		// tenant, so it lands in the worker egress window but sits outside
+		// every ceiling - a drain command must not be refusable by a budget.
+		if (count > 0) chargeDirectEgress(null, null, count, chargeableBytes(frame, count));
 		return count;
 	},
 
@@ -1231,9 +1429,25 @@ export const platform = {
 		// Same topology gate as grantPublish: the game lane's room sequencer
 		// is authoritative only on the single socket-owning I/O worker.
 		assertGameLaneClusterSafe();
+		// Egress: the sender is excluded by this lane's contract, so it is
+		// deducted from the recipient set when it holds the topic. Compact
+		// binary recipients are charged the envelope size too: the 0x03 form
+		// is per-capability and encoded lazily inside the walk, and forcing
+		// the encode on every publish just to price it would tax the 60 Hz
+		// lane.
+		const recipients = excludedRecipient(/** @type {any} */ (senderWs), topic)
+			? Math.max(0, numSubscribers(topic) - 1)
+			: numSubscribers(topic);
+		let egressTenant = null;
+		if (egressGate.armed) {
+			egressTenant = resolvePublishTenant(topic);
+			// { seq: null, delivered: 0 } is this lane's refusal shape.
+			if (!admitPublishEgress(topic, egressTenant, 1, recipients)) return { seq: null, delivered: 0 };
+		}
+		counters.publishCountWindow++;
 		const seq = stampSeqValue(undefined, topicSeqs, topic);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
-		notePublish(topic, env.length);
+		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));
 		if (resumeCaptureActive()) captureResumeFrame(topic, env);
 		const subscribers = subscribersOf(topic);
 		let delivered = 0;

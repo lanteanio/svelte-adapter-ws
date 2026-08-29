@@ -205,6 +205,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shipped plugin type files spell the socket parameter `object`, matching
   this adapter's platform types.
 
+- The `websocket.egress` option: publish-egress ceilings per topic and per
+  tenant over messages, bytes and deliveries, enforced before anything is
+  stamped so a refused publish (return `false`; batches refuse atomically)
+  leaves no sequence gap. Every publish lane charges one shared ledger, the
+  pressure snapshot carries the window's deliveries, bytes and refusals, and
+  tenants resolve through the handler's `egressTenantOf(topic)` export.
+
 - The `./observability` subpath: the observability manifest and contract,
   the canonical diagnostic record surface (`createDiagnostic`,
   `parseDiagnostic`, `formatDiagnostic`, `setOperationalEventSink`) and the

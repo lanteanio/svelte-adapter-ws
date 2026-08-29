@@ -86,8 +86,15 @@ Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `websocket` block (`handler`, `path`, `authPath`, `maxPayloadLength`,
 `idleTimeout`, `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `messageAdmission`,
-`pressure`, `primaryInit`, `workers`, and the shared policy flags). The typed
-surface in `src/index.d.ts` is the reference.
+`pressure`, `egress`, `primaryInit`, `workers`, and the shared policy flags).
+The typed surface in `src/index.d.ts` is the reference.
+
+`websocket.egress` caps publish egress per accounting window: `topic` and
+`tenant` ceilings over `messages`, `bytes` and `deliveries`, with `windowMs`,
+`maxKeys` and `evictionSample` sizing the ledger. A refused publish returns
+`false` (batches refuse atomically), stamps no sequence, and is counted in
+`platform.pressure.egress`. Tenants resolve through the WebSocket handler's
+`egressTenantOf(topic)` export.
 
 Tracing is opt-in and vendor-neutral: point `tracing` at a server module whose
 default (or named `tracing`/`provider`) export implements

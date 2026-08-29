@@ -3,12 +3,30 @@
 
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
-	DEFAULT_PRESSURE_THRESHOLDS, normalizePressureThresholds, notePublish, samplePressureOnce
+	DEFAULT_PRESSURE_THRESHOLDS, normalizePressureThresholds, samplePressureOnce
 } from '../src/runtime/handler/pressure.js';
 import {
 	counters, pressureListeners, pressureSnapshot, publishRateListeners, topicPublishStats
 } from '../src/runtime/handler/state.js';
 import { recordBackpressureDrop } from '../src/runtime/utils/backpressure.js';
+
+/**
+ * Bump the window counters the way the publish paths' shared egress charge
+ * point does (handler/egress-budget.js chargePublishEgress) - the sampler
+ * under test reads only this state.
+ * @param {string} topic
+ * @param {number} bytes
+ */
+function notePublish(topic, bytes) {
+	counters.publishCountWindow++;
+	const entry = topicPublishStats.get(topic);
+	if (entry) {
+		entry.m++;
+		entry.b += bytes;
+	} else {
+		topicPublishStats.set(topic, { m: 1, b: bytes, d: 0 });
+	}
+}
 
 /** Reset the sampler-facing state between cases. */
 beforeEach(() => {

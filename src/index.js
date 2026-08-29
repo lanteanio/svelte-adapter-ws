@@ -11,6 +11,7 @@ import {
 	assertWireSubscribeAuthorization,
 	assertProtectiveNumber,
 	assertSharedOptionValues,
+	assertEgressSection,
 	describeUnknownOptionKeys,
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
@@ -68,7 +69,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
 	'adminPath', 'adminAuthAcknowledged', 'metrics',
-	'maxTopicSeqEntries', 'upgradeAdmission', 'egress', 'protection',
+	'maxTopicSeqEntries', 'upgradeAdmission', 'protection',
 	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
 	'postureExport'
 ];
@@ -126,6 +127,11 @@ export function serializeWsOptions(websocket) {
 		authPathRateLimitWindow: websocket?.authPathRateLimitWindow ?? 10,
 		messageAdmission: websocket?.messageAdmission,
 		pressure: websocket?.pressure,
+		// Publish-egress window and ceilings (plain numbers, so the section
+		// rides the JSON payload cleanly). The tenant resolver travels
+		// separately as the handler module's egressTenantOf export - the one
+		// carrier that reaches the runtime as a function.
+		egress: websocket?.egress,
 		allowSystemTopicSubscribe: websocket?.allowSystemTopicSubscribe === true,
 		authorizeWireSubscribe: websocket?.authorizeWireSubscribe === 'strict'
 			? 'strict'
@@ -323,6 +329,10 @@ export default function (opts = {}) {
 				`got ${JSON.stringify(websocket.handler)}.`
 			);
 		}
+		// A misshaped ceiling must fail at the factory, before any build work:
+		// a typo'd egress key would otherwise leave that ceiling silently open
+		// while the operator believes it is enforced.
+		assertEgressSection(websocket);
 		if (websocket.primaryInit != null && typeof websocket.primaryInit !== 'string') {
 			throw new Error(
 				"websocket.primaryInit must be a module path string (e.g. './src/lib/server/cluster.js') " +

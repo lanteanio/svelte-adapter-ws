@@ -46,6 +46,7 @@ import { wsModule } from '../ws-handler-bridge.js';
 import { capCounts, counters, subscribeAuth, wsConnections, wsWrappers } from './state.js';
 import { detachWireStates } from './wire-state.js';
 import { startPressureSampler } from './pressure.js';
+import { configureEgress } from './egress-budget.js';
 import { leaseGrantSize } from '../wire.js';
 import { recordBackpressureDrop } from '../utils/backpressure.js';
 import { accountClosedLogicalSubscriptions, addLogicalSubscription, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
@@ -108,6 +109,11 @@ for (const name of Object.keys(wsModule)) {
 	}
 }
 armCloseHookAccounting(wsModule.close);
+// The egress gate arms from the serialized option section; the tenant
+// resolver comes from the handler module - the one carrier that reaches the
+// runtime as a function. A defined non-function export refuses at startup
+// rather than silently standing every tenant ceiling down.
+configureEgress(wsOptions.egress, wsModule.egressTenantOf);
 if (wsModule.admin) {
 	console.warn(
 		'[svelte-adapter-ws] The admin() export is not auto-mounted by this adapter yet. ' +

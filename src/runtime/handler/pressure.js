@@ -56,27 +56,6 @@ export function normalizePressureThresholds(opts) {
 const memoryWall = createMemoryWallReader();
 const osPressure = createOsPressureSampler();
 
-/** Whether the per-topic bump is armed (both topic thresholds off skips it). */
-let topicTrackingOn = true;
-
-/**
- * Hot-path bump for one publish: the window counter always, the per-topic
- * stats only while a topic threshold is armed.
- *
- * @param {string} topic
- * @param {number} bytes
- */
-export function notePublish(topic, bytes) {
-	counters.publishCountWindow++;
-	if (!topicTrackingOn) return;
-	const entry = topicPublishStats.get(topic);
-	if (entry) {
-		entry.m++;
-		entry.b += bytes;
-	} else {
-		topicPublishStats.set(topic, { m: 1, b: bytes, d: 0 });
-	}
-}
 
 /**
  * Sample once: fold the counters into the snapshot, fire listeners on a
@@ -88,6 +67,18 @@ export function samplePressureOnce(thresholds) {
 	const interval = thresholds.sampleIntervalMs / 1000;
 	const publishRate = interval > 0 ? counters.publishCountWindow / interval : 0;
 	counters.publishCountWindow = 0;
+
+	// Publish-egress figures for the window just closed, drained exactly like
+	// the publish count above: read into the snapshot, then zeroed so the next
+	// window starts fresh. One stable nested object, mutated in place.
+	pressureSnapshot.egress.deliveries = counters.egressDeliveriesWindow;
+	pressureSnapshot.egress.bytes = counters.egressBytesWindow;
+	pressureSnapshot.egress.refusedTopic = counters.egressRefusedTopicWindow;
+	pressureSnapshot.egress.refusedTenant = counters.egressRefusedTenantWindow;
+	counters.egressDeliveriesWindow = 0;
+	counters.egressBytesWindow = 0;
+	counters.egressRefusedTopicWindow = 0;
+	counters.egressRefusedTenantWindow = 0;
 
 	const connections = wsConnections.size;
 	const subscriberRatio = connections > 0 ? counters.totalSubscriptions / connections : 0;
@@ -217,7 +208,6 @@ let samplerTimer = null;
 export function startPressureSampler(pressureOptions) {
 	if (samplerTimer !== null) return;
 	const thresholds = normalizePressureThresholds(pressureOptions);
-	topicTrackingOn = thresholds.topicPublishRatePerSec !== false || thresholds.topicPublishBytesPerSec !== false;
 	samplerTimer = setIntervalTimer(() => samplePressureOnce(thresholds), thresholds.sampleIntervalMs);
 	if (typeof samplerTimer?.unref === 'function') samplerTimer.unref();
 }

@@ -29,10 +29,18 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ websocket: false })).not.toThrow();
 		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
 		expect(() => adapter({ websocket: { pressure: { publishRatePerSec: 500 } } })).not.toThrow();
-		for (const key of ['metrics', 'upgradeAdmission', 'egress', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
+		for (const key of ['metrics', 'upgradeAdmission', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}
+	});
+
+	it('accepts the egress section and refuses misshaped ceilings at factory time', () => {
+		expect(() => adapter({ websocket: { egress: { topic: { deliveries: 1000 } } } })).not.toThrow();
+		expect(() => adapter({ websocket: { egress: { tenant: { bytes: 1024 }, windowMs: 1000 } } })).not.toThrow();
+		expect(() => adapter({ websocket: { egress: '/x' } })).toThrow(/egress/);
+		expect(() => adapter({ websocket: { egress: { windowMs: 50 } } })).toThrow(/windowMs/);
+		expect(() => adapter({ websocket: { egress: { tenantOf: () => 't' } } })).toThrow(/egressTenantOf/);
 	});
 
 	it('accepts the tracing option as a module path and refuses other shapes at factory time', () => {
