@@ -30,6 +30,10 @@
 		"./safe-url": {
 			"types": "./src/safe-url.d.ts",
 			"default": "./src/safe-url.js"
+		},
+		"./client": {
+			"types": "./src/client.d.ts",
+			"default": "./src/client.js"
 		}
 	},
 	"files": [
@@ -53,6 +57,7 @@
 		"@rollup/plugin-commonjs": "^28.0.0",
 		"@rollup/plugin-json": "^6.0.0",
 		"@rollup/plugin-node-resolve": "^16.0.0",
+		"parse5": "^8.0.0",
 		"rollup": "^4.0.0",
 		"ws": "^8.18.0"
 	},
