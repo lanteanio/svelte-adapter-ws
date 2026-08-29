@@ -99,7 +99,7 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
 | `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
 | `BODY_SIZE_LIMIT` | `512K` | Request body cap (413 above it). |
-| `SHUTDOWN_TIMEOUT` | `30` | Seconds of grace for in-flight work at shutdown; `0` removes the HTTP budget (live WebSockets still drain within 30s - a socket never ends on its own). |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). |
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
 | `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |

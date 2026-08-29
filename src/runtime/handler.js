@@ -57,18 +57,27 @@ export function shutdown(opts = {}) {
 /** @param {{ timeoutMs?: number }} opts */
 async function runShutdown(opts) {
 	beginDrain();
+	// timeoutMs bounds this WHOLE teardown (WS drain, then the HTTP in-flight
+	// drain): the HTTP drain gets what the WS drain left, so the caller's
+	// budget is a bound on the sequence, not a per-phase allowance.
+	const bounded = !!(opts.timeoutMs && opts.timeoutMs > 0);
+	const deadlineAt = bounded ? monotonicNow() + /** @type {number} */ (opts.timeoutMs) : null;
 	if (realtime) {
 		// A WebSocket never ends on its own, so 'no budget' cannot mean 'wait
 		// forever' here: SHUTDOWN_TIMEOUT=0 disables the HTTP in-flight budget
 		// but the WS drain still closes holdouts after a 30s window.
-		const budget = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 30_000;
+		const budget = bounded ? /** @type {number} */ (opts.timeoutMs) : 30_000;
 		await realtime.drainSockets({
 			dispersalMs: reconnect_dispersal_ms,
 			deadlineMs: budget
 		});
 	}
 	stopPressureSampler();
-	return lifecycleShutdown(opts);
+	// Floored at 1ms: timeoutMs 0 is the no-budget spelling, and an exhausted
+	// budget must cut the HTTP drain immediately rather than unbind it.
+	return lifecycleShutdown(deadlineAt !== null
+		? { ...opts, timeoutMs: Math.max(1, deadlineAt - monotonicNow()) }
+		: opts);
 }
 
 // - Configuration validation -------------------------------------------------

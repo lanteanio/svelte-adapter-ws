@@ -182,5 +182,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timer read under `src/` must go through the injectable runtime module, or the
   scan fails naming the raw call site.
 
+### Changed
+
+- `SHUTDOWN_TIMEOUT` bounds the whole teardown sequence - app shutdown hooks,
+  the WebSocket drain and the HTTP in-flight drain now share the one budget
+  instead of each spending it in full, so the process is down when the
+  configured number says it is. `0` still means no budget anywhere. In cluster
+  mode the primary's force-exit fires one worker-exit grace after the budget,
+  so a worker inside its own bound never loses the race to its supervisor.
+
+### Fixed
+
+- A cert-directory watcher error after arming (a renewal's symlink swap
+  removing the watched directory, EPERM on teardown) no longer crashes the
+  cluster primary; the watcher closes itself and the degraded state is
+  reported, matching the single-process watch.
+- The primary's certificate identity record no longer misapplies
+  `SSL_SNI_HOSTS` to the first certificate; the override's semicolon groups
+  only ever name hosts for the extra certificates.
+- A malformed entry anywhere in a cross-worker batched relay frame now
+  refuses the whole batch at the hard tier before anything reaches a
+  subscriber, matching the single-frame relay lane.
+
 The package is not yet published to npm; this section becomes 0.1.0 at the
 first cut.

@@ -1,4 +1,5 @@
 import net from 'node:net';
+import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 
@@ -135,6 +136,93 @@ describe('graceful shutdown', () => {
 			}
 		} finally {
 			console.error = originalError;
+			ownPayload.cleanup();
+		}
+	});
+
+	it('bounds the whole teardown by ONE budget: a WS drain that eats it leaves the HTTP drain only the floor', async () => {
+		// A socket that never acks the server's close frame pins the WS drain
+		// at its full deadline, so under per-phase budgets the HTTP drain would
+		// then spend the SAME budget again (~2x total). The sequence contract:
+		// the HTTP drain gets only what the WS drain left.
+		const WS_OPTS = {
+			maxPayloadLength: 64 * 1024,
+			idleTimeout: 120,
+			maxBackpressure: 1024 * 1024,
+			closeOnBackpressureLimit: false,
+			sendPingsAutomatically: true,
+			compression: false,
+			allowedOrigins: '*',
+			upgradeTimeout: 5,
+			upgradeRateLimit: 0,
+			upgradeRateLimitWindow: 10,
+			authPathRateLimit: 0,
+			authPathRateLimitWindow: 10,
+			allowSystemTopicSubscribe: false,
+			authorizeWireSubscribe: false,
+			allowNonAsciiTopics: false,
+			authPathRequireOrigin: true,
+			compressCredentialedResponses: false,
+			unsafeSameOriginWithoutHostPin: false
+		};
+		const SLOW_SERVER = `
+export class Server {
+	constructor(manifest) {}
+	async init(opts) {}
+	async respond(request) {
+		const p = new URL(request.url).pathname;
+		if (p === '/api/very-slow') {
+			await new Promise((r) => setTimeout(r, 3000));
+			return new Response('done', { headers: { 'content-type': 'text/plain' } });
+		}
+		return new Response('SSR:' + p, { headers: { 'content-type': 'text/html' } });
+	}
+}
+`;
+		const ownPayload = buildRuntime({
+			replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) },
+			serverSource: SLOW_SERVER,
+			wsHandlerSource: 'export function message() {}\n'
+		});
+		const own = await bootRuntime(ownPayload);
+		const holdout = new WebSocket(`ws://127.0.0.1:${own.port}/ws`);
+		/** @type {string[]} */
+		const errorLines = [];
+		const originalError = console.error;
+		try {
+			await new Promise((resolve, reject) => {
+				holdout.on('open', resolve);
+				holdout.on('error', reject);
+			});
+			// Stop reading: the server's close frame is never acked, so the WS
+			// drain holds until its deadline terminates the socket.
+			holdout._socket.pause();
+			const slow = fetch(own.origin + '/api/very-slow').catch((err) => err);
+			await new Promise((r) => setTimeout(r, 50));
+
+			console.error = (...args) => { errorLines.push(args.map(String).join(' ')); };
+			const t0 = Date.now();
+			await own.handler.shutdown({ timeoutMs: 700 });
+			const elapsed = Date.now() - t0;
+			console.error = originalError;
+
+			expect(own.handler.lifecycleState()).toBe('closed');
+			// The WS deadline was honored (the holdout was never going to ack)...
+			expect(elapsed).toBeGreaterThanOrEqual(600);
+			// ...and the HTTP drain got only the exhausted remainder, not a
+			// fresh budget of its own: per-phase semantics would land at ~1400.
+			expect(elapsed).toBeLessThan(1100);
+			// The in-flight request was cut and counted, proving the HTTP drain
+			// had live work it did NOT wait a second budget for.
+			const dropped = errorLines.filter((line) => line.includes('ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED'));
+			expect(dropped.length).toBe(1);
+			const outcome = await slow;
+			if (!(outcome instanceof Error)) {
+				await expect(outcome.text()).rejects.toThrow();
+			}
+		} finally {
+			console.error = originalError;
+			try { holdout.terminate(); } catch { /* already gone */ }
 			ownPayload.cleanup();
 		}
 	});

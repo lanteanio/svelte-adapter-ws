@@ -856,15 +856,17 @@ if (is_primary) {
 			await new Promise((resolve) => setTimer(resolve, shutdown_delay));
 		}
 
-		// Step 3: tell workers to drain and exit (workers run their own hook,
-		// drain and cleanup budgets).
+		// Step 3: tell workers to drain and exit. Each worker bounds its OWN
+		// whole teardown (hooks plus both drains) by SHUTDOWN_TIMEOUT.
 		for (const [worker] of workers) {
 			try { worker.postMessage({ type: 'shutdown' }); } catch { /* worker already exiting */ }
 		}
 
-		// Force-exit after the budget: ask any still-running worker to exit
-		// itself; each request carries its own terminate fallback for a
-		// genuinely wedged worker. The last worker's exit handler
+		// Backstop, not the budget: the workers self-bound at SHUTDOWN_TIMEOUT,
+		// so this fires one exit grace LATER and only reaches a worker whose
+		// teardown machinery is itself wedged - a worker inside its budget must
+		// never lose the race to its own supervisor. Each request carries its
+		// own terminate fallback. The last worker's exit handler
 		// (workers.size === 0) performs the clean primary process.exit(0).
 		//
 		// SHUTDOWN_TIMEOUT=0 is the no-budget spelling, so there is no
@@ -874,7 +876,7 @@ if (is_primary) {
 		if (shutdown_timeout > 0) {
 			const t = setTimer(() => {
 				for (const [worker] of workers) requestWorkerExit(worker, 0);
-			}, shutdown_timeout * 1000);
+			}, shutdown_timeout * 1000 + WORKER_EXIT_GRACE_MS);
 			if (t && t.unref) t.unref();
 		} else {
 			console.log('[primary] SHUTDOWN_TIMEOUT=0: no shutdown budget - workers exit when their own teardown finishes, however long that takes.');
@@ -934,24 +936,28 @@ if (is_primary) {
 			await new Promise((resolve) => setTimeout(resolve, shutdown_delay)); // determinism-allow: process-level shutdown pacing, outside the replayable runtime
 		}
 
-		// The app's cleanup (sveltekit:shutdown listeners, then the ws
-		// shutdown hook) gets its own budget of the same length as the
-		// drain's: a listener awaiting a dead database pool must not park
-		// shutdown forever. Under SHUTDOWN_TIMEOUT=0 the hooks run unbounded,
-		// matching the documented no-budget semantics; the second-signal
-		// force-exit is the escape hatch.
+		// ONE budget for everything that follows: SHUTDOWN_TIMEOUT bounds the
+		// whole teardown sequence (app cleanup hooks, then the WS and HTTP
+		// drains), not each phase separately - a hook that eats the budget
+		// leaves the drains only what remains, so the process is down when the
+		// operator's number says it is. The readiness delay above is outside
+		// the budget: it is a wait the operator asked for, not work that can
+		// overrun. Under SHUTDOWN_TIMEOUT=0 every phase runs unbounded; the
+		// second-signal force-exit is the escape hatch.
+		const budgetMs = shutdown_timeout * 1000;
+		const deadlineAt = budgetMs > 0 ? Date.now() + budgetMs : null; // determinism-allow: process-level shutdown budget, outside the replayable runtime
 		const hooks = (async () => {
 			await runShutdownCleanup(signal);
 			await handler.runAppShutdownHook?.();
 		})().catch((err) => {
 			console.error('[svelte-adapter-ws] app shutdown hook failed:', err);
 		});
-		if (shutdown_timeout > 0) {
+		if (deadlineAt !== null) {
 			const EXPIRED = Symbol('expired');
 			/** @type {any} */
 			let timer = null;
 			const deadline = new Promise((resolve) => {
-				timer = setTimeout(() => resolve(EXPIRED), shutdown_timeout * 1000); // determinism-allow: process-level shutdown budget, outside the replayable runtime
+				timer = setTimeout(() => resolve(EXPIRED), budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
 				if (typeof timer?.unref === 'function') timer.unref();
 			});
 			const outcome = await Promise.race([hooks, deadline]);
@@ -962,7 +968,12 @@ if (is_primary) {
 		} else {
 			await hooks;
 		}
-		await handler.shutdown({ timeoutMs: shutdown_timeout * 1000 });
+		// The drains get the REMAINDER of the sequence budget, floored at 1ms
+		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
+		// must cut the drains immediately, not unbound them.
+		await handler.shutdown({
+			timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - Date.now()) : 0 // determinism-allow: remaining shutdown budget, outside the replayable runtime
+		});
 		process.exit(0);
 	}
 
