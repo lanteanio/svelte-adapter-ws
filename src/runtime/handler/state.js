@@ -52,6 +52,30 @@ export const counters = {
 	droppedBytesWindow: 0,
 	/** platform.publish calls in the current sample window. */
 	publishCountWindow: 0,
+	/**
+	 * Publish-egress accounting for the current pressure window (reset each
+	 * sample): local deliveries (recipients times messages) and serialized
+	 * wire bytes charged by the shared egress charge point, plus ceiling
+	 * refusals per scope. Written by handler/egress-budget.js, drained into
+	 * pressureSnapshot.egress by the sampler.
+	 */
+	egressDeliveriesWindow: 0,
+	egressBytesWindow: 0,
+	egressRefusedTopicWindow: 0,
+	egressRefusedTenantWindow: 0,
+	/**
+	 * Cumulative egress-refusal metrics hook (null when metrics are disabled);
+	 * called with the refused scope so the registry counter carries it.
+	 * @type {((scope: string) => void) | null}
+	 */
+	egressRefusedHook: null,
+	/**
+	 * Cumulative hook for LIVE usage windows dropped at the ledger cap (null
+	 * when metrics are disabled), called with the evicted scope. An expired
+	 * window is reclaimed for free and is deliberately not reported here.
+	 * @type {((scope: string) => void) | null}
+	 */
+	egressEvictedHook: null,
 	/** Live logical subscription count across every connection. */
 	totalSubscriptions: 0,
 	/** Worst client-reported send-gate backlog since the last sample. */
@@ -136,5 +160,15 @@ export const pressureListeners = new Set();
 /** onPublishRate window listeners. @type {Set<(top: Array<object>) => void>} */
 export const publishRateListeners = new Set();
 
-/** Per-topic publish counters for the current window. @type {Map<string, { m: number, b: number }>} */
+/**
+ * Per-topic publish counters for runaway-publisher detection (sampled + reset
+ * each pressure tick). `m`/`b` keep their original meanings (publish calls and
+ * envelope UTF-16 length); `d` is the additive egress deliveries dimension
+ * (recipients times messages, exclusions deducted), charged by the egress
+ * charge point where that lane is armed.
+ * @type {Map<string, { m: number, b: number, d: number }>}
+ */
 export const topicPublishStats = new Map();
+
+/** Throttle map for the default runaway-publisher console.warn (one per topic per minute). @type {Map<string, number>} */
+export const lastPublishWarnAt = new Map();

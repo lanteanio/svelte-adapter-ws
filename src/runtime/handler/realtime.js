@@ -56,7 +56,7 @@ import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic } from './resume-capture.js';
 import { bumpIn, bumpOut, setStatsEnabled } from './conn-stats.js';
-import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp } from './config.js';
+import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
 
 const OPEN = 1;
@@ -107,6 +107,7 @@ for (const name of Object.keys(wsModule)) {
 		);
 	}
 }
+armCloseHookAccounting(wsModule.close);
 if (wsModule.admin) {
 	console.warn(
 		'[svelte-adapter-ws] The admin() export is not auto-mounted by this adapter yet. ' +

@@ -74,7 +74,7 @@ export function notePublish(topic, bytes) {
 		entry.m++;
 		entry.b += bytes;
 	} else {
-		topicPublishStats.set(topic, { m: 1, b: bytes });
+		topicPublishStats.set(topic, { m: 1, b: bytes, d: 0 });
 	}
 }
 

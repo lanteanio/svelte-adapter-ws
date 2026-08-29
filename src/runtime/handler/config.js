@@ -6,6 +6,17 @@ import { env } from '../env.js';
 import { parse_as_bytes, parse_origin } from '../utils/parse.js';
 import { createTrustedProxyMatcher, createClientIpResolver } from '../utils/trusted-proxies.js';
 
+// Whether the app wired a `close` hook - the only place per-connection close
+// accounting surfaces. A live binding armed by realtime.js at init (this
+// module stays free of the ws-handler bridge, so it loads outside a built
+// payload); the bump helpers in pressure-metrics read it per call and
+// early-return at near-zero cost when no hook is registered.
+export let closeHookRegistered = false;
+/** @param {unknown} registered */
+export function armCloseHookAccounting(registered) {
+	closeHookRegistered = !!registered;
+}
+
 export const ssl_cert = env('SSL_CERT', '');
 
 export const ssl_key = env('SSL_KEY', '');
