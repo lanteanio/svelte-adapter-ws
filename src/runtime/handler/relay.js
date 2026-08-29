@@ -222,7 +222,7 @@ export function batchRelay(topic, envelope, compress, seq, capability, event, da
  * single-publish lane's field name on `batchRelay`'s entries. The two lanes
  * carry different shapes and nothing mechanical checks JS shapes here, so this
  * typedef is the one place the contract is written down; the receiver
- * (handler/lifecycle.js `relayPublishBatched`) asserts `env` on entry, and the
+ * (handler/platform.js `relayPublishBatched`) vets `env` on entry, and the
  * ceiling below reading the wrong lane's field once broke every clustered
  * publishBatched.
  * @typedef {{ topic: string, env: string, seq: number | null, origin?: number, ord?: number, birth?: number }} RelayBatchedEntry

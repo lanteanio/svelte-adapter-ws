@@ -88,8 +88,11 @@ const cluster_workers = env('CLUSTER_WORKERS', '');
 const relay_ring_kb = parseIntEnv('CLUSTER_RELAY_RING_KB', env('CLUSTER_RELAY_RING_KB', '256'), 0);
 // A receiving worker that stops draining its ring must not turn the primary
 // into an unbounded spill buffer. These finite per-peer ceilings quarantine
-// that worker through the normal clean-exit/restart supervisor. Bytes bound
-// memory immediately; age catches a small spill that otherwise sits forever.
+// that worker through the normal clean-exit/restart supervisor. The byte
+// ceiling counts the spilled frames' own bytes (a spilled view can pin its
+// drain-batch buffer until the tail flushes, so momentary residency can
+// exceed the count - bounded by one ring-sized batch per peer); age catches
+// a small spill that otherwise sits forever.
 const relay_pending_max_bytes = parseIntEnv(
 	'CLUSTER_RELAY_MAX_PENDING_KB', env('CLUSTER_RELAY_MAX_PENDING_KB', '4096'), 1
 ) * 1024;

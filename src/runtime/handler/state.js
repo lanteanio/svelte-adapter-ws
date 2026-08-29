@@ -74,11 +74,14 @@ export const topicSeqs = new Map();
 /**
  * Whether outbound cluster relay frames are stamped with this worker's
  * per-topic stream identity (origin thread id, dense ordinal, stream birth).
- * The stamps exist for a receiver-side contiguity check, so they are worth
- * paying for only when something consumes them; off, the relay send path
- * (handler/relay.js) pays one boolean test per relayed publish and allocates
- * nothing. A holder, not `export let`, so a write from the module that arms
- * the consumer is visible to the read site in relay.js.
+ * Nothing in this runtime arms it: the stamps feed a receiver-side
+ * contiguity check that lives with the state-hash divergence machinery, and
+ * they are worth paying for only where that consumer exists - armed off, the
+ * relay send path (handler/relay.js) pays one boolean test per relayed
+ * publish and allocates nothing, while the ring format keeps the stamp
+ * fields so an armed sender and an unarmed receiver stay wire-compatible. A
+ * holder, not `export let`, so an arming write is visible to the read site
+ * in relay.js.
  * @type {{ enabled: boolean }}
  */
 export const streamTracking = { enabled: false };

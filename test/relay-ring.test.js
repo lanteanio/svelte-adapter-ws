@@ -313,9 +313,12 @@ describe('ring stream', () => {
 		reader.close();
 		// Both sides settled: no timers, no unresolved work that would keep
 		// the test (or a real primary) alive. A short settle proves no
-		// late async delivery fires after close.
+		// late async delivery fires after close - the count at close is the
+		// count forever.
+		const deliveredAtClose = seen.length;
 		await tick();
 		await tick();
+		expect(seen.length).toBe(deliveredAtClose);
 	});
 
 	// The two lost-wakeup regressions: each side's wait must register against
