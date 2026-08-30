@@ -205,6 +205,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shipped plugin type files spell the socket parameter `object`, matching
   this adapter's platform types.
 
+- The `websocket.maxTopicSeqEntries` option: a bound on the per-topic
+  sequence registry, evicting quiet topics once the cap is crossed so
+  high-cardinality topic names cannot grow it without limit. Topics with live
+  subscribers or an open resume barrier are never evicted, and a probe that
+  throws protects rather than authorizes. Omitted, the registry keeps its
+  warn-threshold default, so zero-config behavior is unchanged.
+
+- `platform.bumpTopicEpoch(topic)`: mint a topic a fresh seq-space generation
+  on this worker, so offsets recorded under the old one cold-rehydrate at
+  their next resume instead of gap-filling. The escape hatch for moving a
+  topic between sequence authorities.
+
 - The `websocket.egress` option: publish-egress ceilings per topic and per
   tenant over messages, bytes and deliveries, enforced before anything is
   stamped so a refused publish (return `false`; batches refuse atomically)

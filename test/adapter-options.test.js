@@ -29,10 +29,19 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ websocket: false })).not.toThrow();
 		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
 		expect(() => adapter({ websocket: { pressure: { publishRatePerSec: 500 } } })).not.toThrow();
-		for (const key of ['metrics', 'upgradeAdmission', 'protection', 'adminPath', 'postureExport', 'maxTopicSeqEntries']) {
+		for (const key of ['metrics', 'upgradeAdmission', 'protection', 'adminPath', 'postureExport']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}
+	});
+
+	it('accepts maxTopicSeqEntries and refuses a misshaped cap at factory time', () => {
+		expect(() => adapter({ websocket: { maxTopicSeqEntries: 50_000 } })).not.toThrow();
+		// 0 is the documented "no bound" spelling, so it stays legal; a
+		// negative cap bounds nothing and is refused before any build work.
+		expect(() => adapter({ websocket: { maxTopicSeqEntries: 0 } })).not.toThrow();
+		expect(() => adapter({ websocket: { maxTopicSeqEntries: -1 } })).toThrow(/maxTopicSeqEntries/);
+		expect(() => adapter({ websocket: { maxTopicSeqEntries: 'lots' } })).toThrow(/maxTopicSeqEntries/);
 	});
 
 	it('accepts the egress section and refuses misshaped ceilings at factory time', () => {
