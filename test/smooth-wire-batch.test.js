@@ -226,16 +226,9 @@ describe('batched update frame (OP_UPDATE_BATCH)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Platform fan-out (real server; skipped when uWebSockets.js is unavailable).
+// Platform fan-out (real server).
 
-let uWS;
-try {
-	uWS = (await import('uWebSockets.js')).default;
-} catch {
-	uWS = null;
-}
-const describeUWS = uWS ? describe : describe.skip;
-const { createTestServer } = uWS ? await import('../src/testing.js') : {};
+const { createTestServer } = await import('../src/testing.js');
 
 const TOPIC = SMOOTH_TOPIC_PREFIX + 'batchwalk';
 
@@ -311,7 +304,7 @@ function decodeAll(binaryFrames) {
 	});
 }
 
-describeUWS('publishWireBatch fan-out', () => {
+describe('publishWireBatch fan-out', () => {
 	clients = [];
 	afterEach(async () => {
 		for (const ws of clients) { try { ws.close(); } catch { /* already closed */ } }
@@ -452,7 +445,7 @@ describeUWS('publishWireBatch fan-out', () => {
 	});
 });
 
-describeUWS('sendWireBatch (per-subscriber culled delivery)', () => {
+describe('sendWireBatch (per-subscriber culled delivery)', () => {
 	clients = [];
 	afterEach(async () => {
 		for (const ws of clients) { try { ws.close(); } catch { /* already closed */ } }

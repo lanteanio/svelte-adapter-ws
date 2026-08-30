@@ -56,9 +56,10 @@ const ALLOW_FILES = new Set(['runtime.js', 'client-runtime.js']);
 // relocated or newly added module under src/ is enforced automatically, with no
 // per-file list to maintain.
 const ENFORCE_EXCEPT = new Set([
-	// Nothing yet. This adapter has no dev-server surface (SvelteKit dev runs
-	// under Vite); every file under src/ is either build-time code or the
-	// served runtime, and both stay clean.
+	// The Vite dev plugin builds the dev-server platform, which is never replayed
+	// by the deterministic harness, so its init-time timers and per-request UUIDs
+	// are legitimate raw calls.
+	'src/vite.js'
 ]);
 
 function isEnforced(rel) {

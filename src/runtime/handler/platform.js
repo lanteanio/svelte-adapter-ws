@@ -26,7 +26,7 @@ import {
 import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
-	throwInvalidSeq, topicEpochValue, wrapBatchEnvelope
+	throwInvalidSeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
@@ -37,6 +37,7 @@ import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterEr
 import { wsModule } from '../ws-handler-bridge.js';
 import { buildBinaryFrame } from '../wire.js';
 import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { seqBound } from './seq-bound.js';
 import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, EGRESS_ADMITTED } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
 import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
@@ -313,7 +314,7 @@ function publish(topic, event, data, options) {
 			!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
 	}
 
-	const seq = stampSeqValue(seqOption, topicSeqs, topic);
+	const seq = stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
 		_warnedTopicSeqCardinality = true;
 		console.warn(adapterConsoleLine(
@@ -583,7 +584,7 @@ export const platform = {
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
 			counters.publishCountWindow++;
-			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic);
+			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
 			events[i] = {
 				topic: m.topic,
 				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null),
@@ -691,7 +692,7 @@ export const platform = {
 		// again here would fork the topic's sequence per worker.
 		const seq = isRelay
 			? (typeof relaySeqOption === 'number' ? relaySeqOption : null)
-			: stampSeqValue(seqOption, topicSeqs, topic);
+			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) counters.publishCountWindow++;
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
@@ -895,7 +896,7 @@ export const platform = {
 			// spelling a clustered batch may carry - really stamps nothing
 			// instead of quietly advancing the per-worker counter it renounced
 			// and relaying the forked number cluster-wide.
-			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic) ?? 0;
+			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic, seqBound) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
 			batchBytes += envelopes[i].length;
 			// Per-entry wire bytes: the envelope's UTF-8 encoding times the
@@ -1445,7 +1446,7 @@ export const platform = {
 			if (!admitPublishEgress(topic, egressTenant, 1, recipients)) return { seq: null, delivered: 0 };
 		}
 		counters.publishCountWindow++;
-		const seq = stampSeqValue(undefined, topicSeqs, topic);
+		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
 		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));
 		if (resumeCaptureActive()) captureResumeFrame(topic, env);
@@ -1564,6 +1565,26 @@ export const platform = {
 	/** @param {string} name */
 	topicEpoch(name) {
 		return topicEpochValue(name);
+	},
+
+	/**
+	 * Mint this topic a fresh seq-space generation on THIS worker, so every
+	 * offset a client recorded under the previous epoch mismatches at its next
+	 * resume and cold-rehydrates instead of gap-filling. The escape hatch for
+	 * changing a topic's seq AUTHORITY: the explicit lane is single-authority
+	 * per topic, and moving a topic between authorities - counter to external
+	 * allocator, one partition to another, a reset store - leaves client
+	 * offsets pointing into a seq space that no longer continues them.
+	 * Worker-local: call it on each worker where the authority change lands
+	 * (app code runs on every worker), and the equality-only epoch repudiates
+	 * old offsets everywhere identically. The subscribe ack and every resume
+	 * compare pick the new value up through `topicEpoch` above.
+	 *
+	 * @param {string} name
+	 * @returns {number} the minted epoch, as topicEpoch(name) now answers
+	 */
+	bumpTopicEpoch(name) {
+		return mintTopicEpoch(name);
 	},
 
 	now,

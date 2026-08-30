@@ -1,0 +1,349 @@
+// The cursor render worker against a REAL server (createTestServer) and
+// the REAL cursor server plugin - no protocol mocks anywhere on the path.
+//
+// What only this file can prove:
+//   - the upgrade echoes the cursor lane subprotocol (node's WebSocket
+//     enforces the echo exactly like browsers: a missing echo fails the
+//     handshake, so a green open IS the proof);
+//   - {type:'cursor-snapshot'} against the real plugin subscribes the socket
+//     server-side (no wire subscribe frame exists in worker traffic);
+//   - the server's publishWire path delivers BINARY frames to the worker
+//     (its hello carries the codec caps) while a caps-less client gets JSON,
+//     and the worker's decode arrives at the same positions;
+//   - a server with `binary: false` keeps the worker correct on pure JSON.
+
+import { describe, it, expect, afterEach } from 'vitest';
+import { attachCursorWorker } from '../src/plugins/cursor/cursor-worker.js';
+import { createCursor } from '../src/plugins/cursor/server.js';
+import { parseBinaryFrame } from '../src/runtime/wire.js';
+import {
+	decodeCursor,
+	CursorDecodeDict,
+	CURSOR_CAPABILITY,
+	CURSOR_CAPABILITY_DICT,
+	CURSOR_CAPABILITY_TIME,
+	CURSOR_SCHEMA_VERSION_TIME
+} from '../src/plugins/cursor/codec.js';
+
+const { createTestServer } = await import('../src/testing.js');
+
+let server;
+let controllers;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Deliberately under vitest's 5000ms testTimeout, so a stall surfaces as this
+// helper's message (which says how long it waited and how many times it looked)
+// rather than as a bare "Test timed out" pointing at the `it` line.
+async function until(pred, timeout = 4000, step = 20) {
+	const started = Date.now();
+	const deadline = started + timeout;
+	let attempts = 0;
+	for (;;) {
+		const v = pred();
+		if (v) return v;
+		attempts++;
+		if (Date.now() > deadline) {
+			throw new Error(`until() timed out after ${Date.now() - started}ms / ${attempts} polls`);
+		}
+		await sleep(step);
+	}
+}
+
+function mockCanvas() {
+	const ctx = {
+		fillStyle: '',
+		globalCompositeOperation: 'source-over',
+		clearRect() {}, beginPath() {}, arc() {}, fill() {}, drawImage() {}
+	};
+	return { width: 0, height: 0, getContext: (t) => (t === '2d' ? ctx : null) };
+}
+
+function bootWorker(url, topic = 'board') {
+	const scope = { posted: [], postMessage(msg, transfer) { this.posted.push({ msg, transfer }); }, onmessage: null };
+	const ctrl = attachCursorWorker(scope);
+	controllers.push(ctrl);
+	ctrl.handleMessage({ type: 'init', topic, url, canvas: mockCanvas(), gpu: 'canvas2d', devicePixelRatio: 1 });
+	return { scope, ctrl };
+}
+
+async function moverClient(url, topic = 'board') {
+	const { WebSocket } = await import('ws');
+	const ws = new WebSocket(url);
+	await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+	ws.send(JSON.stringify({ type: 'cursor-snapshot', topic }));
+	await sleep(60); // server-side subscribe settles
+	return {
+		ws,
+		move: (x, y) => ws.send(JSON.stringify({ type: 'cursor', topic, data: { x, y } }))
+	};
+}
+
+function cursorServer(options = {}, userData = null) {
+	const cursors = createCursor({ throttle: 0, topicThrottle: 0, ...options });
+	const handler = {
+		message(ws, ctx) {
+			if (cursors.hooks.message(ws, ctx)) return;
+		},
+		close: cursors.hooks.close
+	};
+	if (userData !== null) handler.upgrade = () => ({ ...userData });
+	return createTestServer({
+		handler
+	}).then((s) => ({ server: s, cursors }));
+}
+
+describe('cursor render worker against a real server', () => {
+	afterEach(async () => {
+		for (const ctrl of controllers) ctrl.handleMessage({ type: 'destroy' });
+		controllers = [];
+		await server?.close();
+		server = null;
+	});
+	controllers = [];
+
+	// This suite needs the REAL global WebSocket: the cursor controller runs
+	// in-process here and constructs `new WebSocket(url, [subprotocol])` itself, so
+	// a mock left installed by a client suite makes every test below hang on a
+	// socket that never connects. Eighteen suites install one; `stubGlobals` is
+	// what puts them back. Asserting it here names the cause in one line instead of
+	// five timeouts that read as a cursor regression.
+	it('runs against the real global WebSocket, not a mock left by another suite', () => {
+		expect(globalThis.WebSocket?.name).toBe('WebSocket');
+	});
+
+	it('handshakes through the lane subprotocol, snapshots, and ingests moves as BINARY frames', async () => {
+		const made = await cursorServer();
+		server = made.server;
+
+		const { ctrl } = bootWorker(server.wsUrl);
+		const mover = await moverClient(server.wsUrl);
+		mover.move(523.5, 128.25);
+
+		await until(() => ctrl._state.positionMap.size === 1);
+		const [pos] = [...ctrl._state.positionMap.values()];
+		expect(pos.x).toBeCloseTo(523.5, 2);
+		expect(pos.y).toBeCloseTo(128.25, 2);
+		// The roster arrived alongside (join), satisfying the visibility rule.
+		expect(ctrl._state.userMap.size).toBe(1);
+		// Binary proof: the worker advertised the codec caps, so the server's
+		// publishWire announced a topic id before the first 0x03 frame.
+		expect(ctrl._wireIds.size).toBeGreaterThanOrEqual(1);
+		expect([...ctrl._wireIds.values()]).toContain('__cursor:board');
+
+		mover.ws.close();
+	});
+
+	it('projects personal data before the BINARY snapshot catalog is encoded', async () => {
+		const made = await cursorServer({}, {
+			id: 'u-1',
+			name: 'Ada',
+			email: 'ada@example.com',
+			phoneNumber: '+1-555-0100',
+			userphone: '+1-555-0101',
+			msisdn: '15550102',
+			medicalDiagnosis: 'private',
+			rawHeaders: ['authorization', 'Bearer secret', 'cookie', 'sid=secret'],
+			ip: '203.0.113.9',
+			remoteAddress: '203.0.113.9'
+		});
+		server = made.server;
+
+		// Put one cursor in the store before the worker connects. Its first frame
+		// is therefore a single-target catalog through sendWire, not the JSON mock
+		// path used by the unit suite or a join published after the snapshot.
+		const mover = await moverClient(server.wsUrl);
+		mover.move(10, 20);
+		await until(() => made.cursors.list('board').length === 1);
+
+		const { ctrl } = bootWorker(server.wsUrl);
+		await until(() => ctrl._state.userMap.size === 1);
+		const [user] = [...ctrl._state.userMap.values()];
+		expect(user).toEqual({ id: 'u-1' });
+		expect(ctrl._wireIds.size).toBeGreaterThanOrEqual(1);
+
+		mover.ws.close();
+	});
+
+	it('drops a corrupt cursor frame over the real wire and converges on the next absolute position', async () => {
+		// The best-effort row's whole claim, observed end to end: a corrupt
+		// frame on the real 0x03 path neither dispatches, nor kills the
+		// worker, nor poisons its per-connection dictionary - and the next
+		// genuine move converges the position THROUGH THE SAME connection,
+		// which is the self-healing the design position rests on.
+		const made = await cursorServer();
+		server = made.server;
+
+		const mover = await moverClient(server.wsUrl);
+		const { ctrl } = bootWorker(server.wsUrl);
+		mover.move(10.5, 20.5);
+		await until(() => ctrl._state.positionMap.size === 1);
+		const [before] = [...ctrl._state.positionMap.values()];
+		expect(before.x).toBeCloseTo(10.5, 2);
+
+		// Two corrupt shapes through the real publishWire binary path: an
+		// unknown opcode, then a truncated update (a real encode cut short).
+		const corrupt = (bytes) => made.server.platform.publishWire(
+			'__cursor:board', 'update', { corrupt: true },
+			{ capability: CURSOR_CAPABILITY, schemaVersion: 1, encode: () => bytes }
+		);
+		corrupt(new Uint8Array([0x7f]));
+		const real = await import('../src/plugins/cursor/codec.js');
+		const goodBytes = real.encodeCursor('update', { key: 'k9', data: { x: 1, y: 2 } }, null);
+		expect(goodBytes).toBeTruthy();
+		corrupt(goodBytes.subarray(0, goodBytes.length - 3));
+		await sleep(120);
+
+		// Neither corrupt frame moved the worker's state or killed it.
+		expect(ctrl._state.positionMap.size).toBe(1);
+		const [after] = [...ctrl._state.positionMap.values()];
+		expect(after.x).toBeCloseTo(10.5, 2);
+
+		// The next genuine move converges over the same connection.
+		mover.move(50.25, 60.75);
+		await until(() => {
+			const [p] = [...ctrl._state.positionMap.values()];
+			return p && Math.abs(p.x - 50.25) < 0.1;
+		});
+		const [converged] = [...ctrl._state.positionMap.values()];
+		expect(converged.x).toBeCloseTo(50.25, 1);
+		expect(converged.y).toBeCloseTo(60.75, 1);
+
+		mover.ws.close();
+	});
+
+	it('reports its viewport on its own socket and the real tracker records it', async () => {
+		const made = await cursorServer();
+		server = made.server;
+
+		const { ctrl } = bootWorker(server.wsUrl);
+		await until(() => ctrl._ws && ctrl._ws.readyState === 1);
+		ctrl.handleMessage({ type: 'viewport', rect: { x: 0, y: 0, w: 800, h: 600, zoom: 1 } });
+
+		await until(() => made.cursors.stats().viewportsReported === 1);
+		expect(made.cursors.stats().viewportsReported).toBe(1);
+	});
+
+	it('stays correct on a JSON-only server (binary disabled): same positions, zero wire ids', async () => {
+		const made = await cursorServer({ binary: false });
+		server = made.server;
+
+		const { ctrl } = bootWorker(server.wsUrl);
+		const mover = await moverClient(server.wsUrl);
+		mover.move(10.5, 20.5);
+
+		await until(() => ctrl._state.positionMap.size === 1);
+		const [pos] = [...ctrl._state.positionMap.values()];
+		expect(pos.x).toBeCloseTo(10.5, 2);
+		expect(ctrl._wireIds.size).toBe(0);
+
+		mover.ws.close();
+	});
+
+	it('stamps position frames at schemaVersion 3 for a time-capable subscriber', async () => {
+		const made = await cursorServer();
+		server = made.server;
+
+		// A raw observer advertising the time capability, inspecting frames at
+		// the byte level - the sharpest proof the negotiated wire is the
+		// stamped one and the stamp is the server's wall clock.
+		const { WebSocket } = await import('ws');
+		const obs = new WebSocket(server.wsUrl);
+		await new Promise((resolve, reject) => { obs.on('open', resolve); obs.on('error', reject); });
+		const binary = [];
+		const jsonEvents = [];
+		obs.on('message', (data, isBinary) => {
+			if (isBinary) binary.push(new Uint8Array(data));
+			else { try { jsonEvents.push(JSON.parse(data.toString())); } catch { /* ignore */ } }
+		});
+		obs.send(JSON.stringify({ type: 'hello', caps: [CURSOR_CAPABILITY, CURSOR_CAPABILITY_DICT, CURSOR_CAPABILITY_TIME] }));
+		obs.send(JSON.stringify({ type: 'cursor-snapshot', topic: 'board' }));
+		await sleep(60);
+
+		const before = Date.now();
+		const mover = await moverClient(server.wsUrl);
+		mover.move(50.5, 60.25);
+
+		await until(() => binary.length >= 1);
+		const after = Date.now();
+
+		// The snapshot's clock seed arrived as the JSON time event, first.
+		const time = jsonEvents.find((m) => m.topic === '__cursor:board' && m.event === 'time');
+		expect(time).toBeTruthy();
+		expect(time.data.t).toBeGreaterThanOrEqual(before - 60_000);
+
+		// Every binary position frame decodes at schemaVersion 3 with a stamp
+		// inside the observation window.
+		const dict = new CursorDecodeDict();
+		let stamped = 0;
+		for (const bytes of binary) {
+			const parsed = parseBinaryFrame(bytes);
+			expect(parsed).toBeTruthy();
+			expect(parsed.schemaVersion).toBe(CURSOR_SCHEMA_VERSION_TIME);
+			const decoded = decodeCursor(parsed.payload, dict, parsed.schemaVersion);
+			expect(decoded).toBeTruthy();
+			if (decoded.event === 'update' || decoded.event === 'bulk') {
+				expect(decoded.t).toBeGreaterThanOrEqual(before - 1000);
+				expect(decoded.t).toBeLessThanOrEqual(after + 1000);
+				stamped++;
+			}
+		}
+		expect(stamped).toBeGreaterThanOrEqual(1);
+
+		mover.ws.close();
+		obs.close();
+	});
+
+	it('a smoothing worker builds stamped rings and a clock estimate against the real server', async () => {
+		const made = await cursorServer();
+		server = made.server;
+
+		const scope = { posted: [], postMessage(msg, transfer) { this.posted.push({ msg, transfer }); }, onmessage: null };
+		const ctrl = attachCursorWorker(scope);
+		controllers.push(ctrl);
+		ctrl.handleMessage({
+			type: 'init',
+			topic: 'board',
+			url: server.wsUrl,
+			canvas: mockCanvas(),
+			gpu: 'canvas2d',
+			devicePixelRatio: 1,
+			smooth: { delayMs: 'auto', extrapolateMs: 250, snapGapMs: 500 }
+		});
+		// The render loop samples (and advances the clock) only once a
+		// viewport exists - in production the pump sends one right after init.
+		ctrl.handleMessage({ type: 'viewport', rect: { x: 0, y: 0, w: 800, h: 600, zoom: 1 } });
+
+		const mover = await moverClient(server.wsUrl);
+		mover.move(5, 6);
+		await until(() => ctrl._smoother && ctrl._smoother.size >= 1);
+		// The render loop's frames have run estServerNow by now; same-machine
+		// offset is near zero but the estimate exists and is sane.
+		await until(() => ctrl._smoother.clock.offset() !== null);
+		expect(Math.abs(ctrl._smoother.clock.offset())).toBeLessThan(60_000);
+
+		mover.ws.close();
+	});
+
+	it('a fresh snapshot after reconnect rebuilds the same state (re-init on the same server)', async () => {
+		const made = await cursorServer();
+		server = made.server;
+
+		const { ctrl } = bootWorker(server.wsUrl);
+		const mover = await moverClient(server.wsUrl);
+		mover.move(1, 2);
+		await until(() => ctrl._state.positionMap.size === 1);
+
+		// Pause + re-init simulates the unmount/remount cycle; the snapshot
+		// handshake (not resume) restores the roster and positions.
+		ctrl.handleMessage({ type: 'pause' });
+		expect(ctrl._state.positionMap.size).toBe(0);
+		ctrl.handleMessage({ type: 'init', topic: 'board', url: server.wsUrl, gpu: 'canvas2d', devicePixelRatio: 1 });
+
+		await until(() => ctrl._state.positionMap.size === 1);
+		const [pos] = [...ctrl._state.positionMap.values()];
+		expect(pos.x).toBeCloseTo(1, 2);
+
+		mover.ws.close();
+	});
+});

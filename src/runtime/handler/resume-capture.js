@@ -20,6 +20,15 @@ export function resumeCaptureActive() {
 }
 
 /**
+ * Whether a topic has an open resume barrier - a consumer mid-cutover holds
+ * frames for it, so registry eviction must pass it over.
+ * @param {string} topic
+ */
+export function resumeTopicHeld(topic) {
+	return resumeBuffers.size > 0 && resumeBuffers.has(topic);
+}
+
+/**
  * @param {string} topic
  * @param {string} envelope
  */

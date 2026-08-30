@@ -1,4 +1,4 @@
-// Sender exclusion on publishWire against a REAL uWS server (createTestServer,
+// Sender exclusion on publishWire against a REAL server (createTestServer,
 // which runs the testing.js platform mirror of src/runtime/handler.js): a publish
 // carrying { excludeWs } must never deliver that frame to that socket, on the
 // binary path, on the per-connection JSON fallback, and on the declined-frame
@@ -16,14 +16,7 @@ import { SmoothDecodeDict, decodeSmooth } from '../src/plugins/smooth/codec.js';
 import { parseBinaryFrame } from '../src/runtime/wire.js';
 import { trackedSubscribe } from '../src/runtime/utils.js';
 
-let uWS;
-try {
-	uWS = (await import('uWebSockets.js')).default;
-} catch {
-	uWS = null;
-}
-const describeUWS = uWS ? describe : describe.skip;
-const { createTestServer } = uWS ? await import('../src/testing.js') : {};
+const { createTestServer } = await import('../src/testing.js');
 
 const TOPIC = SMOOTH_TOPIC_PREFIX + 'test';
 
@@ -89,7 +82,7 @@ async function connectClient(url, who, caps) {
 	};
 }
 
-describeUWS('publishWire sender exclusion against a real server', () => {
+describe('publishWire sender exclusion against a real server', () => {
 	clients = [];
 	afterEach(async () => {
 		for (const ws of clients) { try { ws.close(); } catch { /* already closed */ } }

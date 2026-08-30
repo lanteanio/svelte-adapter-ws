@@ -96,6 +96,31 @@ export function overrideTopicEpoch(topic, epoch) {
 export function resetTopicEpochs() { _topicEpochs.clear(); }
 
 /**
+ * Mint a topic a fresh epoch, replacing whatever it answers today.
+ *
+ * The explicit seq lane is single-authority per topic, so an app that CHANGES
+ * a topic's authority - moves it from the counter to an external allocator,
+ * repoints it at a different partition, resets the store behind it - must
+ * repudiate every offset clients recorded under the old one, and nothing else
+ * does. The re-roll guard exists because a mint that equals the value being
+ * replaced is a no-op for exactly the offsets the caller asked to repudiate.
+ *
+ * Worker-local like every override in the map above: app code runs on every
+ * worker, each mints independently, and the epoch is equality-only, so
+ * independent values repudiate old offsets on every worker identically.
+ *
+ * @param {string} topic
+ * @returns {number} the installed epoch
+ */
+export function mintTopicEpoch(topic) {
+	const current = topicEpochValue(topic);
+	let minted = randomU32();
+	while (minted === current) minted = randomU32();
+	overrideTopicEpoch(topic, minted);
+	return minted;
+}
+
+/**
  * Allocate the next monotonic sequence number for a topic, mutating
  * `seqMap` in place. The first call for a topic returns 1; subsequent
  * calls return the previous value plus one. Each topic has an

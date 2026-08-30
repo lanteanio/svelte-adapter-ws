@@ -1,5 +1,8 @@
 [
 	{
+		"file": "scripts/sim-git-commit.js"
+	},
+	{
 		"file": "src/client-runtime.js"
 	},
 	{
@@ -7,6 +10,18 @@
 	},
 	{
 		"file": "src/client.js"
+	},
+	{
+		"file": "src/config-guards.js"
+	},
+	{
+		"file": "src/dev-dashboard.js",
+		"adaptations": [
+			{
+				"lead": "Symbol.for('svelte-adapter-ws.dashboard-contributors')",
+				"ours": "Symbol.for('svelte-adapter-uws.dashboard-contributors')"
+			}
+		]
 	},
 	{
 		"file": "src/observability.d.ts"
@@ -501,6 +516,15 @@
 		"file": "src/runtime/utils/observability-privacy.js"
 	},
 	{
+		"file": "src/runtime/utils/operational-diagnostic.js",
+		"adaptations": [
+			{
+				"lead": "new Error('uWebSockets.js returned no listen socket')",
+				"ours": "new Error('no listen socket was bound')"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/utils/posture-export.js"
 	},
 	{
@@ -521,6 +545,171 @@
 			{
 				"lead": " * This is the single canonical copy for the ecosystem: it lives here in the\n * adapter (the layer every package depends on) and is re-exported by\n * `svelte-adapter-ws-extensions/safe-url`; `svelte-realtime` imports it\n * directly. There is intentionally no second copy to drift.",
 				"ours": " * The ecosystem's canonical copy lives in svelte-adapter-uws (the lead\n * adapter); this package carries the same validator so `./safe-url` resolves\n * identically whichever adapter an app installs. The family conformance\n * suite holds the two in lockstep."
+			}
+		]
+	},
+	{
+		"file": "src/sim.d.ts",
+		"adaptations": [
+			{
+				"lead": "/** The uWS helper bundle createTestServer needs alongside the in-memory app. */\nexport interface InMemoryUwsHelpers {\n\tApp(): InMemoryApp;\n\tSSLApp(): InMemoryApp;\n\tus_socket_local_port(): number;\n\tus_listen_socket_close(): void;\n\tSHARED_COMPRESSOR: number;\n\tDISABLED: number;\n}\n\n// Composition primitives: install/teardown the runtime seam, re-latch the\n// per-process epoch, and build the uWS helper bundle - so a downstream package\n// can drive createTestServer over the in-memory app on the same virtual clock.\n",
+				"ours": "// Composition primitives: install/teardown the runtime seam and re-latch the\n// per-process epoch - so a downstream package can drive createTestServer over\n// the in-memory app on the same virtual clock. The in-memory app's listen\n// token carries the bound port and the close function, so no transport helper\n// bundle exists here.\n"
+			},
+			{
+				"lead": "export function createInMemoryUwsHelpers(app: InMemoryApp): InMemoryUwsHelpers;\n",
+				"ours": ""
+			}
+		]
+	},
+	{
+		"file": "src/sim.js",
+		"adaptations": [
+			{
+				"lead": "// that runs over real uWS, but over an in-memory app under a virtual clock and a\n",
+				"ours": "// that runs over the real node:http + ws transport, but over an in-memory app\n// under a virtual clock and a\n"
+			},
+			{
+				"lead": "import { createInMemoryApp, createInMemoryUwsHelpers } from './runtime/sim-inmemory.js';\n",
+				"ours": "import { createInMemoryApp } from './runtime/sim-inmemory.js';\n"
+			},
+			{
+				"lead": "// in-memory uWS helper bundle, alongside the scheduler / rng / fault-engine /\n// app factories. createTestServer is exported from svelte-adapter-ws/testing.\n",
+				"ours": "// scheduler / rng / fault-engine / app factories. createTestServer is exported\n// from svelte-adapter-ws/testing; the in-memory app's listen token carries the\n// bound port and the close function, so no transport helper bundle exists here.\n"
+			},
+			{
+				"lead": "\tcreateInMemoryUwsHelpers, setRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,\n",
+				"ours": "\tsetRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,\n"
+			},
+			{
+				"lead": "\t\tconst app = createInMemoryApp({ scheduler, faultEngine });\n\t\tconst uws = createInMemoryUwsHelpers(app);\n\t\tconst server = await createTestServer({\n",
+				"ours": "\t\tconst app = createInMemoryApp({ scheduler, faultEngine });\n\t\tconst server = await createTestServer({\n"
+			},
+			{
+				"lead": "\t\t\t__app: app,\n\t\t\t__uws: uws\n",
+				"ours": "\t\t\t__app: app\n"
+			},
+			{
+				"lead": "\t\t\tconst uws = createInMemoryUwsHelpers(app);\n",
+				"ours": ""
+			},
+			{
+				"lead": "\t\t\t\t__uws: uws,\n",
+				"ours": ""
+			}
+		]
+	},
+	{
+		"file": "src/testing.d.ts",
+		"adaptations": [
+			{
+				"lead": "import type { WebSocket } from 'uWebSockets.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "\t * real uWS socket AND reported by `platform.maxPayloadLength` from the\n",
+				"ours": "\t * real ws receiver AND reported by `platform.maxPayloadLength` from the\n"
+			},
+			{
+				"lead": "\t * Idle timeout in seconds applied by the harness's real uWS socket,\n\t * mirroring the production `websocket.idleTimeout` option with the same\n\t * guard and the same pass-through: values reach uWS unclamped, and uWS\n\t * applies its own coarse (roughly 4-second) timeout grid and refuses very\n\t * low nonzero values at socket setup. `0` disables the idle reaper\n\t * entirely. A test that wants to observe an idle close should use `8`.\n",
+				"ours": "\t * Idle timeout in seconds applied by the harness's ping/pong idle reaper,\n\t * mirroring the production runtime's own: a live peer answers the\n\t * half-interval ping and the deadline never fires; a vanished peer is\n\t * terminated at the timeout. `0` disables the idle reaper entirely. A\n\t * test that wants to observe an idle close should use `8`.\n"
+			},
+			{
+				"lead": "\t * Live set of currently connected uWS WebSocket instances. Useful in\n",
+				"ours": "\t * Live set of currently connected server-side socket handles. Useful in\n"
+			},
+			{
+				"lead": "\twsConnections: Set<import('uWebSockets.js').WebSocket<any>>;\n",
+				"ours": "\twsConnections: Set<any>;\n"
+			},
+			{
+				"lead": " * Create a lightweight test server backed by a real uWebSockets.js instance.\n",
+				"ours": " * Create a lightweight test server backed by a real node:http + ws server.\n"
+			},
+			{
+				"lead": "// `WS_REQUEST_ID_KEY` is a string (not a Symbol): uWebSockets.js strips\n// Symbol-keyed properties from the userData object passed to\n// `res.upgrade()`, so the upgrade->open carrier slot has to be a string\n// key. The `open` hook moves the value into the Symbol-keyed\n// `WS_PLATFORM` slot and deletes the string key, so test code reading\n// userData after `open` should read `WS_PLATFORM`, not the string key.\n",
+				"ours": "// `WS_REQUEST_ID_KEY` is a string (not a Symbol), the family harness's\n// upgrade->open carrier shape. The `open` hook moves the value into the\n// Symbol-keyed `WS_PLATFORM` slot and deletes the string key, so test\n// code reading userData after `open` should read `WS_PLATFORM`, not the\n// string key.\n"
+			},
+			{
+				"lead": " * across the upgrade->open transition. uWebSockets.js strips Symbol keys\n * from the userData object handed to `res.upgrade()`, so the carrier has\n * to be a string. The `open` hook deletes this slot after promoting the\n * value into the `WS_PLATFORM` Symbol slot, so it never appears in\n * userData while a hook is running.\n",
+				"ours": " * across the upgrade->open transition, the family harness's carrier\n * shape. The `open` hook deletes this slot after promoting the value\n * into the `WS_PLATFORM` Symbol slot, so it never appears in userData\n * while a hook is running.\n"
+			},
+			{
+				"lead": "export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';\n",
+				"ours": "export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';\n"
+			}
+		]
+	},
+	{
+		"file": "src/vite.d.ts"
+	},
+	{
+		"file": "src/vite.js",
+		"adaptations": [
+			{
+				"lead": "WS_PLATFORM, WS_REQUEST_ID_KEY, WS_CAPS",
+				"ours": "WS_PLATFORM, WS_CAPS"
+			},
+			{
+				"lead": "import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from './runtime/error-registry.js';\n",
+				"ours": "import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from './runtime/error-registry.js';\n\n// The per-connection requestId hand-off slot, set in the upgrade callback\n// and promoted-then-deleted in the connection handler before any app hook\n// reads userData. Module-local: no other surface reads it, and this\n// runtime has no boundary that would strip a Symbol key anyway.\nconst WS_REQUEST_ID_KEY = '__adapter_uws_request_id__';\n"
+			},
+			{
+				"lead": " * Uses the same subscribe/unsubscribe/publish protocol as the production\n * uWS handler, so the client store works identically in dev and prod.",
+				"ours": " * Uses the same subscribe/unsubscribe/publish protocol as the production\n * handler, so the client store works identically in dev and prod."
+			},
+			{
+				"lead": "exactly as uWS\n\t\t// does on the production surface.",
+				"ours": "in dev exactly\n\t\t// as on the production surface."
+			},
+			{
+				"lead": "copy sitting after the call, and testing.js had a third spelling.",
+				"ours": "copy sitting after the call, and the lead adapter's testing.js had a third spelling."
+			},
+			{
+				"lead": "against `createTestServer` (testing.js).",
+				"ours": "against `createTestServer` (the lead adapter's testing.js)."
+			},
+			{
+				"lead": "ships and is tested in production (src/runtime/handler.js) and the test\n\t\t// server (testing.js).",
+				"ours": "ships and is tested in production (src/runtime/handler.js) and the test\n\t\t// server (the lead adapter's testing.js)."
+			},
+			{
+				"lead": "(handler/platform.js) and the in-process server (testing.js) both",
+				"ours": "(handler/platform.js) and the in-process server (the lead adapter's\n\t\t\t// testing.js) both"
+			},
+			{
+				"lead": "Mirrors handler.js + testing.js.",
+				"ours": "Mirrors handler.js + the lead adapter's testing.js."
+			},
+			{
+				"lead": "Production and src/testing.js both",
+				"ours": "Production and the lead adapter's src/testing.js both"
+			},
+			{
+				"lead": "// not granted. Dev's `ws.getUserData()` never throws (Node ws, not uWS),\n\t\t// so there is no closed-socket abort path here.",
+				"ours": "// not granted. Dev's `ws.getUserData()` never throws (the wrapper closes\n\t\t// over its userData), so there is no closed-socket abort path here."
+			},
+			{
+				"lead": "\t\t\t// Dev uses Node's `ws` library, not uWS - sockets do not\n\t\t\t// throw \"Invalid access\" when written to after close, so\n\t\t\t// the closed-WS abort path doesn't exist here. Mirror the\n\t\t\t// prod surface as a constant zero.",
+				"ours": "\t\t\t// Dev writes on bare `ws` sockets, which do not throw when\n\t\t\t// written to after close, so the closed-WS abort path doesn't\n\t\t\t// exist here. Mirror the prod surface as a constant zero."
+			},
+			{
+				"lead": "\t\t\t});\n\t\t\tviteServer = server;",
+				"ours": "\t\t\t});\n\t\t\t// Custom 101 headers (the upgradeResponse contract), applied the same\n\t\t\t// way the production handler applies them: ws emits a 'headers' event\n\t\t\t// before writing the handshake; a per-request map carries the app's\n\t\t\t// validated headers into it.\n\t\t\t/** @type {WeakMap<import('node:http').IncomingMessage, Record<string, string>>} */\n\t\t\tconst upgradeExtraHeaders = new WeakMap();\n\t\t\twss.on('headers', (headers, req) => {\n\t\t\t\tconst extra = upgradeExtraHeaders.get(req);\n\t\t\t\tif (!extra) return;\n\t\t\t\tfor (const [name, value] of Object.entries(extra)) {\n\t\t\t\t\t// An array value (several Set-Cookie lines) writes one header LINE\n\t\t\t\t\t// per element - joining them would corrupt every cookie after the\n\t\t\t\t\t// first.\n\t\t\t\t\tif (Array.isArray(value)) {\n\t\t\t\t\t\tfor (const item of value) headers.push(`${name}: ${item}`);\n\t\t\t\t\t} else {\n\t\t\t\t\t\theaders.push(`${name}: ${value}`);\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t});\n\t\t\tviteServer = server;"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t// Dev cannot emit custom 101 headers, but it must still reject\n\t\t\t\t\t\t\t// the same malformed result production rejects. Otherwise an app\n\t\t\t\t\t\t\t// verifies a broken upgrade in dev and only production fails.\n\t\t\t\t\t\t\tconst responseHeaders = snapshotUpgradeHeaders(result.headers);\n\t\t\t\t\t\t\tif (responseHeaders && Object.keys(responseHeaders).length > 0) {\n\t\t\t\t\t\t\t\tconst hasSetCookie = Object.keys(responseHeaders).some(\n\t\t\t\t\t\t\t\t\t(k) => k.toLowerCase() === 'set-cookie'\n\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\tif (hasSetCookie) {\n\t\t\t\t\t\t\t\t\tconsole.warn(\n\t\t\t\t\t\t\t\t\t\t'[adapter-uws] upgradeResponse() attaches Set-Cookie to the 101 response. ' +\n\t\t\t\t\t\t\t\t\t\t'This fails silently behind Cloudflare Tunnel and some other strict edge proxies ' +\n\t\t\t\t\t\t\t\t\t\t'(WebSocket opens, then closes with 1006). Use the `authenticate` hook to ' +\n\t\t\t\t\t\t\t\t\t\t'refresh session cookies over a normal HTTP response.\\n' +\n\t\t\t\t\t\t\t\t\t\t'  See: https://svti.me/cf-cookies'\n\t\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\t\tconsole.warn('[adapter-uws] upgrade() returned response headers. These are only applied in production (uWS); the ws library used in dev does not support custom 101 headers.\\n  See: https://svti.me/dev-101-headers');\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}",
+				"ours": "\t\t\t\t\t\t\t// Validated with the same snapshot production applies, then\n\t\t\t\t\t\t\t// handed to the wss 'headers' listener above, which writes every\n\t\t\t\t\t\t\t// validated header onto the 101 exactly as production does.\n\t\t\t\t\t\t\tconst responseHeaders = snapshotUpgradeHeaders(result.headers);\n\t\t\t\t\t\t\tif (responseHeaders && Object.keys(responseHeaders).length > 0) {\n\t\t\t\t\t\t\t\tupgradeExtraHeaders.set(req, responseHeaders);\n\t\t\t\t\t\t\t\tconst hasSetCookie = Object.keys(responseHeaders).some(\n\t\t\t\t\t\t\t\t\t(k) => k.toLowerCase() === 'set-cookie'\n\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\tif (hasSetCookie) {\n\t\t\t\t\t\t\t\t\tconsole.warn(\n\t\t\t\t\t\t\t\t\t\t'[adapter-ws] upgradeResponse() attaches Set-Cookie to the 101 response. ' +\n\t\t\t\t\t\t\t\t\t\t'This fails silently behind Cloudflare Tunnel and some other strict edge proxies ' +\n\t\t\t\t\t\t\t\t\t\t'(WebSocket opens, then closes with 1006). Use the `authenticate` hook to ' +\n\t\t\t\t\t\t\t\t\t\t'refresh session cookies over a normal HTTP response.\\n' +\n\t\t\t\t\t\t\t\t\t\t'  See: https://svti.me/cf-cookies'\n\t\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}"
+			},
+			{
+				"lead": "adapter?.name !== 'adapter-uws'",
+				"ours": "adapter?.name !== 'adapter-ws'",
+				"all": true
+			},
+			{
+				"lead": "[adapter-uws]",
+				"ours": "[adapter-ws]",
+				"all": true
 			}
 		]
 	},
@@ -550,6 +739,23 @@
 		"file": "test/channels.test.js"
 	},
 	{
+		"file": "test/chaos.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\n",
+				"ours": ""
+			},
+			{
+				"lead": "const describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('chaos / fault-injection harness on createTestServer', () => {\n",
+				"ours": "describe('chaos / fault-injection harness on createTestServer', () => {\n"
+			}
+		]
+	},
+	{
 		"file": "test/client-binary.test.js"
 	},
 	{
@@ -566,6 +772,23 @@
 	},
 	{
 		"file": "test/client.test.js"
+	},
+	{
+		"file": "test/codec-relay.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": " * A scripted fake connection shaped like the subset of the uWS socket the publish\n",
+				"ours": " * A scripted fake connection shaped like the subset of the harness socket the publish\n"
+			},
+			{
+				"lead": "describeUWS('codec-aware cross-worker relay re-encode (relayPublishWire)', () => {\n",
+				"ours": "describe('codec-aware cross-worker relay re-encode (relayPublishWire)', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/connection-permit-carrier.test.js"
@@ -586,10 +809,44 @@
 		"file": "test/cursor-handle.test.js"
 	},
 	{
+		"file": "test/cursor-presence-tap-wire.test.js",
+		"adaptations": [
+			{
+				"lead": "// Unlike the mock-ws unit suites, these run a REAL uWebSockets.js server\n",
+				"ours": "// Unlike the mock-ws unit suites, these run a REAL node:http + ws server\n"
+			},
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('cursor + presence tap channels over a real uWS server', () => {\n",
+				"ours": "describe('cursor + presence tap channels over a real server', () => {\n"
+			}
+		]
+	},
+	{
 		"file": "test/cursor-render.test.js"
 	},
 	{
 		"file": "test/cursor-viewport-client.test.js"
+	},
+	{
+		"file": "test/cursor-worker-wire.test.js",
+		"adaptations": [
+			{
+				"lead": "// The cursor render worker against a REAL uWS server (createTestServer) and\n",
+				"ours": "// The cursor render worker against a REAL server (createTestServer) and\n"
+			},
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": "describeUWS('cursor render worker against a real server', () => {\n",
+				"ours": "describe('cursor render worker against a real server', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/cursor-worker.test.js"
@@ -607,7 +864,26 @@
 		"file": "test/divergence-diagnostics.test.js"
 	},
 	{
+		"file": "test/dst-goldens/adapter-cluster.golden.json"
+	},
+	{
+		"file": "test/dst-goldens/adapter-single.golden.json"
+	},
+	{
 		"file": "test/egress-account.test.js"
+	},
+	{
+		"file": "test/groups-wire-policy.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('groups wire authorization policy', () => {\n",
+				"ours": "describe('groups wire authorization policy', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/groups.test.js"
@@ -673,10 +949,38 @@
 		"file": "test/sim-core.test.js"
 	},
 	{
+		"file": "test/sim-git-commit.test.js"
+	},
+	{
+		"file": "test/sim-golden.test.js"
+	},
+	{
+		"file": "test/sim-leak.test.js"
+	},
+	{
+		"file": "test/sim-multiworker.test.js"
+	},
+	{
+		"file": "test/sim-swarm.test.js"
+	},
+	{
+		"file": "test/sim.test.js"
+	},
+	{
 		"file": "test/smooth-authority.test.js"
 	},
 	{
-		"file": "test/smooth-cell-codec.test.js"
+		"file": "test/smooth-cell-codec.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": "describeUWS('cell codec native cohort fan-out', () => {\n",
+				"ours": "describe('cell codec native cohort fan-out', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/smooth-channel.test.js"
@@ -700,7 +1004,21 @@
 		"file": "test/smooth-local-motion.test.js"
 	},
 	{
-		"file": "test/smooth-noecho.test.js"
+		"file": "test/smooth-noecho.test.js",
+		"adaptations": [
+			{
+				"lead": "// Sender exclusion on publishWire against a REAL uWS server (createTestServer,\n",
+				"ours": "// Sender exclusion on publishWire against a REAL server (createTestServer,\n"
+			},
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": "describeUWS('publishWire sender exclusion against a real server', () => {\n",
+				"ours": "describe('publishWire sender exclusion against a real server', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/smooth-predict.test.js",
@@ -715,7 +1033,25 @@
 		"file": "test/smooth-random.test.js"
 	},
 	{
-		"file": "test/smooth-wire-batch.test.js"
+		"file": "test/smooth-wire-batch.test.js",
+		"adaptations": [
+			{
+				"lead": "// Platform fan-out (real server; skipped when uWebSockets.js is unavailable).\n",
+				"ours": "// Platform fan-out (real server).\n"
+			},
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": "describeUWS('publishWireBatch fan-out', () => {\n",
+				"ours": "describe('publishWireBatch fan-out', () => {\n"
+			},
+			{
+				"lead": "describeUWS('sendWireBatch (per-subscriber culled delivery)', () => {\n",
+				"ours": "describe('sendWireBatch (per-subscriber culled delivery)', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/smooth-wire-view.test.js"
@@ -725,6 +1061,9 @@
 	},
 	{
 		"file": "test/state-hash-detector.test.js"
+	},
+	{
+		"file": "test/steadystate.test.js"
 	},
 	{
 		"file": "test/throttle.test.js"

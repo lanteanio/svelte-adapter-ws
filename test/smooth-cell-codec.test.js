@@ -75,14 +75,7 @@ describe('cell-snapshot codec encode/decode', () => {
 	});
 });
 
-let uWS;
-try {
-	uWS = (await import('uWebSockets.js')).default;
-} catch {
-	uWS = null;
-}
-const describeUWS = uWS ? describe : describe.skip;
-const { createTestServer } = uWS ? await import('../src/testing.js') : {};
+const { createTestServer } = await import('../src/testing.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, timeout = 3000, step = 20) {
@@ -122,7 +115,7 @@ async function connectClient(url, caps) {
 	return { ws, frames };
 }
 
-describeUWS('cell codec native cohort fan-out', () => {
+describe('cell codec native cohort fan-out', () => {
 	clients = [];
 	afterEach(async () => {
 		for (const ws of clients) { try { ws.close(); } catch { /* already closed */ } }
