@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A public entry-point catalog in the README, rendered from the export map by
+  `node scripts/render-entry-points.js`. Each of the 33 subpaths lists its
+  role, execution environment, stability and deprecation state, carried from
+  the lead adapter so the same import reads the same in either package. The
+  table, the declarations and the export map are gated against each other and
+  against the lead.
+
 - The `./testing` and `./sim` subpaths: the in-process handler harness and
   the deterministic network/cluster simulator, both running against this
   runtime's own in-memory double, so a suite that imports them needs no

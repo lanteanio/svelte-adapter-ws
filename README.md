@@ -31,6 +31,53 @@ The family, by tier:
 The suffix names the transport, like every member of the family: `uws` is
 uWebSockets.js, `ws` is the ws library, `bunserve` is `Bun.serve`.
 
+## Public entry points
+
+This catalog is generated from the package export map by
+`node scripts/render-entry-points.js`. Every subpath declares its role,
+execution environment, stability and deprecation state, carried from the
+lead adapter so the same import means the same thing in either package. The
+suite fails if the table drifts from the export map, if a declared subpath
+does not resolve, or if this package declares a subpath the lead does not.
+
+<!-- public-entry-points:start -->
+| Entry point | Role | Environment | Stability | Deprecation |
+|---|---|---|---|---|
+| `svelte-adapter-ws` | SvelteKit adapter and build output | Node build | supported | none |
+| `svelte-adapter-ws/upgrade-response` | WebSocket 101 response headers | Node runtime | supported | none |
+| `svelte-adapter-ws/connection` | Stable connection identity | Node runtime | supported | none |
+| `svelte-adapter-ws/client` | Reactive connection and topic stores | Browser | supported | none |
+| `svelte-adapter-ws/testing` | In-process handler integration harness | Node test | supported | none |
+| `svelte-adapter-ws/sim` | Deterministic network and cluster simulator | Node test | experimental | none |
+| `svelte-adapter-ws/safe-url` | Outbound SSRF policy and address classification | Node runtime | supported | none |
+| `svelte-adapter-ws/observability` | Signal manifest, diagnostic formatter/parser, and schema validator | Universal | supported | none |
+| `svelte-adapter-ws/plugins/replay` | Server replay buffer | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/replay/client` | Browser replay client | Browser | supported | none |
+| `svelte-adapter-ws/plugins/presence` | Server presence registry | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/presence/client` | Reactive presence client | Browser | supported | none |
+| `svelte-adapter-ws/plugins/channels` | Typed server topics | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/channels/client` | Typed client topics | Browser | supported | none |
+| `svelte-adapter-ws/plugins/throttle` | Topic throttle and debounce | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/ratelimit` | Message rate limiting | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/cursor` | Server cursor fan-out | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/cursor/client` | Reactive cursor client | Browser/worker | supported | none |
+| `svelte-adapter-ws/plugins/middleware` | Message middleware pipeline | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/queue` | Per-key ordered work queue | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/groups` | Server broadcast groups | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/groups/client` | Reactive group client | Browser | supported | none |
+| `svelte-adapter-ws/plugins/lock` | Per-key critical sections | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/session` | In-process session store | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/dedup` | Idempotency window | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/crdt` | CRDT wire codec and authority | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/crdt/client` | Binary CRDT client sink | Browser | supported | none |
+| `svelte-adapter-ws/plugins/crdt/replica` | Local CRDT replica primitives | Browser/Node | supported | none |
+| `svelte-adapter-ws/plugins/crdt/channel` | Reactive CRDT channel | Browser | supported | none |
+| `svelte-adapter-ws/plugins/smooth` | Server prediction authority and codec | Node runtime | supported | none |
+| `svelte-adapter-ws/plugins/smooth/client` | Prediction and interpolation client | Browser | supported | none |
+| `svelte-adapter-ws/plugins/smooth/random` | Shared deterministic random stream | Browser/Node | supported | none |
+| `svelte-adapter-ws/plugins/webhooks` | SSRF-gated webhook delivery | Node runtime | supported | none |
+<!-- public-entry-points:end -->
+
 ## Install
 
 ```sh

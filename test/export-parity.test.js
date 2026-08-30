@@ -68,3 +68,57 @@ describe('every declared subpath resolves', () => {
 		});
 	}
 });
+
+// The catalog half: README documents the surface, and both the table and the
+// declarations behind it are held to their sources - the export map for which
+// subpaths exist, the lead's own catalog for what each one is.
+
+/** Parses a lead/local `public-entry-points` markdown block into rows. */
+function catalogRows(markdown) {
+	const start = markdown.indexOf('<!-- public-entry-points:start -->');
+	const end = markdown.indexOf('<!-- public-entry-points:end -->');
+	expect(start, 'public-entry-points markers missing').toBeGreaterThan(-1);
+	expect(end, 'public-entry-points markers missing').toBeGreaterThan(start);
+	return markdown
+		.slice(start, end)
+		.split(/\r?\n/)
+		.filter((line) => line.trim().startsWith('|'))
+		.slice(2)
+		.map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()));
+}
+
+describe('the entry-point catalog stays true to its sources', () => {
+	const meta = JSON.parse(readFileSync(path.join(repoRoot, 'docs', 'entry-points.json'), 'utf8'));
+
+	it('describes exactly the subpaths the package declares', () => {
+		expect(Object.keys(meta)).toEqual(Object.keys(ours));
+	});
+
+	it('has a README table matching the renderer', async () => {
+		const { renderEntryPoints } = await import('../scripts/render-entry-points.js');
+		const readme = readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const rendered = renderEntryPoints().split('\n').map((line) =>
+			line.split('|').slice(1, -1).map((cell) => cell.trim())
+		);
+		expect(
+			catalogRows(readme),
+			'run: node scripts/render-entry-points.js'
+		).toEqual(rendered.slice(2));
+	});
+
+	it('carries the lead declaration for every subpath', () => {
+		const lead = new Map(
+			catalogRows(readFileSync(path.join(uwsRoot, 'README.md'), 'utf8')).map((cells) => {
+				const name = cells[0].replaceAll('`', '');
+				const subpath = name === 'svelte-adapter-uws' ? '.' : '.' + name.slice('svelte-adapter-uws'.length);
+				// The lead's Guide column links into its own README, which has
+				// no counterpart here; the declarations either side of it do.
+				return [subpath, { role: cells[1], environment: cells[2], stability: cells[3], deprecation: cells[5] }];
+			})
+		);
+		for (const [subpath, entry] of Object.entries(meta)) {
+			expect(lead.get(subpath), `${subpath} is absent from the lead catalog`).toBeDefined();
+			expect(entry, `${subpath} declaration`).toEqual(lead.get(subpath));
+		}
+	});
+});

@@ -1,0 +1,200 @@
+{
+	".": {
+		"role": "SvelteKit adapter and build output",
+		"environment": "Node build",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./upgrade-response": {
+		"role": "WebSocket 101 response headers",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./connection": {
+		"role": "Stable connection identity",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./client": {
+		"role": "Reactive connection and topic stores",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./testing": {
+		"role": "In-process handler integration harness",
+		"environment": "Node test",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./sim": {
+		"role": "Deterministic network and cluster simulator",
+		"environment": "Node test",
+		"stability": "experimental",
+		"deprecation": "none"
+	},
+	"./safe-url": {
+		"role": "Outbound SSRF policy and address classification",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./observability": {
+		"role": "Signal manifest, diagnostic formatter/parser, and schema validator",
+		"environment": "Universal",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/replay": {
+		"role": "Server replay buffer",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/replay/client": {
+		"role": "Browser replay client",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/presence": {
+		"role": "Server presence registry",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/presence/client": {
+		"role": "Reactive presence client",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/channels": {
+		"role": "Typed server topics",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/channels/client": {
+		"role": "Typed client topics",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/throttle": {
+		"role": "Topic throttle and debounce",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/ratelimit": {
+		"role": "Message rate limiting",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/cursor": {
+		"role": "Server cursor fan-out",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/cursor/client": {
+		"role": "Reactive cursor client",
+		"environment": "Browser/worker",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/middleware": {
+		"role": "Message middleware pipeline",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/queue": {
+		"role": "Per-key ordered work queue",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/groups": {
+		"role": "Server broadcast groups",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/groups/client": {
+		"role": "Reactive group client",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/lock": {
+		"role": "Per-key critical sections",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/session": {
+		"role": "In-process session store",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/dedup": {
+		"role": "Idempotency window",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/crdt": {
+		"role": "CRDT wire codec and authority",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/crdt/client": {
+		"role": "Binary CRDT client sink",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/crdt/replica": {
+		"role": "Local CRDT replica primitives",
+		"environment": "Browser/Node",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/crdt/channel": {
+		"role": "Reactive CRDT channel",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/smooth": {
+		"role": "Server prediction authority and codec",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/smooth/client": {
+		"role": "Prediction and interpolation client",
+		"environment": "Browser",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/smooth/random": {
+		"role": "Shared deterministic random stream",
+		"environment": "Browser/Node",
+		"stability": "supported",
+		"deprecation": "none"
+	},
+	"./plugins/webhooks": {
+		"role": "SSRF-gated webhook delivery",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	}
+}
