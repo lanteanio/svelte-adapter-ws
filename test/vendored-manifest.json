@@ -867,6 +867,15 @@
 		"file": "test/dedup.test.js"
 	},
 	{
+		"file": "test/dev-batch-landing-order.test.js"
+	},
+	{
+		"file": "test/dev-batch-options.test.js"
+	},
+	{
+		"file": "test/dev-dashboard.test.js"
+	},
+	{
 		"file": "test/divergence-diagnostics.test.js"
 	},
 	{
@@ -1079,6 +1088,25 @@
 	},
 	{
 		"file": "test/transport-metrics.test.js"
+	},
+	{
+		"file": "test/vite-grant-conjunct.test.js"
+	},
+	{
+		"file": "test/vite-max-payload.test.js"
+	},
+	{
+		"file": "test/vite-origin-parity.test.js"
+	},
+	{
+		"file": "test/vite.test.js",
+		"adaptations": [
+			{
+				"lead": "'adapter-uws'",
+				"ours": "'adapter-ws'",
+				"all": true
+			}
+		]
 	},
 	{
 		"file": "test/webhooks-controls.test.js"

@@ -24,6 +24,46 @@ Log line begins:
 
 Further reading: https://svti.me/listen-failed
 
+## ADAPTER-ERR-VITE-LOAD
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.load-failed severity=error] vite.handler.load-failed: Initial loading of the WebSocket handler
+```
+
+**Cause.** The initial development WebSocket handler or one of its imports failed to load.
+
+**Consequence.** The Vite HTTP server stays active, but WebSocket upgrades return HTTP 500 until a handler loads.
+
+**Automatic recovery.** Vite retries the handler when its module graph changes again.
+
+**What to do.** Fix the reported module error and save the handler or one of its dependencies; a dev-server restart is not required.
+
+Further reading: https://svti.me/ws-handler-load
+
+## ADAPTER-ERR-VITE-RELOAD
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.reload-failed severity=error] vite.handler.reload-failed: Hot reloading of the WebSocket handler
+```
+
+**Cause.** A development handler hot reload failed after an earlier handler had loaded.
+
+**Consequence.** Existing WebSocket connections keep the previous handler, but new upgrades return HTTP 500 until recovery.
+
+**Automatic recovery.** Vite retries the handler when its module graph changes again.
+
+**What to do.** Fix the reported module error and save the handler or one of its dependencies; a dev-server restart is not required.
+
+Further reading: https://svti.me/ws-handler-load
+
 ## ADAPTER-ERR-REQUEST-TIMEOUT
 
 Log line begins:

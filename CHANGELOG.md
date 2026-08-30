@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `./vite` subpath: the dev-server plugin, so `vite dev` serves WebSockets
+  against the same protocol the built runtime serves. Dev applies the
+  `upgradeResponse` contract's custom 101 headers the way production does,
+  validated through the same snapshot, rather than declining to emit them.
+  The subscribe, publish, batch and recover lanes answer through the shared
+  policy modules, so a call dev accepts is a call production accepts. Two
+  operator diagnostics ride with it, `ADAPTER-ERR-VITE-LOAD` and
+  `ADAPTER-ERR-VITE-RELOAD`, for a handler that fails its first load and one
+  that fails a hot reload, both documented in the error reference. With it the
+  package declares all 34 of the lead adapter's export subpaths.
+
 - A public entry-point catalog in the README, rendered from the export map by
   `node scripts/render-entry-points.js`. Each of the 33 subpaths lists its
   role, execution environment, stability and deprecation state, carried from

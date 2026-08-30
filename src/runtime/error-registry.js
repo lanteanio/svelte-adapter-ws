@@ -19,6 +19,8 @@
  */
 export const ADAPTER_ERROR_IDS = Object.freeze({
 	LISTEN: 'ADAPTER-ERR-LISTEN',
+	VITE_LOAD: 'ADAPTER-ERR-VITE-LOAD',
+	VITE_RELOAD: 'ADAPTER-ERR-VITE-RELOAD',
 	REQUEST_TIMEOUT: 'ADAPTER-ERR-REQUEST-TIMEOUT',
 	REQUEST_CLOSED: 'ADAPTER-ERR-REQUEST-CLOSED',
 	INVARIANT: 'ADAPTER-ERR-INVARIANT',
@@ -96,6 +98,42 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		anchor: 'adapter-err-listen',
 		help: 'docs/errors.md#adapter-err-listen',
 		link: 'https://svti.me/listen-failed'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.VITE_LOAD,
+		code: null,
+		event: 'vite.handler.load-failed',
+		component: 'vite.websocket',
+		severity: 'error',
+		emission: 'composed',
+		problemPrefix: 'Initial loading of the WebSocket handler',
+		messagePrefix: '[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.load-failed severity=error] vite.handler.load-failed: Initial loading of the WebSocket handler',
+		cause: 'The initial development WebSocket handler or one of its imports failed to load.',
+		consequence: 'The Vite HTTP server stays active, but WebSocket upgrades return HTTP 500 until a handler loads.',
+		automaticRecovery: 'Vite retries the handler when its module graph changes again.',
+		nextAction: 'Fix the reported module error and save the handler or one of its dependencies; a dev-server restart is not required.',
+		sources: Object.freeze(['src/vite.js']),
+		anchor: 'adapter-err-vite-load',
+		help: 'docs/errors.md#adapter-err-vite-load',
+		link: 'https://svti.me/ws-handler-load'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.VITE_RELOAD,
+		code: null,
+		event: 'vite.handler.reload-failed',
+		component: 'vite.websocket',
+		severity: 'error',
+		emission: 'composed',
+		problemPrefix: 'Hot reloading of the WebSocket handler',
+		messagePrefix: '[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.reload-failed severity=error] vite.handler.reload-failed: Hot reloading of the WebSocket handler',
+		cause: 'A development handler hot reload failed after an earlier handler had loaded.',
+		consequence: 'Existing WebSocket connections keep the previous handler, but new upgrades return HTTP 500 until recovery.',
+		automaticRecovery: 'Vite retries the handler when its module graph changes again.',
+		nextAction: 'Fix the reported module error and save the handler or one of its dependencies; a dev-server restart is not required.',
+		sources: Object.freeze(['src/vite.js']),
+		anchor: 'adapter-err-vite-reload',
+		help: 'docs/errors.md#adapter-err-vite-reload',
+		link: 'https://svti.me/ws-handler-load'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.REQUEST_TIMEOUT,
@@ -986,6 +1024,12 @@ export const REQUEST_CLOSED_DETAIL = Object.freeze({
 export function adapterErrorMessage(id, detail = '') {
 	const entry = adapterErrorDefinition(id);
 	return entry.messagePrefix + detail + adapterErrorHelpSuffix(id);
+}
+
+export function adapterErrorProblem(id, detail = '') {
+	const entry = adapterErrorDefinition(id);
+	if (entry.problemPrefix === null) throw new TypeError('Adapter error id has no operational problem prefix: ' + id);
+	return entry.problemPrefix + detail + adapterErrorHelpSuffix(id);
 }
 
 /**

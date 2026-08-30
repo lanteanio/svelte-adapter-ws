@@ -23,6 +23,12 @@
 		"stability": "supported",
 		"deprecation": "none"
 	},
+	"./vite": {
+		"role": "Development WebSocket and handler build plugin",
+		"environment": "Node build/dev",
+		"stability": "supported",
+		"deprecation": "none"
+	},
 	"./testing": {
 		"role": "In-process handler integration harness",
 		"environment": "Node test",

@@ -31,6 +31,10 @@
 			"types": "./src/client.d.ts",
 			"default": "./src/client.js"
 		},
+		"./vite": {
+			"types": "./src/vite.d.ts",
+			"default": "./src/vite.js"
+		},
 		"./testing": {
 			"types": "./src/testing.d.ts",
 			"default": "./src/testing.js"

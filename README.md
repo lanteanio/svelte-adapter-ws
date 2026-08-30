@@ -47,6 +47,7 @@ does not resolve, or if this package declares a subpath the lead does not.
 | `svelte-adapter-ws/upgrade-response` | WebSocket 101 response headers | Node runtime | supported | none |
 | `svelte-adapter-ws/connection` | Stable connection identity | Node runtime | supported | none |
 | `svelte-adapter-ws/client` | Reactive connection and topic stores | Browser | supported | none |
+| `svelte-adapter-ws/vite` | Development WebSocket and handler build plugin | Node build/dev | supported | none |
 | `svelte-adapter-ws/testing` | In-process handler integration harness | Node test | supported | none |
 | `svelte-adapter-ws/sim` | Deterministic network and cluster simulator | Node test | experimental | none |
 | `svelte-adapter-ws/safe-url` | Outbound SSRF policy and address classification | Node runtime | supported | none |
