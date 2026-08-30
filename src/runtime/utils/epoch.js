@@ -96,14 +96,16 @@ export function overrideTopicEpoch(topic, epoch) {
 export function resetTopicEpochs() { _topicEpochs.clear(); }
 
 /**
- * Mint a topic a fresh epoch, replacing whatever it answers today.
- *
- * The explicit seq lane is single-authority per topic, so an app that CHANGES
- * a topic's authority - moves it from the counter to an external allocator,
- * repoints it at a different partition, resets the store behind it - must
- * repudiate every offset clients recorded under the old one, and nothing else
- * does. The re-roll guard exists because a mint that equals the value being
- * replaced is a no-op for exactly the offsets the caller asked to repudiate.
+ * Mint and install a fresh generation for ONE topic, returning it. The same
+ * mint the confirmed-relay-loss drain performs, exposed for the app-driven
+ * case: the explicit seq lane is single-authority per topic, so an app that
+ * CHANGES a topic's authority - moves it from the counter to an external
+ * allocator, repoints it at a different partition, resets the store behind
+ * it - must repudiate every offset clients recorded under the old one, and
+ * nothing else does. The re-roll guard exists because a mint that equals the
+ * value being replaced is a no-op for exactly the offsets the caller asked
+ * to repudiate; the loss drain tolerates its 2^-32 as one missed heal, but a
+ * deliberate bump has the current value in hand and can simply not collide.
  *
  * Worker-local like every override in the map above: app code runs on every
  * worker, each mints independently, and the epoch is equality-only, so
@@ -150,7 +152,169 @@ export function nextTopicSeq(seqMap, topic) {
  * @throws {TypeError} always
  */
 export function throwInvalidSeq(value) {
-	throw new TypeError(`publish seq must be a positive integer (>= 1), received ${String(value)}`);
+	throw new TypeError(
+		`publish seq must be a positive integer number or bigint (an explicit authority's value), ` +
+		`true (the in-memory counter), or false/null (no seq); received ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`
+	);
+}
+
+/**
+ * Refuse a seq whose value the wire's double space cannot keep distinct. Its
+ * own throw site, and its own message: the value IS a positive integer, so the
+ * legal-forms message would send a caller looking for a spelling mistake that
+ * is not there. What is wrong is the magnitude, and the fix is a different
+ * authority, so the message says that.
+ *
+ * @param {number | bigint} value
+ * @returns {never}
+ * @throws {TypeError} always
+ */
+export function throwUncarryableSeq(value) {
+	throw new TypeError(
+		`seq ${typeof value === 'bigint' ? `${value}n` : value} exceeds the wire's safe-integer range ` +
+		`(at most 9007199254740991): the seq space is IEEE-754 double, which stops having a neighbour at ` +
+		`distance one above that, so ids a caller means to be different collapse onto a single value. ` +
+		`Because watermarks advance on a strict greater-than, the second frame then fails to advance the ` +
+		`client's watermark and resume dedup goes ambiguous with nothing on the wire to notice by. Keep ` +
+		`the wide id in the event data and give seq an authority inside the range, or offset it by a ` +
+		`per-topic base; do not truncate, which destroys the ordering seq exists for`
+	);
+}
+
+/**
+ * Validate an EXPLICIT seq value - the number and bigint spellings of one
+ * authority - and project it into the wire's seq space.
+ *
+ * That space is IEEE-754 double, and the range it carries FAITHFULLY is the
+ * safe-integer range: at most 2^53 - 1. Both spellings are held to it.
+ *
+ * Above that range a double no longer has a neighbour at distance one, so two
+ * ids a caller means to be different land on one value. Every max-seen guard
+ * and every client watermark advances on a strict greater-than, so the second
+ * frame does not advance the watermark and resume dedup goes ambiguous -
+ * silently, on exactly the snowflakes and large Kafka offsets a caller reaches
+ * for bigint to carry. The refusal is loud instead.
+ *
+ * Exact representability is NOT the test, though it looks like the natural
+ * one. It fails on both ends. The JSON envelope serializes through
+ * `String(double)`, which emits the shortest round-tripping decimal rather
+ * than the integer: 2^60 is an exact double and still reaches a subscriber as
+ * 1152921504606847000, a number nobody issued. And in the band just above
+ * 2^53, where the gap is two, an exactness test would take a caller's EVEN
+ * offsets and refuse the ODD ones - a contract that fails on half a stream,
+ * by parity, is worse than one that refuses the range outright.
+ *
+ * The two spellings therefore agree everywhere, including on refusal: this is
+ * one rule about the value, not a property of how it was written. Carrying a
+ * wider seq exactly is not available - the seq space is frozen with the
+ * protocol revision - so a caller whose ids exceed the range keeps them in the
+ * event data and gives `seq` an authority that fits.
+ *
+ * @param {number | bigint} value
+ * @returns {number}
+ */
+export function explicitSeqValue(value) {
+	if (typeof value === 'number') {
+		if (Number.isSafeInteger(value) && value >= 1) return value;
+		// An integer too large to be safe is a magnitude fault, not a spelling
+		// one, and gets the message that says so.
+		if (Number.isInteger(value) && value >= 1) throwUncarryableSeq(value);
+	} else if (typeof value === 'bigint' && value >= 1n) {
+		// The typeof is load-bearing, not decoration: `>= 1n` is a VALUE
+		// comparison, and a relational compare of a string against a bigint
+		// runs StringToBigInt - so a bare `value >= 1n` let `'7'` through this
+		// arm and returned 7, quietly making the exported validator accept a
+		// spelling every caller of it refuses.
+		//
+		// `Number.isSafeInteger` then answers exactness and range together: a
+		// bigint at or above 2^53 cannot land on a safe integer, and one below
+		// it converts exactly. No BigInt is allocated on the accepting path.
+		const projected = Number(value);
+		if (Number.isSafeInteger(projected)) return projected;
+		throwUncarryableSeq(value);
+	}
+	throwInvalidSeq(value);
+}
+
+/**
+ * Resolve one batch entry's `seq` into its override form, speaking the same
+ * table as {@link stampSeqValue} so the entry spelling and the options
+ * spelling cannot disagree. ONE resolver for every surface that carries the
+ * batch contract - production, the createTestServer harness, and the Vite
+ * dev plugin - because the pre-pass used to be hand-copied into each, and a
+ * table change landing in one alone is exactly the mirror drift the parity
+ * suite exists to catch.
+ *
+ * A refusal names the entry's POSITION. One bad value refuses the whole
+ * batch, so without the index a caller handing over two hundred entries gets
+ * one message and no way to tell which of them carried it; the array is the
+ * caller's own, so the index is all they need to find it. Rethrown around the
+ * shared validators rather than parameterised into them, so the entry lane and
+ * the options lane keep one table and one wording - the position is a prefix,
+ * not a second contract.
+ *
+ * Only a VALUE refusal is prefixed. The counter-draw refusal an entry can also
+ * trigger (`seq: true` on a clustered runtime) is left alone deliberately: it
+ * is a plain Error about the DEPLOYMENT, not this entry, and its remedy - the
+ * options renouncing the counter with an authority on each entry - is the same
+ * whichever entry happened to surface it, so a position would point at a
+ * scapegoat rather than at the fault. A value refusal is the opposite: exactly
+ * one entry holds the offending value.
+ *
+ * The catch also refuses to dress up an error it did not cause. Coercing the
+ * value for the message runs user code (`Symbol.toPrimitive`), and something
+ * thrown from there is the caller's, not a seq verdict.
+ *
+ * @param {unknown} value the entry's `seq` field, read once by the caller
+ * @param {number} [index] the entry's position, named in a refusal
+ * @returns {number | boolean | undefined} `undefined` inherits the shared
+ *   options; a NUMBER is the validated explicit authority (callers gate their
+ *   authority assertion on this form); `true` draws the entry its own counter
+ *   value; `false` (the resolution of both `false` and `null`) leaves the
+ *   entry seq-less. Anything else throws naming the legal forms - before the
+ *   caller has stamped or delivered anything.
+ */
+export function resolveEntrySeq(value, index) {
+	try {
+		return resolveEntrySeqValue(value);
+	} catch (error) {
+		if (index === undefined || !(error instanceof TypeError)) throw error;
+		throw new TypeError(`batch entry ${index}: ${error.message}`, { cause: error });
+	}
+}
+
+/** @param {unknown} value @returns {number | boolean | undefined} */
+function resolveEntrySeqValue(value) {
+	if (value === undefined) return undefined;
+	if (typeof value === 'number' || typeof value === 'bigint') return explicitSeqValue(value);
+	if (value === false || value === null) return false;
+	if (value === true) return true;
+	throwInvalidSeq(value);
+}
+
+/**
+ * Resolve the SEND lanes' `seq` option - the gap-fill channel a resume hook
+ * replays history through. Explicit forms only: number and bigint validate
+ * exactly as the publish lanes' explicit authority
+ * ({@link explicitSeqValue}); `false`, `null` and absent mean no seq, the
+ * lanes' historical shape. `true` throws its own message rather than the
+ * publish table's: a single-target send has no counter to draw - gap-fill
+ * replays history that is already accounted - and silently meaning
+ * something else here is how the publish table's misuse class started.
+ *
+ * ONE resolver for every surface carrying the send lanes, for the same
+ * anti-drift reason {@link resolveEntrySeq} is one.
+ *
+ * @param {unknown} opt
+ * @returns {number | null}
+ */
+export function resolveSendSeq(opt) {
+	if (opt === undefined || opt === false || opt === null) return null;
+	if (typeof opt === 'number' || typeof opt === 'bigint') return explicitSeqValue(opt);
+	throw new TypeError(
+		'send seq must be an explicit positive integer number or bigint (a replay authority\'s value), ' +
+		'or false/null/absent for no seq; the send lanes never draw the in-memory counter'
+	);
 }
 
 /**
@@ -158,32 +322,42 @@ export function throwInvalidSeq(value) {
  * caller-supplied authority. Shared by every publish entry point so the
  * three-way resolution never drifts between them.
  *
- * Keyed STRICTLY on the `seq` option type so a legacy truthy `seq: true` keeps
- * its historical meaning (the in-memory counter, NOT numeric 1):
+ * Keyed STRICTLY on the `seq` option type, one spelling for every publish
+ * lane and for `publishWireBatch`'s per-entry `seq`:
  *
- * - `options.seq` is a NUMBER: stamp that exact value and do NOT advance the
- *   in-memory per-worker counter. This is a cluster-authoritative seq a replay
- *   backend already allocated (a Redis Lua INCR, a Postgres CTE, or the
- *   in-memory buffer's own counter), so the broadcast wire seq and the replay
- *   seq occupy ONE space instead of diverging. Numeric seqs originate on
- *   different workers and interleave on arrival, so a caller that tracks a
- *   max-seen map must record them through the monotone-max guard
- *   (`recordSeen`), never a bare set - a bare set could regress the local max.
- * - `options.seq === false`: no seq. Returns null so the field is omitted from
- *   the envelope and the topic stays out of the cross-worker SEQUENCE comparison
- *   (it has no number to compare). Such a topic is still contiguity-checked over
- *   the relay, which numbers frames independently of the publish seq.
- * - absent, or any other truthy value: the in-memory per-worker counter. A
- *   topic already in the map advances by one, exactly as every prior release
- *   did. A topic NEW to the map starts at 1 for a caller that passes no
- *   `bound`, and at the bound's carried floor plus one for a caller that does
- *   - the registry may forget a topic, but the counter it hands out must
- *   never repeat a number a client has already seen.
+ * - a NUMBER or BIGINT: stamp that explicit value (validated and projected by
+ *   {@link explicitSeqValue}) and do NOT advance the in-memory per-worker
+ *   counter. This is a cluster-authoritative seq a replay backend already
+ *   allocated (a Redis Lua INCR, a Postgres CTE, or the in-memory buffer's
+ *   own counter), so the broadcast wire seq and the replay seq occupy ONE
+ *   space instead of diverging. Explicit seqs originate on different workers
+ *   and interleave on arrival, so a caller that tracks a max-seen map must
+ *   record them through the monotone-max guard (`recordSeen`), never a bare
+ *   set - a bare set could regress the local max.
+ * - `false` or `null`: no seq. Returns null so the field is omitted from the
+ *   envelope and the topic stays out of the cross-worker SEQUENCE comparison
+ *   (it has no number to compare). Such a topic is still contiguity-checked
+ *   over the relay, which numbers frames independently of the publish seq.
+ *   `null` means no-seq rather than the counter because it is what a nullable
+ *   column or a JSON round trip hands a caller who KNOWS no seq - silently
+ *   drawing the counter for it would mark the topic non-authoritative behind
+ *   the caller's back.
+ * - absent (`undefined`) or `true`: the in-memory per-worker counter - the
+ *   zero-config default, so resume dedup works without the caller naming an
+ *   authority. A topic already in the map advances by one, exactly as every
+ *   prior release did. A topic NEW to the map starts at 1 for a caller that
+ *   passes no `bound`, and at the bound's carried floor plus one for a caller
+ *   that does - the registry may forget a topic, but the counter it hands out
+ *   must never repeat a number a client has already seen.
+ * - anything else - a string from a JSON column, an object, a symbol - THROWS
+ *   naming the legal forms. A string meant as a seq used to draw the counter
+ *   silently, which degraded resume dedup with no signal; the misuse now has
+ *   one failure mode instead of two.
  *
  * Pure with respect to inputs other than the supplied map (mirrors
  * `nextTopicSeq`), so a unit test can pass a fresh map per case.
  *
- * @param {{ seq?: boolean | number } | null | undefined} options
+ * @param {{ seq?: boolean | number | bigint | null } | null | undefined} options
  * @param {Map<string, number>} seqMap
  * @param {string} topic
  * @param {{ floorOf(topic: string): number, onInsert(topic: string): void } | undefined} [bound]
@@ -202,14 +376,14 @@ export function stampSeq(options, seqMap, topic, bound) {
  * resolution, same validation, same counter semantics as the options form,
  * which delegates here so the rule cannot drift.
  *
- * @param {boolean | number | undefined} opt
+ * @param {boolean | number | bigint | null | undefined} opt
  * @param {Map<string, number>} seqMap
  * @param {string} topic
  * @param {{ floorOf(topic: string): number, onInsert(topic: string): void } | undefined} [bound]
  * @returns {number | null}
  */
 export function stampSeqValue(opt, seqMap, topic, bound) {
-	if (opt === false) return null;
+	if (opt === false || opt === null) return null;
 	if (typeof opt === 'number') {
 		// An explicit seq is a cluster-authoritative value that must survive BOTH
 		// the JSON envelope and the 0x03 binary frame and drive the client's resume
@@ -219,9 +393,20 @@ export function stampSeqValue(opt, seqMap, topic, bound) {
 		// diverge from the varint, and poison the monotone-max guard. The in-memory
 		// counter and every shipped authority (Redis INCR) are 1-based; a 0-based
 		// external source must offset by 1. Fail fast rather than corrupt the wire.
-		if (Number.isInteger(opt) && opt >= 1) return opt;
-		throwInvalidSeq(opt);
+		// Inlined from explicitSeqValue so the overwhelmingly common number
+		// spelling keeps its single call frame on the hot path; SAFE integer,
+		// because the wire carries the value faithfully only inside that range.
+		if (Number.isSafeInteger(opt) && opt >= 1) return opt;
+		// Cold: let the shared validator pick between the two refusals, so the
+		// inlined arm cannot drift from it on which message a value earns.
+		// RETURNED, not called for effect: if the two predicates ever diverge
+		// so that the validator ACCEPTS a number this arm rejected, returning
+		// hands back the accepted value instead of throwing the legal-forms
+		// error over it - drift-proof in both directions rather than one.
+		return explicitSeqValue(opt);
 	}
+	if (typeof opt === 'bigint') return explicitSeqValue(opt);
+	if (opt !== undefined && opt !== true) throwInvalidSeq(opt);
 	// The in-memory per-worker counter, inlined from `nextTopicSeq` rather than
 	// called, so the common publish stays a single call frame (a wrapper call
 	// measured a few percent on the isolated publish-resolution micro-bench).

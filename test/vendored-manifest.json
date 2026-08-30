@@ -507,6 +507,9 @@
 		"file": "src/runtime/utils/egress-account.js"
 	},
 	{
+		"file": "src/runtime/utils/epoch.js"
+	},
+	{
 		"file": "src/runtime/utils/metrics-merge.js"
 	},
 	{
@@ -941,6 +944,9 @@
 	},
 	{
 		"file": "test/safe-url.test.js"
+	},
+	{
+		"file": "test/seq-stamp.test.js"
 	},
 	{
 		"file": "test/session.test.js"

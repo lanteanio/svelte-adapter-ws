@@ -263,6 +263,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Publish `seq` resolution accepts the values the lead adapter accepts and
+  refuses the ones it refuses. `seq: null` means no seq instead of quietly
+  drawing the in-memory counter, so a nullable column that arrives empty no
+  longer marks the topic authoritative behind the caller's back. A bigint
+  stamps as the explicit authority it spells rather than falling through to
+  the counter. A string or an object throws instead of degrading resume
+  dedup with nothing on the wire to notice by. A value above the
+  safe-integer range is refused rather than stamped onto a space that cannot
+  keep it distinct from its neighbour, which would strand a client watermark
+  that only ever advances on a strict greater-than. The batch entry lane
+  names the position of the entry that carried a bad value, and the send
+  lanes take an explicit authority only.
+
 - A cert-directory watcher error after arming (a renewal's symlink swap
   removing the watched directory, EPERM on teardown) no longer crashes the
   cluster primary; the watcher closes itself and the degraded state is
