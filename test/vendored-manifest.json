@@ -531,6 +531,9 @@
 		"file": "src/runtime/utils/posture-export.js"
 	},
 	{
+		"file": "src/runtime/utils/subscribe-policy.js"
+	},
+	{
 		"file": "src/runtime/utils/upgrade-admission.js"
 	},
 	{

@@ -263,6 +263,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `subscribe` that asks to recover from an offset without carrying a `ref`
+  is refused with an `error` frame carrying `RECOVER_REQUIRES_REF`, rather
+  than being dropped in silence. Every other refusal on the subscribe path
+  answers nothing when the frame carries no ref, which is the documented ack
+  policy, but it left a client replaying history unable to tell a served
+  resume from a swallowed one, so it carried on from an offset whose gap
+  nothing had reported. The refusal runs before the topic checks and the
+  authorization hooks, so nothing can eat it first. The batch form refuses
+  the whole frame with a null topic, because one ref covers every history
+  request its recover map names. Both the built runtime and
+  `svelte-adapter-ws/testing` answer it.
+
 - Publish `seq` resolution accepts the values the lead adapter accepts and
   refuses the ones it refuses. `seq: null` means no seq instead of quietly
   drawing the in-memory counter, so a nullable column that arrives empty no

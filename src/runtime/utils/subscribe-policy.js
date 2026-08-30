@@ -2,7 +2,7 @@
  * The subscribe decisions, as pure functions of explicit inputs.
  *
  * WHY THIS MODULE EXISTS. `src/runtime/handler.js` (production),
- * `src/testing.js` (the published `svelte-adapter-uws/testing` server) and
+ * `src/testing.js` (the published `svelte-adapter-ws/testing` server) and
  * `src/vite.js` (the dev server) each drive their own socket plumbing, and each
  * used to re-implement the same authorization decisions inline. Nothing
  * enforced that the three agreed, and they repeatedly did not: the same
@@ -116,6 +116,65 @@ export function wantsRecover({ hasResumeHook, recover }) {
 	return Boolean(hasResumeHook)
 		&& Boolean(recover) && typeof recover === 'object'
 		&& Number.isInteger(recover.offset) && recover.offset >= 0;
+}
+
+/**
+ * A subscribe asking for HISTORY with no way to receive the answer. The
+ * family's ack policy is deliberate silence for a ref-less subscribe - the
+ * client said it would not listen - but the recover lane is the one request
+ * whose reply the client MUST correlate: a caller replaying an offset and
+ * assuming it took, when the gate or a denial swallowed it, resumes into a
+ * silent gap. The family client refs every path including the reconnect
+ * resubscribe batch, so this is reachable only by a third-party client, and
+ * a third-party client asking for history without a correlation handle is a
+ * bug worth failing loudly. Refused with the uncorrelatable-error shape
+ * ({@link recoverRequiresRefFrame}) BEFORE any gate or hook can swallow it.
+ *
+ * Only when recover would actually engage: with no resume hook there is no
+ * history to miss, and a malformed recover object is ignored exactly as
+ * {@link wantsRecover} ignores it on the recover lane itself.
+ *
+ * @param {{ hasResumeHook: unknown, recover: unknown, ref: number | string | null }} args
+ * @returns {boolean}
+ */
+export function deniesRefLessRecover({ hasResumeHook, recover, ref }) {
+	return ref === null && wantsRecover({ hasResumeHook, recover });
+}
+
+/**
+ * The batch form of {@link deniesRefLessRecover}: the frame carries one `ref`
+ * and a per-topic recover map, so a single missing ref orphans every history
+ * request in it. Engages when any entry is a well-formed history request -
+ * including one naming a topic outside the frame's `topics` array, which asks
+ * for history it could never receive either way - and refuses the WHOLE
+ * frame, the same whole-frame shape the batch's other contract refusals
+ * take, decided before any entry is inspected for delivery. An empty map, or
+ * one carrying only malformed entries, keeps the frame's ref-less silence
+ * exactly as {@link wantsRecover} would have ignored it.
+ *
+ * @param {{ hasResumeHook: unknown, recover: unknown, ref: number | string | null }} args
+ * @returns {boolean}
+ */
+export function deniesRefLessRecoverBatch({ hasResumeHook, recover, ref }) {
+	if (ref !== null || !hasResumeHook || recover === null || typeof recover !== 'object') return false;
+	for (const topic of Object.keys(/** @type {Record<string, unknown>} */ (recover))) {
+		if (wantsRecover({ hasResumeHook, recover: /** @type {any} */ (recover)[topic] })) return true;
+	}
+	return false;
+}
+
+/**
+ * The uncorrelatable error frame answering a ref-less recover subscribe, in
+ * the established shape for frames that answer for no correlatable request
+ * (the control-frame-limit refusal is the pattern). Carries the topic (or
+ * null for a batch frame, which orphaned every topic it named at once) so a
+ * developer reading a client log can see which request died.
+ *
+ * @param {string | null} topic
+ * @returns {string}
+ */
+export function recoverRequiresRefFrame(topic) {
+	return '{"type":"error","code":"RECOVER_REQUIRES_REF","topic":' + JSON.stringify(topic) + '}';
 }
 
 /**

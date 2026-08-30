@@ -20,6 +20,7 @@ import { MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION
 import {
 	deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook,
 	deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked,
+	deniesRefLessRecover, deniesRefLessRecoverBatch, recoverRequiresRefFrame,
 	exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve
 } from '../utils/subscribe-policy.js';
 import { isValidWireTopic } from '../utils/topic.js';
@@ -752,6 +753,17 @@ function hasRefValue(ref) {
  */
 async function handleSubscribe(rawWs, facade, userData, msg) {
 	const ref = hasRefValue(msg.ref) ? msg.ref : null;
+	// A ref-less frame gets deliberate silence from every refusal below - the
+	// client said it would not listen. The recover lane is the exception: a
+	// caller replaying an offset and hearing nothing cannot tell "it took" from
+	// "something refused it", and resumes into a gap. Refused first, before any
+	// check or hook can swallow it, with the uncorrelatable-error shape.
+	if (deniesRefLessRecover({ hasResumeHook: wsModule.resume, recover: msg.recover, ref })) {
+		const payload = recoverRequiresRefFrame(msg.topic);
+		try { rawWs.send(payload); } catch { /* closed */ }
+		bumpOut(userData, payload);
+		return;
+	}
 	if (!isValidWireTopic(msg.topic, ALLOW_NON_ASCII_TOPICS)) {
 		sendDenied(rawWs, msg.topic, ref, 'INVALID_TOPIC', userData);
 		return;
@@ -889,6 +901,15 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
  */
 async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	const ref = hasRefValue(msg.ref) ? msg.ref : null;
+	// One ref covers the whole batch, so a missing one orphans every history
+	// request the frame's recover map names - refused whole, before any entry
+	// is inspected, like the batch's other contract refusals.
+	if (deniesRefLessRecoverBatch({ hasResumeHook: wsModule.resume, recover: msg.recover, ref })) {
+		const payload = recoverRequiresRefFrame(null);
+		try { rawWs.send(payload); } catch { /* closed */ }
+		bumpOut(userData, payload);
+		return;
+	}
 	const topics = msg.topics.slice(0, 256);
 	// Topics past the 256 cap are denied loudly, never silently dropped.
 	for (let i = 256; i < msg.topics.length; i++) {
