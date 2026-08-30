@@ -27,13 +27,21 @@
 			"types": "./src/connection.d.ts",
 			"default": "./src/connection.js"
 		},
-		"./safe-url": {
-			"types": "./src/safe-url.d.ts",
-			"default": "./src/safe-url.js"
-		},
 		"./client": {
 			"types": "./src/client.d.ts",
 			"default": "./src/client.js"
+		},
+		"./testing": {
+			"types": "./src/testing.d.ts",
+			"default": "./src/testing.js"
+		},
+		"./sim": {
+			"types": "./src/sim.d.ts",
+			"default": "./src/sim.js"
+		},
+		"./safe-url": {
+			"types": "./src/safe-url.d.ts",
+			"default": "./src/safe-url.js"
 		},
 		"./observability": {
 			"types": "./src/observability.d.ts",

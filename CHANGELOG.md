@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `./testing` and `./sim` subpaths: the in-process handler harness and
+  the deterministic network/cluster simulator, both running against this
+  runtime's own in-memory double, so a suite that imports them needs no
+  native package. An export-subpath gate holds the declared surface inside
+  the lead adapter's - a subpath declared only here fails the suite, because
+  an app that imports it could not move back - and checks that every declared
+  types and default target exists and imports.
+
 - The in-process cluster: `CLUSTER_WORKERS=<n|auto>` runs a supervising
   primary thread with one worker thread per slot on Linux, io workers
   binding the shared port themselves via SO_REUSEPORT and compute workers
