@@ -298,10 +298,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy, but it left a client replaying history unable to tell a served
   resume from a swallowed one, so it carried on from an offset whose gap
   nothing had reported. The refusal runs before the topic checks and the
-  authorization hooks, so nothing can eat it first. The batch form refuses
-  the whole frame with a null topic, because one ref covers every history
-  request its recover map names. Both the built runtime and
-  `svelte-adapter-ws/testing` answer it.
+  authorization hooks, so nothing can eat it first, and the built runtime and
+  `svelte-adapter-ws/testing` answer it alike. On the built runtime the
+  `subscribe-batch` form refuses the whole frame with a null topic, because
+  one ref covers every history request its recover map names.
 
 - Publish `seq` resolution accepts the values the lead adapter accepts and
   refuses the ones it refuses. `seq: null` means no seq instead of quietly
@@ -312,9 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dedup with nothing on the wire to notice by. A value above the
   safe-integer range is refused rather than stamped onto a space that cannot
   keep it distinct from its neighbour, which would strand a client watermark
-  that only ever advances on a strict greater-than. The batch entry lane
-  names the position of the entry that carried a bad value, and the send
-  lanes take an explicit authority only.
+  that only ever advances on a strict greater-than.
 
 - A cert-directory watcher error after arming (a renewal's symlink swap
   removing the watched directory, EPERM on teardown) no longer crashes the

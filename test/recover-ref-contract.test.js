@@ -130,6 +130,18 @@ describe('a ref-less recover subscribe is refused loudly', () => {
 		c.close();
 	});
 
+	it('refuses ahead of the topic checks, which are silent without a ref too', async () => {
+		// The whole point of refusing FIRST. Moved below the topic validation,
+		// an invalid topic would take the silent INVALID_TOPIC path and the
+		// history request would die exactly the way it used to.
+		const c = connect();
+		await c.open();
+		c.send({ type: 'subscribe', topic: 'not a valid topic\n', recover: { offset: 0 } });
+		const frame = await c.next((f) => f.json?.code === 'RECOVER_REQUIRES_REF');
+		expect(frame.json.topic).toBe('not a valid topic\n');
+		c.close();
+	});
+
 	it('does not refuse the same request once it carries a ref', async () => {
 		const c = connect();
 		await c.open();
@@ -210,6 +222,39 @@ describe('the harness mirror answers the same refusal', () => {
 			.toEqual({ type: 'error', code: 'RECOVER_REQUIRES_REF', topic: 'room' });
 		expect(frames.some((f) => f?.type === 'subscribed' && f.topic === 'room')).toBe(false);
 
+		ws.close();
+	});
+});
+
+// The refusal is scoped to a server that HAS history to miss. With no resume
+// hook a recover field asks for something nothing could serve, so the frame
+// keeps the ordinary ref-less silence - and wiring the predicate's
+// hasResumeHook to a constant instead of the hook would pass every case above.
+describe('a server with no resume hook keeps the ref-less silence', () => {
+	/** @type {any} */
+	let noResume;
+
+	afterAll(async () => { await noResume?.close(); noResume = null; });
+
+	it('does not refuse a ref-less recover it could never have answered', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		noResume = await createTestServer({ handler: { message() {} } });
+		const ws = new WebSocket(noResume.wsUrl);
+		/** @type {any[]} */
+		const frames = [];
+		ws.on('message', (raw) => {
+			try { frames.push(JSON.parse(raw.toString())); } catch { /* non-JSON */ }
+		});
+		await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+
+		ws.send(JSON.stringify({ type: 'subscribe', topic: 'room', recover: { offset: 0 } }));
+		ws.send(JSON.stringify({ type: 'subscribe', topic: 'quiesce', ref: 11 }));
+		await new Promise((res) => {
+			const tick = () => (frames.some((f) => f?.ref === 11) ? res(undefined) : setTimeout(tick, 10));
+			tick();
+		});
+
+		expect(frames.some((f) => f?.code === 'RECOVER_REQUIRES_REF')).toBe(false);
 		ws.close();
 	});
 });
