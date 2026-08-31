@@ -44,11 +44,58 @@ describe('declared subpaths stay inside the lead surface', () => {
 		).toEqual([]);
 	});
 
+	// The other direction, and the one a drift gate forgets: refusing invented
+	// subpaths says nothing about MISSING ones, so the surface can shrink
+	// silently. Deleting a subpath from the export map used to pass every
+	// assertion in this file, which made "all of the lead's subpaths ship" a
+	// hand count wearing a test's clothes.
+	it('declares every subpath the lead declares', () => {
+		const lead = exportsOf(uwsRoot);
+		const missing = Object.keys(lead).filter((subpath) => !(subpath in ours));
+		expect(
+			missing,
+			'the lead declares these and this package does not; an app that imports ' +
+			'one cannot move here, which is the same broken promise in the other ' +
+			'direction'
+		).toEqual([]);
+	});
+
 	it('points every shared subpath at the same relative targets as the lead', () => {
 		const lead = exportsOf(uwsRoot);
 		for (const [subpath, condition] of Object.entries(ours)) {
 			expect(condition, `${subpath} target shape`).toEqual(lead[subpath]);
+			// ORDER, not just content. Node and TypeScript resolve export
+			// conditions in declaration order and take the first match, so a
+			// map with `default` ahead of `types` type-checks as `any` while
+			// deep-equalling a correct one - toEqual cannot see it.
+			expect(
+				Object.keys(condition),
+				`${subpath} condition order (first match wins at resolution time)`
+			).toEqual(Object.keys(lead[subpath]));
 		}
+	});
+
+	// An export map is only as good as the tarball behind it. `files` decides
+	// what npm actually ships, and nothing else in this suite reads it: with
+	// `src` dropped, every subpath above still resolves from the working tree
+	// and every one of them 404s for an installed consumer.
+	it('ships every declared target inside the packaged files', () => {
+		const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+		const roots = (pkg.files ?? []).map((entry) => entry.replace(/^\.\//, '').replace(/\/$/, ''));
+		const uncovered = [];
+		for (const [subpath, condition] of Object.entries(ours)) {
+			for (const target of Object.values(condition)) {
+				const rel = String(target).replace(/^\.\//, '');
+				if (!roots.some((root) => rel === root || rel.startsWith(root + '/'))) {
+					uncovered.push(`${subpath} -> ${target}`);
+				}
+			}
+		}
+		expect(
+			uncovered,
+			'these export targets are outside every `files` entry, so the published ' +
+			'tarball would not contain them'
+		).toEqual([]);
 	});
 });
 

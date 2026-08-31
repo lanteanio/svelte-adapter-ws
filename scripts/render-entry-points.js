@@ -54,8 +54,19 @@ export function spliceEntryPoints(readme) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	const readmePath = path.join(repoRoot, 'README.md');
-	const next = spliceEntryPoints(readFileSync(readmePath, 'utf8'));
-	writeFileSync(readmePath, next);
+	const current = readFileSync(readmePath, 'utf8');
+	const next = spliceEntryPoints(current);
 	const count = Object.keys(JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).exports).length;
-	console.log(`README.md entry-point catalog rendered (${count} entries).`);
+	// --check verifies instead of writing, so a CI invocation cannot "pass" by
+	// quietly regenerating the very file it was asked to police.
+	if (process.argv.includes('--check')) {
+		if (next !== current) {
+			console.error('README.md entry-point catalog is out of date; run: node scripts/render-entry-points.js');
+			process.exit(1);
+		}
+		console.log('README.md entry-point catalog is current (' + count + ' entries).');
+	} else {
+		writeFileSync(readmePath, next);
+		console.log('README.md entry-point catalog rendered (' + count + ' entries).');
+	}
 }

@@ -163,6 +163,8 @@
 	"scripts": {
 		"probe": "node probe/ws-api-facts.mjs",
 		"check:determinism": "node scripts/check-determinism.js",
+		"check:errors": "node scripts/render-error-docs.js --check",
+		"check:entry-points": "node scripts/render-entry-points.js --check",
 		"check:publish": "publint && attw --pack . --profile esm-only",
 		"test": "vitest run",
 		"test:watch": "vitest",

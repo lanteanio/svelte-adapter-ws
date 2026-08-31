@@ -8,7 +8,7 @@
 // which is exactly each entry's `anchor` field - the check below keeps that
 // true so a registry edit cannot silently break its own help link.
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ADAPTER_ERROR_REGISTRY } from '../src/runtime/error-registry.js';
@@ -41,5 +41,21 @@ for (const entry of ADAPTER_ERROR_REGISTRY) {
 	if (entry.link) lines.push(`Further reading: ${entry.link}`, '');
 }
 
-writeFileSync(path.join(repoRoot, 'docs', 'errors.md'), lines.join('\n') + '\n');
-console.log(`docs/errors.md rendered (${ADAPTER_ERROR_REGISTRY.length} entries).`);
+const outPath = path.join(repoRoot, 'docs', 'errors.md');
+const rendered = lines.join('\n') + '\n';
+
+// --check verifies instead of writing. Without it a CI step spelled
+// `render-error-docs.js --check` regenerates the file and reports success, so
+// a stale reference passes the very gate meant to catch it. An unknown flag
+// that silently does the destructive thing is worse than no flag at all.
+if (process.argv.includes('--check')) {
+	const current = existsSync(outPath) ? readFileSync(outPath, 'utf8').split('\r\n').join('\n') : null;
+	if (current !== rendered) {
+		console.error('docs/errors.md is out of date; run: node scripts/render-error-docs.js');
+		process.exit(1);
+	}
+	console.log('docs/errors.md is current (' + ADAPTER_ERROR_REGISTRY.length + ' entries).');
+} else {
+	writeFileSync(outPath, rendered);
+	console.log('docs/errors.md rendered (' + ADAPTER_ERROR_REGISTRY.length + ' entries).');
+}
