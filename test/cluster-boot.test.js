@@ -92,6 +92,17 @@ describe('cluster configuration refusals', () => {
 		expect(run.out()).not.toContain('Worker thread');
 	});
 
+	it('refuses PORT=0 under CLUSTER_WORKERS, where a shared port cannot be ephemeral', async () => {
+		// Every io worker binds the port itself, so an ephemeral one is a
+		// different port per worker: the fleet comes up green and unreachable.
+		// Refused with the value checks, ahead of the platform capability
+		// checks, because the contradiction holds on every platform.
+		const run = spawnPayload({ CLUSTER_WORKERS: '2', PORT: '0' });
+		expect(await run.exited).toBe(1);
+		expect(run.err()).toContain('PORT=0 cannot be combined with CLUSTER_WORKERS');
+		expect(run.out()).not.toContain('Worker thread');
+	});
+
 	it('refuses a compute count that leaves no I/O worker', async () => {
 		const run = spawnPayload({ CLUSTER_WORKERS: '2' }, { replace: { WORKERS_CONFIG: JSON.stringify({ compute: 2 }) } });
 		expect(await run.exited).toBe(1);

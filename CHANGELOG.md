@@ -274,6 +274,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `PORT=0` with `CLUSTER_WORKERS` set refuses the boot. Every io worker binds
+  the shared port itself, so an ephemeral port hands each worker a different
+  kernel-assigned one: the fleet came up green, logged success, and served on
+  as many ports as it had workers, none of which anything upstream knew to
+  reach. Refused with the other value contradictions, ahead of the platform
+  checks, because it holds on every platform.
+
 - The cluster sequence gate takes every spelling the stamp takes. `seq: null`
   and a bigint authority reached the stamp as legal values but were refused by
   the clustered gate, which answered a topology error about relay settings and

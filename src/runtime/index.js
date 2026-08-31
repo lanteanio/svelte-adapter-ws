@@ -254,6 +254,22 @@ if (is_primary) {
 			`${cluster_mode}'. Use 'reuseport' (Linux), or unset CLUSTER_MODE.`));
 		process.exit(1);
 	}
+	// An ephemeral port and a shared listening port are mutually exclusive by
+	// construction. Every io worker calls listen() itself with reusePort, so
+	// PORT=0 gets each of them its OWN kernel-assigned port: the fleet boots
+	// green, reports success, and serves on as many ports as there are workers,
+	// none of which anything upstream knows to reach. Refused here with the
+	// rest of the capacity misconfigurations rather than discovered in
+	// production, because nothing downstream can notice it.
+	if (port === 0) {
+		console.error(
+			'[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS: every io worker ' +
+			'binds the shared port itself, so an ephemeral port would give each worker a different ' +
+			'one and no worker would be reachable at a known address. Set PORT to a fixed port, or ' +
+			'unset CLUSTER_WORKERS to run a single process on an ephemeral port.'
+		);
+		process.exit(1);
+	}
 	if (process.platform !== 'linux') {
 		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.CLUSTER_CONFIG_REUSEPORT,
 			`${process.platform}). Deploy on Linux, or run one process per core under your process manager.`));
