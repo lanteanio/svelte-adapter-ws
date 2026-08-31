@@ -1,7 +1,7 @@
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders } from './runtime/utils/request-headers.js';
-import { stampSeq, throwInvalidSeq, processEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
+import { stampSeq, resolveEntrySeq, processEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
 import { mergeSamples } from './runtime/utils/metrics-merge.js';
 import { buildBinaryFrame, allocWireId, wireIdAnnounce, createCapCounts, createLeaseState, leaseGrantFrame, leaseReportedSaturation, controlFrameTooLargeFrame, DEFAULT_GRANT } from './runtime/wire.js';
@@ -23,7 +23,7 @@ import {
 	assertSharedOptionValues,
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
-import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority } from './runtime/handler/cluster-sequence-policy.js';
+import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues } from './runtime/handler/cluster-sequence-policy.js';
 import { createServer as createHttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { CLOSED_MESSAGE } from './runtime/handler/ws-facade.js';
@@ -1705,20 +1705,21 @@ export async function createTestServer(options = {}) {
 					const entry = entries[i];
 					statelessDatas[i] = entry.data;
 					statelessExcludes[i] = entry.excludeWs;
-					// The entry-seq lane as the production platform resolves it: a
-					// NUMBER is an explicit per-entry authority, validated while the
-					// batch is still whole and taking the clustered refusal on the
-					// first one; every other value falls through to the shared
-					// batch options.
-					const entrySeqStateless = entry.seq;
-					if (typeof entrySeqStateless === 'number') {
-						if (!Number.isInteger(entrySeqStateless) || entrySeqStateless < 1) throwInvalidSeq(entrySeqStateless);
-						if (!statelessSawExplicit) {
-							assertBatchEntrySequenceAuthority(opts);
-							statelessSawExplicit = true;
+					// Same resolver as the stateful lane above and as production:
+					// one table, so the two lanes of this harness cannot answer
+					// a call differently from each other either.
+					const resolvedStateless = resolveEntrySeq(entry.seq, i);
+					if (resolvedStateless !== undefined) {
+						if (typeof resolvedStateless === 'number') {
+							if (!statelessSawExplicit) {
+								assertBatchEntrySequenceAuthority(opts);
+								statelessSawExplicit = true;
+							}
+						} else if (resolvedStateless === true) {
+							assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);
 						}
 						if (statelessSeqs === null) statelessSeqs = new Array(count);
-						statelessSeqs[i] = entrySeqStateless;
+						statelessSeqs[i] = resolvedStateless;
 					}
 				}
 				// One admission for the whole batch, mirroring production:
@@ -1787,20 +1788,26 @@ export async function createTestServer(options = {}) {
 					excludes[i] = exclude;
 					anyExclude = true;
 				}
-				// The entry-seq lane as the production platform resolves it: a
-				// NUMBER is an explicit per-entry authority, validated while the
-				// batch is still whole and taking the clustered refusal on the
-				// first one; every other value falls through to the shared
-				// batch options.
-				const entrySeq = entry.seq;
-				if (typeof entrySeq === 'number') {
-					if (!Number.isInteger(entrySeq) || entrySeq < 1) throwInvalidSeq(entrySeq);
-					if (!sawExplicitEntrySeq) {
-						assertBatchEntrySequenceAuthority(opts);
-						sawExplicitEntrySeq = true;
+				// The entry-seq lane as the production platform resolves it, and
+				// through the same resolver rather than a second copy of the
+				// table: number and bigint are the explicit authority, true is
+				// the counter, false and null are no-seq, undefined inherits the
+				// shared batch options, and anything else refuses the batch
+				// while it is still whole. A mirror that restates the table is
+				// how the harness starts answering a call differently from the
+				// production surface it exists to stand in for.
+				const resolved = resolveEntrySeq(entry.seq, i);
+				if (resolved !== undefined) {
+					if (typeof resolved === 'number') {
+						if (!sawExplicitEntrySeq) {
+							assertBatchEntrySequenceAuthority(opts);
+							sawExplicitEntrySeq = true;
+						}
+					} else if (resolved === true) {
+						assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);
 					}
 					if (entrySeqs === null) entrySeqs = new Array(count);
-					entrySeqs[i] = entrySeq;
+					entrySeqs[i] = resolved;
 				}
 			}
 			// Egress admission for the whole batch before the stamping loop, as

@@ -26,7 +26,7 @@ import {
 import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
-	throwInvalidSeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
+	resolveEntrySeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
@@ -847,18 +847,34 @@ export const platform = {
 			const entry = entries[i];
 			datas[i] = entry.data;
 			excludes[i] = entry.excludeWs;
-			const entrySeq = entry.seq;
-			if (typeof entrySeq === 'number') {
-				if (!Number.isInteger(entrySeq) || entrySeq < 1) throwInvalidSeq(entrySeq);
-				// An explicit entry seq is the per-entry twin of
-				// publishWire({ seq: N }) and takes the same clustered rule:
-				// the external allocator must also be the fan-out, proven by
-				// relay: false. Checked once per batch, on the first number.
-				if (!sawEntrySeq) {
-					assertBatchEntrySequenceAuthority(opts);
-					sawEntrySeq = true;
+			// The entry lane speaks the same table as the options lane, and
+			// resolveEntrySeq is the ONE spelling of it for every surface:
+			// number and bigint are the explicit authority, true is the
+			// counter, false and null are no-seq - each an OVERRIDE of the
+			// shared options for this entry - undefined inherits, and anything
+			// else refuses the whole batch HERE, in the pre-pass, before the
+			// egress ceiling has answered and before a single entry is stamped.
+			// Hand-rolling the number arm here is what let an over-range value
+			// through this pass and into the stamping loop, where the throw
+			// landed after earlier entries had already been stamped.
+			const resolved = resolveEntrySeq(entry.seq, i);
+			if (resolved !== undefined) {
+				if (typeof resolved === 'number') {
+					// An explicit entry seq is the per-entry twin of
+					// publishWire({ seq: N }) and takes the same clustered rule:
+					// the external allocator must also be the fan-out, proven by
+					// relay: false. Checked once per batch, on the first number.
+					if (!sawEntrySeq) {
+						assertBatchEntrySequenceAuthority(opts);
+						sawEntrySeq = true;
+					}
+				} else if (resolved === true) {
+					// An entry drawing the per-worker counter takes the cluster's
+					// counter refusal up front, whole-batch-or-nothing, the same
+					// rule the shared options' counter form takes at the gate.
+					assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);
 				}
-				entrySeqs[i] = entrySeq;
+				entrySeqs[i] = resolved;
 			}
 		}
 		// Egress admission for the whole batch, before anything is stamped.

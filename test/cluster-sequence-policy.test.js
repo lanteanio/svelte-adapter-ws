@@ -205,7 +205,12 @@ describe('cluster sequence authority policy', () => {
 		// may carry - must stamp nothing, not quietly advance the per-worker
 		// counter it renounced and relay the forked number cluster-wide.
 		expect(wireBatch).toContain(': (opts != null ? opts.seq : undefined)');
-		expect(wireBatch).toContain('throwInvalidSeq(');
+		// The entry lane resolves through the SHARED resolver, not a
+		// hand-rolled number check: restating the table here is what let an
+		// over-range value past the pre-pass and into the stamping loop,
+		// where the throw arrives after earlier entries are already stamped.
+		expect(wireBatch).toContain('resolveEntrySeq(entry.seq, i)');
+		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
 		// batch() snapshots each message's option fields once and judges the
 		// snapshot, then hands publish() the SAME snapshot - so the atomic
 		// pre-pass and the per-message stamp cannot disagree.
