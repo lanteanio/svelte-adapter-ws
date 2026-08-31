@@ -225,3 +225,54 @@ describe('cluster sequence authority policy', () => {
 			.toBe(2);
 	});
 });
+
+// The gate and the stamp speak ONE table. Every spelling the stamp learned
+// has to reach this gate too: a spelling the stamp accepts and the gate
+// refuses hands the caller a topology message about relay settings and worker
+// counters for what is really a value they were told is legal, and a spelling
+// the gate accepts while the batch surface stays blind to it is worse - it
+// stamps one authority onto every entry of a batch and calls that a sequence.
+describe('the gate carries every spelling the stamp accepts', () => {
+	const cluster = { totalWorkers: 3, ioWorkers: 2 };
+
+	it('takes null as a no-seq form, the way false is one', () => {
+		expect(clusterSequenceValuesAccepted(null, undefined, cluster)).toBe(true);
+		expect(clusterSequenceValuesAccepted(false, undefined, cluster)).toBe(true);
+		expect(() => assertClusterSequenceAuthority({ seq: null }, cluster)).not.toThrow();
+	});
+
+	it('takes a bigint authority on the same terms as the number spelling', () => {
+		expect(clusterSequenceValuesAccepted(5n, false, cluster)).toBe(true);
+		expect(clusterSequenceValuesAccepted(5, false, cluster)).toBe(true);
+		// The authority must also be the fan-out, whichever way it is spelled.
+		expect(clusterSequenceValuesAccepted(5n, true, cluster)).toBe(false);
+		expect(clusterSequenceValuesAccepted(5, true, cluster)).toBe(false);
+		// Non-positive is not an authority in either spelling.
+		expect(clusterSequenceValuesAccepted(0n, false, cluster)).toBe(false);
+		expect(clusterSequenceValuesAccepted(0, false, cluster)).toBe(false);
+	});
+
+	it('refuses a bigint on the batch surface, where one options seq cannot number many entries', () => {
+		// The whole point of the batch refusal: `options.seq` is ONE value and
+		// a batch needs one per entry. A spelling that slips past it does not
+		// fail, it stamps the same seq on every entry and calls the result a
+		// sequence - so the bigint spelling has to refuse exactly as the
+		// number spelling does.
+		expect(() => assertBatchSequenceAuthority({ seq: 5n }, {})).toThrow(TypeError);
+		expect(() => assertBatchSequenceAuthority({ seq: 5n }, {})).toThrow(BATCH_SEQUENCE_ERROR);
+		expect(() => assertBatchSequenceAuthority({ seq: 5 }, {})).toThrow(BATCH_SEQUENCE_ERROR);
+		// The no-seq forms stay legal on the batch surface.
+		expect(() => assertBatchSequenceAuthority({ seq: false }, {})).not.toThrow();
+		expect(() => assertBatchSequenceAuthority({ seq: null }, {})).not.toThrow();
+	});
+
+	it('agrees with the stamp on every spelling, so neither can drift alone', () => {
+		for (const seq of [false, null, 5, 5n, true, undefined]) {
+			const stampTook = (() => {
+				try { stampSeqValue(seq, new Map(), 't'); return true; } catch { return false; }
+			})();
+			// Off-cluster the gate takes everything the stamp takes.
+			expect(clusterSequenceValuesAccepted(seq, false, { totalWorkers: 1 }), String(seq)).toBe(stampTook);
+		}
+	});
+});

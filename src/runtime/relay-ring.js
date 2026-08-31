@@ -384,8 +384,15 @@ export class RingReader {
 		let buf = /** @type {Uint8Array} */ (this.acc);
 		let offset = 0;
 		while (buf.length - offset >= 4) {
+			// The unsign applies to the WHOLE chain, not to the top byte alone:
+			// `|` yields a signed Int32, so unsigning one operand and then or-ing
+			// it back in returns a negative length for any prefix at or above
+			// 2^31. A negative length walks past every guard below - it is not
+			// greater than the ceiling, it is not longer than the bytes in hand -
+			// and then drives `offset` deeply negative, which is the corrupt
+			// stream this reader exists to refuse.
 			const len =
-				buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | ((buf[offset + 3] << 24) >>> 0);
+				(buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24)) >>> 0;
 			if (len > this.maxFrameBytes) {
 				// Decided from the length PREFIX, before waiting for the rest: the
 				// point is not to allocate for it. Stopping the reader is the honest

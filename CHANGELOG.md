@@ -274,6 +274,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The cluster sequence gate takes every spelling the stamp takes. `seq: null`
+  and a bigint authority reached the stamp as legal values but were refused by
+  the clustered gate, which answered a topology error about relay settings and
+  worker counters for a value the publish contract documents as fine. Worse on
+  the batch surface: the refusal that stops one `options.seq` from numbering
+  many entries only tested the number spelling, so a bigint slipped past it and
+  stamped the same sequence onto every entry of the batch. That is not a
+  failure a caller can see - it is a batch whose entries all claim one seq,
+  which collapses a subscriber's watermark and makes resume discard the rest.
+- The relay ring refuses a length prefix at or above 2^31 instead of decoding
+  it negative. The unsign was applied to the top byte alone rather than to the
+  whole or-chain, so the result came back as a signed integer: a negative
+  length is not greater than the frame ceiling and not longer than the bytes in
+  hand, so it passed both guards, then drove the parse offset deeply negative
+  and span the reader through half a billion empty frames. That is exactly the
+  corrupt stream the ceiling exists to refuse.
+
 - A `subscribe` that asks to recover from an offset without carrying a `ref`
   is refused with an `error` frame carrying `RECOVER_REQUIRES_REF`, rather
   than being dropped in silence. Every other refusal on the subscribe path

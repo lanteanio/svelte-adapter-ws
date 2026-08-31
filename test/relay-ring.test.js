@@ -754,3 +754,76 @@ describe('cross-thread (real worker_threads)', () => {
 		}
 	}, 15000);
 });
+
+// The length prefix arrives from another thread's memory. It is process-internal
+// and normally written by our own RingWriter, but the reader's oversized guard
+// exists precisely for the case where it is not what we wrote - and a guard that
+// a hostile value walks straight past is not a guard.
+describe('a corrupt length prefix cannot walk past the oversized guard', () => {
+	// Data starts after the 64-byte header, and a fresh ring puts the first
+	// frame at data offset 0, so the frame's 4-byte length prefix is the first
+	// four bytes of the data area.
+	const PREFIX_AT = 64;
+
+	/** @param {SharedArrayBuffer} sab @param {number} value */
+	function forgeLengthPrefix(sab, value) {
+		const bytes = new Uint8Array(sab);
+		bytes[PREFIX_AT] = value & 0xff;
+		bytes[PREFIX_AT + 1] = (value >>> 8) & 0xff;
+		bytes[PREFIX_AT + 2] = (value >>> 16) & 0xff;
+		bytes[PREFIX_AT + 3] = (value >>> 24) & 0xff;
+	}
+
+	it('refuses a prefix with the top bit set instead of decoding it negative', async () => {
+		const sab = createRelayRingBuffer(4096);
+		const writer = new RingWriter(sab);
+		writer.write(encodePublishFrame('t', '{"n":1}', false, 1, undefined, undefined, undefined));
+		writer.notify();
+
+		// 2^31: the smallest value whose top bit is set. Decoded as a signed
+		// Int32 this is -2147483648, which is not greater than any ceiling and
+		// not longer than the bytes in hand, so it passes both guards and then
+		// drives the parse offset negative.
+		forgeLengthPrefix(sab, 0x80000000);
+
+		/** @type {any[]} */
+		const oversized = [];
+		/** @type {any[]} */
+		const frames = [];
+		const reader = new RingReader(sab, (f) => frames.push(f), {
+			maxFrameBytes: 64 * 1024,
+			onOversized: (e) => oversized.push(e)
+		});
+		reader.start();
+
+		await until(() => oversized.length > 0);
+		expect(oversized[0].declaredBytes).toBe(2147483648);
+		expect(oversized[0].declaredBytes).toBeGreaterThan(oversized[0].maxFrameBytes);
+		// Refusing means stopping, not emitting the frames a negative offset
+		// would have manufactured out of the same four bytes.
+		expect(frames).toEqual([]);
+		expect(reader.closed).toBe(true);
+	});
+
+	it('still accepts the largest prefix that is genuinely under the ceiling', async () => {
+		const sab = createRelayRingBuffer(4096);
+		const writer = new RingWriter(sab);
+		writer.write(encodePublishFrame('t', '{"n":1}', false, 7, undefined, undefined, undefined));
+		writer.notify();
+
+		/** @type {any[]} */
+		const oversized = [];
+		/** @type {any[]} */
+		const seen = [];
+		const reader = new RingReader(sab, (f) => seen.push(decodeRelayFrame(f).seq), {
+			maxFrameBytes: 64 * 1024,
+			onOversized: (e) => oversized.push(e)
+		});
+		reader.start();
+
+		await until(() => seen.length === 1);
+		expect(seen).toEqual([7]);
+		expect(oversized).toEqual([]);
+		reader.close();
+	});
+});
