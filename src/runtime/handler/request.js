@@ -18,10 +18,15 @@ const IS_WIN32 = process.platform === 'win32';
 
 /**
  * Realtime HTTP routes, installed by handler.js when the websocket lane is
- * built in: the 426 answer on the WebSocket path and the authenticate
- * preflight endpoint. Null when realtime is off - the checks then cost one
- * comparison.
- * @type {{ wsPath: string, tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) => boolean } | null}
+ * built in: the GET answer on the WebSocket path, the upgrade gate's waiting
+ * room, and the authenticate preflight endpoint. Null when realtime is off -
+ * the checks then cost one comparison.
+ * @type {{
+ *   wsPath: string,
+ *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) => boolean,
+ *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => void,
+ *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean
+ * } | null}
  */
 let realtimeRoutes = null;
 
@@ -79,12 +84,17 @@ export function handleRequest(req, res) {
 	if (realtimeRoutes !== null) {
 		// A plain GET on the WebSocket path is a client that forgot (or was
 		// stripped of) its upgrade headers - answer with the status that says
-		// so instead of rendering the app's 404.
+		// so instead of rendering the app's 404. Under a full upgrade gate the
+		// same URL is a browser NAVIGATION into a queue, so the answer is the
+		// capacity refusal the upgrade door would have given.
 		if (pathname === realtimeRoutes.wsPath && isGetLike) {
-			res.writeHead(426, { 'content-type': 'text/plain', upgrade: 'websocket' });
-			res.end('WebSocket upgrade required');
+			realtimeRoutes.serveWsPathGet(req, res, pathname, search);
 			return;
 		}
+		// The waiting room's poll and holding page. Both are read-only and
+		// answer before the static index so a same-named asset can never
+		// shadow the queue a browser is sitting in.
+		if (isGetLike && realtimeRoutes.tryWaitingRoomRoute(req, res, pathname, search)) return;
 		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname)) return;
 	}
 

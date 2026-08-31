@@ -133,9 +133,27 @@ Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `staticCacheControl`, `staticDotfiles`, `warmup`, `tracing`, and the
 `websocket` block (`handler`, `path`, `authPath`, `maxPayloadLength`,
 `idleTimeout`, `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
-`allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `messageAdmission`,
-`pressure`, `egress`, `primaryInit`, `workers`, and the shared policy flags).
-The typed surface in `src/index.d.ts` is the reference.
+`allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `upgradeAdmission`,
+`messageAdmission`, `pressure`, `egress`, `primaryInit`, `workers`, and the
+shared policy flags). The typed surface in `src/index.d.ts` is the reference.
+
+`websocket.upgradeAdmission` gates NEW handshakes; an open connection is never
+touched. `maxConcurrent` caps upgrades in flight, `maxConnections` caps
+reserved-plus-live sockets with a permit held until close, `perTickBudget`
+paces how many handshakes complete per event-loop tick behind a finite
+`maxDeferred` queue, and `cursorLane.fraction` reserves part of the concurrent
+ceiling for the cursor-only lane so a flood of cursor reconnects cannot starve
+the main lane. Whenever a ceiling is set the refusal is content-negotiated: a
+browser navigation to the WebSocket path (or to `waitingRoom.path`, default
+`/__waiting-room`) gets a self-polling holding page that reloads when a slot
+frees, polling `waitingRoom.admitCheckPath` (default `/__admit-check`), while
+WebSocket clients and non-HTML requests keep `503` with a jittered
+`Retry-After`. `waitingRoom: false` drops the polling page and answers an HTML
+navigation with a minimal accessible `503` instead. `waitingRoom.template`
+takes a full HTML document with `{{token}}` substitution, and
+`waitingRoom.renderer` takes a module path that renders per request for
+locale-aware pages; the two are mutually exclusive and both are validated when
+the adapter is configured.
 
 `websocket.egress` caps publish egress per accounting window: `topic` and
 `tenant` ceilings over `messages`, `bytes` and `deliveries`, with `windowMs`,

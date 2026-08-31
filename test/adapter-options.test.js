@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import adapter, { KNOWN_ADAPTER_OPTION_KEYS, unknownAdapterOptionKeys, renderRefusedDotfileWarning } from '../src/index.js';
+import adapter, { KNOWN_ADAPTER_OPTION_KEYS, unknownAdapterOptionKeys, unknownWebsocketOptionKeys, renderRefusedDotfileWarning, serializeWsOptions } from '../src/index.js';
 
 describe('adapter factory options', () => {
 	it('builds an adapter object with the family name and support surface', () => {
@@ -29,7 +29,20 @@ describe('adapter factory options', () => {
 		expect(() => adapter({ websocket: false })).not.toThrow();
 		expect(() => adapter({ websocket: { maxPayloadLength: 2 * 1024 * 1024, idleTimeout: 60 } })).not.toThrow();
 		expect(() => adapter({ websocket: { pressure: { publishRatePerSec: 500 } } })).not.toThrow();
-		for (const key of ['metrics', 'upgradeAdmission', 'protection', 'adminPath', 'postureExport']) {
+		expect(() => adapter({ websocket: { upgradeAdmission: { maxConcurrent: 500 } } })).not.toThrow();
+		// The admission ceilings are judged where the section is serialized
+		// into the build: a value the gate cannot read leaves every ceiling
+		// unset, so it fails the build instead of silently disabling the gate.
+		expect(() => serializeWsOptions({ upgradeAdmission: 500 })).toThrow(/upgradeAdmission must be an object/);
+		expect(() => serializeWsOptions({ upgradeAdmission: { maxConcurrent: -1 } })).toThrow(/maxConcurrent/);
+		expect(() => serializeWsOptions({ upgradeAdmission: { maxConcurrent: 500 } })).not.toThrow();
+		// A typo one level down is reported rather than dropped - the gate it
+		// meant to configure would otherwise stay off in silence.
+		expect(unknownWebsocketOptionKeys({ upgradeAdmission: { maxConcurent: 500 } }))
+			.toEqual(['upgradeAdmission.maxConcurent']);
+		expect(unknownWebsocketOptionKeys({ upgradeAdmission: { waitingRoom: { pollIntervalMs: 3000 } } }))
+			.toEqual([]);
+		for (const key of ['metrics', 'protection', 'adminPath', 'postureExport']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not available yet/);
 		}

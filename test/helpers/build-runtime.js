@@ -194,6 +194,7 @@ export class Server {
  *   replace?: Partial<Record<string, string>>,
  *   serverSource?: string,
  *   manifestSource?: string,
+ *   waitingRoomRendererSource?: string,
  *   files?: Record<string, string | Buffer>,
  *   mtime?: Date
  * }} [options]
@@ -210,6 +211,7 @@ export function buildRuntime(options = {}) {
 		KIT_NODE: './server/kit-node.js',
 		WS_HANDLER: './server/ws-handler.js',
 		TRACING_PROVIDER: './tracing-provider.js',
+		WAITING_ROOM_RENDERER: './server/waiting-room-renderer.js',
 		ENV_PREFIX: JSON.stringify(''),
 		PRECOMPRESS: JSON.stringify(true),
 		WS_ENABLED: JSON.stringify(false),
@@ -243,6 +245,12 @@ export function buildRuntime(options = {}) {
 	mkdirSync(path.join(dir, 'server'), { recursive: true });
 	writeFileSync(path.join(dir, 'server', 'index.js'), options.serverSource ?? FIXTURE_SERVER);
 	writeFileSync(path.join(dir, 'server', 'ws-handler.js'), options.wsHandlerSource ?? '// No WebSocket handler configured\n');
+	// The waiting-room renderer stub adapt() writes when no renderer module is
+	// configured; a test that ships one overrides with waitingRoomRendererSource.
+	writeFileSync(
+		path.join(dir, 'server', 'waiting-room-renderer.js'),
+		options.waitingRoomRendererSource ?? 'export default null;\n'
+	);
 	// The primaryInit stub adapt() writes when the option is absent; a cluster
 	// test overrides with primaryInitSource.
 	writeFileSync(path.join(dir, 'server', 'primary-init.js'), options.primaryInitSource ?? 'export default null;\n');

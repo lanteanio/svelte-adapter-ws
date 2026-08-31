@@ -163,7 +163,9 @@ if (WS_ENABLED) {
 	});
 	installRealtimeRoutes({
 		wsPath: realtime.wsPath(),
-		tryAuthenticateRoute: realtime.tryAuthenticateRoute
+		tryAuthenticateRoute: realtime.tryAuthenticateRoute,
+		serveWsPathGet: realtime.serveWsPathGet,
+		tryWaitingRoomRoute: realtime.tryWaitingRoomRoute
 	});
 }
 

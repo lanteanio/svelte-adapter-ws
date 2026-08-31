@@ -31,6 +31,60 @@ export interface MessageAdmissionOptions {
 	maxQueue?: number;
 }
 
+export interface WaitingRoomOptions {
+	/** Holding-page route the adapter serves (default '/__waiting-room'). */
+	path?: string;
+	/** Poll endpoint the page hits (default '/__admit-check'). */
+	admitCheckPath?: string;
+	/** Base seconds for the jittered Retry-After (default derived from pollIntervalMs). */
+	retryAfterSeconds?: number;
+	/** Page poll cadence in ms (default 2000). */
+	pollIntervalMs?: number;
+	/** Application name shown above the capacity message and in the title. */
+	appName?: string;
+	/** Service-status link: relative, or http, https, mailto, tel. */
+	statusUrl?: string;
+	/** Help link: relative, or http, https, mailto, tel. */
+	supportUrl?: string;
+	/** Incident reference shown as escaped text. */
+	incidentId?: string;
+	/**
+	 * Module path whose default (or named `renderWaitingRoom`) export renders
+	 * the page per request from a safe request facade, returning a full HTML
+	 * document plus BCP 47 `lang` and `dir`. A build-serializable module path,
+	 * not a live function; mutually exclusive with `template`.
+	 */
+	renderer?: string;
+	/**
+	 * Full HTML document replacing the built-in page, validated at
+	 * construction against the accessible-document contract. `{{queueDepth}}`,
+	 * `{{estimatedSeconds}}`, `{{pollIntervalMs}}`, `{{retryAfterSeconds}}`,
+	 * `{{admitCheckPath}}`, `{{appName}}`, `{{statusUrl}}`, `{{supportUrl}}`
+	 * and `{{incidentId}}` substitute the live escaped values.
+	 */
+	template?: string;
+}
+
+export interface UpgradeAdmissionOptions {
+	/** Ceiling on upgrades in flight at once; crossed requests get 503. 0 or omitted disables. */
+	maxConcurrent?: number;
+	/** Ceiling on reserved upgrades plus live connections, held until close. 0 or omitted disables. */
+	maxConnections?: number;
+	/** Ceiling on handshakes completed per event-loop tick; the overflow defers. 0 or omitted disables. */
+	perTickBudget?: number;
+	/** Ceiling on callbacks waiting behind perTickBudget (default 1024 while pacing is on). */
+	maxDeferred?: number;
+	/** Reserve a fraction of maxConcurrent for the deprioritised cursor-only upgrade lane. */
+	cursorLane?: { fraction?: number };
+	/**
+	 * Content-negotiated refusal at capacity, on by default whenever a ceiling
+	 * is set: a browser navigation gets a self-polling holding page, every
+	 * other client keeps the 503 with a jittered Retry-After. `false` drops the
+	 * polling page; an HTML navigation then gets a minimal accessible 503.
+	 */
+	waitingRoom?: false | WaitingRoomOptions;
+}
+
 export interface WebSocketOptions {
 	/** Module path of the WebSocket handler (default: auto-discovered src/hooks.ws.{js,ts,mjs}). */
 	handler?: string;
@@ -61,6 +115,7 @@ export interface WebSocketOptions {
 	/** Authenticate-door requests per IP per window; 0 disables (default 30). */
 	authPathRateLimit?: number;
 	authPathRateLimitWindow?: number;
+	upgradeAdmission?: UpgradeAdmissionOptions;
 	messageAdmission?: MessageAdmissionOptions;
 	pressure?: PressureThresholds;
 	/** Allow wire-level subscribes to '__'-prefixed system topics (default false). */

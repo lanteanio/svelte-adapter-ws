@@ -9,7 +9,7 @@
 /* global WS_AUTH_PATH */
 import { WebSocketServer } from 'ws';
 import {
-	WS_ATTRIBUTION, WS_CAPS, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
+	WS_ATTRIBUTION, WS_CAPS, WS_CONNECTION_PERMIT, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
 	WS_PUBLISH_GRANT, WS_SESSION_ID, WS_STATS, WS_SUBSCRIPTIONS,
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
 	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
@@ -24,7 +24,7 @@ import {
 	exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve
 } from '../utils/subscribe-policy.js';
 import { isValidWireTopic } from '../utils/topic.js';
-import { assert } from '../utils/assertions.js';
+import { assert, fatal } from '../utils/assertions.js';
 import { isOriginAllowed, isAuthOriginAccepted, describeUnsafeSameOriginConfig } from '../utils/origin.js';
 import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
@@ -35,6 +35,13 @@ import { resolveRequestId } from '../utils/request-id.js';
 import {
 	createMessageAdmission, runAdmittedMessageHook, runAdmittedMessageWork, messageOverloadedFrame
 } from '../utils/message-admission.js';
+import {
+	createUpgradeAdmission, negotiateRejection, isCursorLaneUpgrade, resolveWaitingRoom,
+	createWaitingRoomRequest, sendWaitingRoomPage, buildAccessibleCapacityRefusalPage,
+	jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter
+} from '../utils/upgrade-admission.js';
+import { createConnectionPermitCarrier } from '../utils/connection-permit.js';
+import { waitingRoomRenderer } from '../waiting-room-renderer-bridge.js';
 import { parseCookies, createCookies } from '../cookies.js';
 import {
 	createLeaseState, leaseGrantFrame, leaseReportedSaturation,
@@ -136,6 +143,39 @@ setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta;
 
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
 
+// Upgrade admission: the concurrent-handshake ceiling, the whole-lifetime
+// connection bound, the reserved cursor sub-budget, and the bounded per-tick
+// pacing queue. Every ceiling is off by default, so a zero-config build pays
+// one comparison per upgrade and nothing else.
+const admission = createUpgradeAdmission(wsOptions.upgradeAdmission);
+const connectionPermitCarrier = createConnectionPermitCarrier();
+const ADMISSION_PER_TICK_BUDGET = wsOptions.upgradeAdmission?.perTickBudget ?? 0;
+// Whether any ceiling can reject. Read where the gate's bookkeeping would
+// otherwise cost an unconfigured deployment something it can never use.
+const ADMISSION_ARMED =
+	admission.maxConcurrent > 0 || admission.maxConnections > 0 || ADMISSION_PER_TICK_BUDGET > 0;
+// Content-negotiated rejection for over-capacity upgrades: resolved once (or
+// null when off), and null keeps the bare 503. On by default whenever the gate
+// can reject; the only escape is `waitingRoom: false`.
+const WAITING_ROOM = resolveWaitingRoom(wsOptions.upgradeAdmission, waitingRoomRenderer);
+// The rolling poll counter behind the queue-depth estimate. Created only with
+// a room to report to, so nothing is allocated for a server without one.
+const pollCounter = WAITING_ROOM !== null ? createPollCounter(WAITING_ROOM.pollIntervalMs) : null;
+
+/**
+ * Hand back the whole-lifetime connection permit a connection holds, once.
+ * Every path that ends an accepted connection goes through here - a normal
+ * close, an attribution refusal at open, a failure between the handshake and
+ * full registration - or the live ceiling shrinks by one until restart.
+ *
+ * @param {any} userData
+ */
+function releaseConnectionPermitFor(userData) {
+	if (!userData[WS_CONNECTION_PERMIT]) return;
+	userData[WS_CONNECTION_PERMIT] = undefined;
+	admission.releaseConnection();
+}
+
 // Rate limiters for the two doors, sharing one implementation so a
 // correction can never land on only one of them. Bounds match the family:
 // 10k tracked identities, 16-entry eviction sample, 128-char keys.
@@ -197,12 +237,6 @@ wss.on('headers', (headers, req) => {
 });
 
 /**
- * @param {import('node:stream').Duplex} socket
- * @param {number} status
- * @param {string} text
- * @param {string} [extraHeader]
- */
-/**
  * One span per REJECTED admission, so a trace shows why a socket never
  * opened. Fires only with a provider armed; accepted upgrades get their span
  * around the upgrade itself.
@@ -222,16 +256,122 @@ function traceUpgradeRejection(headers, reason) {
 	}, () => undefined);
 }
 
-function refuseUpgrade(socket, status, text, extraHeader) {
-	const line = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 429: 'Too Many Requests', 500: 'Internal Server Error', 503: 'Service Unavailable', 504: 'Gateway Timeout' }[status] || 'Error';
+const STATUS_TEXT = {
+	200: 'OK', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found',
+	426: 'Upgrade Required', 429: 'Too Many Requests', 500: 'Internal Server Error',
+	503: 'Service Unavailable', 504: 'Gateway Timeout'
+};
+
+/**
+ * Answer an upgrade attempt with a plain HTTP response on the raw socket. The
+ * upgrade listener owns the socket outright - there is no ServerResponse to
+ * write through - so the status line and headers are composed here.
+ *
+ * `extraHeaders` is either one pre-rendered header line or a list of name /
+ * value pairs; a pair list supplying its own content-type wins, which is what
+ * lets the capacity refusals answer with a document instead of plain text.
+ *
+ * @param {import('node:stream').Duplex} socket
+ * @param {number} status
+ * @param {string} text
+ * @param {string | Array<[string, string]>} [extraHeaders]
+ */
+function refuseUpgrade(socket, status, text, extraHeaders) {
+	const line = STATUS_TEXT[status] || 'Error';
+	let head = `HTTP/1.1 ${status} ${line}\r\nConnection: close\r\n`;
+	let hasType = false;
+	if (typeof extraHeaders === 'string') {
+		head += extraHeaders + '\r\n';
+	} else if (extraHeaders) {
+		for (const [name, value] of extraHeaders) {
+			if (name.toLowerCase() === 'content-type') hasType = true;
+			head += `${name}: ${value}\r\n`;
+		}
+	}
+	if (!hasType) head += 'Content-Type: text/plain\r\n';
 	try {
-		socket.write(
-			`HTTP/1.1 ${status} ${line}\r\nContent-Type: text/plain\r\nConnection: close\r\n` +
-			(extraHeader ? extraHeader + '\r\n' : '') +
-			`Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text
-		);
+		socket.write(head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text);
 	} catch { /* peer already gone */ }
 	socket.destroy();
+}
+
+/**
+ * The response shape the shared refusal writers speak, over a raw upgrade
+ * socket. sendWaitingRoomPage() and the capacity refusals are written once for
+ * the whole family against a cork/writeStatus/writeHeader/end response; this
+ * adapts that to the socket the upgrade listener holds, so the status line,
+ * the headers and the body bytes stay identical to what the family answers.
+ *
+ * @param {import('node:stream').Duplex} socket
+ */
+function upgradeRefusalResponse(socket) {
+	let status = 503;
+	/** @type {Array<[string, string]>} */
+	const headers = [];
+	const res = {
+		cork(fn) { fn(); return res; },
+		writeStatus(statusLine) {
+			status = Number.parseInt(String(statusLine), 10) || 503;
+			return res;
+		},
+		writeHeader(name, value) { headers.push([String(name), String(value)]); return res; },
+		end(body) {
+			refuseUpgrade(socket, status, body == null ? '' : String(body), headers);
+			return res;
+		}
+	};
+	return res;
+}
+
+/**
+ * The request shape the shared waiting-room helpers read, over a node request.
+ * A localization renderer inspects method, url and headers through this; the
+ * facade is what keeps that contract identical across the family's transports.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} pathname
+ * @param {string} query - the query string without its leading '?'
+ */
+function waitingRoomRequestFacade(req, pathname, query) {
+	return {
+		getMethod: () => String(req.method || 'GET').toLowerCase(),
+		getUrl: () => pathname,
+		getQuery: () => query,
+		/** @param {(name: string, value: string) => void} visitor */
+		forEach: (visitor) => {
+			const raw = req.rawHeaders;
+			for (let i = 0; i < raw.length; i += 2) visitor(raw[i].toLowerCase(), raw[i + 1]);
+		}
+	};
+}
+
+/**
+ * The `Retry-After` a refusal answers. The room's configured base where a room
+ * exists, the shared default where none does - one number per condition, so a
+ * client honouring the header never reads one lane as "retry immediately"
+ * while the same full gate tells another lane to wait.
+ *
+ * @returns {number}
+ */
+function refusalRetryAfter() {
+	return WAITING_ROOM !== null
+		? WAITING_ROOM.jitteredRetryAfter()
+		: jitterRetryAfter(REFUSAL_RETRY_AFTER_SECONDS);
+}
+
+/**
+ * Read one header off a node request without the duplicate-policy walk. The
+ * refusal paths read at most two headers and must not pay for a full
+ * collection; node has already merged repeated lines here.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} name
+ * @returns {string}
+ */
+function headerValue(req, name) {
+	const value = req.headers[name];
+	if (value === undefined) return '';
+	return Array.isArray(value) ? value.join(', ') : value;
 }
 
 /**
@@ -263,6 +403,109 @@ export async function handleUpgrade(req, socket, head) {
 		return;
 	}
 
+	// Cursor-only upgrade lane (the worker's second WebSocket). The requested
+	// subprotocol routes the upgrade through the reserved cursor sub-budget
+	// only when a lane is configured; an unconfigured deployment never reads
+	// the header for lane purposes and never branches on the lane.
+	const cursorLaneEnabled = admission.cursorMaxConcurrent > 0;
+	const isCursor = cursorLaneEnabled && isCursorLaneUpgrade(headerValue(req, 'sec-websocket-protocol'));
+
+	// Serve an at-capacity refusal without ever consuming a gate slot. A
+	// browser navigation gets the self-polling holding page (it holds no
+	// socket); everything else keeps the 503 plus a jittered Retry-After. A
+	// cursor-lane upgrade is never a browser navigation, so it always gets the
+	// bare 503 and skips the Accept negotiation - but it backs off like every
+	// other refusal, because the condition is the same full gate.
+	const serveUpgradeRefusal = () => {
+		if (WAITING_ROOM === null || isCursor) {
+			// An HTML navigation keeps a minimal document baseline even when
+			// the interactive room is disabled.
+			if (!isCursor && negotiateRejection(
+				headerValue(req, 'accept'), headerValue(req, 'upgrade')
+			) === 'html') {
+				sendWaitingRoomPage(upgradeRefusalResponse(socket), {
+					body: buildAccessibleCapacityRefusalPage(),
+					lang: 'en',
+					dir: 'ltr',
+					headers: [['retry-after', String(refusalRetryAfter())]],
+					varyAcceptLanguage: false
+				}, '503 Service Unavailable');
+				return;
+			}
+			refuseUpgrade(socket, 503, 'Server is at upgrade capacity, please retry', [
+				['retry-after', String(refusalRetryAfter())]
+			]);
+			return;
+		}
+		// One header read, no full walk on the reject path.
+		if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {
+			// Browser navigation: serve the self-polling holding page.
+			sendWaitingRoomPage(upgradeRefusalResponse(socket), WAITING_ROOM.renderResponse(
+				undefined,
+				createWaitingRoomRequest(waitingRoomRequestFacade(req, pathname, q === -1 ? '' : url.slice(q + 1)))
+			));
+			return;
+		}
+		// WebSocket handshake / library client: the 503, refined with the
+		// jittered Retry-After.
+		refuseUpgrade(socket, 503, 'Server is at upgrade capacity, please retry', [
+			['retry-after', String(refusalRetryAfter())]
+		]);
+	};
+
+	// Pre-upgrade soft filter: the cap on concurrent upgrades being processed.
+	// The cheapest possible rejection - no header walk, no address decode, no
+	// origin check - so a connection storm is shed before it consumes
+	// per-request CPU. A cursor-lane upgrade is admitted through its reserved
+	// sub-budget so it can never starve main-WS admission.
+	const handshakeAcquired = isCursor ? admission.tryAcquireCursor() : admission.tryAcquire();
+	if (!handshakeAcquired) {
+		traceUpgradeRejection(null, isCursor ? 'cursor_lane' : 'over_capacity');
+		serveUpgradeRefusal();
+		return;
+	}
+	let inFlightReleased = false;
+	let connectionPermitHeld = false;
+	let connectionPermitTransferred = false;
+	function releaseConnectionPermit() {
+		if (!connectionPermitHeld || connectionPermitTransferred) return;
+		connectionPermitHeld = false;
+		admission.releaseConnection();
+	}
+	function releaseInFlight() {
+		if (!inFlightReleased) {
+			inFlightReleased = true;
+			if (isCursor) admission.releaseCursorInFlight();
+			else admission.release();
+		}
+		releaseConnectionPermit();
+		// Nothing is left for the abandoned-handshake listener to hand back;
+		// drop it so an accepted connection does not retain the whole upgrade
+		// closure - request, header bag and handshake head - for its lifetime.
+		if (ADMISSION_ARMED) socket.removeListener('close', releaseInFlight);
+	}
+	function rejectDeferredOverflow() {
+		traceUpgradeRejection(null, 'deferred_overflow');
+		releaseInFlight();
+		serveUpgradeRefusal();
+	}
+
+	// The whole-lifetime connection permit is reserved across the handshake
+	// too, so concurrent upgrades cannot overshoot the live-connection ceiling.
+	if (!admission.tryAcquireConnection()) {
+		traceUpgradeRejection(null, 'connection_capacity');
+		releaseInFlight();
+		serveUpgradeRefusal();
+		return;
+	}
+	connectionPermitHeld = admission.maxConnections > 0;
+
+	// A peer that hangs up while the admission hook is parked must hand both
+	// reservations back; without this the gate leaks a slot per abandoned
+	// handshake until the process restarts. Only a gate with a ceiling has
+	// anything to leak, so an unconfigured deployment installs no listener.
+	if (ADMISSION_ARMED) socket.on('close', releaseInFlight);
+
 	// Full header policy: repeated singletons refuse the handshake the same
 	// way they refuse a request.
 	/** @type {Record<string, string>} */
@@ -271,6 +514,7 @@ export async function handleUpgrade(req, socket, head) {
 	if (ambiguous !== null) {
 		traceUpgradeRejection(null, 'duplicate_header');
 		refuseUpgrade(socket, 400, 'Bad Request');
+		releaseInFlight();
 		return;
 	}
 	const wsTraceParent = extractTraceContext(headers);
@@ -281,6 +525,7 @@ export async function handleUpgrade(req, socket, head) {
 	if (upgradeRateLimiter.exceeded(clientIp, now())) {
 		traceUpgradeRejection(headers, 'ip_rate_limit');
 		refuseUpgrade(socket, 429, 'Too Many Requests');
+		releaseInFlight();
 		return;
 	}
 
@@ -299,6 +544,7 @@ export async function handleUpgrade(req, socket, head) {
 	})) {
 		traceUpgradeRejection(headers, 'bad_origin');
 		refuseUpgrade(socket, 403, 'Origin not allowed');
+		releaseInFlight();
 		return;
 	}
 
@@ -343,11 +589,13 @@ export async function handleUpgrade(req, socket, head) {
 			if (result === TIMEOUT) {
 				traceUpgradeRejection(headers, 'auth_timeout');
 				refuseUpgrade(socket, 504, 'Upgrade timed out');
+				releaseInFlight();
 				return;
 			}
 			if (result === false) {
 				traceUpgradeRejection(headers, 'auth_rejected');
 				refuseUpgrade(socket, 401, 'Unauthorized');
+				releaseInFlight();
 				return;
 			}
 			if (result && /** @type {any} */ (result).__upgradeResponse === true) {
@@ -374,6 +622,7 @@ export async function handleUpgrade(req, socket, head) {
 				traceUpgradeRejection(headers, 'hook_error');
 				refuseUpgrade(socket, 500, 'Internal Server Error', 'X-Request-ID: ' + wsRequestId);
 			}
+			releaseInFlight();
 			return;
 		}
 	}
@@ -381,35 +630,71 @@ export async function handleUpgrade(req, socket, head) {
 	// A peer that vanished during admission has nothing left to accept or
 	// refuse; ws would notice on its own, but skipping the accept avoids
 	// tearing down a connection that never opened.
-	if (socket.destroyed) return;
+	if (socket.destroyed) {
+		releaseInFlight();
+		return;
+	}
 
-	wss.handleUpgrade(req, socket, head, (ws) => {
-		// ws owns the socket's error handling from here on.
-		socket.removeListener('error', onSocketError);
-		const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
-		const merged = { remoteAddress, .../** @type {any} */ (userData) };
+	const acceptUpgrade = () => {
+		// Between admission and a paced execution the client may have hung up.
+		if (socket.destroyed) { releaseInFlight(); return; }
 		try {
-			openConnection(ws, merged, wsRequestId, connectionTraceContext);
-		} catch (err) {
-			// A failure between accept and full registration must tear the
-			// socket down completely - a half-registered connection would sit
-			// in the walks forever with no close listener to reap it.
-			emitOperationalEvent({
-				source: 'svelte-adapter-ws',
-				component: 'runtime.websocket-open',
-				event: 'runtime.websocket-open.failed',
-				severity: 'error',
-				dataClass: 'pseudonymous',
-				message: 'Connection setup failed after the upgrade completed.',
-				attributes: { requestId: wsRequestId, error: diagnosticError(err) }
-			});
-			const facade = wsWrappers.get(ws);
-			unregisterSocket(ws);
-			wsWrappers.delete(ws);
-			if (facade) wsConnections.delete(facade);
-			try { ws.terminate(); } catch { /* already gone */ }
+			const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
+			const merged = { remoteAddress, .../** @type {any} */ (userData) };
+			// The whole-lifetime permit rides the handshake on userData and is
+			// promoted to its symbol slot at open, so close - and only close -
+			// hands it back. Rolled back here if the handshake itself throws,
+			// or the ceiling would shrink by one for the process's lifetime.
+			let carrier = null;
+			if (connectionPermitHeld) {
+				carrier = connectionPermitCarrier.install(merged);
+				connectionPermitTransferred = true;
+			}
+			try {
+				wss.handleUpgrade(req, socket, head, (ws) => {
+					// ws owns the socket's error handling from here on.
+					socket.removeListener('error', onSocketError);
+					try {
+						openConnection(ws, merged, wsRequestId, connectionTraceContext);
+					} catch (err) {
+						// A failure between accept and full registration must tear
+						// the socket down completely - a half-registered connection
+						// would sit in the walks forever with no close listener to
+						// reap it.
+						emitOperationalEvent({
+							source: 'svelte-adapter-ws',
+							component: 'runtime.websocket-open',
+							event: 'runtime.websocket-open.failed',
+							severity: 'error',
+							dataClass: 'pseudonymous',
+							message: 'Connection setup failed after the upgrade completed.',
+							attributes: { requestId: wsRequestId, error: diagnosticError(err) }
+						});
+						const facade = wsWrappers.get(ws);
+						unregisterSocket(ws);
+						wsWrappers.delete(ws);
+						if (facade) wsConnections.delete(facade);
+						releaseConnectionPermitFor(merged);
+						try { ws.terminate(); } catch { /* already gone */ }
+					}
+				});
+			} catch (error) {
+				if (connectionPermitTransferred) {
+					connectionPermitTransferred = false;
+					connectionPermitCarrier.rollback(merged, carrier);
+				}
+				releaseConnectionPermit();
+				throw error;
+			}
+		} finally {
+			releaseInFlight();
 		}
-	});
+	};
+
+	// Bounded deferral: the per-tick budget paces how many handshakes complete
+	// in one turn, and the queue behind it is finite. A full queue sheds rather
+	// than growing without bound.
+	if (admission.admit(acceptUpgrade) === null) rejectDeferredOverflow();
 }
 
 /**
@@ -425,6 +710,17 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 			console.error('[svelte-adapter-ws] connection error:', err);
 		}
 	});
+	// Promote the handshake carrier to the symbol slot close reads. A carrier
+	// that cannot be found is unrecoverable: the permit would be held with
+	// nothing left to hand it back, so the connection is refused instead.
+	if (admission.maxConnections > 0) {
+		const permitRestored = connectionPermitCarrier.restore(userData);
+		fatal(permitRestored, 'ws.connection-permit-carrier', null);
+		if (!permitRestored) {
+			try { rawWs.terminate(); } catch { /* already gone */ }
+			return;
+		}
+	}
 	registerSocket(rawWs);
 	userData[WS_SUBSCRIPTIONS] = new Set();
 
@@ -471,6 +767,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 			attributes: { requestId, error: diagnosticError(err) }
 		});
 		unregisterSocket(rawWs);
+		releaseConnectionPermitFor(userData);
 		try { rawWs.close(1008, 'Attribution failed'); } catch { /* already gone */ }
 		return;
 	}
@@ -1182,6 +1479,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 			console.error('[adapter-ws] close hook threw:', err);
 		}
 	}
+	releaseConnectionPermitFor(userData);
 	accountClosedLogicalSubscriptions(subs);
 	if (userData[WS_LEASE]) userData[WS_LEASE] = undefined;
 	capCounts.adjust(userData[WS_CAPS], null);
@@ -1396,6 +1694,127 @@ export async function fireShutdownOnce() {
 /** @returns {string} the configured WebSocket path (for the 426 route) */
 export function wsPath() {
 	return WS_PATH;
+}
+
+/**
+ * The response shape the shared refusal writers speak, over a node response.
+ * The HTTP routes below answer through the same sendWaitingRoomPage() the
+ * upgrade path uses, so a holding page is byte-identical whichever door it
+ * came through.
+ *
+ * @param {import('node:http').ServerResponse} res
+ */
+function httpRefusalResponse(res) {
+	let status = 200;
+	let statusText = 'OK';
+	/** @type {Record<string, string>} */
+	const headers = {};
+	const facade = {
+		cork(fn) { fn(); return facade; },
+		writeStatus(statusLine) {
+			const line = String(statusLine);
+			const space = line.indexOf(' ');
+			status = Number.parseInt(line, 10) || 200;
+			statusText = space === -1 ? '' : line.slice(space + 1);
+			return facade;
+		},
+		writeHeader(name, value) { headers[String(name).toLowerCase()] = String(value); return facade; },
+		end(body) {
+			try {
+				res.writeHead(status, statusText || undefined, headers);
+				res.end(body == null ? '' : String(body));
+			} catch { /* exchange already gone */ }
+			return facade;
+		}
+	};
+	return facade;
+}
+
+/**
+ * The GET answer on the WebSocket path. A browser NAVIGATION to the socket URL
+ * lands here rather than on the upgrade listener, so the two doors have to
+ * negotiate a full gate identically: below capacity it is the ordinary
+ * upgrade-required hint, at capacity it is the holding page (or the accessible
+ * 503 when the room is opted out) for an HTML navigation and the bare 503 for
+ * everything else.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} pathname
+ * @param {string} search - the query string including its leading '?', or ''
+ * @returns {void}
+ */
+export function serveWsPathGet(req, res, pathname, search) {
+	if (!ADMISSION_ARMED || admission.hasCapacity()) {
+		res.writeHead(426, { 'content-type': 'text/plain', upgrade: 'websocket' });
+		res.end('WebSocket upgrade required');
+		return;
+	}
+	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {
+		if (WAITING_ROOM !== null) {
+			// The same page the refusal path serves: no seeded count, the first
+			// poll fills it in.
+			sendWaitingRoomPage(httpRefusalResponse(res), WAITING_ROOM.renderResponse(
+				undefined,
+				createWaitingRoomRequest(waitingRoomRequestFacade(req, pathname, search.slice(1)))
+			));
+			return;
+		}
+		sendWaitingRoomPage(httpRefusalResponse(res), {
+			body: buildAccessibleCapacityRefusalPage(),
+			lang: 'en',
+			dir: 'ltr',
+			headers: [['retry-after', String(refusalRetryAfter())]],
+			varyAcceptLanguage: false
+		}, '503 Service Unavailable');
+		return;
+	}
+	res.writeHead(503, { 'content-type': 'text/plain', 'retry-after': String(refusalRetryAfter()) });
+	res.end('Server is at upgrade capacity, please retry');
+}
+
+/**
+ * The waiting room's own two GET routes: the capacity poll the holding page
+ * calls, and direct navigation to the page itself. Both are read-only - the
+ * poll probes capacity via `hasCapacity()` and never acquires - so polling can
+ * never consume a gate slot. Returns true when the request was answered here.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} pathname
+ * @param {string} search - the query string including its leading '?', or ''
+ * @returns {boolean}
+ */
+export function tryWaitingRoomRoute(req, res, pathname, search) {
+	if (WAITING_ROOM === null) return false;
+	if (pathname === WAITING_ROOM.admitCheckPath) {
+		pollCounter.record(now());
+		if (admission.hasCapacity()) {
+			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+			res.end('{"admit":true}');
+			return true;
+		}
+		const queueDepth = pollCounter.depth(now());
+		const estimatedSeconds = WAITING_ROOM.estimateSeconds(queueDepth);
+		// 202 rather than 503 so the poll itself is never read as a failed or
+		// rate-limited upgrade: it holds no socket and stays distinguishable
+		// in logs.
+		res.writeHead(202, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+		res.end(
+			'{"admit":false,"queueDepth":' + queueDepth +
+			',"estimatedSeconds":' + estimatedSeconds +
+			',"pollAfterMs":' + WAITING_ROOM.pollIntervalMs + '}'
+		);
+		return true;
+	}
+	if (pathname === WAITING_ROOM.path) {
+		sendWaitingRoomPage(httpRefusalResponse(res), WAITING_ROOM.renderResponse(
+			pollCounter.depth(now()),
+			createWaitingRoomRequest(waitingRoomRequestFacade(req, pathname, search.slice(1)))
+		));
+		return true;
+	}
+	return false;
 }
 
 /**

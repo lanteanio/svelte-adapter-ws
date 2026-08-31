@@ -13,9 +13,13 @@ import {
 	assertSharedOptionValues,
 	assertEgressSection,
 	describeUnknownOptionKeys,
+	KNOWN_PRESSURE_OPTION_KEYS,
+	KNOWN_EGRESS_OPTION_KEYS,
+	KNOWN_EGRESS_CEILING_KEYS,
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
 import { normalizeMessageAdmission } from './runtime/utils/message-admission.js';
+import { compileAccessibleWaitingRoomTemplate } from './runtime/utils/waiting-room-template.js';
 
 const runtimeDir = fileURLToPath(new URL('./runtime', import.meta.url).href);
 
@@ -68,11 +72,89 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * error at the only moment anyone is watching.
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
-	'adminPath', 'adminAuthAcknowledged', 'metrics',
-	'upgradeAdmission', 'protection',
+	'adminPath', 'adminAuthAcknowledged', 'metrics', 'protection',
 	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
 	'postureExport'
 ];
+
+/**
+ * Object-valued options whose CONTENTS are also checked, keyed by dotted path.
+ *
+ * A top-level-only walk cannot see a typo one level down, and for
+ * `upgradeAdmission` that is not cosmetic: `maxConcurent: 500` leaves the
+ * handshake ceiling and cursor lane switched off (and the waiting room too
+ * unless the separate `maxConnections` ceiling is enabled), silently. The
+ * whole-lifetime socket bound is a separate option by design.
+ *
+ * `pressure` is milder - its thresholds are merged over defaults, so a typo
+ * leaves the default threshold rather than "off" - but a dropped key there
+ * still means the operator's tuning silently did nothing.
+ */
+export const KNOWN_NESTED_WEBSOCKET_OPTION_KEYS = {
+	upgradeAdmission: new Set(['maxConcurrent', 'maxConnections', 'perTickBudget', 'maxDeferred', 'cursorLane', 'waitingRoom']),
+	'upgradeAdmission.cursorLane': new Set(['fraction']),
+	'upgradeAdmission.waitingRoom': new Set([
+		'path', 'admitCheckPath', 'pollIntervalMs', 'retryAfterSeconds', 'template',
+		'renderer', 'appName', 'statusUrl', 'supportUrl', 'incidentId'
+	]),
+	messageAdmission: new Set([
+		'perConnectionRate', 'globalRate',
+		'perConnectionBytesRate', 'globalBytesRate', 'rateWindowMs',
+		'perConnectionConcurrent', 'globalConcurrent', 'maxQueue'
+	]),
+	// One set with the value judgment in config-guards.js, so the unknown-key
+	// warning and the threshold guard can never recognize different keys.
+	pressure: KNOWN_PRESSURE_OPTION_KEYS,
+	// Same sharing rule for the egress ledger: the guard and the walk read one
+	// key set. A typo'd ceiling (`deliverys`) would otherwise leave that
+	// ceiling silently open while the operator believes it is enforced.
+	egress: KNOWN_EGRESS_OPTION_KEYS,
+	'egress.topic': KNOWN_EGRESS_CEILING_KEYS,
+	'egress.tenant': KNOWN_EGRESS_CEILING_KEYS,
+	// `workers: { comptue: 2 }` silently runs zero compute workers - the same
+	// failure class, one level down, on a different option.
+	workers: new Set(['compute']),
+	postureExport: new Set(['path'])
+};
+
+/**
+ * Every `websocket.*` key - at any depth this walk knows about - the adapter
+ * does not recognize, as dotted paths. The adapt step warns on every returned
+ * key.
+ *
+ * @param {Record<string, unknown> | null} websocket - normalized websocket options
+ * @returns {string[]}
+ */
+export function unknownWebsocketOptionKeys(websocket) {
+	if (!websocket || typeof websocket !== 'object') return [];
+	/** @type {string[]} */
+	const out = [];
+	collectUnknownKeys(websocket, KNOWN_WEBSOCKET_OPTION_KEYS, '', out);
+	return out;
+}
+
+/**
+ * @param {Record<string, unknown>} bag
+ * @param {Set<string>} known
+ * @param {string} prefix
+ * @param {string[]} out
+ */
+function collectUnknownKeys(bag, known, prefix, out) {
+	for (const key of Object.keys(bag)) {
+		const dotted = prefix ? `${prefix}.${key}` : key;
+		if (!known.has(key)) {
+			out.push(dotted);
+			continue;
+		}
+		const nested = KNOWN_NESTED_WEBSOCKET_OPTION_KEYS[dotted];
+		const value = bag[key];
+		// `false` disables a whole section (waitingRoom, pressure) and an array
+		// is never a section - neither has keys worth walking.
+		if (nested && value && typeof value === 'object' && !Array.isArray(value)) {
+			collectUnknownKeys(/** @type {Record<string, unknown>} */ (value), nested, dotted, out);
+		}
+	}
+}
 
 /**
  * The `wsOpts` payload serialized into the build as `WS_OPTIONS`. Every
@@ -126,6 +208,7 @@ export function serializeWsOptions(websocket) {
 		upgradeRateLimitWindow: websocket?.upgradeRateLimitWindow ?? 10,
 		authPathRateLimit: websocket?.authPathRateLimit ?? 30,
 		authPathRateLimitWindow: websocket?.authPathRateLimitWindow ?? 10,
+		upgradeAdmission: websocket?.upgradeAdmission,
 		messageAdmission: websocket?.messageAdmission,
 		// The per-topic seq registry cap. Absent leaves the runtime on its
 		// warn-threshold default, so a zero-config build keeps today's
@@ -333,6 +416,33 @@ export default function (opts = {}) {
 				`websocket.handler must be a path string (e.g. './src/lib/server/ws.js') - ` +
 				`got ${JSON.stringify(websocket.handler)}.`
 			);
+		}
+		// The holding page an operator supplies, judged here rather than at
+		// boot: a renderer is a module PATH (a live function cannot survive the
+		// options serialization), the two override forms are mutually
+		// exclusive, and a template string is compiled now so a broken token or
+		// an inaccessible document fails the build instead of the first
+		// refusal a real user sees.
+		const waitingRoomTemplate = websocket.upgradeAdmission?.waitingRoom?.template;
+		const waitingRoomRenderer = websocket.upgradeAdmission?.waitingRoom?.renderer;
+		if (waitingRoomRenderer != null && typeof waitingRoomRenderer !== 'string') {
+			throw new Error(
+				`websocket.upgradeAdmission.waitingRoom.renderer must be a module path string ` +
+				`(e.g. './src/lib/server/waiting-room.js') - got ${JSON.stringify(waitingRoomRenderer)}.`
+			);
+		}
+		if (typeof waitingRoomRenderer === 'string' && waitingRoomRenderer.trim() === '') {
+			throw new Error(
+				'websocket.upgradeAdmission.waitingRoom.renderer must not be an empty module path.'
+			);
+		}
+		if (waitingRoomRenderer && waitingRoomTemplate != null) {
+			throw new Error(
+				'websocket.upgradeAdmission.waitingRoom.renderer and .template are mutually exclusive.'
+			);
+		}
+		if (typeof waitingRoomTemplate === 'string') {
+			compileAccessibleWaitingRoomTemplate(waitingRoomTemplate);
 		}
 		// A misshaped ceiling must fail at the factory, before any build work:
 		// a typo'd egress key would otherwise leave that ceiling silently open
@@ -644,7 +754,7 @@ export default function (opts = {}) {
 			// build, so a key the adapter does not recognize would be dropped
 			// silently - warn so a typo surfaces instead of no-op'ing.
 			if (websocket) {
-				const unknownWsKeys = describeUnknownOptionKeys(websocket, KNOWN_WEBSOCKET_OPTION_KEYS);
+				const unknownWsKeys = unknownWebsocketOptionKeys(websocket);
 				if (unknownWsKeys.length) {
 					builder.log.warn(
 						`[adapter-ws] unknown websocket option(s): ${unknownWsKeys.join(', ')} - ` +
@@ -661,6 +771,7 @@ export default function (opts = {}) {
 					KIT_NODE: './server/kit-node.js',
 					WS_HANDLER: './server/ws-handler.js',
 					TRACING_PROVIDER: './tracing-provider.js',
+					WAITING_ROOM_RENDERER: './server/waiting-room-renderer.js',
 					ENV_PREFIX: JSON.stringify(envPrefix),
 					PRECOMPRESS: JSON.stringify(precompress),
 					WS_ENABLED: JSON.stringify(!!websocket),
@@ -713,6 +824,31 @@ export default function (opts = {}) {
 				builder.log.minor(`Tracing provider: ${tracingPath}`);
 			} else {
 				writeFileSync(out + '/tracing-provider.js', 'export default null;\n');
+			}
+
+			// Per-request waiting-room renderer. A module path rather than a
+			// live function for the same serialization reason as primaryInit:
+			// adapter options are serialized into the build. The user's default
+			// or named renderWaitingRoom export is bundled into an isolated
+			// server entry; a null stub keeps the runtime bridge resolvable
+			// when the feature is unused.
+			const waitingRoomRendererPath =
+				websocket?.upgradeAdmission?.waitingRoom &&
+				typeof websocket.upgradeAdmission.waitingRoom === 'object'
+					? websocket.upgradeAdmission.waitingRoom.renderer
+					: null;
+			if (waitingRoomRendererPath) {
+				const rendererEntry = `${tmp}/waiting-room-renderer-entry-src.js`;
+				writeFileSync(
+					rendererEntry,
+					`import * as m from ${JSON.stringify(path.resolve(waitingRoomRendererPath))};\n` +
+					'const pick = (ns) => ns.default ?? ns.renderWaitingRoom ?? null;\n' +
+					'export default pick(m);\n'
+				);
+				await esbuildServerModule(builder, rendererEntry, out + '/server/waiting-room-renderer.js');
+				builder.log.minor(`Waiting-room renderer: ${waitingRoomRendererPath}`);
+			} else {
+				writeFileSync(out + '/server/waiting-room-renderer.js', 'export default null;\n');
 			}
 
 			// Runtime-readable identity metadata. Keep this as package/schema

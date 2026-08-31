@@ -159,37 +159,62 @@ const hasOwn = Object.prototype.hasOwnProperty;
  * inherited function rather than `undefined`, so the cheap check alone would
  * report a first sighting as a duplicate.
  *
- * @param {string[]} rawHeaders - node's IncomingMessage.rawHeaders
+ * Two source shapes reach this, and both are real: node's flat `rawHeaders`
+ * pair array is what every HTTP and upgrade exchange here carries, while the
+ * family's request objects expose their lines through a `forEach(name, value)`
+ * visitor. Same policy either way - one collection point means a correction
+ * lands on both.
+ *
+ * @param {string[] | { forEach(visitor: (name: string, value: string) => void): void }} source -
+ *   node's IncomingMessage.rawHeaders, or a request exposing a header visitor
  * @param {Record<string, string>} headers - filled in place, lowercase keys
  * @returns {string | null} name of the first single-valued header that arrived
  *   more than once, or null when the request is unambiguous
  */
-export function collectRequestHeaders(rawHeaders, headers) {
+export function collectRequestHeaders(source, headers) {
 	/** @type {string | null} */
 	let ambiguous = null;
-	for (let i = 0; i < rawHeaders.length; i += 2) {
-		const key = rawHeaders[i].toLowerCase();
-		const value = rawHeaders[i + 1];
-		const previous = headers[key];
-		if (previous === undefined || !hasOwn.call(headers, key)) {
-			headers[key] = value;
-			continue;
-		}
-		if (SINGLE_VALUED.has(key)) {
+	if (Array.isArray(source)) {
+		for (let i = 0; i < source.length; i += 2) {
 			// Name the FIRST offender and keep walking. Stopping the merge here
 			// would make every later repeated header first-wins, which is neither
 			// the documented contract nor a policy anything asked for.
-			if (ambiguous === null) ambiguous = key;
-			continue;
+			const refused = takeHeaderLine(headers, source[i], source[i + 1]);
+			if (refused !== null && ambiguous === null) ambiguous = refused;
 		}
-		if (key === 'set-cookie') continue;
-		if (proxySingleValued.has(key)) {
-			headers[key] = value;
-			continue;
-		}
-		headers[key] = key === 'cookie'
-			? previous + '; ' + value
-			: previous + ', ' + value;
+		return ambiguous;
 	}
+	source.forEach((name, value) => {
+		const refused = takeHeaderLine(headers, name, value);
+		if (refused !== null && ambiguous === null) ambiguous = refused;
+	});
 	return ambiguous;
+}
+
+/**
+ * Apply the policy to one header line. Returns the header's name when the line
+ * is a refused duplicate, null otherwise.
+ *
+ * @param {Record<string, string>} headers - filled in place, lowercase keys
+ * @param {string} rawKey
+ * @param {string} value
+ * @returns {string | null}
+ */
+function takeHeaderLine(headers, rawKey, value) {
+	const key = rawKey.toLowerCase();
+	const previous = headers[key];
+	if (previous === undefined || !hasOwn.call(headers, key)) {
+		headers[key] = value;
+		return null;
+	}
+	if (SINGLE_VALUED.has(key)) return key;
+	if (key === 'set-cookie') return null;
+	if (proxySingleValued.has(key)) {
+		headers[key] = value;
+		return null;
+	}
+	headers[key] = key === 'cookie'
+		? previous + '; ' + value
+		: previous + ', ' + value;
+	return null;
 }

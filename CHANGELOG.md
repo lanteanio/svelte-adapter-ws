@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `websocket.upgradeAdmission`: the upgrade gate, which the build previously
+  refused. `maxConcurrent` caps handshakes in flight, `maxConnections` caps
+  reserved-plus-live sockets with a permit held for the socket's lifetime and
+  handed back on close, `perTickBudget` paces completions per event-loop tick
+  behind a finite `maxDeferred` queue, and `cursorLane.fraction` carves a
+  reserved sub-budget for the cursor-only lane so cursor reconnects cannot
+  starve main admission. Refusals are content-negotiated: a browser navigation
+  gets a self-polling holding page at `/__waiting-room` backed by the
+  `/__admit-check` poll endpoint, WebSocket and non-HTML clients keep `503`
+  with a jittered `Retry-After`, and `waitingRoom: false` answers an HTML
+  navigation with a minimal accessible `503`. The page takes a
+  `waitingRoom.template` document with `{{token}}` substitution or a
+  `waitingRoom.renderer` module path for per-request localization, both
+  validated when the adapter is configured. A typo one level down
+  (`upgradeAdmission.maxConcurent`) is now named by the build warning rather
+  than dropped in silence.
+
 - The `./vite` subpath: the dev-server plugin, so `vite dev` serves WebSockets
   against the same protocol the built runtime serves. Dev applies the
   `upgradeResponse` contract's custom 101 headers the way production does,
@@ -21,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package declares all 34 of the lead adapter's export subpaths.
 
 - A public entry-point catalog in the README, rendered from the export map by
-  `node scripts/render-entry-points.js`. Each of the 33 subpaths lists its
+  `node scripts/render-entry-points.js`. Each subpath lists its
   role, execution environment, stability and deprecation state, carried from
   the lead adapter so the same import reads the same in either package. The
   table, the declarations and the export map are gated against each other and
@@ -273,6 +290,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a worker inside its own bound never loses the race to its supervisor.
 
 ### Fixed
+
+- A batch entry's `seq` is judged through the shared resolver, in the pass that
+  runs before anything is stamped, admitted or delivered. Production and the
+  in-process harness each restated the table with a number-only check, which
+  accepted a positive integer above the wire's safe-integer range and left the
+  refusal to the stamping loop - by which point earlier entries of the same
+  batch had already been stamped and the egress ceiling had already answered,
+  so a batch that never went out whole still moved the topic sequence and put
+  frames on the wire. The entry lane now takes bigint, `true` and `null` the
+  way the options lane does, and a refusal names the position of the entry that
+  carried the bad value.
 
 - `PORT=0` with `CLUSTER_WORKERS` set refuses the boot. Every io worker binds
   the shared port itself, so an ephemeral port hands each worker a different
