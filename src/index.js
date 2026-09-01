@@ -764,6 +764,21 @@ export default function (opts = {}) {
 				}
 			}
 
+			// A function waiting-room template cannot be serialized into the
+			// build, so it would be dropped in silence and the operator would
+			// get the built-in page believing theirs was in use. The template
+			// is an HTML string with {{token}} placeholders.
+			const wrTemplate = websocket?.upgradeAdmission?.waitingRoom;
+			if (wrTemplate && typeof wrTemplate === 'object' && typeof wrTemplate.template === 'function') {
+				builder.log.warn(
+					'[adapter-ws] upgradeAdmission.waitingRoom.template must now be an HTML string ' +
+					'with {{queueDepth}} / {{estimatedSeconds}} / {{pollIntervalMs}} / ' +
+					'{{retryAfterSeconds}} / {{admitCheckPath}} / {{appName}} / {{statusUrl}} / ' +
+					'{{supportUrl}} / {{incidentId}} tokens. A function cannot be serialized ' +
+					'into the build and was ignored; the built-in holding page is being used.'
+				);
+			}
+
 			builder.copy(runtimeDir, out, {
 				replace: {
 					MANIFEST: './server/manifest.js',

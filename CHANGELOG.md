@@ -291,6 +291,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A handshake that never becomes a connection returns its upgrade permit. The
+  permit was marked as transferred to the connection around the accept call,
+  which is sound on the lead's transport because its accept either opens or
+  throws. The `ws` library has a third outcome: for a non-GET, a missing or
+  malformed `Sec-WebSocket-Key`, a version other than 8 or 13, a rejected
+  `shouldHandle`, an unparseable subprotocol or a bad permessage-deflate offer,
+  it answers the peer itself and returns, calling nothing and throwing nothing.
+  Each of those took a permit nothing could hand back, so two unauthenticated
+  packets per permit walked `upgradeAdmission.maxConnections` down to zero and
+  left the server refusing every client until it was restarted. The transfer is
+  now marked where the accept actually lands, in both the built runtime and
+  `svelte-adapter-ws/testing`.
+- A refusal page's headers accumulate on a null-prototype object, so a header
+  named `__proto__` can no longer hit `Object.prototype`'s setter and vanish
+  with no own property and no error.
+- `upgradeAdmission.waitingRoom.template` given a function warns at build time
+  instead of being dropped in silence. A function cannot be serialized into the
+  build, so the operator was served the built-in page believing theirs was in
+  use; the template is an HTML string with `{{token}}` placeholders.
+- The waiting-room renderer types the family declares - `WaitingRoomRenderer`
+  and the context and result shapes around it - are exported. The harness's own
+  type declarations already imported `WaitingRoomRenderer`, so
+  `svelte-adapter-ws/testing` did not type-check.
+
 - A `seq` the wire cannot carry is refused before the egress ceiling answers.
   The publish lanes validated the value as a side effect of stamping it, and
   the stamp is the last thing they do, so under an armed ceiling whose window

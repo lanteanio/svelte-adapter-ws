@@ -422,7 +422,14 @@ function createNodeApp() {
 				writeRawRefusal(socket, statusCode, body == null ? '' : String(body), pendingHeaders);
 				return res;
 			},
-			upgrade: (userData, _secKey, _secProtocol, _secExtensions, _context) => {
+			// `onAccepted` fires only once the accept has actually landed. Both
+			// exits above it - an aborted or already-settled request, and every
+			// handshake ws answers itself without calling back - return having
+			// opened nothing, so a caller that treats the CALL as the accept
+			// hands ownership to a connection that will never exist. The
+			// argument is internal to this facade; the uWS shape it mirrors
+			// takes five.
+			upgrade: (userData, _secKey, _secProtocol, _secExtensions, _context, onAccepted) => {
 				if (aborted || settled) return;
 				settled = true;
 				// Headers written before the upgrade (the 101 + upgradeResponse
@@ -433,6 +440,7 @@ function createNodeApp() {
 				wss.handleUpgrade(nodeReq, socket, head, (rawWs) => {
 					// ws owns the socket's error handling from here on.
 					socket.removeListener('error', onSocketError);
+					onAccepted?.();
 					openNodeConnection(rawWs, ud);
 				});
 			}
@@ -3001,12 +3009,15 @@ export async function createTestServer(options = {}) {
 				: null;
 			const upgradeWithConnectionPermit = (userData) => {
 				let carrier = null;
-				if (connectionPermitHeld) {
-					carrier = connectionPermitCarrier.install(userData);
-					connectionPermitTransferred = true;
-				}
+				// Decorate up front, transfer only on the accept: the facade
+				// answers some handshakes itself and opens nothing, and a
+				// permit marked transferred on those is one nothing can ever
+				// hand back.
+				if (connectionPermitHeld) carrier = connectionPermitCarrier.install(userData);
 				try {
-					res.upgrade(userData, secKey, secProtocol, secExtensions, context);
+					res.upgrade(userData, secKey, secProtocol, secExtensions, context, () => {
+						if (connectionPermitHeld) connectionPermitTransferred = true;
+					});
 				} catch (error) {
 					if (connectionPermitTransferred) {
 						connectionPermitTransferred = false;

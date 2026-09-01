@@ -646,14 +646,27 @@ export async function handleUpgrade(req, socket, head) {
 			// hands it back. Rolled back here if the handshake itself throws,
 			// or the ceiling would shrink by one for the process's lifetime.
 			let carrier = null;
-			if (connectionPermitHeld) {
-				carrier = connectionPermitCarrier.install(merged);
-				connectionPermitTransferred = true;
-			}
+			// Decorating `merged` is safe to do up front - it is unreachable
+			// unless the accept lands - but the TRANSFER is only real once ws
+			// has actually handed us a socket. `handleUpgrade` has a third
+			// outcome besides accept and throw: it answers the peer itself and
+			// returns, calling nothing, for a non-GET, a missing or malformed
+			// Sec-WebSocket-Key, a version that is not 8 or 13, a rejected
+			// shouldHandle, an unparseable subprotocol, a bad
+			// permessage-deflate offer, or a socket that stopped being
+			// readable. Marking the transfer before the call meant every one
+			// of those took a permit that nothing could ever hand back - two
+			// unauthenticated packets each, until the ceiling was gone and the
+			// process needed a restart. The lead cannot reach this: its accept
+			// primitive either opens or throws.
+			if (connectionPermitHeld) carrier = connectionPermitCarrier.install(merged);
 			try {
 				wss.handleUpgrade(req, socket, head, (ws) => {
 					// ws owns the socket's error handling from here on.
 					socket.removeListener('error', onSocketError);
+					// The accept landed, so the permit now belongs to the
+					// connection and close is what returns it.
+					if (connectionPermitHeld) connectionPermitTransferred = true;
 					try {
 						openConnection(ws, merged, wsRequestId, connectionTraceContext);
 					} catch (err) {
@@ -1707,8 +1720,13 @@ export function wsPath() {
 function httpRefusalResponse(res) {
 	let status = 200;
 	let statusText = 'OK';
+	// Null-prototype: header names arrive lowercased from a writer, and a name
+	// like `__proto__` assigned into a plain object hits Object.prototype's
+	// setter - the write lands nowhere, the key never appears among the own
+	// properties, and nothing throws, so the header is dropped in silence. The
+	// same shape is already refused for staticHeaders at build time.
 	/** @type {Record<string, string>} */
-	const headers = {};
+	const headers = Object.create(null);
 	const facade = {
 		cork(fn) { fn(); return facade; },
 		writeStatus(statusLine) {

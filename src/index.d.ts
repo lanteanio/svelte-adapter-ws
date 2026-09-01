@@ -31,7 +31,7 @@ export interface MessageAdmissionOptions {
 	maxQueue?: number;
 }
 
-export interface WaitingRoomOptions {
+interface WaitingRoomOptions {
 	/** Holding-page route the adapter serves (default '/__waiting-room'). */
 	path?: string;
 	/** Poll endpoint the page hits (default '/__admit-check'). */
@@ -65,7 +65,7 @@ export interface WaitingRoomOptions {
 	template?: string;
 }
 
-export interface UpgradeAdmissionOptions {
+interface UpgradeAdmissionOptions {
 	/** Ceiling on upgrades in flight at once; crossed requests get 503. 0 or omitted disables. */
 	maxConcurrent?: number;
 	/** Ceiling on reserved upgrades plus live connections, held until close. 0 or omitted disables. */
@@ -269,3 +269,80 @@ export function serializeWsOptions(websocket: Record<string, unknown>): Record<s
 export function renderRefusedDotfileWarning(refused: string[]): string;
 
 export default function adapter(options?: AdapterOptions): Adapter;
+
+/**
+ * Live context passed to a custom `waitingRoom.template`. All numeric fields
+ * are UX estimates surfaced for the holding page, never an admission input.
+ */
+export interface WaitingRoomContext {
+	/** Polls seen in the last poll interval (a UX estimate, not an admission input). */
+	queueDepth: number;
+	/** Rolling drain-rate estimate in seconds (a UX estimate). */
+	estimatedSeconds: number;
+	/** Configured page poll cadence in ms. */
+	pollIntervalMs: number;
+	/** Configured base for the jittered Retry-After in seconds. */
+	retryAfterSeconds: number;
+	/** The poll endpoint path the page should fetch. */
+	admitCheckPath: string;
+	/** Configured application name, or an empty string when omitted. */
+	appName: string;
+	/** Configured service-status URL, or an empty string when omitted. */
+	statusUrl: string;
+	/** Configured support URL, or an empty string when omitted. */
+	supportUrl: string;
+	/** Configured incident reference, or an empty string when omitted. */
+	incidentId: string;
+}
+
+/** Synchronous request facade passed to a waiting-room renderer module. */
+export interface WaitingRoomRequestContext {
+	/** Uppercase request method. */
+	readonly method: string;
+	/** Path plus query string for the holding-page request. */
+	readonly url: string;
+	/** Case-insensitive request-header lookup; absent headers return `null`. */
+	readonly headers: {
+		get(name: string): string | null;
+	};
+}
+
+/** Per-request context passed to a locale-aware waiting-room renderer. */
+export interface WaitingRoomRendererContext extends WaitingRoomContext {
+	readonly request: WaitingRoomRequestContext;
+}
+
+/**
+ * One accessible document baseline for every custom waiting path.
+ *
+ * At runtime `body` is parsed and validated for a doctype; valid
+ * `html[lang]` and `html[dir]`; non-empty title and body; exposed main
+ * landmark and non-empty status live region; and an exposed enabled named recovery
+ * control or non-empty safe link. Comments and hidden, inert, template, script,
+ * and style subtrees cannot satisfy the contract. Renderer `lang` and
+ * `dir` are authoritative and are applied before that validation.
+ */
+export interface AccessibleWaitingDocument {
+	/**
+	 * A full HTML document containing an `<html>` element. This is trusted
+	 * application HTML; escape every request/configuration value you interpolate.
+	 */
+	body: string;
+	/** Valid BCP 47 language tag; emitted as `Content-Language` and `html[lang]`. */
+	lang: string;
+	/** Document direction; emitted as `html[dir]`. */
+	dir: 'ltr' | 'rtl' | 'auto';
+	/**
+	 * Optional extra response headers. Adapter-owned framing, cache, language,
+	 * and variation headers cannot be overridden.
+	 */
+	headers?: Record<string, string>;
+}
+
+/** Compatibility name for the document returned by a waiting-room renderer. */
+export interface WaitingRoomRendererResult extends AccessibleWaitingDocument {}
+
+/** Synchronous build-bundled renderer for a localized waiting-room document. */
+export type WaitingRoomRenderer = (
+	context: WaitingRoomRendererContext
+) => AccessibleWaitingDocument;
