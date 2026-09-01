@@ -500,10 +500,14 @@ export async function handleUpgrade(req, socket, head) {
 	}
 	connectionPermitHeld = admission.maxConnections > 0;
 
-	// A peer that hangs up while the admission hook is parked must hand both
-	// reservations back; without this the gate leaks a slot per abandoned
-	// handshake until the process restarts. Only a gate with a ceiling has
-	// anything to leak, so an unconfigured deployment installs no listener.
+	// Returns the reservations early when the socket is DESTROYED while the
+	// admission hook is parked - the error path above does that, and so does a
+	// peer RST. It does not catch an ordinary hang-up: node hands over an
+	// upgrade socket with its parser detached and nothing reading it, so a FIN
+	// produces no 'end' and therefore no 'close', and that slot is instead
+	// returned by the release below once the hook settles. Bounded either way
+	// by the upgrade deadline, never held past it. Only a gate with a ceiling
+	// has anything to return, so an unconfigured deployment installs nothing.
 	if (ADMISSION_ARMED) socket.on('close', releaseInFlight);
 
 	// Full header policy: repeated singletons refuse the handshake the same
