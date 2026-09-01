@@ -92,3 +92,35 @@ describe('a batch entry seq is judged before anything is delivered', () => {
 		], codec)).toThrow(/batch entry 2:/);
 	});
 });
+
+// The publish lanes used to validate a seq as a SIDE EFFECT of stamping it,
+// and the stamp is the last thing they do - after the egress ceiling has
+// answered. So under an armed ceiling a value the wire cannot carry came back
+// as a plain `false`, which is also what an ordinary shed returns, and only
+// became a TypeError once load dropped. A programming error must not surface
+// on a schedule set by traffic.
+describe('an unstampable seq is refused before anything else answers', () => {
+	it('throws for a value the stamp would refuse, on the single publish lane', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		server = await createTestServer();
+		const p = server.platform;
+		// A string from a JSON column, and an integer past the wire's range.
+		expect(() => p.publish('room', 'e', {}, { seq: '5' })).toThrow(TypeError);
+		expect(() => p.publish('room', 'e', {}, { seq: Number.MAX_SAFE_INTEGER + 1 })).toThrow(TypeError);
+		// The legal spellings still answer normally rather than throwing.
+		expect(p.publish('room', 'e', {}, { seq: 5 })).toBe(false);
+		expect(p.publish('room', 'e', {}, { seq: null })).toBe(false);
+	});
+
+	// The one case that distinguishes a gate that checks from one that does
+	// not: a non-empty batch reaches the stamping loop and would refuse these
+	// anyway, so only the EMPTY call proves the check moved to the call gate.
+	it('refuses an empty batch for the same options seq a full one refuses', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		server = await createTestServer();
+		const codec = createSmoothWireCodec();
+		expect(() => server.platform.publishWireBatch('room', 'e', [], codec, { seq: '5' }))
+			.toThrow(TypeError);
+		expect(server.platform.publishWireBatch('room', 'e', [], codec, { seq: false })).toBe(false);
+	});
+});

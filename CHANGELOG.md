@@ -291,6 +291,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `seq` the wire cannot carry is refused before the egress ceiling answers.
+  The publish lanes validated the value as a side effect of stamping it, and
+  the stamp is the last thing they do, so under an armed ceiling whose window
+  had been crossed `publish(topic, event, data, { seq: '5' })` returned `false`
+  - the same answer an ordinary shed gives - and raised the TypeError only once
+  load dropped. A programming error must not surface on a schedule set by
+  traffic. The check now runs first on `publish`, on `publishWire` for a frame
+  this worker originates, and at the batch call gate, which also puts it ahead
+  of the empty-entries return so an empty batch refuses what a full one
+  refuses.
+
 - A batch entry's `seq` is judged through the shared resolver, in the pass that
   runs before anything is stamped, admitted or delivered. Production and the
   in-process harness each restated the table with a number-only check, which

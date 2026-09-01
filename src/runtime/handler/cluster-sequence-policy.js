@@ -1,4 +1,5 @@
 import { workerData } from 'node:worker_threads';
+import { assertStampableSeq } from '../utils/epoch.js';
 
 export const CLUSTER_SEQUENCE_ERROR =
 	'clustered publish requires { seq: false } (or null) or { seq: <positive integer number or bigint>, relay: false }; per-worker counters and the multi-origin built-in relay cannot preserve one monotonic topic sequence';
@@ -105,6 +106,7 @@ export function assertBatchSequenceAuthority(options, data = workerData) {
 		// refuse a deployment shape, not a value.
 		throw new TypeError(BATCH_SEQUENCE_ERROR);
 	}
+	assertStampableSeq(options?.seq);
 }
 
 // A batch ENTRY carrying an explicit seq is the per-entry twin of

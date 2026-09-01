@@ -1,5 +1,5 @@
 {
 	"repo": "svelte-adapter-uws",
-	"rev": "bca4842",
+	"rev": "e439a71",
 	"why": "The commit of the lead adapter this repo vendored from. The parity gate reads the lead at THIS revision, never at its working tree: a lead checkout with unsaved edits (its own session mid-change) would otherwise turn this gate red for work that is not ours and is not even committed. Moving to a newer lead is a deliberate act - bump this rev, re-derive every vendored file, review what changed, commit the two together."
 }

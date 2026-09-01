@@ -26,7 +26,7 @@ import {
 import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
-	resolveEntrySeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
+	resolveEntrySeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
@@ -294,6 +294,12 @@ function publish(topic, event, data, options) {
 	const jitterOption = options != null ? options.jitterMs : undefined;
 	const excludeWs = (options && options.excludeWs) || null;
 	assertClusterSequenceAuthorityValues(seqOption, relayOption);
+	// The VALUE, ahead of the ceiling below. Stamping is the last step on this
+	// lane, so a seq the wire cannot carry used to be answered with a plain
+	// `false` while the budget was armed - indistinguishable from the ordinary
+	// shed - and with the TypeError only once load dropped. A programming error
+	// must not surface on a schedule set by traffic.
+	assertStampableSeq(seqOption);
 
 	// Egress recipients are the topic's local subscribers, read once per
 	// logical publish, with an excluded socket that holds the topic deducted;
@@ -671,6 +677,10 @@ export const platform = {
 		const isRelay = !!(options && /** @type {any} */ (options)._isRelay);
 		const relaySeqOption = isRelay ? /** @type {any} */ (options)._relaySeq : undefined;
 		if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);
+		// And the value, before the admission below (see publish()). A relayed
+		// frame carries its origin's seq, not this option, and that origin
+		// already validated it.
+		if (!isRelay) assertStampableSeq(seqOption);
 		// Egress recipients and admission, origin-side only: a relayed frame
 		// was charged once on the worker that published it, and refusing it
 		// here would fork the cluster's delivery. The decision runs before the
