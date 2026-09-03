@@ -65,7 +65,7 @@ export function admin(request) {
  *
  * @param {number} port
  * @param {string} target
- * @returns {Promise<{ status: number, body: string }>}
+ * @returns {Promise<{ status: number, body: string, head: string }>}
  */
 function rawGet(port, target) {
 	return new Promise((resolve, reject) => {
@@ -83,7 +83,11 @@ function rawGet(port, target) {
 			const statusLine = out.split('\r\n')[0] || '';
 			const status = Number(statusLine.split(' ')[1]);
 			const sep = out.indexOf('\r\n\r\n');
-			resolve({ status, body: sep === -1 ? '' : out.slice(sep + 4) });
+			resolve({
+				status,
+				body: sep === -1 ? '' : out.slice(sep + 4),
+				head: (sep === -1 ? out : out.slice(0, sep)).toLowerCase()
+			});
 		});
 	});
 }
@@ -109,13 +113,23 @@ afterAll(async () => {
 describe('an admin target that normalizes out of the prefix is refused', () => {
 	// Each of these resolves to a path outside `/__realtime/`, so the route that
 	// matched and the request the handler would be told about disagree.
+	//
+	// The last two land on a SIBLING of the prefix rather than somewhere
+	// unrelated, and they are the ones that pin the boundary. The guard tests
+	// `startsWith(ADMIN_PATH + '/')`; drop that trailing slash and
+	// `/__realtimezzz` starts with `/__realtime`, so the escape is served again
+	// while every target that resolves somewhere unrelated still refuses. A
+	// list made only of unrelated destinations cannot tell the two spellings
+	// apart.
 	for (const target of [
 		'/__realtime/../reflect',
 		'/__realtime/%2e%2e/reflect',
 		'/__realtime/%2E%2E/reflect',
 		'/__realtime/./../../reflect',
 		'/__realtime/./../escape',
-		'/__realtime/a/../../reflect'
+		'/__realtime/a/../../reflect',
+		'/__realtime/../__realtimezzz',
+		'/__realtime/../__realtime-evil/x'
 	]) {
 		it(`refuses ${target}`, async () => {
 			const res = await rawGet(rt.port, target);
@@ -152,6 +166,33 @@ describe('an admin target that normalizes out of the prefix is refused', () => {
 		expect(JSON.parse(res.body).seen).toBe('/__realtime/a..b');
 	});
 
+	it('frames the refusal with a length rather than chunked', async () => {
+		// The success writer sets content-length deliberately, because uWS
+		// derives one from the body it is handed and the two backends would
+		// otherwise frame the same answer differently. A refusal is an answer
+		// too, and node falls back to chunked whenever the header is absent.
+		const res = await rawGet(rt.port, '/__realtime/../reflect');
+		expect(res.status).toBe(400);
+		expect(res.head, 'refusal answered chunked').not.toContain('transfer-encoding: chunked');
+		expect(res.head).toContain(`content-length: ${Buffer.byteLength(res.body)}`);
+	});
+
+	it('serves a target that resolves onto the bare prefix', async () => {
+		// The guard's middle clause allows the resolved path to BE the prefix,
+		// not only to sit under it, and nothing else in this file reaches that
+		// clause: replace it with `true` and the rest of the suite stays green.
+		//
+		// Worth knowing what is being locked here. A DIRECT `GET /__realtime`
+		// is not routed to admin at all, because the mount matches
+		// `ADMIN_PATH + '/'`, so it falls through to the app's own routing.
+		// This target reaches admin() and reports the bare prefix. That is the
+		// family's shipped condition rather than this repo's invention, so it
+		// is pinned as-is; changing it belongs upstream, not here.
+		const res = await rawGet(rt.port, '/__realtime/../__realtime');
+		expect(res.status).toBe(200);
+		expect(JSON.parse(res.body).seen).toBe('/__realtime');
+	});
+
 	it('still serves an ordinary admin target', async () => {
 		const res = await rawGet(rt.port, '/__realtime/introspect');
 		expect(res.status).toBe(200);
@@ -184,6 +225,12 @@ describe('the harness refuses the same targets', () => {
 
 		const escaped = await rawGet(port, '/__realtime/../reflect');
 		expect(escaped.status).toBe(400);
+
+		// The sibling boundary, on this surface too: the harness carries its
+		// own copy of the check, so a slash dropped there escapes exactly as it
+		// would in the runtime and nothing else here would notice.
+		const sibling = await rawGet(port, '/__realtime/../__realtimezzz');
+		expect(sibling.status, 'a sibling of the prefix must not be served').toBe(400);
 
 		const inside = await rawGet(port, '/__realtime/a/../introspect');
 		expect(inside.status).toBe(200);

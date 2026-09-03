@@ -76,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract the handler speaks, and writes the response back verbatim. All
   authorization lives in the app handler; the adapter's own answers are the
   transport failures alone - `405` for a fetch-forbidden method, `400` for an
-  ambiguous header or an unusable Host, `413` for a declared body over
+  ambiguous header, an unusable Host, or a target that resolves outside the
+  mount prefix, `413` for a declared body over
   `BODY_SIZE_LIMIT`, and `500` for a handler that throws, rejects or returns a
   non-`Response`. A throw or a rejection also emits
   `ADAPTER-ERR-ADMIN-HANDLER`, carrying the error; a returned non-`Response`

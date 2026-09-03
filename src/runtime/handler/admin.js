@@ -48,12 +48,19 @@ export const adminMounted = MOUNT_PREFIX !== null;
  */
 function sendAdminError(res, status, message) {
 	if (res.headersSent) return;
+	// Length-framed for the same reason the success writer below gives: uWS
+	// derives the length from the body it is handed, so leaving it off answers
+	// chunked where the family answers with a length, and leaves a HEAD
+	// refusal - whose body node strips - with no size at all. Every status
+	// this writer is used for carries a body.
+	const body = JSON.stringify({ error: message });
 	res.writeHead(status, {
 		'content-type': 'application/json',
 		'cache-control': 'no-store',
-		'x-content-type-options': 'nosniff'
+		'x-content-type-options': 'nosniff',
+		'content-length': String(Buffer.byteLength(body))
 	});
-	res.end(JSON.stringify({ error: message }));
+	res.end(body);
 }
 
 /**

@@ -277,7 +277,9 @@ takes that fallback.
 When your WebSocket handler exports an `admin(request)` function -
 `svelte-realtime`'s auth-gated observability handler is the canonical one - the
 adapter mounts it at the reserved `/__realtime/*` path, matched **before** the
-static and SSR lanes so admin traffic never hits page routing. The adapter
+static and SSR lanes so admin traffic never hits page routing. The match reads
+the target as sent, and a target that resolves outside the prefix is refused
+`400` rather than rewritten. The adapter
 bridges the `node:http` request to the framework-agnostic Web `Request` ->
 `Response` contract the handler speaks and writes the response back; it is pure
 transport plumbing, so **all** authorization lives in your handler (the adapter
