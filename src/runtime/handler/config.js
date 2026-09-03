@@ -2,6 +2,9 @@
 // process.env access crosses the V8-to-OS boundary per read, so nothing in
 // here may be re-read inside a request handler.
 
+// Substituted by the adapter's build step; a free identifier until then.
+/* global WS_OPTIONS */
+
 import { env } from '../env.js';
 import { parse_as_bytes, parse_origin } from '../utils/parse.js';
 import { createTrustedProxyMatcher, createClientIpResolver } from '../utils/trusted-proxies.js';
@@ -175,3 +178,10 @@ export function get_origin(headers) {
 
 	return port ? `${protocol}://${hostWithoutPort}:${port}` : `${protocol}://${host}`;
 }
+
+// The reserved admin prefix, or `false` when the auto-mount is off. Derived
+// here rather than at the route registration because the admin handler needs it
+// too: it is what the handler checks the request's own pathname against, and
+// two derivations of one prefix is one drift away from a check that passes for
+// a route it does not describe.
+export const ADMIN_PATH = (WS_OPTIONS && WS_OPTIONS.adminPath !== undefined) ? WS_OPTIONS.adminPath : '/__realtime';

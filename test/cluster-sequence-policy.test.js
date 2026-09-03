@@ -1,5 +1,40 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+
+/**
+ * Read a source with its line endings normalized, so an anchor spanning a line
+ * break cannot match on one checkout and miss on another.
+ *
+ * @param {string} rel
+ * @returns {string}
+ */
+function readSource(rel) {
+	return readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * The source between two anchors, with BOTH anchors asserted.
+ *
+ * Assume a widened slice PASSES rather than fails: an unchecked `indexOf` that
+ * misses returns -1, `slice(start, -1)` reads as one-before-the-end, and the
+ * slice becomes nearly the whole file - where a `toContain` needle that appears
+ * anywhere later keeps passing while the pin no longer describes the lane it
+ * names. So a renamed JSDoc heading or a reordered method has to fail HERE, by
+ * name, rather than quietly producing a slice these pins no longer describe.
+ *
+ * @param {string} source
+ * @param {string} from
+ * @param {string} to
+ * @returns {string}
+ */
+function carve(source, from, to) {
+	const start = source.indexOf(from);
+	expect(start, `carve anchor not found: ${JSON.stringify(from)}`).toBeGreaterThan(-1);
+	const end = source.indexOf(to, start + from.length);
+	expect(end, `carve closing anchor ${JSON.stringify(to)} not found after ${JSON.stringify(from)}`)
+		.toBeGreaterThan(-1);
+	return source.slice(start, end);
+}
 import {
 	BATCH_SEQUENCE_ERROR,
 	BATCH_ENTRY_SEQUENCE_ERROR,
@@ -147,20 +182,16 @@ describe('cluster sequence authority policy', () => {
 	});
 
 	it('guards every production sequence-stamping entry point before mutation', () => {
-		const indexSource = readFileSync(new URL('../src/runtime/index.js', import.meta.url), 'utf8');
-		const source = readFileSync(new URL('../src/runtime/handler/platform.js', import.meta.url), 'utf8');
+		const indexSource = readSource('../src/runtime/index.js');
+		const source = readSource('../src/runtime/handler/platform.js');
 		// The primary threads the resolved worker count into workerData, which
 		// is what arms the multi-worker policy in every worker.
 		expect(indexSource).toContain('totalWorkers: num');
-		const publish = source.slice(source.indexOf('function publish('), source.indexOf('\nfunction send('));
-		const wireAt = source.indexOf('\tpublishWire(');
-		const wire = source.slice(wireAt, source.indexOf('\n\t/**', wireAt));
-		const wireBatchAt = source.indexOf('\tpublishWireBatch(');
-		const wireBatch = source.slice(wireBatchAt, source.indexOf('\n\t/**', wireBatchAt));
-		const loopBatchAt = source.indexOf('\tbatch(messages)');
-		const loopBatch = source.slice(loopBatchAt, source.indexOf('\n\t/**', loopBatchAt));
-		const batchAt = source.indexOf('\tpublishBatched(');
-		const batch = source.slice(batchAt, source.indexOf('\n\t/**', batchAt));
+		const publish = carve(source, 'function publish(', '\nfunction send(');
+		const wire = carve(source, '\tpublishWire(', '\n\t/**');
+		const wireBatch = carve(source, '\tpublishWireBatch(', '\n\t/**');
+		const loopBatch = carve(source, '\tbatch(messages)', '\n\t/**');
+		const batch = carve(source, '\tpublishBatched(', '\n\t/**');
 		// The single lanes follow the one-read rule the batch pioneered: every
 		// option field is read into a local BEFORE the authority check, and the
 		// check judges the locals - so a stateful accessor cannot answer the

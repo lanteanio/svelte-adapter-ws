@@ -28,7 +28,7 @@ import { handleRequest, installRealtimeRoutes } from './handler/request.js';
 import { start as lifecycleStart, shutdown as lifecycleShutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
 import { stopPressureSampler } from './handler/pressure.js';
-import { reconnect_dispersal_ms } from './handler/config.js';
+import { reconnect_dispersal_ms, ADMIN_PATH } from './handler/config.js';
 
 export { beginDrain, lifecycleState, isDraining, platform };
 
@@ -178,7 +178,7 @@ if (WS_ENABLED) {
 		tryAdminRoute: admin.tryAdminRoute
 	});
 	if (admin.adminMounted) {
-		console.log(`[svelte-adapter-ws] Admin route registered at ${admin.ADMIN_PATH}/*`);
+		console.log(`[svelte-adapter-ws] Admin route registered at ${ADMIN_PATH}/*`);
 		// The adapter cannot see whether the app's admin() handler gates its own
 		// requests, so it says so once at boot. An operator who HAS gated it sets
 		// `adminAuthAcknowledged: true` to silence the line - a warning that
@@ -186,7 +186,7 @@ if (WS_ENABLED) {
 		// learns to be ignored, which costs more than it buys.
 		if (!admin.ADMIN_AUTH_ACKNOWLEDGED) {
 			console.warn(
-				`[svelte-adapter-ws] Warning: Admin route ${admin.ADMIN_PATH}/* is mounted with NO adapter-level ` +
+				`[svelte-adapter-ws] Warning: Admin route ${ADMIN_PATH}/* is mounted with NO adapter-level ` +
 				'authentication. It is publicly reachable unless the app\'s admin() ' +
 				'handler gates it (e.g. by validating a session cookie or bearer token). ' +
 				'Set websocket.adminAuthAcknowledged: true once it is gated to silence this.'

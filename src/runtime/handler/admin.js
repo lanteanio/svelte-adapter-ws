@@ -11,7 +11,7 @@
 // adapter never inspects or short-circuits the auth decision. A handler that
 // throws or rejects yields a generic 500 with no detail leaked to the client.
 
-import { origin, get_origin, body_size_limit } from './config.js';
+import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
 import { FORBIDDEN_METHODS, send405 } from './http-helpers.js';
 import { getRequest } from '../kit-node-bridge.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
@@ -23,9 +23,6 @@ import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 /* global WS_OPTIONS */
 
 const wsOptions = WS_OPTIONS || {};
-
-/** The configured mount prefix, or `false` when the auto-mount is disabled. */
-export const ADMIN_PATH = wsOptions.adminPath !== undefined ? wsOptions.adminPath : '/__realtime';
 
 /** True once the operator has confirmed the app handler gates its own requests. */
 export const ADMIN_AUTH_ACKNOWLEDGED = wsOptions.adminAuthAcknowledged === true;
@@ -216,6 +213,31 @@ export function tryAdminRoute(req, res, pathname, state) {
 	try {
 		baseOrigin = origin || get_origin(headers);
 	} catch {
+		sendAdminError(res, 400, 'bad request');
+		return true;
+	}
+
+	// This route matched the RAW pathname, but building the Request resolves
+	// dot segments, so `${ADMIN_PATH}/../reflect` matches here and would hand
+	// the app's `admin()` a request whose pathname is `/reflect` - outside the
+	// prefix that was routed, and outside the namespace the handler's own
+	// dispatch and authorization are written against. Refused rather than
+	// rewritten: a target whose route and whose self-description disagree is
+	// ambiguous, and resolving it either way picks a winner for the caller.
+	// The check asks where the path ENDS UP, so a target that normalizes back
+	// inside is still served, and `..%2f` keeps the prefix because it is one
+	// opaque segment rather than a dot segment. This parse cannot be handed to
+	// `getRequest`, which builds its own URL from `req.url`.
+	let parsed;
+	try {
+		parsed = new URL(baseOrigin + (req.url || '/'));
+	} catch {
+		sendAdminError(res, 400, 'bad request');
+		return true;
+	}
+	if (ADMIN_PATH !== false &&
+		parsed.pathname !== ADMIN_PATH &&
+		!parsed.pathname.startsWith(ADMIN_PATH + '/')) {
 		sendAdminError(res, 400, 'bad request');
 		return true;
 	}
