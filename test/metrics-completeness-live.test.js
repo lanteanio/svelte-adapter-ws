@@ -143,6 +143,29 @@ describe('a booted worker reports a complete metrics document', () => {
 		expect(line, 'no reporting line in the merged document').toBeDefined();
 		expect(line).toBe('metrics_snapshot_workers_reporting 1');
 	});
+
+	it('gives every required signal a non-empty HELP line on a booted worker', () => {
+		// The sentence an operator reads to interpret a number, asserted where
+		// they actually meet it: the document a real worker produces.
+		//
+		// Deliberately NOT compared against the manifest text. The renderer
+		// reads its help from the manifest too, so an equality check moves with
+		// whatever it is meant to be checking and cannot fail - proved by
+		// rewording an entry and watching that version stay green. What this
+		// asserts instead is that the line is THERE and carries a sentence: a
+		// signal absent from the document, or emitted with an empty help, is a
+		// number an operator meets with nothing to read it by.
+		const doc = String(mergeSamples([{ worker: 1, samples }], { expected: 1, reporting: 1 }));
+		const helpFor = new Map();
+		for (const line of doc.split('\n')) {
+			const m = /^# HELP (\S+) (.*)$/.exec(line);
+			if (m) helpFor.set(m[1], m[2]);
+		}
+		const missing = REQUIRED.filter((s) => !helpFor.has(s.name)).map((s) => s.name);
+		expect(missing, 'required signals with no HELP line in the rendered document').toEqual([]);
+		const blank = REQUIRED.filter((s) => (helpFor.get(s.name) || '').trim() === '').map((s) => s.name);
+		expect(blank, 'required signals whose rendered HELP is empty').toEqual([]);
+	});
 });
 
 // The outcome family answers "did this publish reach anyone", and every lane
