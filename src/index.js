@@ -72,7 +72,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * error at the only moment anyone is watching.
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
-	'adminPath', 'adminAuthAcknowledged', 'metrics', 'protection',
+	'metrics', 'protection',
 	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
 	'postureExport'
 ];
@@ -163,9 +163,10 @@ function collectUnknownKeys(bag, known, prefix, out) {
  * at build time.
  *
  * @param {Record<string, any> | null} websocket - normalized websocket options
+ * @param {string | false} adminPath - validated admin route prefix (or false)
  * @returns {Record<string, unknown>}
  */
-export function serializeWsOptions(websocket) {
+export function serializeWsOptions(websocket, adminPath) {
 	// A flag that RESTRICTS access must never be coerced: `=== true` reads
 	// treat every other value as "off", so a misshaped value is a build error.
 	assertWireSubscribeAuthorization(websocket, 'authorizeWireSubscribe');
@@ -227,7 +228,14 @@ export function serializeWsOptions(websocket) {
 		allowNonAsciiTopics: websocket?.allowNonAsciiTopics === true,
 		authPathRequireOrigin: websocket?.authPathRequireOrigin !== false,
 		compressCredentialedResponses: websocket?.compressCredentialedResponses === true,
-		unsafeSameOriginWithoutHostPin: websocket?.unsafeSameOriginWithoutHostPin === true
+		unsafeSameOriginWithoutHostPin: websocket?.unsafeSameOriginWithoutHostPin === true,
+		// Silences the boot warning that the admin route carries no
+		// adapter-level authentication. Set it once the app's admin() handler
+		// gates its own requests - the adapter cannot detect that itself.
+		adminAuthAcknowledged: websocket?.adminAuthAcknowledged === true,
+		// Admin route prefix (validated above): a normalized path string
+		// (default `/__realtime`) or `false` to disable the auto-mount.
+		adminPath
 	};
 }
 
@@ -565,9 +573,9 @@ export default function (opts = {}) {
 		for (const key of UNSHIPPED_WEBSOCKET_KEYS) {
 			if (websocket[key] !== undefined) {
 				throw new Error(
-					`[adapter-ws] websocket.${key} is not available yet in svelte-adapter-ws. ` +
-					'The lane behind it has not shipped here; remove the option, or use ' +
-					'svelte-adapter-uws where it is supported.'
+					`[adapter-ws] websocket.${key} is not supported by svelte-adapter-ws. ` +
+					'This build cannot deliver the behavior the option asks for; remove the ' +
+					'option, or use svelte-adapter-uws, where it is supported.'
 				);
 			}
 		}
@@ -930,7 +938,36 @@ export default function (opts = {}) {
 					`websocket.authPath ('${wsAuthPath}') must differ from websocket.path ('${wsPath}').`
 				);
 			}
-			const wsOpts = websocket ? serializeWsOptions(websocket) : null;
+			// Admin / observability route prefix. The adapter auto-mounts the WS
+			// handler's `admin(request)` export here (before the SSR catch-all)
+			// when it is exported. Default `/__realtime`; set a string to relocate
+			// it; set `false` to disable the auto-mount entirely (e.g. when mounting
+			// it yourself via a SvelteKit `+server.js` route with your own
+			// middleware). The realtime admin handler is mount-prefix agnostic, so a
+			// custom path is configured in this one place.
+			let adminPath = websocket?.adminPath;
+			if (adminPath === undefined || adminPath === null) adminPath = '/__realtime';
+			if (adminPath !== false) {
+				if (typeof adminPath !== 'string' || adminPath[0] !== '/') {
+					throw new Error(
+						`websocket.adminPath must be an absolute path string starting with '/' ` +
+						`(e.g. '/__realtime'), or false to disable the auto-mounted admin route - ` +
+						`got ${JSON.stringify(adminPath)}.`
+					);
+				}
+				adminPath = adminPath.replace(/\/+$/, '');
+				if (adminPath === '') {
+					throw new Error(
+						`websocket.adminPath cannot be '/' or empty - use a non-root prefix like '/__realtime', or false to disable.`
+					);
+				}
+				if (adminPath === wsPath || adminPath === wsAuthPath) {
+					throw new Error(
+						`websocket.adminPath ('${adminPath}') must differ from websocket.path ('${wsPath}') and websocket.authPath ('${wsAuthPath}').`
+					);
+				}
+			}
+			const wsOpts = websocket ? serializeWsOptions(websocket, adminPath) : null;
 
 			// Loud on unknown websocket.* keys: options are serialized into the
 			// build, so a key the adapter does not recognize would be dropped

@@ -25,7 +25,8 @@ const IS_WIN32 = process.platform === 'win32';
  *   wsPath: string,
  *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) => boolean,
  *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => void,
- *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean
+ *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
+ *   tryAdminRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean
  * } | null}
  */
 let realtimeRoutes = null;
@@ -96,6 +97,15 @@ export function handleRequest(req, res) {
 		// shadow the queue a browser is sitting in.
 		if (isGetLike && realtimeRoutes.tryWaitingRoomRoute(req, res, pathname, search)) return;
 		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname)) return;
+		// The reserved admin prefix, last of the realtime routes and above the
+		// static lane. The exact realtime routes above beat it - the WebSocket
+		// path, the authenticate endpoint, both waiting-room paths, and the two
+		// probes for the methods each answers - and it beats the static and SSR
+		// catch-all, so a same-named asset cannot shadow an admin path. Note the
+		// probes are GET-only, so a HEAD on a probe path nested under the admin
+		// prefix reaches the admin handler; uWS routes the same way, because a
+		// method-scoped route does not claim the other methods either.
+		if (realtimeRoutes.tryAdminRoute(req, res, pathname, state)) return;
 	}
 
 	// Static fast path: one Map lookup on the RAW undecoded pathname, five

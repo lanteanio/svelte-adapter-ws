@@ -156,6 +156,10 @@ if (WS_ENABLED) {
 	// Dynamic so a JSON-only (websocket-less) build never evaluates the ws
 	// import graph. The await rides module top-level await like _init.js.
 	realtime = await import('./handler/realtime.js');
+	// The admin route reads the app's handler module through the same bridge
+	// realtime.js does, so it may only be loaded from inside this branch: the
+	// WS_HANDLER placeholder resolves in a websocket-enabled build alone.
+	const admin = await import('./handler/admin.js');
 	server.on('upgrade', (req, socket, head) => {
 		void realtime?.handleUpgrade(req, socket, head).catch(() => {
 			try { socket.destroy(); } catch { /* already gone */ }
@@ -165,8 +169,25 @@ if (WS_ENABLED) {
 		wsPath: realtime.wsPath(),
 		tryAuthenticateRoute: realtime.tryAuthenticateRoute,
 		serveWsPathGet: realtime.serveWsPathGet,
-		tryWaitingRoomRoute: realtime.tryWaitingRoomRoute
+		tryWaitingRoomRoute: realtime.tryWaitingRoomRoute,
+		tryAdminRoute: admin.tryAdminRoute
 	});
+	if (admin.adminMounted) {
+		console.log(`[svelte-adapter-ws] Admin route registered at ${admin.ADMIN_PATH}/*`);
+		// The adapter cannot see whether the app's admin() handler gates its own
+		// requests, so it says so once at boot. An operator who HAS gated it sets
+		// `adminAuthAcknowledged: true` to silence the line - a warning that
+		// cannot be turned off after the operator has acted on it is how a log
+		// learns to be ignored, which costs more than it buys.
+		if (!admin.ADMIN_AUTH_ACKNOWLEDGED) {
+			console.warn(
+				`[svelte-adapter-ws] Warning: Admin route ${admin.ADMIN_PATH}/* is mounted with NO adapter-level ` +
+				'authentication. It is publicly reachable unless the app\'s admin() ' +
+				'handler gates it (e.g. by validating a session cookie or bearer token). ' +
+				'Set websocket.adminAuthAcknowledged: true once it is gated to silence this.'
+			);
+		}
+	}
 }
 
 export { realtime };

@@ -247,6 +247,38 @@ export interface WebSocketOptions {
 	path?: string;
 	/** Authenticate preflight route (default '/__ws/auth'). */
 	authPath?: string;
+	/**
+	 * Prefix for the reserved admin / observability route. When your WebSocket
+	 * handler exports an `admin(request)` function (svelte-realtime's auth-gated
+	 * introspection handler is the canonical one), the adapter auto-mounts it at
+	 * `<adminPath>/*`, matched before the SSR catch-all so it never hits page
+	 * routing. The handler is mount-prefix agnostic, so relocating it is a
+	 * one-place change here.
+	 *
+	 * Set `false` to disable the auto-mount entirely - for apps that mount the
+	 * `admin` handler themselves (e.g. a SvelteKit `+server.js` route with their
+	 * own middleware) and do not want a second, adapter-owned mount point. No
+	 * effect unless the handler exports `admin`.
+	 *
+	 * Must be an absolute path (starting with `/`) that differs from `path` and
+	 * `authPath`.
+	 * @default '/__realtime'
+	 */
+	adminPath?: string | false;
+	/**
+	 * Silence the boot warning that the auto-mounted admin route carries no
+	 * adapter-level authentication.
+	 *
+	 * The adapter mounts `admin` without gating it - whether requests are
+	 * authenticated is entirely up to the handler, and the adapter cannot
+	 * inspect that - so it warns once at startup. Set this to `true` after
+	 * confirming the handler validates a session cookie, bearer token or
+	 * equivalent, so the line stops appearing in logs an operator has already
+	 * acted on. It changes nothing about routing or authorization.
+	 *
+	 * @default false
+	 */
+	adminAuthAcknowledged?: boolean;
 	/** Max inbound frame bytes (default 1 MiB). */
 	maxPayloadLength?: number;
 	/** Idle reap timeout in seconds; 0 disables (default 120). */
@@ -1316,7 +1348,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS: Set<string>;
 /** @internal */
 export function unknownAdapterOptionKeys(opts: Record<string, unknown> | null | undefined): string[];
 /** @internal */
-export function serializeWsOptions(websocket: Record<string, unknown>): Record<string, unknown>;
+export function serializeWsOptions(websocket: Record<string, unknown>, adminPath: string | false): Record<string, unknown>;
 /** @internal */
 export function renderRefusedDotfileWarning(refused: string[]): string;
 /**

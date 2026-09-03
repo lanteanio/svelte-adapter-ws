@@ -100,6 +100,24 @@ connection closed
 
 Further reading: https://svti.me/request-closed
 
+## ADAPTER-ERR-ADMIN-HANDLER
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.admin event=admin.handler-failed severity=error] The admin handler failed; the request was answered 500.
+```
+
+**Cause.** An admin route handler threw or returned a rejected promise.
+
+**Consequence.** That one admin request answered 500. Application traffic and WebSocket delivery are unaffected.
+
+**Automatic recovery.** None for the failed request; the next admin request runs the handler again.
+
+**What to do.** Read the attached error attribute and fix the admin handler. Admin routes are separately gated, so this does not indicate a fault in the serving path.
+
 ## ADAPTER-ERR-INVARIANT
 
 Log line begins:

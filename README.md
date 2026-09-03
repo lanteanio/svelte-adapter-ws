@@ -131,7 +131,8 @@ the build loudly rather than silently no-op'ing.
 Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `healthCheckPath`, `readinessCheckPath`, `staticHeaders`,
 `staticCacheControl`, `staticDotfiles`, `warmup`, `tracing`, and the
-`websocket` block (`handler`, `path`, `authPath`, `maxPayloadLength`,
+`websocket` block (`handler`, `path`, `authPath`, `adminPath`,
+`adminAuthAcknowledged`, `maxPayloadLength`,
 `idleTimeout`, `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `upgradeAdmission`,
 `messageAdmission`, `pressure`, `egress`, `primaryInit`, `workers`, and the
@@ -161,6 +162,47 @@ the adapter is configured.
 `false` (batches refuse atomically), stamps no sequence, and is counted in
 `platform.pressure.egress`. Tenants resolve through the WebSocket handler's
 `egressTenantOf(topic)` export.
+
+### The reserved `/__realtime/*` admin route
+
+When your WebSocket handler exports an `admin(request)` function -
+`svelte-realtime`'s auth-gated observability handler is the canonical one - the
+adapter mounts it at the reserved `/__realtime/*` path, matched **before** the
+static and SSR lanes so admin traffic never hits page routing. The adapter
+bridges the `node:http` request to the framework-agnostic Web `Request` ->
+`Response` contract the handler speaks and writes the response back; it is pure
+transport plumbing, so **all** authorization lives in your handler (the adapter
+never inspects or short-circuits the decision). A handler that throws, rejects,
+or returns a non-`Response` yields a generic `500` with no detail leaked. The
+route is a no-op unless the handler exports `admin`, so existing apps are
+unaffected.
+
+Configure the prefix with `websocket.adminPath`:
+
+```js
+// vite.config.ts - inside sveltekit({ adapter: ... })
+adapter({
+  websocket: {
+    adminPath: "/__ops", // relocate it (default '/__realtime')
+    // adminPath: false    // OR disable the auto-mount entirely
+  },
+});
+```
+
+Set a **string** to relocate the route (defense-in-depth, or to avoid colliding
+with an app route), or **`false`** to disable the auto-mount entirely - for apps
+that mount the `admin` handler themselves through a SvelteKit `+server.js` route
+(with their own middleware), so there is no second adapter-owned mount point. It
+must be an absolute path differing from `websocket.path` and
+`websocket.authPath`; an invalid value fails the build. The `svelte-realtime`
+admin handler is mount-prefix agnostic, so the path is configured here in one
+place.
+
+Because the adapter cannot see whether your handler gates its own requests, it
+warns once at boot that the mounted route carries no adapter-level
+authentication. Set `websocket.adminAuthAcknowledged: true` once the handler
+validates a session cookie, bearer token or equivalent and that line stops
+appearing; it changes nothing about routing or authorization.
 
 Tracing is opt-in and vendor-neutral: point `tracing` at a server module whose
 default (or named `tracing`/`provider`) export implements
@@ -293,8 +335,9 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `authenticate` preflight endpoint with CSRF defense and rate limiting is
    in; app hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). The `websocket.*`
-   options whose lanes have not shipped here (admin, metrics, admission
-   ceilings, egress, posture) refuse the build loudly.
+   options whose lanes have not shipped here (`metrics`, and the protection
+   and posture group - `protection`, `postureExport` and the three audit
+   intervals) refuse the build loudly.
    Graceful shutdown drains live sockets itself (`http.close()` never
    completes while one is open): new upgrades are refused the moment drain
    begins, every client gets the reconnect advisory with the

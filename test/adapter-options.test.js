@@ -1,5 +1,84 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, describe, expect, it } from 'vitest';
 import adapter, { KNOWN_ADAPTER_OPTION_KEYS, unknownAdapterOptionKeys, unknownWebsocketOptionKeys, renderRefusedDotfileWarning, serializeWsOptions } from '../src/index.js';
+
+// The path options are normalized inside adapt(), not by the factory, so the
+// cases below run a real adapt over a stub Builder. The build tree lands in a
+// gitignored temp dir; `copy` records the substitution map, which is where the
+// serialized WS_OPTIONS - the only carrier that reaches the runtime - is
+// visible.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const buildDir = mkdtempSync(path.join(repoRoot, 'test', '.tmp-adapt-options-'));
+const FIXTURE_SERVER = 'export class Server { constructor(m) { this.m = m; } async init() {} async respond() { return new Response("x"); } }\n';
+
+/** @param {string} source @param {Record<string, string>} replace */
+function substitute(source, replace) {
+	let result = source;
+	for (const [key, value] of Object.entries(replace)) {
+		result = result.replace(new RegExp(`\\b${key}\\b`, 'g'), value);
+	}
+	return result;
+}
+
+/** @param {string} from @param {string} to @param {Record<string, string>} replace */
+function copyTree(from, to, replace) {
+	mkdirSync(to, { recursive: true });
+	for (const entry of readdirSync(from, { withFileTypes: true })) {
+		const src = path.join(from, entry.name);
+		const dst = path.join(to, entry.name);
+		if (entry.isDirectory()) copyTree(src, dst, replace);
+		else writeFileSync(dst, substitute(readFileSync(src, 'utf8'), replace));
+	}
+}
+
+/**
+ * Run adapt() over a stub Builder and hand back the serialized WS_OPTIONS.
+ * @param {Record<string, unknown>} websocket
+ * @returns {Promise<Record<string, any>>}
+ */
+async function adaptWebsocket(websocket) {
+	const appDir = mkdtempSync(path.join(buildDir, 'app-'));
+	/** @type {Record<string, string> | null} */
+	let replaceMap = null;
+	const log = Object.assign(() => {}, { minor() {}, info() {}, success() {}, warn() {}, error() {} });
+	await adapter({ out: path.join(appDir, 'build'), precompress: false, websocket }).adapt({
+		log,
+		rimraf: (/** @type {string} */ p) => rmSync(p, { recursive: true, force: true }),
+		mkdirp: (/** @type {string} */ p) => mkdirSync(p, { recursive: true }),
+		getBuildDirectory: (/** @type {string} */ name) => path.join(appDir, '.svelte-kit', name),
+		config: {
+			kit: {
+				paths: { base: '' },
+				env: { dir: appDir, publicPrefix: 'PUBLIC_', privatePrefix: '' },
+				files: { assets: path.join(appDir, 'static') },
+				alias: {},
+				version: { name: 'test' }
+			}
+		},
+		writeClient(/** @type {string} */ dest) { mkdirSync(dest, { recursive: true }); return []; },
+		writePrerendered(/** @type {string} */ dest) { mkdirSync(dest, { recursive: true }); return []; },
+		writeServer(/** @type {string} */ dest) {
+			mkdirSync(dest, { recursive: true });
+			writeFileSync(path.join(dest, 'index.js'), FIXTURE_SERVER);
+			return [];
+		},
+		generateManifest: () => "{ appPath: '_app', mimeTypes: {}, assets: new Set([]) }",
+		prerendered: { paths: [] },
+		compress: async () => {},
+		hasServerInstrumentationFile: () => false,
+		copy(/** @type {string} */ from, /** @type {string} */ to, /** @type {{ replace: Record<string, string> }} */ opts) {
+			replaceMap ??= opts.replace;
+			copyTree(from, to, opts.replace);
+		}
+	});
+	return JSON.parse(/** @type {Record<string, string>} */ (replaceMap).WS_OPTIONS);
+}
+
+afterAll(() => {
+	rmSync(buildDir, { recursive: true, force: true });
+});
 
 describe('adapter factory options', () => {
 	it('builds an adapter object with the family name and support surface', () => {
@@ -42,9 +121,9 @@ describe('adapter factory options', () => {
 			.toEqual(['upgradeAdmission.maxConcurent']);
 		expect(unknownWebsocketOptionKeys({ upgradeAdmission: { waitingRoom: { pollIntervalMs: 3000 } } }))
 			.toEqual([]);
-		for (const key of ['metrics', 'protection', 'adminPath', 'postureExport']) {
+		for (const key of ['metrics', 'protection', 'postureExport']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
-				.toThrow(/is not available yet/);
+				.toThrow(/is not supported by svelte-adapter-ws/);
 		}
 	});
 
@@ -130,4 +209,33 @@ describe('adapter factory options', () => {
 		expect(warning).toContain('.well-known/.nested');
 		expect(warning).toContain('staticDotfiles: true');
 	});
+
+	it('normalizes websocket.adminPath and refuses the paths that cannot mount', async () => {
+		// The default is the reserved prefix, carried into the build as the
+		// only thing the runtime reads.
+		expect((await adaptWebsocket({})).adminPath).toBe('/__realtime');
+		expect((await adaptWebsocket({ adminPath: '/__ops' })).adminPath).toBe('/__ops');
+		// `false` disables the auto-mount and survives serialization as false,
+		// not as a string or a dropped key.
+		expect((await adaptWebsocket({ adminPath: false })).adminPath).toBe(false);
+		// Trailing slashes are stripped BEFORE the empty and collision checks,
+		// so the stripped value is what mounts and what the checks judge.
+		expect((await adaptWebsocket({ adminPath: '/x/' })).adminPath).toBe('/x');
+		expect((await adaptWebsocket({ adminPath: '/x///' })).adminPath).toBe('/x');
+		// The acknowledgement flag is a strict boolean: a truthy string leaves
+		// the boot warning armed rather than silencing it by coercion.
+		expect((await adaptWebsocket({ adminAuthAcknowledged: true })).adminAuthAcknowledged).toBe(true);
+		expect((await adaptWebsocket({ adminAuthAcknowledged: 'yes' })).adminAuthAcknowledged).toBe(false);
+
+		await expect(adaptWebsocket({ adminPath: 5 }))
+			.rejects.toThrow(/websocket\.adminPath must be an absolute path string starting with '\/'/);
+		await expect(adaptWebsocket({ adminPath: 'ops' }))
+			.rejects.toThrow(/websocket\.adminPath must be an absolute path string starting with '\/'/);
+		await expect(adaptWebsocket({ adminPath: '/' }))
+			.rejects.toThrow(/websocket\.adminPath cannot be '\/' or empty/);
+		await expect(adaptWebsocket({ adminPath: '/ws' }))
+			.rejects.toThrow(/websocket\.adminPath \('\/ws'\) must differ from websocket\.path/);
+		await expect(adaptWebsocket({ adminPath: '/__ws/auth' }))
+			.rejects.toThrow(/must differ from websocket\.path \('\/ws'\) and websocket\.authPath/);
+	}, 60000);
 });

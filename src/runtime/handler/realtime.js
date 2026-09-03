@@ -122,12 +122,6 @@ armCloseHookAccounting(wsModule.close);
 // runtime as a function. A defined non-function export refuses at startup
 // rather than silently standing every tenant ceiling down.
 configureEgress(wsOptions.egress, wsModule.egressTenantOf);
-if (wsModule.admin) {
-	console.warn(
-		'[svelte-adapter-ws] The admin() export is not auto-mounted by this adapter yet. ' +
-		'Mount it yourself via a +server.js route until the admin lane ships.'
-	);
-}
 
 setStatsEnabled(!!wsModule.close);
 

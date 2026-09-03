@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The auto-mounted admin route and `websocket.adminPath`, which the build
+  previously refused. When the WebSocket handler exports `admin(request)`, the
+  adapter mounts it under a reserved prefix (default `/__realtime`) ahead of the
+  static and SSR lanes, bridges the request to the Web `Request` -> `Response`
+  contract the handler speaks, and writes the response back verbatim. All
+  authorization lives in the app handler; the adapter's own answers are the
+  transport failures alone - `405` for a fetch-forbidden method, `400` for an
+  ambiguous header or an unusable Host, `413` for a declared body over
+  `BODY_SIZE_LIMIT`, and `500` for a handler that throws, rejects or returns a
+  non-`Response`. A throw or a rejection also emits
+  `ADAPTER-ERR-ADMIN-HANDLER`, carrying the error; a returned non-`Response`
+  is answered `500` without one, because there is no error to carry. Set a
+  string to
+  relocate the prefix or `false` to disable the mount; a value that is not an
+  absolute path, or that collides with `websocket.path` or `websocket.authPath`,
+  fails the build.
+
+- `websocket.adminAuthAcknowledged`: silences the boot warning that the mounted
+  admin route carries no adapter-level authentication. The adapter cannot see
+  whether the app's `admin()` handler gates its own requests, so it says so once
+  at startup; set this to `true` after confirming it does. It changes nothing
+  about routing or authorization.
+
 - `websocket.upgradeAdmission`: the upgrade gate, which the build previously
   refused. `maxConcurrent` caps handshakes in flight, `maxConnections` caps
   reserved-plus-live sockets with a permit held for the socket's lifetime and

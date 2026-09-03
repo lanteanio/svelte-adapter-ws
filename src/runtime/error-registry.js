@@ -23,6 +23,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	VITE_RELOAD: 'ADAPTER-ERR-VITE-RELOAD',
 	REQUEST_TIMEOUT: 'ADAPTER-ERR-REQUEST-TIMEOUT',
 	REQUEST_CLOSED: 'ADAPTER-ERR-REQUEST-CLOSED',
+	ADMIN_HANDLER: 'ADAPTER-ERR-ADMIN-HANDLER',
 	INVARIANT: 'ADAPTER-ERR-INVARIANT',
 	WARMUP_RENDER: 'ADAPTER-ERR-WARMUP-RENDER',
 	PRESSURE_RUNAWAY_PUBLISHER: 'ADAPTER-ERR-PRESSURE-RUNAWAY-PUBLISHER',
@@ -170,6 +171,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		anchor: 'adapter-err-request-closed',
 		help: 'docs/errors.md#adapter-err-request-closed',
 		link: 'https://svti.me/request-closed'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.ADMIN_HANDLER,
+		code: null,
+		event: 'admin.handler-failed',
+		component: 'runtime.admin',
+		severity: 'error',
+		emission: 'direct',
+		problemPrefix: 'The admin handler failed; the request was answered 500.',
+		messagePrefix: direct('runtime.admin', 'admin.handler-failed', 'error', 'The admin handler failed; the request was answered 500.'),
+		cause: 'An admin route handler threw or returned a rejected promise.',
+		consequence: 'That one admin request answered 500. Application traffic and WebSocket delivery are unaffected.',
+		automaticRecovery: 'None for the failed request; the next admin request runs the handler again.',
+		nextAction: 'Read the attached error attribute and fix the admin handler. Admin routes are separately gated, so this does not indicate a fault in the serving path.',
+		sources: Object.freeze(['src/runtime/handler/admin.js']),
+		anchor: 'adapter-err-admin-handler',
+		help: 'docs/errors.md#adapter-err-admin-handler'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.INVARIANT,

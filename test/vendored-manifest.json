@@ -713,6 +713,27 @@
 		]
 	},
 	{
+		"file": "test/admin-route.test.js",
+		"adaptations": [
+			{
+				"lead": "// The reserved `/__realtime/*` admin route is wired over a real uWS server.\n// Skip the whole suite when the optional uWebSockets.js binding is absent.\nlet uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n\nlet server;\n\ndescribeUWS('reserved",
+				"ours": "// The reserved `/__realtime/*` admin route, driven over the node:http\n// server createTestServer builds.\n\nlet server;\n\ndescribe('reserved"
+			},
+			{
+				"lead": "\t\t// With no admin route mounted, the request falls through to uWS's\n\t\t// built-in 404. A mounted route would return our JSON (200/500), never\n\t\t// a uWS \"File Not Found\" 404 - so this proves the route is absent.",
+				"ours": "\t\t// With no admin route mounted, the request falls through to the\n\t\t// harness's built-in 404. A mounted route would return our JSON\n\t\t// (200/500), never a plain 404 - so this proves the route is absent."
+			},
+			{
+				"lead": "\t\t// ...and NOT at the default prefix (uWS built-in 404, route absent there).",
+				"ours": "\t\t// ...and NOT at the default prefix (harness 404, route absent there)."
+			},
+			{
+				"lead": "\ndescribeUWS('platform.introspect transport snapshot', () => {\n\tafterEach(async () => {\n\t\tawait server?.close();\n\t\tserver = null;\n\t});\n\n\tit('returns a PII-free scalar snapshot (no topic names)', async () => {\n\t\tconst { createTestServer } = await import('../src/testing.js');\n\t\tserver = await createTestServer();\n\t\tconst snap = server.platform.introspect();\n\n\t\texpect(typeof snap.connections).toBe('number');\n\t\texpect(typeof snap.closedWsAborts).toBe('number');\n\t\texpect(typeof snap.maxPayloadLength).toBe('number');\n\t\texpect(['normal', 'elevated', 'siege']).toContain(snap.protection);\n\n\t\t// Scalar pressure signals only - topPublishers (topic names) is omitted.\n\t\texpect(snap.pressure).toBeTypeOf('object');\n\t\texpect('topPublishers' in snap.pressure).toBe(false);\n\t\texpect(typeof snap.pressure.reason).toBe('string');\n\t\texpect(typeof snap.pressure.active).toBe('boolean');\n\n\t\t// assertions is a plain object snapshot (not the live Map).\n\t\texpect(snap.assertions).toBeTypeOf('object');\n\t\texpect(snap.assertions instanceof Map).toBe(false);\n\n\t\t// Default introspection exposes only bounded diagnostic metadata. Detailed\n\t\t// keyed stream evidence requires an exact opaque id through the admin gate.\n\t\texpect(snap.diagnostics).toEqual({ retained: 0, recent: [] });\n\t\texpect(server.platform.diagnostic('unknown')).toBeNull();\n\t});\n\n\tit('reflects the live connection count', async () => {\n\t\tconst { WebSocket } = await import('ws');\n\t\tconst { createTestServer } = await import('../src/testing.js');\n\t\tserver = await createTestServer();\n\t\texpect(server.platform.introspect().connections).toBe(0);\n\n\t\tconst ws = new WebSocket(server.wsUrl);\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tws.on('open', resolve);\n\t\t\tws.on('error', reject);\n\t\t});\n\t\t// The server-side open handler can lag the client open event slightly;\n\t\t// poll briefly until the connection registers.\n\t\tfor (let i = 0; i < 50 && server.platform.introspect().connections === 0; i++) {\n\t\t\tawait new Promise((r) => setTimeout(r, 10));\n\t\t}\n\t\texpect(server.platform.introspect().connections).toBe(1);\n\t\tws.close();\n\t});\n\n\tit('composes through a realtime-style admin handler under a transport key', async () => {\n\t\tconst { createTestServer } = await import('../src/testing.js');\n\t\t// Model svelte-realtime's introspect() merging platform.introspect()\n\t\t// under a `transport` key, exposed via the admin route.\n\t\tserver = await createTestServer({\n\t\t\thandler: {\n\t\t\t\tadmin: async (request) => {\n\t\t\t\t\tconst sub = new URL(request.url).pathname.replace('/__realtime/', '');\n\t\t\t\t\tif (sub !== 'introspect') return new Response('not found', { status: 404 });\n\t\t\t\t\tconst transport = server.platform.introspect();\n\t\t\t\t\treturn Response.json({ handlers: { total: 0 }, transport });\n\t\t\t\t}\n\t\t\t}\n\t\t});\n\t\tconst res = await fetch(`${server.url}/__realtime/introspect`);\n\t\texpect(res.status).toBe(200);\n\t\tconst body = await res.json();\n\t\texpect(body.transport).toBeTypeOf('object');\n\t\texpect(typeof body.transport.connections).toBe('number');\n\t\texpect(body.handlers.total).toBe(0);\n\t});\n});\n",
+				"ours": ""
+			}
+		]
+	},
+	{
 		"file": "test/admission-metrics.test.js",
 		"adaptations": [
 			{
