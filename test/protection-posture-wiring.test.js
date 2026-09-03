@@ -137,15 +137,24 @@ describe('the live sampler carries the posture', () => {
 	});
 });
 
-const realtimeSource = readFileSync(
-	fileURLToPath(new URL('../src/runtime/handler/realtime.js', import.meta.url)), 'utf8'
-);
-const platformSource = readFileSync(
-	fileURLToPath(new URL('../src/runtime/handler/platform.js', import.meta.url)), 'utf8'
-);
-const lifecycleSource = readFileSync(
-	fileURLToPath(new URL('../src/runtime/handler/lifecycle.js', import.meta.url)), 'utf8'
-);
+/**
+ * Read a source with its line endings normalized.
+ *
+ * The anchors below are written with LF, and this repo checks out CRLF under
+ * git's autocrlf - so an anchor spanning a line break matches only on whichever
+ * of the two the working tree happens to hold. Normalizing here is what keeps
+ * these pins from passing locally and failing on a fresh clone.
+ *
+ * @param {string} rel
+ * @returns {string}
+ */
+function readSource(rel) {
+	return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const realtimeSource = readSource('../src/runtime/handler/realtime.js');
+const platformSource = readSource('../src/runtime/handler/platform.js');
+const lifecycleSource = readSource('../src/runtime/handler/lifecycle.js');
 
 /** The source between two anchors, so a branch is asserted on its own text. */
 function block(source, from, to) {

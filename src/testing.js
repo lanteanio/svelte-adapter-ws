@@ -2410,11 +2410,28 @@ export async function createTestServer(options = {}) {
 			return { seq, delivered };
 		},
 		batch(messages) {
+			// Vet every entry's seq before one of them can draw a counter or
+			// reach a subscriber, the same order production takes: a batch
+			// whose later entry carries an unstampable seq must fail whole
+			// rather than deliver its prefix and then throw.
+			if (Array.isArray(messages)) {
+				for (const m of messages) {
+					const o = /** @type {any} */ (m != null ? m.options : undefined);
+					assertStampableSeq(o != null ? o.seq : undefined);
+				}
+			}
 			return messages.map(({ topic, event, data, options }) => platform.publish(topic, event, data, options));
 		},
 		publishBatched(messages, options) {
 			void options; // Platform-shape parity; the test server configures no compressor.
 			if (!Array.isArray(messages) || messages.length === 0) return;
+			// Same pre-pass as production: the send happens after the stamping
+			// loop, so an unstampable entry costs no frame but would leave the
+			// counter advanced past a value nothing was sent under.
+			for (const m of messages) {
+				const o = /** @type {any} */ (m != null ? m.options : undefined);
+				assertStampableSeq(o != null ? o.seq : undefined);
+			}
 			messages = collapseByCoalesceKey(messages);
 			if (messages.length === 0) return;
 			const firstTopic = messages[0].topic;

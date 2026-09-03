@@ -521,6 +521,15 @@ export const platform = {
 			msgJitters[i] = o != null ? o.jitterMs : undefined;
 			msgExcludes[i] = o != null ? o.excludeWs : undefined;
 			assertClusterSequenceAuthorityValues(seqOption, relayOption);
+			// And the VALUE, here rather than in the stamping loop below. This
+			// path loses no frame either way - its send sits after the loop -
+			// but the entries ahead of an unstampable one have already drawn
+			// the topic counter and written max-seen, so the counter skips a
+			// number no client ever saw. A client watermark can then sit above
+			// a value that was never sent, and republishing that seq once the
+			// payload is fixed reads as already-seen. Nothing on the wire
+			// marks it.
+			assertStampableSeq(seqOption);
 			msgSeqs[i] = seqOption;
 			msgRelays[i] = relayOption;
 		}
@@ -643,6 +652,16 @@ export const platform = {
 				? o
 				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };
 			assertClusterSequenceAuthority(snap);
+			// And the VALUE, on the same snapshot the authority check just
+			// read. The authority question is answered for the whole batch up
+			// here, but the value question used to happen inside each
+			// per-message publish() below - so a batch whose third entry
+			// carried an unstampable seq delivered its first two and then
+			// threw. Independent of topology, which is the point:
+			// clusterSequenceValuesAccepted returns accepted without reading
+			// the value whenever the runtime is not multi-worker, so on the
+			// default deployment the pre-pass vetted nothing the caller wrote.
+			assertStampableSeq(snap != null ? snap.seq : undefined);
 			snapshots[i] = snap;
 		}
 		const results = [];
