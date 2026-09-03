@@ -16,7 +16,7 @@ import { env } from './env.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from './error-registry.js';
 import { monotonicNow, wallEpoch, setTimer, setIntervalTimer, clearTimer, clearIntervalTimer } from './runtime.js';
 import { createRelayRingBuffer, RingWriter, RingReader, decodeRelayFrame } from './relay-ring.js';
-import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible } from './relay-spill-policy.js';
+import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible, relayRingEligible } from './relay-spill-policy.js';
 import { createRestartSupervisor } from './restart-supervisor.js';
 import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
 import { certExpiryAlert, createCertWatcher, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
@@ -346,7 +346,7 @@ if (is_primary) {
 	 * both retained so a respawn re-creates the SAME role in the SAME slot
 	 * after a crash. `threadId` is captured at spawn because Node nulls the
 	 * worker handle before emitting 'exit'.
-	 * @typedef {{ threadId: number, lastHeartbeat: number, spawnedAt: number, ready: boolean, role: 'io' | 'compute', slot: { role: 'io' | 'compute', index: number }, ringWriter: RingWriter | null, ringReader: RingReader | null, relayQuarantined: boolean }} WorkerMeta
+	 * @typedef {{ threadId: number, lastHeartbeat: number, spawnedAt: number, ready: boolean, role: 'io' | 'compute', slot: { role: 'io' | 'compute', index: number }, ringWriter: RingWriter | null, ringReader: RingReader | null, relayQuarantined: boolean, relayAttached: boolean }} WorkerMeta
 	 */
 
 	/** @type {Map<import('node:worker_threads').Worker, WorkerMeta>} */
@@ -529,7 +529,8 @@ if (is_primary) {
 			slot,
 			ringWriter: null,
 			ringReader: null,
-			relayQuarantined: false
+			relayQuarantined: false,
+			relayAttached: false
 		};
 		if (relay_ring !== null) {
 			const quarantineRelaySpill = createRelaySpillQuarantine({
@@ -551,7 +552,7 @@ if (is_primary) {
 			meta.ringReader = new RingReader(relay_ring.up, (frame) => {
 				meta.lastHeartbeat = monotonicNow();
 				for (const [w, m] of workers) {
-					if (w !== worker && m.ringWriter !== null && relayEligible(m)) {
+					if (w !== worker && m.ringWriter !== null && relayRingEligible(m)) {
 						const accepted = m.ringWriter.write(frame);
 						if (accepted) {
 							m.ringWriter.notify();
@@ -599,6 +600,15 @@ if (is_primary) {
 			// (whose heartbeat-ack queues behind the publishes) is never
 			// false-flagged as unresponsive under sustained fan-out.
 			if (meta) meta.lastHeartbeat = monotonicNow();
+			if (msg.type === 'relay-attached') {
+				// The worker's relay reader is live, so frames handed to its ring
+				// will now be drained. Before this the fan-out skips it - see
+				// `relayAttached` where the slot is created. Idempotent by
+				// construction: a worker posts this once, and a respawn arrives
+				// on a fresh slot whose flag starts false again.
+				if (meta) meta.relayAttached = true;
+				return;
+			}
 			if (msg.type === 'ready') {
 				// An io worker reports 'ready' once it is listening; a compute
 				// worker once its init hook has resolved. Both mark the worker
@@ -1220,6 +1230,11 @@ if (is_primary) {
 				}
 			});
 			relayReader.start();
+			// Tell the primary too: until it hears this it hands this worker no
+			// relay frames, so that a boot of any length cannot fill a ring
+			// nobody is reading yet. Posted after the reader is started, so the
+			// first frame the primary sends has somewhere to be drained to.
+			try { parentPort?.postMessage({ type: 'relay-attached' }); } catch { /* primary already gone */ }
 		}
 	}
 }

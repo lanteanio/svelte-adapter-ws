@@ -682,6 +682,24 @@
 		]
 	},
 	{
+		"file": "test-vectors/README.md"
+	},
+	{
+		"file": "test-vectors/binary.json"
+	},
+	{
+		"file": "test-vectors/frames.json"
+	},
+	{
+		"file": "test-vectors/game-fanout-compact.json"
+	},
+	{
+		"file": "test-vectors/game-relay.json"
+	},
+	{
+		"file": "test-vectors/webtransport-stream.json"
+	},
+	{
 		"file": "test/_helpers.js",
 		"adaptations": [
 			{
@@ -773,6 +791,9 @@
 	},
 	{
 		"file": "test/client.test.js"
+	},
+	{
+		"file": "test/cluster-relay-attach-gate.test.js"
 	},
 	{
 		"file": "test/codec-relay.test.js",
