@@ -259,6 +259,162 @@ export function unknownAdapterOptionKeys(opts) {
 }
 
 /**
+ * What the Vite plugin recorded about the module it bundled as the WS handler,
+ * written beside the emitted chunk. Null when there is no record - an app can
+ * place a `ws-handler.js` of its own, and older plugin builds wrote none.
+ *
+ * @param {string} tmp - the adapter build directory, which is also the SSR output dir
+ * @returns {{ source: string, absolute: string | null, from: string } | null}
+ */
+export function readHandlerOrigin(tmp) {
+	return readEmittedOrigin(`${tmp}/ws-handler.origin.json`);
+}
+
+/**
+ * What the Vite plugin recorded about the module it bundled as the metrics
+ * registry, written beside the emitted chunk. Null when there is no record -
+ * older plugin builds wrote none, and the esbuild fallback writes none either.
+ *
+ * @param {string} tmp - the adapter build directory, which is also the SSR output dir
+ * @returns {{ source: string, absolute: string | null, from: string } | null}
+ */
+export function readMetricsOrigin(tmp) {
+	return readEmittedOrigin(`${tmp}/metrics-registry.origin.json`);
+}
+
+/**
+ * @param {string} file
+ * @returns {{ source: string, absolute: string | null, from: string } | null}
+ */
+function readEmittedOrigin(file) {
+	try {
+		const parsed = JSON.parse(readFileSync(file, 'utf8'));
+		if (typeof parsed?.source !== 'string' || !parsed.source) return null;
+		return {
+			source: parsed.source,
+			// Absolute where the plugin recorded one. `source` is relative to the
+			// VITE root while this side resolves against its own cwd, so the two
+			// only agree when those coincide - comparing the relative form would
+			// report the same file as a mismatch in a monorepo or under an
+			// explicit Vite `root`.
+			absolute: typeof parsed.absolute === 'string' && parsed.absolute ? parsed.absolute : null,
+			from: typeof parsed.from === 'string' ? parsed.from : 'unknown'
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Two paths naming the same file. Compared after resolution so `./src/x.js`
+ * and `src/x.js` agree, and case-insensitively on the platforms whose file
+ * systems are, so a drive-letter or casing difference is not reported as a
+ * configuration conflict.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function samePath(a, b) {
+	const left = path.resolve(a);
+	const right = path.resolve(b);
+	if (left === right) return true;
+	return process.platform === 'win32' && left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * Refuse a build whose `websocket.handler` names a different module than the
+ * one the Vite plugin actually bundled.
+ *
+ * The plugin resolves the handler and emits `ws-handler.js` before the adapter
+ * runs, and the adapter then takes that file as it stands. So when the two
+ * disagree the adapter's option loses - silently, while the build log reports
+ * a handler was built. That is not a cosmetic drop: the module that wins
+ * decides WHICH authorization hooks exist, and an app-supplied `subscribe`
+ * hook stands the server-grant model down, so an accidental substitution can
+ * disarm a gate the operator explicitly enabled.
+ *
+ * The plugin honors `websocket.handler` itself, so agreement is the normal
+ * case; this catches the paths where it could not - an unreadable Svelte
+ * config, a hand-written `ws-handler.js`, or a plugin from a different install.
+ *
+ * @param {string | null | undefined} handler - the adapter's `websocket.handler`
+ * @param {{ source: string, absolute?: string | null, from: string } | null} origin - what the plugin recorded
+ * @param {{ warn: (msg: string) => void }} log - builder.log
+ */
+export function assertBundledHandlerMatches(handler, origin, log) {
+	if (!handler) return;
+
+	if (!origin) {
+		log.warn(
+			`websocket.handler is set to '${handler}', but the WebSocket handler was already built ` +
+			'by the Vite plugin and carries no record of which module it used, so the adapter ' +
+			'cannot confirm the two agree.\n' +
+			'  If the plugin and the adapter come from the same svelte-adapter-ws install this ' +
+			'should not happen - check for a stale or duplicated copy of the package.'
+		);
+		return;
+	}
+
+	if (samePath(handler, origin.absolute ?? origin.source)) return;
+
+	throw new Error(
+		`websocket.handler names a different module than the one that was built.\n` +
+		`  SvelteKit config  websocket.handler: ${JSON.stringify(handler)}\n` +
+		`  actually bundled: ${JSON.stringify(origin.source)} (${origin.from})\n` +
+		(origin.from.startsWith('auto-discovered')
+			? '  The plugin fell back to auto-discovery, which also happens when it cannot read ' +
+			  'the active SvelteKit adapter config - check that it exports this adapter instance.\n'
+			: '') +
+		'The Vite plugin resolves the WebSocket handler before the adapter runs, so the ' +
+		'bundled module is the one that decides which upgrade/subscribe hooks your app has. ' +
+		'Refusing the build rather than shipping the wrong one.\n' +
+		'  Name the handler in ONE place - websocket.handler on the adapter is honored ' +
+		'by the dev plugin too.'
+	);
+}
+
+/**
+ * Refuse a build whose `websocket.metrics` names a different module than the
+ * one the Vite plugin actually bundled as the metrics registry.
+ *
+ * Same shape as the handler check above, with a different consequence: the
+ * winning module decides WHICH registry instance the adapter's counters land
+ * on. A substituted registry does not disarm authorization, it mis-scrapes -
+ * every adapter counter increments on an instance no scrape route reads, which
+ * presents as counters silently frozen at zero rather than as an error.
+ *
+ * @param {string | null | undefined} metrics - the adapter's `websocket.metrics`
+ * @param {{ source: string, absolute?: string | null, from: string } | null} origin - what the plugin recorded
+ * @param {{ warn: (msg: string) => void }} log - builder.log
+ */
+export function assertBundledMetricsMatches(metrics, origin, log) {
+	if (!metrics) return;
+
+	if (!origin) {
+		log.warn(
+			`websocket.metrics is set to '${metrics}', but the metrics registry was already built ` +
+			'by the Vite plugin and carries no record of which module it used, so the adapter ' +
+			'cannot confirm the two agree.\n' +
+			'  If the plugin and the adapter come from the same svelte-adapter-ws install this ' +
+			'should not happen - check for a stale or duplicated copy of the package.'
+		);
+		return;
+	}
+
+	if (samePath(metrics, origin.absolute ?? origin.source)) return;
+
+	throw new Error(
+		`websocket.metrics names a different module than the one that was built.\n` +
+		`  SvelteKit config  websocket.metrics: ${JSON.stringify(metrics)}\n` +
+		`  actually bundled: ${JSON.stringify(origin.source)} (${origin.from})\n` +
+		'The Vite plugin resolves the metrics registry before the adapter runs, so the ' +
+		'bundled module is the instance every adapter counter lands on. Refusing the build ' +
+		'rather than shipping counters that increment where no scrape route reads.'
+	);
+}
+
+/**
  * The build-time warning naming every static path the dotfile rule refuses.
  *
  * The wording has to survive its own list. The `.well-known` carve-out exempts
@@ -512,6 +668,20 @@ export default function (opts = {}) {
 	return {
 		name: 'adapter-ws',
 
+		// Read by the Vite plugin (src/vite.js) so this one value drives both
+		// surfaces. The plugin resolves the WS handler and emits it BEFORE the
+		// adapter runs, so without this the plugin could not see the adapter's
+		// choice and would bundle whatever auto-discovery found instead.
+		websocketHandler: websocket?.handler ?? null,
+
+		// Same contract for the metrics registry. The plugin emits the module as
+		// a chunk of the app's own SSR build, which is what makes the registry
+		// ONE instance: Rollup dedupes the module between this entry and every
+		// route that imports it, so `platform.metrics` and an app-graph import
+		// read the same object. The adapter's esbuild fallback cannot do that -
+		// a separate bundle is a separate instance by construction.
+		websocketMetrics: websocket?.metrics ?? null,
+
 		async adapt(builder) {
 			const tmp = builder.getBuildDirectory('adapter-ws');
 
@@ -547,9 +717,17 @@ export default function (opts = {}) {
 			// - WebSocket handler module -----------------------------------------
 			if (websocket) {
 				if (existsSync(`${tmp}/ws-handler.js`)) {
-					// A Vite plugin already emitted the handler through the app's
-					// own bundle; take it as it stands.
-					builder.log.minor('WebSocket handler: built by Vite plugin');
+					// The plugin already resolved and emitted the handler. Confirm it
+					// bundled the module this adapter was configured with, and name
+					// that module in the log, so a substitution is visible in the
+					// build output instead of hiding behind "a handler was built".
+					const origin = readHandlerOrigin(tmp);
+					assertBundledHandlerMatches(websocket.handler, origin, builder.log);
+					builder.log.minor(
+						origin
+							? `WebSocket handler: ${origin.source} (${origin.from}, built by Vite plugin)`
+							: 'WebSocket handler: built by Vite plugin'
+					);
 				} else {
 					let handlerFile = websocket.handler;
 					if (!handlerFile) {

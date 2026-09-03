@@ -310,7 +310,7 @@ export function createInMemoryApp(opts) {
 		listen(...args) {
 			// listen(port, cb) | listen(host, port, cb). The cb gets a truthy
 			// listen token on success; the token carries the bound port and the
-			// close function, so the dispatch needs no transport helper bundle.
+			// close function, so the helper bundle below has nothing to do.
 			const cb = args[args.length - 1];
 			listenSocket = { port: boundPort, close() { /* no real socket to close */ } };
 			if (typeof cb === 'function') cb(listenSocket);
@@ -324,4 +324,20 @@ export function createInMemoryApp(opts) {
 	};
 
 	return app;
+}
+
+/**
+ * The minimal uWS helper bundle createTestServer needs besides the app itself
+ * (port lookup + listen-socket close). The in-memory variants are trivial.
+ * @param {ReturnType<typeof createInMemoryApp>} app
+ */
+export function createInMemoryUwsHelpers(app) {
+	return {
+		App: () => app,
+		SSLApp: () => app,
+		us_socket_local_port: () => app._port(),
+		us_listen_socket_close: () => { /* no real socket to close */ },
+		SHARED_COMPRESSOR: 1,
+		DISABLED: 0
+	};
 }

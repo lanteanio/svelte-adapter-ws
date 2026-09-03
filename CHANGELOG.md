@@ -272,7 +272,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parseDiagnostic`, `formatDiagnostic`, `setOperationalEventSink`) and the
   W3C trace-context helpers.
 
+- The root type declarations now cover the whole surface the package exports.
+  `WebSocketHandler`, `MetricsRegistry`, `Platform`'s companions
+  (`TopicHelper`, `TopicPublishRate`, `RuntimeVersionInfo`), every hook context
+  (`UpgradeContext`, `AuthenticateContext`, `AuthenticateCookies`,
+  `CookieSerializeOptions`, `OpenContext`, `MessageContext`, `CloseContext`,
+  `SubscribeContext`, `SubscribeDenialReason`, `ResumeContext`), the game-lane
+  frames (`GameFrame`, `GameDenialReason`, `GameDeniedFrame`), the shed-message
+  frames (`MessageOverloadReason`, `MessageOverloadedFrame`), the egress
+  sections (`EgressOptions`, `EgressCeilings`) and a `WebSocket` handle typed
+  for this transport are all declared and exported. `svelte-adapter-ws/testing`
+  imports four of these from the root, so that subpath now type-checks.
+
+- `WebSocketOptions` declares `maxTopicSeqEntries` and `egress`, which the build
+  already threaded into the runtime payload, and `compression` accepts
+  `boolean | number` to match the value the config guard already admits.
+
+- `node scripts/check-types.js` (`npm run check:types`): every subpath's runtime
+  target is parsed for its export names and held against the declaration file
+  its `types` condition points at, so an export that ships without a
+  declaration - which degrades a consumer to `any` - fails before the tests do.
+  The suite runs it too.
+
+- The export-parity suite compares NAME SETS with the lead in both directions
+  for all 34 subpaths, runtime and declaration alike, resolving
+  `export * from` chains. A name only this package exposes is as much of a
+  break as one it is missing, and neither can pass now.
+
+- `svelte-adapter-ws/sim` exports `createInMemoryUwsHelpers` and its
+  `InMemoryUwsHelpers` type. A composer that builds its own in-memory server
+  can hand the helper bundle to `createTestServer`, so the simulator and a
+  downstream harness drive the same listen seam.
+
+- `node scripts/check-declarations.js` (`npm run check:declarations`): every
+  declaration file the exports map publishes is compiled under strict
+  `nodenext`. The name check reads declarations as text and cannot see whether
+  they compile, and neither publint nor attw lib-checks them, so a declaration
+  surface could be broken in every consumer with all other checks green.
+
 ### Changed
+
+- `websocket.handler` is checked against the module the Vite plugin actually
+  bundled. The plugin records which module became `ws-handler.js`; the build now
+  reads that record, refuses when the two name different modules, and names the
+  bundled module in the build log instead of only reporting that a handler was
+  built. Which module wins decides which authorization hooks the server has, so
+  a silent substitution can stand a gate down.
 
 - Operational log lines now print the family's canonical diagnostic shape
   (`[lantean/diagnostic source=... component=... event=... severity=...]`
@@ -288,6 +333,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured number says it is. `0` still means no budget anywhere. In cluster
   mode the primary's force-exit fires one worker-exit grace after the budget,
   so a worker inside its own bound never loses the race to its supervisor.
+
+### Removed
+
+- The `PressureThresholds` type is no longer exported. The lead adapter
+  declares no such name and inlines the same shape on `WebSocketOptions`, so
+  exporting it here made an app annotated with it unable to move back. The
+  option's shape is unchanged; only the exported name is gone. Replace an
+  annotation with the inline shape, or read it through
+  `WebSocketOptions['pressure']`.
 
 ### Fixed
 

@@ -166,6 +166,8 @@
 		"check:determinism": "node scripts/check-determinism.js",
 		"check:errors": "node scripts/render-error-docs.js --check",
 		"check:entry-points": "node scripts/render-entry-points.js --check",
+		"check:types": "node scripts/check-types.js",
+		"check:declarations": "node scripts/check-declarations.js",
 		"check:publish": "publint && attw --pack . --profile esm-only",
 		"test": "vitest run",
 		"test:watch": "vitest",
@@ -203,6 +205,7 @@
 		"acorn": "^8.18.0",
 		"esbuild": "^0.28.2",
 		"publint": "^0.3.22",
+		"typescript": "^6.0.3",
 		"vitest": "^4.0.18"
 	}
 }

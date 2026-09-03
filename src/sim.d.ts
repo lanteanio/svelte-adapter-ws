@@ -333,14 +333,23 @@ export interface RuntimeEnv {
 	tz?: string;
 }
 
-// Composition primitives: install/teardown the runtime seam and re-latch the
-// per-process epoch - so a downstream package can drive createTestServer over
-// the in-memory app on the same virtual clock. The in-memory app's listen
-// token carries the bound port and the close function, so no transport helper
-// bundle exists here.
+/** The uWS helper bundle createTestServer needs alongside the in-memory app. */
+export interface InMemoryUwsHelpers {
+	App(): InMemoryApp;
+	SSLApp(): InMemoryApp;
+	us_socket_local_port(): number;
+	us_listen_socket_close(): void;
+	SHARED_COMPRESSOR: number;
+	DISABLED: number;
+}
+
+// Composition primitives: install/teardown the runtime seam, re-latch the
+// per-process epoch, and build the uWS helper bundle - so a downstream package
+// can drive createTestServer over the in-memory app on the same virtual clock.
 export function setRuntimeEnv(env: Partial<RuntimeEnv>, opts?: { force?: boolean }): void;
 export function resetRuntimeEnv(): void;
 export function resetProcessEpoch(): void;
+export function createInMemoryUwsHelpers(app: InMemoryApp): InMemoryUwsHelpers;
 
 export const DEFAULT_SEED: string;
 export const FIXED_EPOCH: number;

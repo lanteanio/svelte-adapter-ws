@@ -8,7 +8,7 @@
 // Public subpath: `svelte-adapter-ws/sim`.
 
 import { createScheduler, createSeededRng, createFaultEngine, DEFAULT_SEED, FIXED_EPOCH } from './runtime/sim-core.js';
-import { createInMemoryApp } from './runtime/sim-inmemory.js';
+import { createInMemoryApp, createInMemoryUwsHelpers } from './runtime/sim-inmemory.js';
 import { setRuntimeEnv, resetRuntimeEnv } from './runtime/runtime.js';
 import { createTestServer } from './testing.js';
 import { WS_SUBSCRIPTIONS, resetProcessEpoch, processEpoch } from './runtime/utils.js';
@@ -22,12 +22,11 @@ import { runSteadyState, faultClasses } from './runtime/steadystate.js';
 // Building blocks for composing a custom multi-instance runner over the SAME
 // virtual clock and seam (e.g. a redis/postgres-backed sim in a downstream
 // package): the seam install/teardown, the per-process epoch latch, and the
-// scheduler / rng / fault-engine / app factories. createTestServer is exported
-// from svelte-adapter-ws/testing; the in-memory app's listen token carries the
-// bound port and the close function, so no transport helper bundle exists here.
+// in-memory uWS helper bundle, alongside the scheduler / rng / fault-engine /
+// app factories. createTestServer is exported from svelte-adapter-ws/testing.
 export {
 	createScheduler, createSeededRng, createFaultEngine, createInMemoryApp,
-	setRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,
+	createInMemoryUwsHelpers, setRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,
 	DEFAULT_SEED, FIXED_EPOCH
 };
 
@@ -243,13 +242,15 @@ export async function runSim(config = {}) {
 	resetProcessEpoch();
 	try {
 		const app = createInMemoryApp({ scheduler, faultEngine });
+		const uws = createInMemoryUwsHelpers(app);
 		const server = await createTestServer({
 			handler: config.handler || {},
 			allowSystemTopicSubscribe: config.allowSystemTopicSubscribe === true,
 			allowNonAsciiTopics: config.allowNonAsciiTopics === true,
 			upgradeAdmission: config.upgradeAdmission,
 			protection: config.protection,
-			__app: app
+			__app: app,
+			__uws: uws
 		});
 
 		/** @type {Array<{ category: string, context: any }>} */
@@ -517,6 +518,7 @@ async function runClusterSim(config) {
 			const wRng = createSeededRng(seed + ':ws:' + id);
 			const wFaultEngine = createFaultEngine({ rng: wRng, faults: config.faults || {} });
 			const app = createInMemoryApp({ scheduler, faultEngine: wFaultEngine });
+			const uws = createInMemoryUwsHelpers(app);
 			const relay = createClusterRelay({ workerId: id, bus });
 			const server = await createTestServer({
 				handler: config.handler || {},
@@ -525,6 +527,7 @@ async function runClusterSim(config) {
 				upgradeAdmission: config.upgradeAdmission,
 				protection: config.protection,
 				__app: app,
+				__uws: uws,
 				__onPublish: relay.onPublish
 			});
 			// Per-incarnation topic generation - the opaque token a subscribe ack

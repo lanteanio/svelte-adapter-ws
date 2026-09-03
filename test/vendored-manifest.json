@@ -555,17 +555,7 @@
 		]
 	},
 	{
-		"file": "src/sim.d.ts",
-		"adaptations": [
-			{
-				"lead": "/** The uWS helper bundle createTestServer needs alongside the in-memory app. */\nexport interface InMemoryUwsHelpers {\n\tApp(): InMemoryApp;\n\tSSLApp(): InMemoryApp;\n\tus_socket_local_port(): number;\n\tus_listen_socket_close(): void;\n\tSHARED_COMPRESSOR: number;\n\tDISABLED: number;\n}\n\n// Composition primitives: install/teardown the runtime seam, re-latch the\n// per-process epoch, and build the uWS helper bundle - so a downstream package\n// can drive createTestServer over the in-memory app on the same virtual clock.\n",
-				"ours": "// Composition primitives: install/teardown the runtime seam and re-latch the\n// per-process epoch - so a downstream package can drive createTestServer over\n// the in-memory app on the same virtual clock. The in-memory app's listen\n// token carries the bound port and the close function, so no transport helper\n// bundle exists here.\n"
-			},
-			{
-				"lead": "export function createInMemoryUwsHelpers(app: InMemoryApp): InMemoryUwsHelpers;\n",
-				"ours": ""
-			}
-		]
+		"file": "src/sim.d.ts"
 	},
 	{
 		"file": "src/sim.js",
@@ -573,34 +563,6 @@
 			{
 				"lead": "// that runs over real uWS, but over an in-memory app under a virtual clock and a\n",
 				"ours": "// that runs over the real node:http + ws transport, but over an in-memory app\n// under a virtual clock and a\n"
-			},
-			{
-				"lead": "import { createInMemoryApp, createInMemoryUwsHelpers } from './runtime/sim-inmemory.js';\n",
-				"ours": "import { createInMemoryApp } from './runtime/sim-inmemory.js';\n"
-			},
-			{
-				"lead": "// in-memory uWS helper bundle, alongside the scheduler / rng / fault-engine /\n// app factories. createTestServer is exported from svelte-adapter-ws/testing.\n",
-				"ours": "// scheduler / rng / fault-engine / app factories. createTestServer is exported\n// from svelte-adapter-ws/testing; the in-memory app's listen token carries the\n// bound port and the close function, so no transport helper bundle exists here.\n"
-			},
-			{
-				"lead": "\tcreateInMemoryUwsHelpers, setRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,\n",
-				"ours": "\tsetRuntimeEnv, resetRuntimeEnv, resetProcessEpoch,\n"
-			},
-			{
-				"lead": "\t\tconst app = createInMemoryApp({ scheduler, faultEngine });\n\t\tconst uws = createInMemoryUwsHelpers(app);\n\t\tconst server = await createTestServer({\n",
-				"ours": "\t\tconst app = createInMemoryApp({ scheduler, faultEngine });\n\t\tconst server = await createTestServer({\n"
-			},
-			{
-				"lead": "\t\t\t__app: app,\n\t\t\t__uws: uws\n",
-				"ours": "\t\t\t__app: app\n"
-			},
-			{
-				"lead": "\t\t\tconst uws = createInMemoryUwsHelpers(app);\n",
-				"ours": ""
-			},
-			{
-				"lead": "\t\t\t\t__uws: uws,\n",
-				"ours": ""
 			}
 		]
 	},
@@ -1152,5 +1114,38 @@
 	},
 	{
 		"file": "test/webhooks.test.js"
+	},
+	{
+		"file": "test/ws-handler-resolution.test.js",
+		"adaptations": [
+			{
+				"lead": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see src/runtime/handler/subscribe-hooks.js), so a substitution\n// can disarm a gate the operator explicitly armed.\n",
+				"ours": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see the subscribe authorization in\n// src/runtime/handler/realtime.js), so a substitution can disarm a gate the\n// operator explicitly armed.\n"
+			},
+			{
+				"lead": "// The artifact test below therefore asserts on the BUILT BUNDLE, not on the\n// adapter's normalized options: the option object was always correct: it was\n// simply never read, so an options-level assertion stays green against the bug.\n",
+				"ours": "// An options-level assertion stays green against that bug on its own, because\n// the option object was always correct - it was simply never read. So what\n// these cases pin is the adapter PUBLISHING the option to the plugin, and the\n// guard that refuses a build whose bundle names a different module.\n"
+			},
+			{
+				"lead": "import { readFileSync } from 'node:fs';\n",
+				"ours": ""
+			},
+			{
+				"lead": "import { buildFixtureOnce } from './helpers/fixture-build.js';\nimport { hasUWS, REAL_BOOT_BUDGET_MS } from './helpers/real-runtime.js';\nimport { variantOut, FIXTURE_VARIANTS } from './fixture/variants.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "const fixtureDir = path.join(ROOT, 'test/fixture');\n",
+				"ours": ""
+			},
+			{
+				"lead": "\tit('publishes the configured module path on the adapter object', () => {\n\t\texpect(adapter({ websocket: { metrics: './src/m.js' } }).websocketMetrics).toBe('./src/m.js');\n\t});\n\n",
+				"ours": ""
+			},
+			{
+				"lead": "// The real proof. Everything above tests the guard; this tests that the option\n// actually reaches the build, which is what was broken.\nconst describeBuild = hasUWS ? describe : describe.skip;\n\ndescribeBuild('the built artifact honours websocket.handler through the Vite plugin', () => {\n\tit('bundles the module named on the adapter, not the auto-discovered one', () => {\n\t\t// The `grant` variant names its handler ONLY through the adapter's\n\t\t// `websocket.handler` (test/fixture/svelte.config.js); the fixture's\n\t\t// vite.config.js passes the plugin nothing. So if the plugin stops\n\t\t// honouring the adapter's option, auto-discovery picks up\n\t\t// src/hooks.ws.js and every assertion below flips.\n\t\texpect(FIXTURE_VARIANTS.grant.handler).toBe('./src/hooks.ws.grant.js');\n\n\t\tconst built = buildFixtureOnce('grant');\n\t\texpect(built, 'grant fixture variant failed to build').toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\n\t\t// A marker unique to the named module...\n\t\texpect(bundle).toContain('resume-topics');\n\t\t// ...and one unique to the module auto-discovery would have picked.\n\t\texpect(bundle).not.toContain('cork-test');\n\t\t// Reads a build rather than performing one on a warm tree, but the call\n\t\t// is the same one either way and a cold or contended tree pays for the\n\t\t// build here - which is more than vitest's default allows for.\n\t}, REAL_BOOT_BUDGET_MS);\n\n\tit('carries the named handler plugin hook, not the auto-discovered authorization hook', () => {\n\t\t// The named handler now wraps a real groups-plugin side-effect hook and\n\t\t// preserves its marker. Its export is expected and does not disarm the\n\t\t// grant model; the differential suite proves that behavior. These bundle\n\t\t// markers distinguish it from src/hooks.ws.js, whose app authorization\n\t\t// hook would stand the armed gate down.\n\t\texpect(buildFixtureOnce('grant')).toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\t\tconst exportList = /\\bexport\\s*\\{([^}]*)\\}/.exec(bundle);\n\t\texpect(exportList, 'bundled handler has no export statement to inspect').not.toBeNull();\n\n\t\tconst names = exportList[1]\n\t\t\t.split(',')\n\t\t\t.map((entry) => entry.trim().split(/\\s+as\\s+/).pop().trim())\n\t\t\t.filter(Boolean);\n\n\t\texpect(names).toContain('upgrade');\n\t\texpect(names).toContain('subscribe');\n\t\texpect(bundle).toContain('policy-lobby');\n\t\texpect(bundle).toContain('hook-entered');\n\t}, REAL_BOOT_BUDGET_MS);\n});\n",
+				"ours": ""
+			}
+		]
 	}
 ]

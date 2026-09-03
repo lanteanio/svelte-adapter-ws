@@ -1065,11 +1065,23 @@ export async function createTestServer(options = {}) {
 		sendOutboundT(ws, payload);
 	}
 
-	// The simulator injects an in-memory app via the internal __app option so
-	// the same dispatch runs over the virtual clock. The default path
-	// constructs a real node:http + ws server shaped to the same app contract,
-	// so createTestServer serves real sockets a test can dial.
+	// The simulator injects an in-memory app plus its helper bundle via the
+	// internal __app / __uws options so the same dispatch runs over the virtual
+	// clock. The default path constructs a real node:http + ws server shaped to
+	// the same app contract, so createTestServer serves real sockets a test can
+	// dial.
 	const app = options.__app || createNodeApp();
+
+	// Port lookup and listen-socket close ride the same seam, so an injected
+	// app answers both from its own listen token. The default reads the PASSED
+	// token rather than a captured app: a second server in the same process
+	// would otherwise report the first one's port.
+	const uWS = options.__uws || {
+		/** @param {any} socket */
+		us_socket_local_port: (socket) => socket.port,
+		/** @param {any} socket */
+		us_listen_socket_close: (socket) => { socket.close(); }
+	};
 
 	// Register the client-relay (`game` lane) binary twin (ingress kind `game:1`),
 	// matching production. Idempotent + per-server so it survives a test that
@@ -4086,7 +4098,7 @@ export async function createTestServer(options = {}) {
 	return new Promise((resolve, reject) => {
 		app.listen(port, async (listenSocket) => {
 			if (!listenSocket) return reject(new Error('Failed to listen'));
-			const boundPort = listenSocket.port;
+			const boundPort = uWS.us_socket_local_port(listenSocket);
 
 			// Fire the user's `init` hook once the test server is listening,
 			// before resolving createTestServer(). Mirrors production
@@ -4102,7 +4114,7 @@ export async function createTestServer(options = {}) {
 						: null;
 					await handler.init({ platform, workerData: testWorkerData });
 				} catch (err) {
-					try { listenSocket.close(); } catch {}
+					try { uWS.us_listen_socket_close(listenSocket); } catch {}
 					return reject(err);
 				}
 			}
@@ -4221,7 +4233,7 @@ export async function createTestServer(options = {}) {
 						await new Promise((r) => setTimer(r, 5));
 					}
 					wsConnections.clear();
-					listenSocket.close();
+					uWS.us_listen_socket_close(listenSocket);
 					// Accepting stops HERE, not when readiness flipped: the window
 					// between the two is what the drain delay exists for, and
 					// production moves the same state at the same point.
