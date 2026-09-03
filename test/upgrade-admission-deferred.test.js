@@ -152,8 +152,15 @@ describe('bounded upgrade deferral', () => {
 
 	it('uses no front-removing array operation in the queue implementation', () => {
 		const source = readFileSync(new URL('../src/runtime/utils/upgrade-admission.js', import.meta.url), 'utf8');
+		// Both anchors are asserted because the assertion below is a NEGATIVE
+		// one, and an empty slice satisfies it without reading anything. Rename
+		// the opening anchor and indexOf returns -1, which slice reads as
+		// one-before-the-end: the carve collapses to nothing and the pin passes
+		// while checking no code at all.
 		const start = source.indexOf('export function createUpgradeAdmission');
+		expect(start, 'createUpgradeAdmission must stay findable by name').toBeGreaterThan(-1);
 		const end = source.indexOf('export const WS_CONNECTION_PERMIT_KEY', start);
+		expect(end, 'the closing anchor moved, so this carve no longer spans the queue').toBeGreaterThan(start);
 		expect(source.slice(start, end)).not.toContain('.shift(');
 	});
 });
