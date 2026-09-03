@@ -72,9 +72,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * error at the only moment anyone is watching.
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
-	'metrics', 'protection',
-	'stateHashIntervalMs', 'consistencyAuditIntervalMs', 'resourceGrowthAuditIntervalMs',
-	'postureExport'
+	'metrics', 'stateHashIntervalMs'
 ];
 
 /**
@@ -216,6 +214,20 @@ export function serializeWsOptions(websocket, adminPath) {
 		// behavior and only a deployment already in warned pathology moves.
 		maxTopicSeqEntries: websocket?.maxTopicSeqEntries,
 		pressure: websocket?.pressure,
+		// The graduated protection posture over the 1 Hz pressure signal.
+		// Absent leaves the runtime at 'normal', where the posture machine is
+		// never constructed and every read is one null test.
+		protection: websocket?.protection,
+		// Local stream socket the live posture is pushed to. Absent means no
+		// listener is opened.
+		postureExport: websocket?.postureExport,
+		// The per-worker consistency auditor's cadence. The one audit in this
+		// section that defaults ON, so a build that omits the key still gets
+		// the invariant net; 0 disables it and schedules no timer.
+		consistencyAuditIntervalMs: websocket?.consistencyAuditIntervalMs ?? 5000,
+		// The optional resource-growth trend auditor. Off by default: a trend
+		// signal is probabilistic, so it is opt-in rather than always paid for.
+		resourceGrowthAuditIntervalMs: websocket?.resourceGrowthAuditIntervalMs ?? 0,
 		// Publish-egress window and ceilings (plain numbers, so the section
 		// rides the JSON payload cleanly). The tenant resolver travels
 		// separately as the handler module's egressTenantOf export - the one

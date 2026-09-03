@@ -6,7 +6,7 @@
 
 import { createMemoryWallReader } from '../utils/memory-wall.js';
 import { createOsPressureSampler } from '../utils/os-pressure.js';
-import { computePressureReason, computeTopPublishers } from '../utils/pressure.js';
+import { applyCapacityReason, computePressureReason, computeTopPublishers } from '../utils/pressure.js';
 import { samplePressureValue } from '../wire.js';
 import {
 	foldConnectionBackpressure, takeBackpressureDropWindow,
@@ -112,20 +112,28 @@ export function samplePressureOnce(thresholds) {
 	topicPublishStats.clear();
 
 	const reason = computePressureReason(sampleReadings, thresholds);
+	counters.lastBasePressureReason = reason;
+	// Layer the protection posture's CAPACITY reason on top of the pure
+	// pressure reason. With no posture engaged this is the base reason
+	// unchanged. The level read here is the one the gate enforced across the
+	// window just measured; the posture advances for the NEXT sample below.
+	const effectiveReason = counters.activePosture !== null
+		? applyCapacityReason(reason, counters.activePosture.level)
+		: reason;
 	const value = samplePressureValue(sampleReadings, thresholds, counters.leaseSaturationPeak);
 	// Halved per tick with a floor: an asymptotic decay would keep a once-
 	// saturated worker reading a nonzero value for a thousand quiet ticks.
 	counters.leaseSaturationPeak = counters.leaseSaturationPeak < 0.002 ? 0 : counters.leaseSaturationPeak * 0.5;
 
 	const previousReason = pressureSnapshot.reason;
-	const transitioned = reason !== previousReason;
+	const transitioned = effectiveReason !== previousReason;
 	pressureSnapshot.sampledAt = wallEpoch();
 	pressureSnapshot.value = value;
 	pressureSnapshot.subscriberRatio = subscriberRatio;
 	pressureSnapshot.publishRate = publishRate;
 	pressureSnapshot.memoryMB = memoryMB;
-	pressureSnapshot.reason = reason;
-	pressureSnapshot.active = reason !== 'NONE';
+	pressureSnapshot.reason = effectiveReason;
+	pressureSnapshot.active = effectiveReason !== 'NONE';
 	pressureSnapshot.psi = os.psi;
 	pressureSnapshot.cpuThrottle = os.cpuThrottle;
 	pressureSnapshot.maxBufferedBytes = maxBufferedBytes;
@@ -133,6 +141,20 @@ export function samplePressureOnce(thresholds) {
 	pressureSnapshot.droppedFrames = droppedFrames;
 	pressureSnapshot.droppedBytes = droppedBytes;
 	pressureSnapshot.topPublishers = topPublishers;
+
+	// Advance the posture once per sample, AFTER folding the snapshot - the
+	// level just read drove this sample's reason; the tick decides the next.
+	// It rides this timer, so no second one is introduced. The posture must
+	// read the BASE pressure signal, never the CAPACITY-layered one: once the
+	// level is engaged `effectiveReason` is CAPACITY every sample, so feeding
+	// the layered activity back would mean the relaxation dwell never sees a
+	// calm sample and the level could never come down.
+	if (counters.activePosture !== null) counters.activePosture.tick({ active: reason !== 'NONE' });
+
+	// Push the posture line to export subscribers on the same cadence - the
+	// 1 Hz heartbeat is the export contract, and silence means the adapter is
+	// gone. Null unless a posture export is configured.
+	if (counters.postureExportHook !== null) counters.postureExportHook();
 
 	// Snapshot the listener sets before iterating: a Set iterator visits
 	// entries added during iteration, so a re-arming listener could spin the

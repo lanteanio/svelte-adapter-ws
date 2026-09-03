@@ -388,6 +388,98 @@ export interface WebSocketOptions {
 	 */
 	egress?: EgressOptions;
 	pressure?: PressureThresholds;
+	/**
+	 * Graduated protection posture over the live `platform.pressure` signal,
+	 * governing only the admission of NEW upgrades - existing connections are
+	 * never affected at any level.
+	 *
+	 * - `'normal'` (default): today's behaviour. The posture machine is inert
+	 *   and adds no work to the hot path.
+	 * - `'auto'`: the adapter escalates under sustained pressure and relaxes on
+	 *   recovery (escalate fast, relax slow). `normal -> elevated` on sustained
+	 *   `pressure.active`; `elevated -> siege` when over-capacity upgrade
+	 *   rejects run at twice the gate's admit rate; downward needs a longer
+	 *   quiet dwell.
+	 * - `'elevated'` / `'siege'`: pin a level for incident response or testing.
+	 *
+	 * At `'elevated'` every refusal widens its `Retry-After` jitter. At
+	 * `'siege'` new upgrades are refused at static-serve cost and
+	 * `/__admit-check` always reports busy. Only the `siege` step needs a
+	 * ceiling: escalating to it compares the over-capacity reject rate against
+	 * the gate's admit rate, so without `upgradeAdmission.maxConcurrent` or
+	 * `upgradeAdmission.maxConnections` there is no rate to compare and
+	 * `'auto'` stops at `elevated` - which it still reaches on sustained
+	 * pressure alone.
+	 */
+	protection?: 'normal' | 'elevated' | 'siege' | 'auto';
+	/**
+	 * Posture push-export (opt-in): listen on a local stream socket (a unix
+	 * domain socket path, or a `\\.\pipe\...` named pipe on Windows) and push
+	 * the live protection posture as newline-delimited JSON -
+	 * `{"v":1,"posture":"elevated","reason":"PSI","value":0.83,"psi":{...},"cpuThrottle":{...}}` -
+	 * to every connected consumer: once on connect, once on every posture or
+	 * reason transition, and once per 1 Hz pressure sample (the steady cadence
+	 * doubles as a liveness signal - silence means the adapter is gone). Built
+	 * for an external edge-defense daemon or watchdog that wants the app's
+	 * load state without speaking its protocol. Local-only and payload-free.
+	 *
+	 * @example
+	 * ```js
+	 * adapter({ websocket: { postureExport: '/run/app/posture.sock' } });
+	 * ```
+	 */
+	postureExport?: string | { path: string } | false;
+	/**
+	 * Interval in milliseconds for the per-worker consistency auditor - a
+	 * background check that runs the shared invariant predicates against a
+	 * bounded, structure-only snapshot of the worker's live connections on a
+	 * slow, jittered, unref'd timer.
+	 *
+	 * It runs OFF the hot path: publish, send, subscribe, and close pay nothing;
+	 * the only cost is reading state the worker already maintains, on a timer
+	 * that never holds the event loop open. The snapshot is bounded - a fixed
+	 * slice of connections per tick, walked round-robin - so a worker with a
+	 * million connections audits a constant amount of work each tick regardless
+	 * of population, and the snapshot carries no payloads, no topic strings, and
+	 * no client identity beyond the per-connection session id used as a log
+	 * label.
+	 *
+	 * A detected violation logs a package-attributed `[lantean/diagnostic ...]` line and
+	 * increments the queryable `platform.assertions` counter (the soft tier) - it
+	 * never terminates the worker. The single exception is a subscription slot
+	 * that has become a non-`Set` (heap or dispatch corruption that cannot heal):
+	 * if it persists across two consecutive audits, it escalates to a deferred
+	 * worker restart (exit code 78). A healthy or transient state is never killed.
+	 *
+	 * On by default at `5000` (5s). Set to `0` to disable entirely - no timer is
+	 * scheduled and the path costs nothing. It runs in single-process AND
+	 * clustered deployments alike (it is a per-worker net, not a cross-worker
+	 * comparison).
+	 *
+	 * @default 5000
+	 */
+	consistencyAuditIntervalMs?: number;
+	/**
+	 * Interval in milliseconds for the optional per-worker resource-growth
+	 * auditor - a background trend detector that samples the SIZE of the live
+	 * bookkeeping collections (connections, topic index, caches) on a slow,
+	 * jittered, unref'd timer and flags a series that climbs monotonically, the
+	 * signature of a close / unsubscribe / eviction path that stopped shedding.
+	 * It reads only Map/Set sizes, never a monotonic-by-design counter.
+	 *
+	 * OBSERVE-ONLY: a suspected trend logs at most one throttled warning per
+	 * worker; it NEVER asserts, throws, or terminates. Distinct from
+	 * `consistencyAuditIntervalMs`, which checks point-in-time invariants rather
+	 * than a time-series trend.
+	 *
+	 * Off by default (`0` - no timer is scheduled and the path costs nothing),
+	 * because a trend signal is probabilistic; the always-on structural guard is
+	 * the deterministic simulator (`svelte-adapter-ws/sim`), not production.
+	 * `30000` (30s) is a sensible enabled value.
+	 *
+	 * @default 0 (disabled)
+	 */
+	resourceGrowthAuditIntervalMs?: number;
 	/** Allow wire-level subscribes to '__'-prefixed system topics (default false). */
 	allowSystemTopicSubscribe?: boolean;
 	/** Honor client subscribes only for server-granted topics; 'strict' ignores app hooks. */

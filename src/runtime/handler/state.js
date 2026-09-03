@@ -81,7 +81,43 @@ export const counters = {
 	/** Worst client-reported send-gate backlog since the last sample. */
 	leaseSaturationPeak: 0,
 	/** The wall ratio the last sample measured (sizes lease grants). */
-	lastHeapUsedRatio: 0
+	lastHeapUsedRatio: 0,
+	/**
+	 * Live protection posture, null until the realtime module builds one and
+	 * null for the whole life of a `'normal'` deployment. Every read in the
+	 * family tests `!== null` first, so the field must EXIST here even when it
+	 * holds null - an absent property reads `undefined`, which passes that
+	 * test and throws on the `.level` behind it.
+	 * @type {{ level: 'normal' | 'elevated' | 'siege', rejectedPerSecond: number, recordCapacityReject(): void, recordRateLimitReject(): void, tick(snapshot: { active: boolean }): void } | null}
+	 */
+	activePosture: null,
+	/** Base (un-layered) pressure reason from the most recent sample, for the posture transition line. */
+	lastBasePressureReason: 'NONE',
+	/**
+	 * Posture-export push hook, called by the 1 Hz sampler and by a posture
+	 * transition. Null when no export is configured.
+	 * @type {(() => void) | null}
+	 */
+	postureExportHook: null,
+	/**
+	 * The live posture exporter; shutdown closes it. Null when no export is
+	 * configured.
+	 * @type {{ broadcast: () => void, close: () => void, clientCount: () => number } | null}
+	 */
+	postureExporter: null,
+	/**
+	 * The per-worker consistency auditor (null when disabled by interval 0).
+	 * Lives on the holder so the install site (handler/realtime.js) and the
+	 * shutdown site (handler/lifecycle.js) share ONE reference.
+	 * @type {{ start(): void, stop(): void, runOnce(): unknown } | null}
+	 */
+	consistencyAuditor: null,
+	/**
+	 * The optional resource-growth trend auditor (null when disabled by
+	 * interval 0, the default). Same holder rationale as consistencyAuditor.
+	 * @type {{ start(): void, stop(): void, runOnce(): void } | null}
+	 */
+	resourceGrowthAuditor: null
 };
 
 // - Realtime state -----------------------------------------------------------

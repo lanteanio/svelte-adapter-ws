@@ -152,8 +152,17 @@ export function shutdown(opts = {}) {
 /** @param {{ timeoutMs?: number }} opts */
 async function performShutdown(opts) {
 	beginDrain();
+	// Stop the audit timers (both no-ops when never installed). An auditor
+	// left running keeps reading state its server no longer serves, and unlike
+	// the export it reports to nobody outside the process, so nothing is owed
+	// it during the drain.
+	counters.consistencyAuditor?.stop();
+	counters.consistencyAuditor = null;
+	counters.resourceGrowthAuditor?.stop();
+	counters.resourceGrowthAuditor = null;
 	const server = httpServer;
 	if (!server) {
+		closePostureExport();
 		setLifecycleState('closed');
 		return;
 	}
@@ -191,5 +200,22 @@ async function performShutdown(opts) {
 	}
 	server.closeAllConnections?.();
 	await closed;
+	closePostureExport();
 	setLifecycleState('closed');
+}
+
+/**
+ * Drop the posture export socket (a no-op when none was configured) so the
+ * socket file does not outlive the process and its consumers read a clean EOF
+ * rather than a path that answers nothing.
+ *
+ * Deliberately the LAST thing the shutdown does. The export's steady cadence is
+ * documented as a liveness signal - silence means the adapter is gone - so
+ * cutting it at the start of the drain would report gone while this worker is
+ * still serving every connection it has left.
+ */
+function closePostureExport() {
+	counters.postureExporter?.close();
+	counters.postureExporter = null;
+	counters.postureExportHook = null;
 }

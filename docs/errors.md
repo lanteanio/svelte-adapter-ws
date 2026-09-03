@@ -946,6 +946,60 @@ Log line begins:
 
 **What to do.** Read the shape on the line. For a failed listen, fix the directory permissions, create the missing parent directory, or point the export at a free path, then restart the worker - removing a stale socket file by hand is not the repair, because the runtime already removes one before every listen. For a later socket error the export is down until restart; its consumers key on the 1 Hz cadence stopping either way.
 
+## ADAPTER-ERR-POSTURE-OBSERVER
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] a posture transition handler threw
+```
+
+**Cause.** The adapter's own protection-posture transition handler threw. It prints the posture line, then pushes the new posture to the export socket. The export push contains its own failures, so what remains is the console write.
+
+**Consequence.** The posture CHANGED and the runtime is shedding or recovering as configured, but the record of it did not finish. What went missing is the posture log line, and with it the IMMEDIATE export push that follows it - a defense daemon reacting to the change does not get it at the instant of transition. The staleness that leaves is shorter than a sample, not longer: the posture advances from inside the 1 Hz pressure sampler, and that same sampler run pushes the ordinary posture heartbeat a few statements later, so an export reader carries the true posture before the tick that raised it has finished.
+
+**Automatic recovery.** The heartbeat later in the SAME sampler run carries the new posture, so no export reader waits for another transition or another second; the next transition runs the handler again, since a throw does not unregister it. Only the incident-timeline console line for this transition is gone for good.
+
+**What to do.** This is an adapter-internal failure - report it with the error printed beside it. The console write is the candidate to look at first: the export push after it contains its own failures (a non-serializable snapshot and a slow client are both handled inside it).
+
+## ADAPTER-ERR-POSTURE-TRANSITION
+
+Severity: warn
+
+Log line begins:
+
+```
+[ws] protection posture 
+```
+
+**Cause.** The worker moved between protection postures - normal, elevated and siege. Normal to elevated is decided by sampled pressure holding over a configured threshold (memory, CPU quota, kernel stall time, publish rate or subscriber ratio). Elevated to siege is decided instead by the rate of capacity rejections crossing the siege rate, independently of those signals. Both directions relax after a run of quiet samples, and siege steps down to elevated rather than straight to normal. The line names the posture it left, the posture it entered, the rejection rate at that moment and the highest pressure signal.
+
+**Consequence.** What the posture changes depends on which one it entered. At ELEVATED nothing is refused - the admission effect is only a wider Retry-After jitter on capacity responses that were already going out - so this line is a warning rather than an outage. It does change what the worker REPORTS, though: from here a sample reads its pressure state as active, and its reason as CAPACITY unless the underlying signal is MEMORY, which is preserved and reported as itself - so `platform.pressure`, the posture export and any onPressure listener follow the posture rather than the underlying signal, except for the one signal you would least want masked. At SIEGE the worker additionally refuses EVERY new upgrade at static-serve cost, and clients see a capacity refusal rather than an error. A worker that settles at either is running at its ceiling.
+
+**Automatic recovery.** Yes, and a de-escalation prints this same line: the posture steps back down after a run of quiet samples, and both directions are dwell-gated so it cannot flap.
+
+**What to do.** Read the two numbers together, because which one decided depends on the edge. Entering elevated is decided by the pressure signal named on the line. Entering siege is decided by rejected/s crossing the siege rate and can print pressure=NONE - that is a capacity-reject storm rather than a resource problem, so read rejected/s there. A relaxation always prints pressure=NONE, because a run of quiet samples is what causes it. A posture that returns to normal on its own needs nothing; one that stays raised means the worker is undersized for the load or something is not shedding - the resource-growth line and the per-topic pressure entries cover that side.
+
+## ADAPTER-ERR-RESOURCE-GROWTH
+
+Severity: warn
+
+Log line begins:
+
+```
+[ws] resource-growth auditor: 
+```
+
+**Cause.** A runtime structure the growth auditor samples has been trending upward across consecutive samples without shedding. The auditor is opt-in and off unless an audit interval is configured, so silence here means it is disabled just as often as it means nothing is growing.
+
+**Consequence.** Nothing is refused - this is the early warning, and it is printed once per worker lifetime, so a trend that continues after it says nothing more. What the auditor has is a DIRECTION across consecutive samples, not a prediction: a trend that continues ends in memory pressure and eventually exhausts the heap, and one that levels off or starts shedding later never gets there. If it does continue, whether anything sheds before the end depends on configuration - the protection posture is opt-in, so on a default deployment there is no posture to raise. No worker is restarted on account of memory either, so what follows an exhausted heap is the process aborting rather than one thread being replaced.
+
+**Automatic recovery.** None. The auditor observes; it does not evict.
+
+**What to do.** The line names the structure. Find the path that stopped shedding for it - a close, unsubscribe or eviction that no longer runs - rather than raising a limit.
+
 ## ADAPTER-ERR-UPGRADE-DEFERRED
 
 Severity: error

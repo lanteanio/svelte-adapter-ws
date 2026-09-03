@@ -121,7 +121,31 @@ describe('adapter factory options', () => {
 			.toEqual(['upgradeAdmission.maxConcurent']);
 		expect(unknownWebsocketOptionKeys({ upgradeAdmission: { waitingRoom: { pollIntervalMs: 3000 } } }))
 			.toEqual([]);
-		for (const key of ['metrics', 'protection', 'postureExport']) {
+		// The protection and posture lane builds here.
+		expect(() => adapter({ websocket: { protection: 'auto' } })).not.toThrow();
+		expect(() => adapter({ websocket: { postureExport: '/run/app/posture.sock' } })).not.toThrow();
+		expect(() => adapter({ websocket: { postureExport: { path: '/run/app/posture.sock' } } })).not.toThrow();
+		expect(() => adapter({ websocket: { consistencyAuditIntervalMs: 0 } })).not.toThrow();
+		expect(() => adapter({ websocket: { resourceGrowthAuditIntervalMs: 30_000 } })).not.toThrow();
+		// A known key the serializer drops would be lost in silence - the
+		// unknown-key walk cannot see it, because the key IS known.
+		const posture = serializeWsOptions({
+			protection: 'siege',
+			postureExport: { path: '/run/app/posture.sock' },
+			consistencyAuditIntervalMs: 250,
+			resourceGrowthAuditIntervalMs: 30_000
+		}, '/__realtime');
+		expect(posture.protection).toBe('siege');
+		expect(posture.postureExport).toEqual({ path: '/run/app/posture.sock' });
+		expect(posture.consistencyAuditIntervalMs).toBe(250);
+		expect(posture.resourceGrowthAuditIntervalMs).toBe(30_000);
+		// The two defaults a zero-config build carries: the invariant net is on,
+		// the probabilistic trend detector is off.
+		const defaults = serializeWsOptions({}, '/__realtime');
+		expect(defaults.consistencyAuditIntervalMs).toBe(5000);
+		expect(defaults.resourceGrowthAuditIntervalMs).toBe(0);
+		// The clustered state-hash lane and the metrics registry still refuse.
+		for (const key of ['metrics', 'stateHashIntervalMs']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not supported by svelte-adapter-ws/);
 		}

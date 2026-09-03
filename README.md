@@ -135,8 +135,16 @@ Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `adminAuthAcknowledged`, `maxPayloadLength`,
 `idleTimeout`, `maxBackpressure`, `closeOnBackpressureLimit`, `compression`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `upgradeAdmission`,
-`messageAdmission`, `pressure`, `egress`, `primaryInit`, `workers`, and the
-shared policy flags). The typed surface in `src/index.d.ts` is the reference.
+`messageAdmission`, `maxTopicSeqEntries`, `pressure`, `egress`, `protection`,
+`postureExport`, `consistencyAuditIntervalMs`,
+`resourceGrowthAuditIntervalMs`, `primaryInit`, `workers`, and the shared
+policy flags). The typed surface in `src/index.d.ts` is the reference.
+
+`websocket.maxTopicSeqEntries` (default `1000000`) caps the per-topic sequence
+registry. Past the cap the least recently published unprotected topic is
+evicted and its high-water number carried forward, so a re-published topic
+always resumes above what any forgotten topic reached - a counter may skip
+numbers, it never repeats one. `0` disables the bound.
 
 `websocket.upgradeAdmission` gates NEW handshakes; an open connection is never
 touched. `maxConcurrent` caps upgrades in flight, `maxConnections` caps
@@ -162,6 +170,44 @@ the adapter is configured.
 `false` (batches refuse atomically), stamps no sequence, and is counted in
 `platform.pressure.egress`. Tenants resolve through the WebSocket handler's
 `egressTenantOf(topic)` export.
+
+`websocket.protection` (default `'normal'`) is the graduated protection
+posture over the 1 Hz pressure signal, and it governs only the admission of
+NEW upgrades - an open connection is never touched at any level. `'auto'`
+escalates fast and relaxes slow: `normal -> elevated` after sustained
+`pressure.active`, `elevated -> siege` once over-capacity upgrade rejects run
+at twice the gate's admit rate, and each step down needs a longer quiet dwell.
+`'elevated'` and `'siege'` pin a level for incident response. At `elevated`
+every capacity refusal widens its `Retry-After` jitter; at `siege` new
+upgrades are refused at static-serve cost, `/__admit-check` always answers
+`202` with a doubled `pollAfterMs`, and a browser navigation to the WebSocket
+path gets the capacity page rather than `426`. A per-IP `429` never feeds the
+escalation - that is an attack signal, not capacity. The live level reads back
+as `platform.protection` and layers `'CAPACITY'` onto `platform.pressure`
+(`MEMORY` still outranks it). Only the `siege` step needs a ceiling:
+escalation to `siege` compares the over-capacity reject rate against the
+gate's admit rate, so without `upgradeAdmission.maxConcurrent` or
+`maxConnections` there is no rate to compare and `'auto'` stops at
+`elevated` - which it still reaches on sustained pressure alone.
+
+`websocket.postureExport` opens a local stream socket - a unix domain socket
+path, or a `\\.\pipe\...` named pipe on Windows - and pushes the live posture
+to every connected consumer as newline-delimited JSON
+(`{"v":1,"posture":"elevated","reason":"PSI","value":0.83,"psi":{...},"cpuThrottle":{...}}`):
+once on connect, once per transition, and once per 1 Hz sample, so a consumer
+that stops receiving lines knows the adapter is gone. Local-only and
+payload-free.
+
+`websocket.consistencyAuditIntervalMs` (default `5000`) runs the shared
+invariant predicates against a bounded, structure-only snapshot of live
+connections on a slow, jittered, unref'd timer, off the hot path. A violation
+logs and increments `platform.assertions`; only a subscription slot that is no
+longer a `Set`, persisting across two consecutive audits, escalates to a
+deferred worker restart. `0` disables it and schedules no timer.
+`websocket.resourceGrowthAuditIntervalMs` (default `0`, off) is the
+observe-only counterpart: it trends the SIZE of the live bookkeeping
+collections and logs one throttled warning when a series climbs monotonically,
+the signature of a close, unsubscribe or eviction path that stopped shedding.
 
 ### The reserved `/__realtime/*` admin route
 

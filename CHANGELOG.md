@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `websocket.protection`: the graduated protection posture over the 1 Hz
+  pressure signal, which the build previously refused. It governs the admission
+  of NEW upgrades only - an open connection is never touched at any level.
+  `'auto'` escalates fast and relaxes slow (`normal -> elevated` on sustained
+  pressure, `elevated -> siege` when over-capacity upgrade rejects run at twice
+  the gate's admit rate, each step down behind a longer quiet dwell);
+  `'elevated'` and `'siege'` pin a level. At `elevated` every capacity refusal
+  widens its `Retry-After` jitter; at `siege` new upgrades are refused at
+  static-serve cost, a browser navigation to the WebSocket path gets the
+  capacity page instead of `426`, and `/__admit-check` always answers `202`
+  with a doubled `pollAfterMs`. A per-IP `429` is counted apart and never
+  escalates the posture. The live level reads back as `platform.protection`
+  (also in `platform.introspect()`) and layers `'CAPACITY'` onto
+  `platform.pressure`, behind `MEMORY`. Each level change prints
+  `ADAPTER-ERR-POSTURE-TRANSITION` with the rejection rate and the base
+  pressure reason.
+
+- `websocket.postureExport`: a local stream socket - a unix domain socket path,
+  or a `\\.\pipe\...` named pipe on Windows - that pushes the live posture to
+  every connected consumer as newline-delimited JSON, once on connect, once per
+  transition, and once per 1 Hz sample. The steady cadence is the liveness
+  signal: silence means the adapter is gone. Local-only and payload-free
+  (posture, reason and kernel pressure numbers). A listen that fails, or a
+  socket that fails later, disables the export with
+  `ADAPTER-ERR-POSTURE-EXPORT-DISABLED` and never touches the server it
+  reports on. Takes a path string or `{ path }`.
+
+- `websocket.consistencyAuditIntervalMs` (default `5000`): the per-worker
+  consistency auditor, running the shared invariant predicates against a
+  bounded, structure-only snapshot of live connections on a slow, jittered,
+  unref'd timer. It never runs on the hot path. A violation logs and increments
+  `platform.assertions`; only a subscription slot that is no longer a `Set`,
+  persisting across two consecutive audits, escalates to a deferred worker
+  restart. Set `0` to disable it and schedule no timer.
+
+- `websocket.resourceGrowthAuditIntervalMs` (default `0`, off): the
+  observe-only resource-growth trend auditor. It samples the SIZE of the live
+  bookkeeping collections and logs one throttled
+  `ADAPTER-ERR-RESOURCE-GROWTH` per worker when a series climbs monotonically -
+  the signature of a close, unsubscribe or eviction path that stopped shedding.
+  It never asserts, throws or terminates.
+
 - The auto-mounted admin route and `websocket.adminPath`, which the build
   previously refused. When the WebSocket handler exports `admin(request)`, the
   adapter mounts it under a reserved prefix (default `/__realtime`) ahead of the

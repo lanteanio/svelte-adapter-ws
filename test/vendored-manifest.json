@@ -531,6 +531,9 @@
 		"file": "src/runtime/utils/posture-export.js"
 	},
 	{
+		"file": "src/runtime/utils/pressure.js"
+	},
+	{
 		"file": "src/runtime/utils/subscribe-policy.js"
 	},
 	{
@@ -981,6 +984,32 @@
 	},
 	{
 		"file": "test/presence.test.js"
+	},
+	{
+		"file": "test/protection-posture-unit.test.js",
+		"adaptations": [
+			{
+				"lead": "// Pure-function coverage for the graduated protection posture and the capacity\n// reason override. These tests drive the exported helpers directly and import\n// nothing that pulls in uWebSockets.js, so they evaluate identically under every\n// pool worker and cannot flake on cross-file module-load ordering. The live\n// createTestServer coupling lives in protection-posture.test.js.",
+				"ours": "// Pure-function coverage for the graduated protection posture and the capacity\n// reason override. These tests drive the exported helpers directly, so they\n// evaluate identically under every pool worker and cannot flake on cross-file\n// module-load ordering. The live createTestServer coupling lives in\n// protection-posture.test.js."
+			},
+			{
+				"lead": "import {\n\tcreatePosture,\n\tapplyCapacityReason,\n\tcreateUpgradeAdmission,\n\tcomputePressureReason\n} from '../src/runtime/utils.js';",
+				"ours": "import { createPosture, applyCapacityReason, computePressureReason } from '../src/runtime/utils/pressure.js';\nimport { createUpgradeAdmission } from '../src/runtime/utils/upgrade-admission.js';"
+			}
+		]
+	},
+	{
+		"file": "test/protection-posture.test.js",
+		"adaptations": [
+			{
+				"lead": "// The pure createPosture / applyCapacityReason assertions live in\n// protection-posture-unit.test.js (no uWebSockets.js import) so they evaluate\n// deterministically under every pool worker. This file holds only the live\n// integration, and runs its server-backed describe blocks sequentially so two\n// uWS instances never contend on port/socket churn within the file.\n\nimport { describe, it, expect, afterEach } from 'vitest';\n\nlet uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\n\nconst describeUWS = uWS ? describe.sequential : describe.skip;\n\nlet server;",
+				"ours": "// The pure createPosture / applyCapacityReason assertions live in\n// protection-posture-unit.test.js so they evaluate deterministically under\n// every pool worker. This file holds only the live integration, and runs its\n// server-backed describe blocks sequentially so two servers never contend on\n// port churn within the file.\n\nimport { describe, it, expect, afterEach } from 'vitest';\n\nlet server;"
+			},
+			{
+				"lead": "describeUWS('protection posture coupling on createTestServer', () => {",
+				"ours": "describe.sequential('protection posture coupling on createTestServer', () => {"
+			}
+		]
 	},
 	{
 		"file": "test/queue.test.js"

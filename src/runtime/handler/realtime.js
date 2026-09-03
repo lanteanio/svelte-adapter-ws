@@ -41,6 +41,11 @@ import {
 	jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter
 } from '../utils/upgrade-admission.js';
 import { createConnectionPermitCarrier } from '../utils/connection-permit.js';
+import { createPosture } from '../utils/pressure.js';
+import { startPostureExport } from '../utils/posture-export.js';
+import { createConsistencyAuditor } from '../auditor.js';
+import { buildConnectionAuditSnapshot } from '../audit-snapshot.js';
+import { createResourceGrowthAuditor, structuralResourceProbes } from '../leak-probes.js';
 import { waitingRoomRenderer } from '../waiting-room-renderer-bridge.js';
 import { parseCookies, createCookies } from '../cookies.js';
 import {
@@ -51,13 +56,16 @@ import { now, monotonicNow, randomUuid, wallEpoch, setTimer, setIntervalTimer, c
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
-import { capCounts, counters, subscribeAuth, wsConnections, wsWrappers } from './state.js';
+import {
+	capCounts, counters, decodeCache, envelopePrefixCache, lastPublishWarnAt, pressureSnapshot,
+	staticCache, subscribeAuth, topicPublishStats, wsConnections, wsWrappers
+} from './state.js';
 import { detachWireStates } from './wire-state.js';
-import { startPressureSampler } from './pressure.js';
+import { normalizePressureThresholds, startPressureSampler } from './pressure.js';
 import { configureEgress } from './egress-budget.js';
 import { leaseGrantSize } from '../wire.js';
 import { recordBackpressureDrop } from '../utils/backpressure.js';
-import { accountClosedLogicalSubscriptions, addLogicalSubscription, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
+import { accountClosedLogicalSubscriptions, addLogicalSubscription, isSettledSubscriptionRegistry, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
 import { registerGameIngress, gameLaneClusterSafe } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
@@ -135,6 +143,93 @@ registerGameIngress();
 startPressureSampler(wsOptions.pressure);
 setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta; });
 
+// - Per-worker consistency auditor -------------------------------------------
+// A background check that runs the shared invariant predicates against a
+// BOUNDED, structure-only snapshot of live connection state on a slow,
+// seam-jittered, unref'd timer. It NEVER runs on the hot path: publish /
+// send / subscribe / close pay nothing; the only cost is the bookkeeping they
+// already do. Default on (5000ms); set `consistencyAuditIntervalMs: 0` to
+// disable entirely (no timer scheduled, zero cost). A violation logs +
+// increments the assertion counter (the soft tier); only a `subs.shape`
+// corruption that PERSISTS across two consecutive audits of the same window
+// escalates to the hard tier (a deferred worker restart), so a healthy or
+// transient state is never killed.
+const CONSISTENCY_AUDIT_INTERVAL_MS = wsOptions.consistencyAuditIntervalMs ?? 5000;
+if (CONSISTENCY_AUDIT_INTERVAL_MS > 0) {
+	// Build a bounded snapshot over the round-robin window the factory requests.
+	// The builder iterates the connection Set ONCE with a skip-counter and only
+	// allocates the window, so the cost is fixed per tick regardless of how many
+	// connections the worker holds. `counters.totalSubscriptions` is read at call
+	// time (not captured), so the cap accountant reflects the live value.
+	const buildAuditSnapshot = ({ offset, limit }) => buildConnectionAuditSnapshot({
+		connections: wsConnections,
+		subscriptionsKey: WS_SUBSCRIPTIONS,
+		sessionIdKey: WS_SESSION_ID,
+		totalSubscriptions: counters.totalSubscriptions,
+		offset,
+		limit,
+		isSettled: isSettledSubscriptionRegistry
+	});
+	// Soft by default; only `subs.shape` (a per-connection subscription slot
+	// that is not a Set) escalates, and only when it persists across two audits.
+	const auditor = createConsistencyAuditor({
+		snapshot: buildAuditSnapshot,
+		assert,
+		fatal,
+		hardCategories: ['subs.shape'],
+		intervalMs: CONSISTENCY_AUDIT_INTERVAL_MS
+	});
+	counters.consistencyAuditor = auditor;
+	auditor.start();
+}
+
+// - Optional resource-growth trend auditor -----------------------------------
+// Distinct from the consistency auditor above (which checks point-in-time
+// invariants): this one trends the SIZE of the live bookkeeping collections
+// across samples and flags a series that grows monotonically - the signature
+// of a close / unsubscribe / eviction path that stopped shedding. It reads
+// ONLY Map/Set `.size` (never a monotonic-by-design counter), rides its own
+// slow, seam-jittered, unref'd timer, and is OBSERVE-ONLY: a suspected trend
+// logs at most one throttled warning and NEVER asserts or terminates. Off by
+// default (interval 0), because a trend signal is inherently probabilistic and
+// the always-on structural guard is the deterministic simulator, not
+// production.
+const RESOURCE_GROWTH_AUDIT_INTERVAL_MS = wsOptions.resourceGrowthAuditIntervalMs ?? 0;
+if (RESOURCE_GROWTH_AUDIT_INTERVAL_MS > 0) {
+	let growthWarned = false;
+	const growthAuditor = createResourceGrowthAuditor({
+		// Self-healing / bounded collections only, so a rising trend really is a
+		// leak: wsConnections shrinks as clients disconnect, topicPublishStats is
+		// cleared every pressure tick, and lastPublishWarnAt / decodeCache /
+		// envelopePrefixCache are LRU-evicted while staticCache plateaus at the
+		// finite asset set. The per-topic registries topicSeqs and sharedTopics
+		// grow with topic cardinality BY DESIGN, so probing them here would
+		// self-fire a false leak: topicSeqs is held to its configured ceiling by
+		// the seq bound (handler/seq-bound.js), which can only evict a topic no
+		// client is on, and sharedTopics has no such bound at all.
+		probes: structuralResourceProbes({
+			wsConnections,
+			topicPublishStats,
+			lastPublishWarnAt,
+			decodeCache,
+			envelopePrefixCache,
+			staticCache
+		}),
+		intervalMs: RESOURCE_GROWTH_AUDIT_INTERVAL_MS,
+		onGrowth(report) {
+			// One throttled warning for the whole worker lifetime; the auditor
+			// observes a direction, and repeating the same line every tick would
+			// bury the rest of the log without adding a fact.
+			if (growthWarned) return;
+			growthWarned = true;
+			console.warn(adapterConsoleLine(ADAPTER_ERROR_IDS.RESOURCE_GROWTH,
+				`'${report.name}' size trending upward (delta ${report.delta} over ${report.n} samples); investigate a close/unsubscribe/eviction path that stopped shedding.`));
+		}
+	});
+	counters.resourceGrowthAuditor = growthAuditor;
+	growthAuditor.start();
+}
+
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
 
 // Upgrade admission: the concurrent-handshake ceiling, the whole-lifetime
@@ -155,6 +250,73 @@ const WAITING_ROOM = resolveWaitingRoom(wsOptions.upgradeAdmission, waitingRoomR
 // The rolling poll counter behind the queue-depth estimate. Created only with
 // a room to report to, so nothing is allocated for a server without one.
 const pollCounter = WAITING_ROOM !== null ? createPollCounter(WAITING_ROOM.pollIntervalMs) : null;
+
+// Graduated protection posture over the 1 Hz pressure signal. Opt-in via the
+// `protection` option; absent or `'normal'` leaves `counters.activePosture`
+// null, so the reject path, the pressure snapshot and the poll response stay
+// byte-identical to a deployment that never sets it. `'auto'` resolves the
+// level from pressure; `'elevated'`/`'siege'` pin it for incident response.
+// The posture is ticked from the pressure sampler (no new timer) but built
+// here because it reads the module's admission gate.
+const PROTECTION_MODE = wsOptions.protection || 'normal';
+
+/** @returns {'normal' | 'elevated' | 'siege'} */
+function postureLevel() {
+	return counters.activePosture !== null ? counters.activePosture.level : 'normal';
+}
+
+counters.activePosture = (PROTECTION_MODE === 'normal')
+	? null
+	: createPosture({
+		admission,
+		// The LIVE thresholds this transport's sampler reads. Resolving them
+		// any other way would let the posture judge a different set of numbers
+		// than the sampler that drives it.
+		getThresholds: () => normalizePressureThresholds(wsOptions.pressure),
+		pin: PROTECTION_MODE === 'auto' ? undefined : PROTECTION_MODE,
+		// One log line per level change - the operator's incident timeline.
+		// Dwell-gated by the machine, so it can never flood. No client identity
+		// on the line: rate and reason only.
+		onTransition: (from, to) => {
+			console.warn(adapterConsoleLine(
+				ADAPTER_ERROR_IDS.POSTURE_TRANSITION,
+				`${from} -> ${to} rejected/s=${counters.activePosture !== null ? counters.activePosture.rejectedPerSecond : 0} ` +
+				`pressure=${counters.lastBasePressureReason}`
+			));
+			// Push the transition to export subscribers immediately - a defense
+			// daemon reacting to a posture change must not wait out the rest of
+			// the sample window.
+			if (counters.postureExportHook !== null) counters.postureExportHook();
+		}
+	});
+
+// Posture push-export (opt-in): a local stream socket where an external
+// process (an edge-defense daemon, a watchdog) follows the live posture as
+// newline-delimited JSON - pushed on connect, on every transition, and on
+// every 1 Hz sample (the cadence doubles as a liveness signal). Local-only and
+// payload-free: posture, reason, and kernel pressure numbers.
+const POSTURE_EXPORT = wsOptions.postureExport;
+if (POSTURE_EXPORT !== undefined && POSTURE_EXPORT !== false) {
+	const exportPath = typeof POSTURE_EXPORT === 'string' ? POSTURE_EXPORT : POSTURE_EXPORT?.path;
+	if (typeof exportPath !== 'string' || exportPath.length === 0) {
+		throw new Error("websocket.postureExport must be a socket path string or { path } (or omitted)");
+	}
+	const exporter = startPostureExport(exportPath, () => ({
+		v: 1,
+		posture: postureLevel(),
+		reason: pressureSnapshot.reason,
+		value: pressureSnapshot.value,
+		psi: pressureSnapshot.psi ?? null,
+		cpuThrottle: pressureSnapshot.cpuThrottle ?? null
+	}));
+	counters.postureExporter = exporter;
+	counters.postureExportHook = () => exporter.broadcast();
+} else {
+	// Assigned on BOTH branches, so a re-run of this module replaces a stale
+	// hook rather than leaving one pointed at a closed exporter.
+	counters.postureExporter = null;
+	counters.postureExportHook = null;
+}
 
 /**
  * Hand back the whole-lifetime connection permit a connection holds, once.
@@ -343,14 +505,18 @@ function waitingRoomRequestFacade(req, pathname, query) {
  * The `Retry-After` a refusal answers. The room's configured base where a room
  * exists, the shared default where none does - one number per condition, so a
  * client honouring the header never reads one lane as "retry immediately"
- * while the same full gate tells another lane to wait.
+ * while the same full gate tells another lane to wait. The jitter band widens
+ * as the posture rises, so a packed server thins its own retry rate; 0.5 is
+ * the jitter helper's own default, which keeps `normal` exactly where it was.
  *
  * @returns {number}
  */
 function refusalRetryAfter() {
+	const lvl = postureLevel();
+	const spread = lvl === 'siege' ? 1.5 : lvl === 'elevated' ? 1.0 : 0.5;
 	return WAITING_ROOM !== null
-		? WAITING_ROOM.jitteredRetryAfter()
-		: jitterRetryAfter(REFUSAL_RETRY_AFTER_SECONDS);
+		? WAITING_ROOM.jitteredRetryAfter(spread)
+		: jitterRetryAfter(REFUSAL_RETRY_AFTER_SECONDS, spread);
 }
 
 /**
@@ -447,13 +613,29 @@ export async function handleUpgrade(req, socket, head) {
 		]);
 	};
 
+	// Siege refuses every NEW upgrade at static-serve cost, even while the gate
+	// has free slots - no slot is acquired, so an existing connection is never
+	// touched. Counted as an over-capacity reject so an auto posture stays
+	// escalated.
+	if (postureLevel() === 'siege') {
+		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
+		traceUpgradeRejection(null, 'siege');
+		serveUpgradeRefusal();
+		return;
+	}
+
 	// Pre-upgrade soft filter: the cap on concurrent upgrades being processed.
 	// The cheapest possible rejection - no header walk, no address decode, no
 	// origin check - so a connection storm is shed before it consumes
 	// per-request CPU. A cursor-lane upgrade is admitted through its reserved
-	// sub-budget so it can never starve main-WS admission.
+	// sub-budget so it can never starve main-WS admission; a saturated cursor
+	// lane is real capacity pressure, so it counts as an over-capacity reject
+	// too.
 	const handshakeAcquired = isCursor ? admission.tryAcquireCursor() : admission.tryAcquire();
 	if (!handshakeAcquired) {
+		// Count the over-capacity reject (and only this one) so the posture's
+		// rolling reject rate reflects true gate pressure.
+		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
 		traceUpgradeRejection(null, isCursor ? 'cursor_lane' : 'over_capacity');
 		serveUpgradeRefusal();
 		return;
@@ -479,6 +661,7 @@ export async function handleUpgrade(req, socket, head) {
 		if (ADMISSION_ARMED) socket.removeListener('close', releaseInFlight);
 	}
 	function rejectDeferredOverflow() {
+		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
 		traceUpgradeRejection(null, 'deferred_overflow');
 		releaseInFlight();
 		serveUpgradeRefusal();
@@ -487,6 +670,7 @@ export async function handleUpgrade(req, socket, head) {
 	// The whole-lifetime connection permit is reserved across the handshake
 	// too, so concurrent upgrades cannot overshoot the live-connection ceiling.
 	if (!admission.tryAcquireConnection()) {
+		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
 		traceUpgradeRejection(null, 'connection_capacity');
 		releaseInFlight();
 		serveUpgradeRefusal();
@@ -521,6 +705,10 @@ export async function handleUpgrade(req, socket, head) {
 	const clientIp = resolveClientIp(direct, headers, direct);
 
 	if (upgradeRateLimiter.exceeded(clientIp, now())) {
+		// Per-IP rate-limit reject. Reported on its own counter, never the
+		// over-capacity one, so an attack-driven 429 storm can never escalate
+		// the protection posture toward siege.
+		if (counters.activePosture !== null) counters.activePosture.recordRateLimitReject();
 		traceUpgradeRejection(headers, 'ip_rate_limit');
 		refuseUpgrade(socket, 429, 'Too Many Requests');
 		releaseInFlight();
@@ -1761,7 +1949,17 @@ function httpRefusalResponse(res) {
  * @returns {void}
  */
 export function serveWsPathGet(req, res, pathname, search) {
-	if (!ADMISSION_ARMED || admission.hasCapacity()) {
+	// Siege answers this navigation the same way the upgrade door answers the
+	// handshake behind it; without the posture test a sieged server would hand
+	// a browser 'upgrade required' and then refuse the upgrade it just asked
+	// for. At normal and elevated the live gate stays the source of truth.
+	//
+	// The siege test sits OUTSIDE the armed guard on purpose: the upgrade
+	// short-circuit refuses on posture alone, with no ceiling configured, so
+	// gating this one behind ADMISSION_ARMED would reinstate exactly the
+	// mismatch above for a deployment that pins `protection: 'siege'` and
+	// configures no `upgradeAdmission` at all.
+	if (postureLevel() !== 'siege' && (!ADMISSION_ARMED || admission.hasCapacity())) {
 		res.writeHead(426, { 'content-type': 'text/plain', upgrade: 'websocket' });
 		res.end('WebSocket upgrade required');
 		return;
@@ -1805,13 +2003,24 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 	if (WAITING_ROOM === null) return false;
 	if (pathname === WAITING_ROOM.admitCheckPath) {
 		pollCounter.record(now());
-		if (admission.hasCapacity()) {
+		// Siege never admits a reload into a full gate: it always reports busy,
+		// even while the live gate has free slots. At normal and elevated
+		// `hasCapacity()` stays the source of truth, so the poll only ever ADDS
+		// the siege always-202 gate - it never admits a client the real gate
+		// would reject.
+		if (postureLevel() !== 'siege' && admission.hasCapacity()) {
 			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
 			res.end('{"admit":true}');
 			return true;
 		}
 		const queueDepth = pollCounter.depth(now());
 		const estimatedSeconds = WAITING_ROOM.estimateSeconds(queueDepth);
+		// Widen the poll cadence under siege so a packed room thins its own
+		// retry rate; normal and elevated keep the configured interval. The
+		// client honours what is served here, so this is the only lever on it.
+		const pollAfterMs = postureLevel() === 'siege'
+			? WAITING_ROOM.pollIntervalMs * 2
+			: WAITING_ROOM.pollIntervalMs;
 		// 202 rather than 503 so the poll itself is never read as a failed or
 		// rate-limited upgrade: it holds no socket and stays distinguishable
 		// in logs.
@@ -1819,7 +2028,7 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 		res.end(
 			'{"admit":false,"queueDepth":' + queueDepth +
 			',"estimatedSeconds":' + estimatedSeconds +
-			',"pollAfterMs":' + WAITING_ROOM.pollIntervalMs + '}'
+			',"pollAfterMs":' + pollAfterMs + '}'
 		);
 		return true;
 	}

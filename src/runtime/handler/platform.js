@@ -1238,7 +1238,12 @@ export const platform = {
 		return pressureSnapshot;
 	},
 
-	get protection() { return 'normal'; },
+	get protection() {
+		// The live level, or 'normal' for a deployment that never configured a
+		// posture (where no machine is built at all). introspect() reads this
+		// same getter, so both surfaces move together.
+		return counters.activePosture !== null ? counters.activePosture.level : 'normal';
+	},
 
 	get metrics() { return null; },
 
