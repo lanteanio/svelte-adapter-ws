@@ -15,10 +15,11 @@
 // configured, which is what makes an unreturned permit a denial of service
 // rather than an accounting slip.
 
-import net from 'node:net';
+import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+import { rawUpgrade } from './helpers/raw-upgrade.js';
 
 const BASE_WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -53,20 +54,6 @@ async function bootWithAdmission(upgradeAdmission, extraWsOpts = {}) {
 	return { ...rt, cleanup: async () => { await rt.close(); payload.cleanup(); } };
 }
 
-/** A raw handshake ws will refuse itself, answered without our callback running. */
-function rawUpgrade(port, lines) {
-	return new Promise((resolve) => {
-		const socket = net.connect(port, '127.0.0.1', () => {
-			socket.write(lines.join('\r\n') + '\r\n\r\n');
-		});
-		let data = '';
-		socket.on('data', (chunk) => { data += chunk.toString(); });
-		const done = () => resolve(data.split('\r\n')[0] || '');
-		socket.on('close', done);
-		socket.on('error', () => resolve(''));
-		setTimeout(() => { socket.destroy(); done(); }, 1500);
-	});
-}
 
 /** Does a legitimate client still get in? */
 function healthyHandshake(port, headers) {
@@ -146,12 +133,20 @@ describe('a handshake that never becomes a connection returns its permit', () =>
 // between taking the slot and accepting has to give it back, and each of those
 // returns sits on its own branch - so one deleted release is invisible until a
 // ceiling stops recovering under exactly that kind of traffic.
+//
+// The end-to-end case here proves the branch answers 400 and that the gate
+// recovers; the branch-local release is pinned in the stub-socket block below,
+// because over a real socket the abandoned-handshake listener would return the
+// slot on its own.
 describe('a refused upgrade returns the in-flight slot', () => {
 	it('recovers after a handshake refused on the duplicate-header branch', async () => {
 		const rt = await bootWithAdmission({ maxConcurrent: 1 });
 		try {
 			// A repeated singleton header is refused before the accept, on a
-			// different branch from the malformed handshakes above.
+			// different branch from the malformed handshakes above. Content-Type
+			// rather than Content-Length: node's own parser answers a repeated
+			// Content-Length itself, so a handshake carrying one never reaches
+			// the adapter and proves nothing about this branch.
 			const dup = await rawUpgrade(rt.port, [
 				'GET /ws HTTP/1.1',
 				`Host: 127.0.0.1:${rt.port}`,
@@ -159,8 +154,8 @@ describe('a refused upgrade returns the in-flight slot', () => {
 				'Connection: Upgrade',
 				'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
 				'Sec-WebSocket-Version: 13',
-				'Content-Length: 0',
-				'Content-Length: 0'
+				'Content-Type: text/plain',
+				'Content-Type: text/plain'
 			]);
 			expect(dup).toContain('400');
 
@@ -172,4 +167,202 @@ describe('a refused upgrade returns the in-flight slot', () => {
 			await rt.cleanup();
 		}
 	}, 60000);
+});
+
+// Over a real socket every refusal ends in socket.destroy(), node emits
+// 'close' on the next tick, and the abandoned-handshake listener an armed gate
+// installs hands the slot back regardless of what the branch itself did. So an
+// end-to-end refusal cannot tell a working branch from a deleted one. These
+// drive the upgrade listener directly over a socket stub that destroys without
+// emitting anything: with no 'close' there is no backstop, and the branch's own
+// release is the only thing that can free the slot.
+//
+// The follow-up probe on every case is a duplicate-header handshake rather than
+// a healthy one, because that branch is checked before both the rate limiter
+// and the origin policy and consumes no rate-limit token - so the probe reads
+// the same under every configuration below. Its answer is the assertion: 400
+// means the slot came back, 503 means the previous refusal kept it.
+
+/** A socket that records what was written and dies quietly. */
+function stubSocket({ destroyed = false } = {}) {
+	const socket = new EventEmitter();
+	socket.destroyed = destroyed;
+	socket.written = '';
+	socket.write = (chunk) => { socket.written += String(chunk); return true; };
+	socket.destroy = () => { socket.destroyed = true; };
+	return socket;
+}
+
+function statusLine(socket) {
+	return socket.written.split('\r\n')[0];
+}
+
+const HANDSHAKE_HEADERS = [
+	['Host', '127.0.0.1'],
+	['Upgrade', 'websocket'],
+	['Connection', 'Upgrade'],
+	['Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ=='],
+	['Sec-WebSocket-Version', '13']
+];
+
+const DUPLICATE_HEADERS = [...HANDSHAKE_HEADERS, ['Content-Length', '0'], ['Content-Length', '0']];
+
+/** The upgrade listener's view of a request: raw pairs plus the joined bag. */
+function upgradeRequest(headerPairs) {
+	/** @type {string[]} */
+	const rawHeaders = [];
+	/** @type {Record<string, string>} */
+	const headers = {};
+	for (const [name, value] of headerPairs) {
+		rawHeaders.push(name, value);
+		headers[name.toLowerCase()] = value;
+	}
+	return {
+		method: 'GET',
+		url: '/ws',
+		rawHeaders,
+		headers,
+		socket: { remoteAddress: '127.0.0.1' }
+	};
+}
+
+/**
+ * Boot a payload and hand back its upgrade listener. The port is never dialed -
+ * every drive below hands the listener a socket stub directly - but the server
+ * still has to reach `ready`, because an upgrade arriving before that is
+ * refused as draining, ahead of every branch under test.
+ */
+async function bootRealtime(wsOptions, wsHandlerSource) {
+	const payload = buildRuntime({
+		replace: {
+			WS_ENABLED: JSON.stringify(true),
+			WS_OPTIONS: JSON.stringify({ ...BASE_WS_OPTS, ...wsOptions })
+		},
+		wsHandlerSource: wsHandlerSource ?? '// no handler\n'
+	});
+	const rt = await bootRuntime(payload);
+	return {
+		realtime: rt.handler.realtime,
+		cleanup: async () => { await rt.close(); payload.cleanup(); }
+	};
+}
+
+/** One drive of the upgrade listener over a fresh stub. */
+async function drive(realtime, headerPairs, socketOptions) {
+	const socket = stubSocket(socketOptions);
+	await realtime.handleUpgrade(upgradeRequest(headerPairs), socket, Buffer.alloc(0));
+	return socket;
+}
+
+describe('every refusal branch returns the in-flight slot on its own', () => {
+	it('returns it after the duplicate-header 400', async () => {
+		const rt = await bootRealtime({ upgradeAdmission: { maxConcurrent: 1 } });
+		try {
+			const refused = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(refused)).toContain('400');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	});
+
+	it('returns it after the per-IP rate-limit 429', async () => {
+		// A positive ceiling is what arms the limiter at all: `upgradeRateLimit: 0`
+		// disables it, so the branch is unreachable at the suite's usual value.
+		// The limiter refuses only once a window's worth of upgrades has been
+		// counted, and only a request that reaches it is counted - so the first
+		// drive spends the single token. It arrives on an already-dead socket,
+		// which is answered and released without writing anything.
+		const rt = await bootRealtime({
+			upgradeRateLimit: 1,
+			upgradeAdmission: { maxConcurrent: 1 }
+		});
+		try {
+			const spent = await drive(rt.realtime, HANDSHAKE_HEADERS, { destroyed: true });
+			expect(spent.written).toBe('');
+
+			const refused = await drive(rt.realtime, HANDSHAKE_HEADERS);
+			expect(statusLine(refused)).toContain('429');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	});
+
+	it('returns it after the origin 403', async () => {
+		const rt = await bootRealtime({
+			allowedOrigins: ['http://allowed.example'],
+			upgradeAdmission: { maxConcurrent: 1 }
+		});
+		try {
+			const refused = await drive(rt.realtime, [
+				...HANDSHAKE_HEADERS,
+				['Origin', 'http://evil.example']
+			]);
+			expect(statusLine(refused)).toContain('403');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	});
+
+	it('returns it after the upgrade-hook deadline 504', async () => {
+		const rt = await bootRealtime(
+			{ upgradeTimeout: 1, upgradeAdmission: { maxConcurrent: 1 } },
+			'export function upgrade() { return new Promise(() => {}); }\n'
+		);
+		try {
+			const refused = await drive(rt.realtime, HANDSHAKE_HEADERS);
+			expect(statusLine(refused)).toContain('504');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	}, 30000);
+
+	it('returns it after the upgrade-hook 401', async () => {
+		const rt = await bootRealtime(
+			{ upgradeAdmission: { maxConcurrent: 1 } },
+			'export function upgrade() { return false; }\n'
+		);
+		try {
+			const refused = await drive(rt.realtime, HANDSHAKE_HEADERS);
+			expect(statusLine(refused)).toContain('401');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	});
+
+	it('returns it after the upgrade-hook 500', async () => {
+		const rt = await bootRealtime(
+			{ upgradeAdmission: { maxConcurrent: 1 } },
+			"export function upgrade() { throw new Error('hook boom'); }\n"
+		);
+		try {
+			const refused = await drive(rt.realtime, HANDSHAKE_HEADERS);
+			expect(statusLine(refused)).toContain('500');
+
+			const probe = await drive(rt.realtime, DUPLICATE_HEADERS);
+			expect(statusLine(probe)).toContain('400');
+			expect(statusLine(probe)).not.toContain('503');
+		} finally {
+			await rt.cleanup();
+		}
+	});
 });

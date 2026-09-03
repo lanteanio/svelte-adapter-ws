@@ -6,6 +6,7 @@
 // "the wiring works."
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { rawUpgrade } from './helpers/raw-upgrade.js';
 
 
 let server;
@@ -329,5 +330,96 @@ describe('cursor-lane admission on createTestServer', () => {
 		const fresh = await attemptUpgrade(server.wsUrl, CURSOR_SUBPROTOCOL);
 		expect(fresh.opened).toBe(true);
 		fresh.ws?.close();
+	});
+});
+
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Every refusal between taking a slot and accepting has to hand that slot back,
+// and each return sits on its own branch. Nothing else here can cover for them:
+// the harness answers an upgrade through a response object and arms its abort
+// callback only after these branches have run, so a served refusal never fires
+// it. A deleted release is therefore a permanent one, and the next handshake
+// under a one-slot ceiling is what says so.
+describe('a refused upgrade returns its harness slot', () => {
+	afterEach(async () => {
+		await server?.close();
+		server = null;
+	});
+
+	it('recovers after a duplicate-header 400', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		server = await createTestServer({ upgradeAdmission: { maxConcurrent: 1 } });
+
+		const refused = await rawUpgrade(server.port, [
+			'GET /ws HTTP/1.1',
+			`Host: 127.0.0.1:${server.port}`,
+			'Upgrade: websocket',
+			'Connection: Upgrade',
+			'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+			'Sec-WebSocket-Version: 13',
+			'Content-Type: text/plain',
+			'Content-Type: text/plain'
+		]);
+		expect(refused).toContain('400');
+
+		const healthy = await attemptUpgrade(server.wsUrl);
+		expect(healthy.status).not.toBe(503);
+		expect(healthy.opened).toBe(true);
+		healthy.ws?.close();
+	});
+
+	it('recovers after a connection-ceiling refusal', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		// One live connection and one concurrent handshake. The refusal below
+		// is charged to the connection ceiling, but it is holding an in-flight
+		// slot when it happens - and that half is invisible whenever
+		// maxConcurrent is unset, because then nothing counts it.
+		server = await createTestServer({
+			upgradeAdmission: { maxConcurrent: 1, maxConnections: 1 }
+		});
+
+		const held = await attemptUpgrade(server.wsUrl);
+		expect(held.opened).toBe(true);
+
+		const refused = await attemptUpgrade(server.wsUrl);
+		expect(refused.opened).toBe(false);
+		expect(refused.status).toBe(503);
+
+		await new Promise((resolve) => {
+			held.ws.once('close', resolve);
+			held.ws.close();
+		});
+		await sleep(60);
+
+		const replacement = await attemptUpgrade(server.wsUrl);
+		expect(replacement.opened).toBe(true);
+		replacement.ws?.close();
+	});
+
+	it('recovers after a paced upgrade is shed by a full deferral queue', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		// One handshake per turn and no queue behind it, so a second upgrade
+		// landing in the same turn is shed by the pacer rather than the
+		// ceiling. The ceiling of one is what makes a kept slot visible: with
+		// no upgrade hook every admitted callback runs and frees its slot
+		// synchronously, so nothing else here can be refused for capacity.
+		server = await createTestServer({
+			upgradeAdmission: { maxConcurrent: 1, perTickBudget: 1, maxDeferred: 0 }
+		});
+
+		const results = await Promise.all(
+			Array.from({ length: 30 }, () => attemptUpgrade(server.wsUrl))
+		);
+		const shed = results.filter((r) => r.status === 503);
+		expect(shed.length).toBeGreaterThan(0);
+		for (const r of results) r.ws?.close();
+		await sleep(60);
+
+		const quiet = await attemptUpgrade(server.wsUrl);
+		expect(quiet.status).not.toBe(503);
+		expect(quiet.opened).toBe(true);
+		quiet.ws?.close();
 	});
 });

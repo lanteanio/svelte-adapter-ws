@@ -733,6 +733,39 @@
 		]
 	},
 	{
+		"file": "test/admission-metrics.test.js",
+		"adaptations": [
+			{
+				"lead": "// uWS server (createTestServer harness) with a recording registry passed via\n",
+				"ours": "// server (the createTestServer harness) with a recording registry passed via\n"
+			},
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\n\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('admission metrics on createTestServer', () => {\n",
+				"ours": "describe('admission metrics on createTestServer', () => {\n"
+			},
+			{
+				"lead": "const CURSOR_SUBPROTOCOL = 'svelte-realtime-cursor';\n\n",
+				"ours": "const CURSOR_SUBPROTOCOL = 'svelte-realtime-cursor';\n\n// The client's own `close` event is not proof the server has finished with the\n// connection: on this transport the peer's FIN is acknowledged to the client\n// before the server's close handler has run, so the permit is handed back a\n// turn later. Poll the gauge instead of sampling it once.\nasync function waitForGauge(metrics, name, value, timeoutMs = 2000) {\n\tconst deadline = Date.now() + timeoutMs;\n\twhile (metrics.gaugeValue(name) !== value && Date.now() < deadline) {\n\t\tawait new Promise((r) => setTimeout(r, 5));\n\t}\n\treturn metrics.gaugeValue(name);\n}\n\n"
+			},
+			{
+				"lead": "\t\t\tfirst.ws.once('close', resolve);\n\t\t\tfirst.ws.close();\n\t\t});\n\t\texpect(metrics.gaugeValue('ws_connection_headroom')).toBe(1);",
+				"ours": "\t\t\tfirst.ws.once('close', resolve);\n\t\t\tfirst.ws.close();\n\t\t});\n\t\texpect(await waitForGauge(metrics, 'ws_connection_headroom', 1)).toBe(1);"
+			},
+			{
+				"lead": "\t\t\tconnection.ws.once('close', resolve);\n\t\t\tconnection.ws.close();\n\t\t});\n\t\texpect(metrics.gaugeValue('ws_connection_headroom')).toBe(1);",
+				"ours": "\t\t\tconnection.ws.once('close', resolve);\n\t\t\tconnection.ws.close();\n\t\t});\n\t\texpect(await waitForGauge(metrics, 'ws_connection_headroom', 1)).toBe(1);"
+			},
+			{
+				"lead": "\t// the refusal runs synchronously, inside the uWS route handler, where the\n\t// request is still valid. Every shipped test was on that side of the line.\n\t//\n\t// With a hook that resolves in a LATER TICK - which is every hook doing real\n\t// I/O, and so the ordinary auth-carrying shape - the refusal runs from the\n\t// hook's `.then()`. uWS invalidates the stack-allocated request at the END OF\n\t// THE NATIVE TICK (not at route-handler return: a hook awaiting only settled\n\t// promises stays inside the tick and was always fine), so the refusal's header\n\t// reads threw, the catch around the hook swallowed it, and the client got a\n\t// 500 it cannot tell from a broken server - for a NORMAL, expected shed.\n\t//\n\t// It also double-counted: the same attempt landed on `deferred_overflow` and\n\t// then again on `hook_error`, breaking the accounting invariant the\n\t// over-capacity test above pins.\n",
+				"ours": "\t// the refusal runs synchronously inside the route handler.\n\t//\n\t// With a hook that resolves in a LATER TICK - which is every hook doing real\n\t// I/O, and so the ordinary auth-carrying shape - the refusal runs from the\n\t// hook's `.then()`. The contract is the same either way: a shed answers 503\n\t// and is counted once as `deferred_overflow`, never a 500 and never counted\n\t// again as `hook_error`. A 500 is indistinguishable from a broken server,\n\t// and the second count breaks the accounting invariant the over-capacity\n\t// test above pins.\n\t//\n\t// A transport whose request object dies with the native tick that produced\n\t// it reaches that 500 by throwing on the late header reads. This one hands\n\t// the upgrade a plain header bag that outlives the tick, so the throw\n\t// cannot arise here and the case pins the answer rather than the mechanism.\n"
+			}
+		]
+	},
+	{
 		"file": "test/auditor-safety.test.js"
 	},
 	{

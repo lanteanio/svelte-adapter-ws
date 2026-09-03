@@ -134,6 +134,20 @@ describe('bounded upgrade deferral', () => {
 	it('enables the default waiting room when bounded pacing can shed', () => {
 		expect(resolveWaitingRoom({ perTickBudget: 1 })).not.toBeNull();
 		expect(resolveWaitingRoom({ perTickBudget: 1, waitingRoom: false })).toBeNull();
+
+		// And nothing else turns it on. A gate with no ceiling has nothing to
+		// queue for, so every shape below has to resolve to null - including
+		// maxDeferred on its own, which is forced to zero without a per-tick
+		// budget to pace against.
+		expect(resolveWaitingRoom(undefined)).toBeNull();
+		expect(resolveWaitingRoom(null)).toBeNull();
+		expect(resolveWaitingRoom({})).toBeNull();
+		expect(resolveWaitingRoom({ maxConcurrent: 0, maxConnections: 0, perTickBudget: 0 })).toBeNull();
+		expect(resolveWaitingRoom({ maxDeferred: 4 })).toBeNull();
+		// Production passes the bundled renderer as the second argument, so a
+		// guard that admitted a renderer would open the room on every build
+		// that ships one, ceiling or not.
+		expect(resolveWaitingRoom(undefined, () => ({}))).toBeNull();
 	});
 
 	it('uses no front-removing array operation in the queue implementation', () => {

@@ -279,6 +279,19 @@ describe('production upgrade admission', () => {
 			const hint = await fetch(rt.origin + '/ws');
 			expect(hint.status).toBe(426);
 			await hint.text();
+
+			// No ceiling means no room to resolve, so neither room route is
+			// mounted and both paths belong to the app. The 426 above cannot
+			// see this: the WS path answers it before it ever reads the room.
+			const admit = await fetch(rt.origin + '/__admit-check');
+			expect(admit.status).toBe(200);
+			expect(String(admit.headers.get('content-type'))).toContain('text/html');
+			expect(await admit.text()).toBe('SSR:/__admit-check');
+
+			const room = await fetch(rt.origin + '/__waiting-room');
+			expect(room.status).toBe(200);
+			expect(String(room.headers.get('content-type'))).toContain('text/html');
+			expect(await room.text()).toBe('SSR:/__waiting-room');
 		} finally {
 			await rt.cleanup();
 		}

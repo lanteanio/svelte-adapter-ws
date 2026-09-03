@@ -550,6 +550,21 @@ describe('upgrade waiting room on createTestServer', () => {
 			expect(results.some((r) => r.status === 200)).toBe(false);
 			expect(results.some((r) => r.status === 503)).toBe(false);
 
+			// Neither room route exists either: they are mounted only once a
+			// room resolves, and no ceiling means no room. The burst above
+			// cannot tell, because it never reaches a rejection.
+			const admit = await fetch(server.url + '/__admit-check');
+			const admitBody = await admit.text();
+			expect(admit.status).not.toBe(202);
+			expect(String(admit.headers.get('content-type'))).not.toContain('application/json');
+			expect(admitBody).not.toContain('"admit"');
+
+			const room = await fetch(server.url + '/__waiting-room');
+			const roomBody = await room.text();
+			expect(room.status).not.toBe(200);
+			expect(String(room.headers.get('content-type'))).not.toContain('text/html');
+			expect(roomBody).not.toContain('/__admit-check');
+
 			closeAll(results);
 		});
 	});
