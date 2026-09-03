@@ -166,6 +166,26 @@ describe('a booted worker reports a complete metrics document', () => {
 		const blank = REQUIRED.filter((s) => (helpFor.get(s.name) || '').trim() === '').map((s) => s.name);
 		expect(blank, 'required signals whose rendered HELP is empty').toEqual([]);
 	});
+
+	it('renders no HELP line that names the runtime that produced the number', () => {
+		// The half the case above cannot make. Its expectation comes from the
+		// manifest, which is also where the renderer reads its help, so
+		// rewording an entry moves both sides together and the mutation stays
+		// green. An ABSENT word is an independent fact: it does not move when
+		// the manifest is reworded, and it catches a stale or hardcoded
+		// sentence anywhere in the render path, including one that never came
+		// from the manifest at all.
+		//
+		// These words specifically. This adapter fans out in JS over node:http
+		// and ws, so a sentence crediting C++ or a native backpressure limit
+		// describes machinery this backend does not have, and an operator
+		// meets it on our own /metrics with no way to know it is wrong.
+		const doc = String(mergeSamples([{ worker: 1, samples }], { expected: 1, reporting: 1 }));
+		const layerNaming = doc
+			.split('\n')
+			.filter((line) => line.startsWith('# HELP ') && /C\+\+|native backpressure limit|Native publish calls/.test(line));
+		expect(layerNaming, 'a HELP line still names the implementation layer').toEqual([]);
+	});
 });
 
 // The outcome family answers "did this publish reach anyone", and every lane

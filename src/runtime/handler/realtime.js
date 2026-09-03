@@ -325,10 +325,10 @@ const gBackpressureConnections = containMetricInstrument(METRICS?.gauge(
 	'ws_backpressure_connections', 'Sampled connections holding a backpressured outbound queue'
 ));
 const mDroppedFrames = containMetricInstrument(METRICS?.counter(
-	'ws_dropped_frames_total', 'Outbound WebSocket frames dropped by the native backpressure limit', []
+	'ws_dropped_frames_total', 'Outbound WebSocket frames dropped under backpressure', []
 ));
 const mDroppedBytes = containMetricInstrument(METRICS?.counter(
-	'ws_dropped_bytes_total', 'Outbound WebSocket payload bytes dropped by the native backpressure limit', []
+	'ws_dropped_bytes_total', 'Outbound WebSocket payload bytes dropped under backpressure', []
 ));
 // The rest of what the 1 Hz sampler already computes. These are scalars the
 // fold produces and then discards - exporting them adds gauge writes to a
@@ -344,7 +344,7 @@ const gSubscriptions = containMetricInstrument(METRICS?.gauge(
 // cannot be re-windowed by the query, and reads wrong whenever the scrape
 // interval differs from the sample interval.
 const mPublishes = containMetricInstrument(METRICS?.counter(
-	'ws_publishes_total', 'Publish calls made (fan-out happens in C++; not per-recipient deliveries)', []
+	'ws_publishes_total', 'Publish calls made, never per-recipient deliveries', []
 ));
 const mHttpRequests = containMetricInstrument(METRICS?.counter(
 	'http_requests_total', 'Completed HTTP requests by bounded method and outcome', ['method', 'outcome']
@@ -388,7 +388,7 @@ const hWsConnectionDuration = containMetricInstrument(METRICS?.histogram?.(
 // socket deducted - which is also why this family sums to ws_publishes_total
 // here. The help string is the manifest's, and the manifest is vendored.
 const mPublishOutcomes = containMetricInstrument(METRICS?.counter(
-	'ws_publish_outcomes_total', 'Native publish calls by aggregate delivery outcome', ['outcome']
+	'ws_publish_outcomes_total', 'Publish calls by aggregate delivery outcome', ['outcome']
 ));
 // Only the publish-outcome hook is taken from the shared transport helper. Its
 // HTTP and WebSocket wrappers patch a uWS response object and wrap ONE

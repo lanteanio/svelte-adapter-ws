@@ -395,6 +395,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Metric `# HELP` sentences say what a number measures rather than which
+  runtime produced it. `ws_publishes_total`, `ws_publish_outcomes_total`,
+  `ws_dropped_frames_total` and `ws_dropped_bytes_total` no longer credit C++
+  fan-out or a native backpressure limit, neither of which exists on this
+  backend: this adapter fans out in JS over `node:http` and `ws`. Metric names,
+  types and labels are unchanged, so dashboards, recording rules and alerts
+  keep working.
+
 - `websocket.handler` is checked against the module the Vite plugin actually
   bundled. The plugin records which module became `ws-handler.js`; the build now
   reads that record, refuses when the two name different modules, and names the
