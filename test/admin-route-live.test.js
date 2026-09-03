@@ -274,7 +274,12 @@ describe('the reserved admin route on the built runtime', () => {
 		// node falls back to chunked, and a HEAD would carry no size at all.
 		const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
 		expect(head, '405 answered chunked').not.toContain('transfer-encoding: chunked');
-		expect(head).toContain(`content-length: ${'Method Not Allowed'.length}`);
+		// A WHOLE header line, not a substring: `content-length: 180` contains
+		// `content-length: 18`, so a substring match would accept a declared
+		// length ten times the body and read as though it checked the number.
+		expect(head.split('\r\n'), '405 declared the wrong length').toContain(
+			`content-length: ${'Method Not Allowed'.length}`
+		);
 	});
 
 	it('refuses a declared content-length over the body cap with 413', async () => {

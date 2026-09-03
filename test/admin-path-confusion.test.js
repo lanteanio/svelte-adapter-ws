@@ -93,6 +93,19 @@ function rawGet(port, target, method = 'GET') {
 	});
 }
 
+/**
+ * The response's header block as WHOLE lines, for assertions about a header
+ * whose value is a number. `toContain` over the raw block is a substring match,
+ * and `content-length: 230` contains `content-length: 23` - so a declared
+ * length that is a numeric extension of the true one slips a pin that reads as
+ * though it checked the number.
+ *
+ * @param {{ head: string }} res
+ */
+function headerLines(res) {
+	return res.head.split('\r\n');
+}
+
 /** @type {any} */
 let payload;
 /** @type {any} */
@@ -175,7 +188,14 @@ describe('an admin target that normalizes out of the prefix is refused', () => {
 		const res = await rawGet(rt.port, '/__realtime/../reflect');
 		expect(res.status).toBe(400);
 		expect(res.head, 'refusal answered chunked').not.toContain('transfer-encoding: chunked');
-		expect(res.head).toContain(`content-length: ${Buffer.byteLength(res.body)}`);
+		// Matched as a WHOLE header line, not as a substring: `content-length:
+		// 230` contains `content-length: 23`, so a substring match accepts any
+		// declared length that is a numeric extension of the true one - a
+		// truncated reply every client reads as a framing error, passing a pin
+		// that names itself after framing.
+		expect(headerLines(res), 'refusal declared the wrong length').toContain(
+			`content-length: ${Buffer.byteLength(res.body)}`
+		);
 
 		// HEAD is the other half of the reason, and the half a GET cannot show:
 		// node strips the body itself, so without the header the reply carries
@@ -184,7 +204,7 @@ describe('an admin target that normalizes out of the prefix is refused', () => {
 		const head = await rawGet(rt.port, '/__realtime/../reflect', 'HEAD');
 		expect(head.status).toBe(400);
 		expect(head.body, 'node must strip a HEAD body').toBe('');
-		expect(head.head, 'HEAD refusal carried no size').toContain(
+		expect(headerLines(head), 'HEAD refusal carried no size, or the wrong one').toContain(
 			`content-length: ${Buffer.byteLength(res.body)}`
 		);
 	});
@@ -253,13 +273,20 @@ describe('the harness refuses the same targets', () => {
 		// framing production never produces.
 		for (const [label, res] of [['refusal', escaped], ['success', inside]]) {
 			expect(res.head, `harness ${label} answered chunked`).not.toContain('transfer-encoding: chunked');
-			expect(res.head, `harness ${label} carried no length`).toContain(
+			expect(headerLines(res), `harness ${label} declared no length, or the wrong one`).toContain(
 				`content-length: ${Buffer.byteLength(res.body)}`
 			);
 		}
 
-		// The refusal never reached the handler; the resolved target did, and
-		// carried the path it resolved to.
-		expect(seen).toEqual(['/__realtime/introspect']);
+		// The harness's own copy of the bare-prefix clause. The runtime's is
+		// pinned above; this one is the other half of the pair this file exists
+		// to keep aligned, and without it the two surfaces are free to disagree
+		// about the exact target that pin locks in.
+		const bare = await rawGet(port, '/__realtime/../__realtime');
+		expect(bare.status, 'the harness must serve the bare prefix too').toBe(200);
+
+		// The refusals never reached the handler; the two resolved targets did,
+		// each carrying the path it resolved to.
+		expect(seen).toEqual(['/__realtime/introspect', '/__realtime']);
 	});
 });
