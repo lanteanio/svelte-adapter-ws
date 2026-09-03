@@ -23,7 +23,7 @@ import {
 	assertSharedOptionValues,
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
-import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues } from './runtime/handler/cluster-sequence-policy.js';
+import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues, RELAY_ORIGIN_SEQ } from './runtime/handler/cluster-sequence-policy.js';
 import { createServer as createHttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { CLOSED_MESSAGE } from './runtime/handler/ws-facade.js';
@@ -1520,7 +1520,8 @@ export async function createTestServer(options = {}) {
 			// re-encodes binary against THIS server's local connections, stamping the
 			// carried origin seq verbatim (no re-stamp) and never re-relaying
 			// (relay:false suppresses the onPublishT relay below).
-			const isRelay = !!(options && options._isRelay);
+			const relayOriginSeq = options != null ? options[RELAY_ORIGIN_SEQ] : undefined;
+			const isRelay = relayOriginSeq !== undefined;
 			// Egress admission, origin-side only (a relayed frame was charged on
 			// the worker that published it), before the stamp - as production.
 			let recipients = 0;
@@ -1538,7 +1539,7 @@ export async function createTestServer(options = {}) {
 				}
 			}
 			const seq = isRelay
-				? (typeof options._relaySeq === 'number' ? options._relaySeq : null)
+				? relayOriginSeq
 				: stampSeq(options, topicSeqs, topic, seqBoundT);
 			const env = envelope(topic, event, data, seq);
 			// The relay carries the JSON envelope plus, for a registered codec, its
@@ -1547,7 +1548,10 @@ export async function createTestServer(options = {}) {
 			// carries envelope-only. The relay fires once per publish regardless of
 			// sender exclusion: the excluded socket only exists on this instance.
 			const relayCap = (onPublishT && byCapabilityT.has(wire.capability)) ? wire.capability : undefined;
-			if (onPublishT && !(options && options.relay === false)) {
+			// `!isRelay` carries this on its own now: the marker forces the
+			// decision off, so the relay set site no longer passes
+			// `relay: false` beside it and a received frame cannot go onward.
+			if (!isRelay && onPublishT && !(options && options.relay === false)) {
 				onPublishT({
 					kind: 'publish', topic, envelope: env, seq, compress: false,
 					capability: relayCap,
@@ -1959,7 +1963,12 @@ export async function createTestServer(options = {}) {
 			const codec = byCapabilityT.get(capability);
 			if (!codec) return false;
 			if (!capCountsT.has(capability)) return false;
-			platform.publishWire(topic, event, data, codec, { relay: false, _isRelay: true, _relaySeq: seq, compress });
+			// Normalized here, as production does: a relayed frame with no seq
+			// must still read as relayed, and `undefined` cannot say that.
+			platform.publishWire(topic, event, data, codec, {
+				[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,
+				compress
+			});
 			return true;
 		},
 		sendWire(ws, topic, event, data, wire, options) {

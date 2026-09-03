@@ -47,7 +47,7 @@ import { registerWireCodec, getWireCodec } from './codec-registry.js';
 import { batchRelay, relayBatched } from './relay.js';
 import {
 	assertClusterSequenceAuthority, assertClusterSequenceAuthorityValues,
-	assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority
+	assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, RELAY_ORIGIN_SEQ
 } from './cluster-sequence-policy.js';
 import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload, assertGameLaneClusterSafe } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
@@ -704,8 +704,11 @@ export const platform = {
 		const relayOption = options != null ? options.relay : undefined;
 		const compressOption = options != null ? options.compress : undefined;
 		const excludeOption = options != null ? options.excludeWs : undefined;
-		const isRelay = !!(options && /** @type {any} */ (options)._isRelay);
-		const relaySeqOption = isRelay ? /** @type {any} */ (options)._relaySeq : undefined;
+		// Presence IS the relay test, and the value is the origin's seq. A
+		// module Symbol, so an application options object cannot carry it and
+		// buy itself past the sequence-authority check below.
+		const relayOriginSeq = options != null ? /** @type {any} */ (options)[RELAY_ORIGIN_SEQ] : undefined;
+		const isRelay = relayOriginSeq !== undefined;
 		if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);
 		// And the value, before the admission below (see publish()). A relayed
 		// frame carries its origin's seq, not this option, and that origin
@@ -731,7 +734,7 @@ export const platform = {
 		// origin already stamped and counted this publish once, and stamping
 		// again here would fork the topic's sequence per worker.
 		const seq = isRelay
-			? (typeof relaySeqOption === 'number' ? relaySeqOption : null)
+			? relayOriginSeq
 			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) {
@@ -751,7 +754,10 @@ export const platform = {
 		// the opt-in. The compress INTENT (not the locally-gated value) rides
 		// along so the receiver re-gates by its own compressor. Exclusion
 		// stays local: the excluded socket cannot be on another worker.
-		const relayed = !!(parentPort && relayOption !== false);
+		// The marker forces the decision off by itself, so a relayed frame
+		// cannot be relayed onward whatever else the options say. Two settings
+		// that have to agree are one that can be forgotten.
+		const relayed = !isRelay && !!(parentPort && relayOption !== false);
 		const relayCap = relayed && wire && typeof wire.capability === 'string' && getWireCodec(wire.capability)
 			? wire.capability
 			: undefined;
@@ -1749,7 +1755,15 @@ export function relayPublishWire(topic, event, data, capability, seq, compress) 
 	const codec = getWireCodec(capability);
 	if (!codec) return false;
 	if (!capCounts.has(capability)) return false;
-	platform.publishWire(topic, event, data, codec, /** @type {any} */ ({ relay: false, _isRelay: true, _relaySeq: seq, compress }));
+	// Normalized HERE, not on the read: a relayed frame legitimately arrives
+	// with no seq, and `undefined` is indistinguishable from an absent marker -
+	// it would read as an origin publish on every worker that received it, draw
+	// their counters and relay onward. `relay: false` is gone because the
+	// marker now forces that decision off on its own.
+	platform.publishWire(topic, event, data, codec, /** @type {any} */ ({
+		[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,
+		compress
+	}));
 	return true;
 }
 

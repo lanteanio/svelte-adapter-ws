@@ -438,6 +438,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A publish can no longer talk its way past the cluster sequence authority by
+  naming the relay's own option keys. The marker the built-in relay uses to say
+  "this frame already carries its origin's sequence" was two ordinary string
+  properties on the options object, and an application reaches `publishWire`
+  with an options object of its own: spelling them suppressed the check that
+  keeps one monotonic sequence per topic, and let the caller stamp whatever it
+  liked. The marker is now a module symbol, which an application cannot name. A
+  call that tries is not refused, only ignored, and publishes as an ordinary
+  origin publish.
+
 - A handshake that never becomes a connection returns its upgrade permit. The
   permit was marked as transferred to the connection around the accept call,
   which is sound on the lead's transport because its accept either opens or

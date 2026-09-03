@@ -205,9 +205,14 @@ describe('cluster sequence authority policy', () => {
 			expect(publish.split(field).length, `publish reads ${field} exactly once`).toBe(2);
 		}
 		expect(wire).toContain('if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);');
-		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.excludeWs', '_relaySeq :']) {
+		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.excludeWs', '[RELAY_ORIGIN_SEQ]']) {
 			expect(wire.split(field).length, `publishWire reads ${field} exactly once`).toBe(2);
 		}
+		// The marker forces the relay decision off by itself. Without the
+		// `!isRelay` term a received frame is relayed onward whenever the
+		// options do not say otherwise, and the set site no longer says so.
+		expect(wire, 'the relay decision must be forced off by the marker')
+			.toContain('const relayed = !isRelay && !!(parentPort && relayOption !== false);');
 		// The batch asserts on its OWN copy of the options, not on the caller's
 		// live object - a caller that mutated it after the check would otherwise
 		// stamp under an authority nobody validated. The guard runs before ANY
@@ -242,6 +247,26 @@ describe('cluster sequence authority policy', () => {
 		// where the throw arrives after earlier entries are already stamped.
 		expect(wireBatch).toContain('resolveEntrySeq(entry.seq, i)');
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
+		// The relay SET site normalizes, and it is pinned here rather than
+		// driven because production's relay needs a worker cluster: the
+		// behavioural pair lives in test/codec-relay.test.js against the
+		// harness copy. A missing seq must reach the marker as null, since
+		// `undefined` is indistinguishable from an absent marker and the frame
+		// would read as an origin publish on every worker that received it.
+		const relaySet = source.slice(source.indexOf('export function relayPublishWire'));
+		expect(relaySet.indexOf('export function relayPublishWire'), 'relayPublishWire must stay findable by name')
+			.toBe(0);
+		expect(relaySet).toContain("[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,");
+		// And it no longer sets the relay flag beside the marker: two settings
+		// that have to agree are one that can be forgotten. Comment lines are
+		// stripped first, because this pin is about the CODE and the sentence
+		// explaining the change naturally quotes the spelling it removed.
+		const relayEnd = relaySet.indexOf('\n}');
+		expect(relayEnd, 'relayPublishWire has no closing brace, so this slice would widen')
+			.toBeGreaterThan(0);
+		const relayBody = relaySet.slice(0, relayEnd).replace(/^[ \t]*\/\/.*$/gm, '');
+		expect(relayBody, 'the marker alone must carry the relay decision')
+			.not.toContain('relay: false');
 		// batch() snapshots each message's option fields once and judges the
 		// snapshot, then hands publish() the SAME snapshot - so the atomic
 		// pre-pass and the per-message stamp cannot disagree.
