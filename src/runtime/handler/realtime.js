@@ -379,6 +379,14 @@ const hWsConnectionDuration = containMetricInstrument(METRICS?.histogram?.(
 		buckets: [...WS_CONNECTION_DURATION_BUCKETS]
 	}
 ));
+// Scope note, because it differs from the family's other backend and the
+// difference is not a choice: there, the counter covers native fan-out calls
+// only, and a publish that excludes a socket falls through to a per-socket
+// walk that the breakdown never sees. Every publish here IS that walk, so the
+// same scope would count nothing at all. It therefore covers every logical
+// publish, classified by whether the publish reached anyone with the excluded
+// socket deducted - which is also why this family sums to ws_publishes_total
+// here. The help string is the manifest's, and the manifest is vendored.
 const mPublishOutcomes = containMetricInstrument(METRICS?.counter(
 	'ws_publish_outcomes_total', 'Native publish calls by aggregate delivery outcome', ['outcome']
 ));
