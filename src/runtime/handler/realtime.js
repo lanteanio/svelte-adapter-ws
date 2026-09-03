@@ -24,7 +24,17 @@ import {
 	exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve
 } from '../utils/subscribe-policy.js';
 import { isValidWireTopic } from '../utils/topic.js';
-import { assert, fatal } from '../utils/assertions.js';
+import { assert, fatal, wireAssertionMetrics } from '../utils/assertions.js';
+import { containMetricInstrument, mirrorRegistry } from '../utils/metrics.js';
+import { metricsRegistry } from '../metrics-bridge.js';
+import {
+	createTransportMetricHooks, HTTP_DURATION_BUCKETS, UPGRADE_DURATION_BUCKETS,
+	WS_CONNECTION_DURATION_BUCKETS, WS_MESSAGE_DURATION_BUCKETS
+} from '../transport-metrics.js';
+import { emitPressureMetricTelemetry, probeOsPressureSources } from '../utils/os-pressure.js';
+import { countOpenFds, readFdLimits } from '../utils/fd-limit.js';
+import { PRESSURE_REASON_CODES } from '../observability-manifest.js';
+import { parentPort } from 'node:worker_threads';
 import { isOriginAllowed, isAuthOriginAccepted, describeUnsafeSameOriginConfig } from '../utils/origin.js';
 import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
@@ -183,53 +193,6 @@ if (CONSISTENCY_AUDIT_INTERVAL_MS > 0) {
 	auditor.start();
 }
 
-// - Optional resource-growth trend auditor -----------------------------------
-// Distinct from the consistency auditor above (which checks point-in-time
-// invariants): this one trends the SIZE of the live bookkeeping collections
-// across samples and flags a series that grows monotonically - the signature
-// of a close / unsubscribe / eviction path that stopped shedding. It reads
-// ONLY Map/Set `.size` (never a monotonic-by-design counter), rides its own
-// slow, seam-jittered, unref'd timer, and is OBSERVE-ONLY: a suspected trend
-// logs at most one throttled warning and NEVER asserts or terminates. Off by
-// default (interval 0), because a trend signal is inherently probabilistic and
-// the always-on structural guard is the deterministic simulator, not
-// production.
-const RESOURCE_GROWTH_AUDIT_INTERVAL_MS = wsOptions.resourceGrowthAuditIntervalMs ?? 0;
-if (RESOURCE_GROWTH_AUDIT_INTERVAL_MS > 0) {
-	let growthWarned = false;
-	const growthAuditor = createResourceGrowthAuditor({
-		// Self-healing / bounded collections only, so a rising trend really is a
-		// leak: wsConnections shrinks as clients disconnect, topicPublishStats is
-		// cleared every pressure tick, and lastPublishWarnAt / decodeCache /
-		// envelopePrefixCache are LRU-evicted while staticCache plateaus at the
-		// finite asset set. The per-topic registries topicSeqs and sharedTopics
-		// grow with topic cardinality BY DESIGN, so probing them here would
-		// self-fire a false leak: topicSeqs is held to its configured ceiling by
-		// the seq bound (handler/seq-bound.js), which can only evict a topic no
-		// client is on, and sharedTopics has no such bound at all.
-		probes: structuralResourceProbes({
-			wsConnections,
-			topicPublishStats,
-			lastPublishWarnAt,
-			decodeCache,
-			envelopePrefixCache,
-			staticCache
-		}),
-		intervalMs: RESOURCE_GROWTH_AUDIT_INTERVAL_MS,
-		onGrowth(report) {
-			// One throttled warning for the whole worker lifetime; the auditor
-			// observes a direction, and repeating the same line every tick would
-			// bury the rest of the log without adding a fact.
-			if (growthWarned) return;
-			growthWarned = true;
-			console.warn(adapterConsoleLine(ADAPTER_ERROR_IDS.RESOURCE_GROWTH,
-				`'${report.name}' size trending upward (delta ${report.delta} over ${report.n} samples); investigate a close/unsubscribe/eviction path that stopped shedding.`));
-		}
-	});
-	counters.resourceGrowthAuditor = growthAuditor;
-	growthAuditor.start();
-}
-
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
 
 // Upgrade admission: the concurrent-handshake ceiling, the whole-lifetime
@@ -250,6 +213,450 @@ const WAITING_ROOM = resolveWaitingRoom(wsOptions.upgradeAdmission, waitingRoomR
 // The rolling poll counter behind the queue-depth estimate. Created only with
 // a room to report to, so nothing is allocated for a server without one.
 const pollCounter = WAITING_ROOM !== null ? createPollCounter(WAITING_ROOM.pollIntervalMs) : null;
+
+// Bounded label vocabularies for the transport RED families. Frozen label
+// objects are built once per cell so an emit on a hot path allocates nothing,
+// and an unrecognized method folds into `other` rather than seating a series
+// per verb a scanner invents.
+const HTTP_METRIC_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'other'];
+/** @param {readonly string[]} left @param {string} leftKey @param {readonly string[]} outcomes */
+function labelMatrix(left, leftKey, outcomes) {
+	/** @type {Record<string, Record<string, Readonly<Record<string, string>>>>} */
+	const matrix = {};
+	for (const a of left) {
+		/** @type {Record<string, Readonly<Record<string, string>>>} */
+		const row = {};
+		for (const b of outcomes) row[b] = Object.freeze({ [leftKey]: a, outcome: b });
+		matrix[a] = Object.freeze(row);
+	}
+	return Object.freeze(matrix);
+}
+const HTTP_METRIC_LABELS = labelMatrix(HTTP_METRIC_METHODS, 'method',
+	['ok', 'client_error', 'server_error', 'aborted']);
+const WS_MESSAGE_METRIC_LABELS = labelMatrix(['text', 'binary'], 'kind', ['ok', 'error']);
+const OUTCOME_ONLY_LABELS = Object.freeze(Object.fromEntries(
+	['admitted', 'rejected', 'aborted', 'error', 'clean', 'abnormal']
+		.map((outcome) => [outcome, Object.freeze({ outcome })])
+));
+
+/** @param {string} method @param {string} outcome */
+function httpLabels(method, outcome) {
+	const key = String(method || '').toLowerCase();
+	return HTTP_METRIC_LABELS[HTTP_METRIC_METHODS.includes(key) ? key : 'other'][outcome];
+}
+
+/** @param {number} status */
+function httpOutcome(status) {
+	if (status >= 500) return 'server_error';
+	if (status >= 400) return 'client_error';
+	return 'ok';
+}
+
+// - Registry observability ---------------------------------------------------
+// Opt-in via the `metrics` option - a module path (`websocket.metrics`) whose
+// default export is a registry shaped like the extensions `createMetrics()`
+// (positional counter/gauge factories). The build bundles it; the runtime
+// imports it here through the bridge and also exposes it on `platform.metrics`
+// for a scrape route. Instruments resolve once; every emit is optional-chained,
+// so the disabled path (registry null) costs one undefined check per site and
+// the accept path allocates nothing.
+//
+// Registrations go through a MIRRORING wrapper: every value the runtime writes
+// is recorded under the adapter's own declared name, which is what
+// `platform.metricsSnapshot()` merges across worker threads. Merging the
+// registry's RENDERED text instead is wrong - a registry that namespaces its
+// output (the documented way to use one) renders names the manifest cannot
+// match, and the cluster merge would silently degrade to per-worker
+// passthrough. `platform.metrics` still exposes the real registry, so an app's
+// own scrape route is unaffected.
+const METRICS = mirrorRegistry(metricsRegistry);
+const mUpgradeAdmitted = containMetricInstrument(METRICS?.counter(
+	'upgrade_admitted_total', 'WebSocket upgrades accepted'
+));
+const mUpgradeRejected = containMetricInstrument(METRICS?.counter(
+	'upgrade_rejected_total', 'WebSocket upgrades rejected before open', ['reason']
+));
+const mUpgradeDeferredRejected = containMetricInstrument(METRICS?.counter(
+	'upgrade_deferred_rejected_total',
+	'Upgrade callbacks shed because the bounded deferral queue was full'
+));
+const mUpgradeRateEvicted = containMetricInstrument(METRICS?.counter(
+	'upgrade_rate_map_evicted_total', 'Rate-limit entries evicted at the map cap', ['door']
+));
+const mPostureTransitions = containMetricInstrument(METRICS?.counter(
+	'protection_posture_transitions_total', 'Protection posture level changes', ['from', 'to']
+));
+const gPostureState = containMetricInstrument(METRICS?.gauge(
+	'protection_posture_state', 'Current protection posture (0 normal, 1 elevated, 2 siege)'
+));
+const gUpgradeInflight = containMetricInstrument(METRICS?.gauge(
+	'upgrade_inflight', 'Upgrades currently between admission and open'
+));
+const gUpgradeDeferredDepth = containMetricInstrument(METRICS?.gauge(
+	'upgrade_deferred_depth', 'Upgrade callbacks waiting in the bounded pacing queue'
+));
+const gUpgradeDeferredOldestAge = containMetricInstrument(METRICS?.gauge(
+	'upgrade_deferred_oldest_age_seconds',
+	'Age of the oldest callback in the bounded upgrade pacing queue'
+));
+if (gUpgradeDeferredDepth !== undefined || gUpgradeDeferredOldestAge !== undefined) {
+	admission.setDeferredObserver((depth, oldestAgeMs) => {
+		gUpgradeDeferredDepth?.set(depth);
+		gUpgradeDeferredOldestAge?.set(oldestAgeMs / 1000);
+	});
+}
+const gConnectionHeadroom = admission.maxConnections > 0
+	? containMetricInstrument(METRICS?.gauge(
+		'ws_connection_headroom',
+		'Remaining reserved-or-live WebSocket connection permits'
+	))
+	: undefined;
+gConnectionHeadroom?.set(admission.connectionHeadroom);
+const gQueueDepth = containMetricInstrument(METRICS?.gauge(
+	'waiting_room_queue_depth', 'Clients currently polling the waiting room'
+));
+// Outbound-backpressure telemetry, sampled from the 1 Hz pressure snapshot.
+// Worst per-connection buffered bytes seen over the sampled connection set,
+// and the count of sampled connections holding a notable outbound queue.
+const gBackpressureMaxBytes = containMetricInstrument(METRICS?.gauge(
+	'ws_backpressure_max_bytes', 'Worst per-connection outbound buffered bytes over the sampled set'
+));
+const gBackpressureConnections = containMetricInstrument(METRICS?.gauge(
+	'ws_backpressure_connections', 'Sampled connections holding a backpressured outbound queue'
+));
+const mDroppedFrames = containMetricInstrument(METRICS?.counter(
+	'ws_dropped_frames_total', 'Outbound WebSocket frames dropped by the native backpressure limit', []
+));
+const mDroppedBytes = containMetricInstrument(METRICS?.counter(
+	'ws_dropped_bytes_total', 'Outbound WebSocket payload bytes dropped by the native backpressure limit', []
+));
+// The rest of what the 1 Hz sampler already computes. These are scalars the
+// fold produces and then discards - exporting them adds gauge writes to a
+// callback that already runs, and no new work to any per-request or
+// per-message path.
+const gConnections = containMetricInstrument(METRICS?.gauge(
+	'ws_connections', 'Live WebSocket connections'
+));
+const gSubscriptions = containMetricInstrument(METRICS?.gauge(
+	'ws_subscriptions', 'Live topic subscriptions; divide by ws_connections for the subscriber ratio'
+));
+// A counter, not the sampler's precomputed rate: a rate baked at our cadence
+// cannot be re-windowed by the query, and reads wrong whenever the scrape
+// interval differs from the sample interval.
+const mPublishes = containMetricInstrument(METRICS?.counter(
+	'ws_publishes_total', 'Publish calls made (fan-out happens in C++; not per-recipient deliveries)', []
+));
+const mHttpRequests = containMetricInstrument(METRICS?.counter(
+	'http_requests_total', 'Completed HTTP requests by bounded method and outcome', ['method', 'outcome']
+));
+const hHttpDuration = containMetricInstrument(METRICS?.histogram?.(
+	'http_request_duration_seconds', 'HTTP request completion duration in seconds', {
+		labelNames: ['method', 'outcome'],
+		buckets: [...HTTP_DURATION_BUCKETS]
+	}
+));
+const hUpgradeDuration = containMetricInstrument(METRICS?.histogram?.(
+	'upgrade_duration_seconds', 'WebSocket upgrade decision duration in seconds', {
+		labelNames: ['outcome'],
+		buckets: [...UPGRADE_DURATION_BUCKETS]
+	}
+));
+const mWsMessages = containMetricInstrument(METRICS?.counter(
+	'ws_messages_total', 'Completed inbound WebSocket messages by kind and outcome', ['kind', 'outcome']
+));
+const mMessageAdmissionRejected = containMetricInstrument(METRICS?.counter(
+	'ws_message_admission_rejected_total', 'Application WebSocket messages shed by established-message admission', ['reason', 'scope']
+));
+const hWsMessageDuration = containMetricInstrument(METRICS?.histogram?.(
+	'ws_message_duration_seconds', 'Inbound WebSocket message handling duration in seconds', {
+		labelNames: ['kind', 'outcome'],
+		buckets: [...WS_MESSAGE_DURATION_BUCKETS]
+	}
+));
+const hWsConnectionDuration = containMetricInstrument(METRICS?.histogram?.(
+	'ws_connection_duration_seconds', 'WebSocket connection lifetime in seconds', {
+		labelNames: ['outcome'],
+		buckets: [...WS_CONNECTION_DURATION_BUCKETS]
+	}
+));
+const mPublishOutcomes = containMetricInstrument(METRICS?.counter(
+	'ws_publish_outcomes_total', 'Native publish calls by aggregate delivery outcome', ['outcome']
+));
+// Only the publish-outcome hook is taken from the shared transport helper. Its
+// HTTP and WebSocket wrappers patch a uWS response object and wrap ONE
+// behavior object - neither shape exists on this transport, and both would
+// apply silently and measure nothing - so those emit sites are wired directly
+// against the node request and per-socket listeners instead.
+const transportMetricHooks = createTransportMetricHooks({ publishOutcomes: mPublishOutcomes }, monotonicNow);
+counters.publishOutcomeHook = transportMetricHooks?.publishOutcome ?? null;
+const gPressureSaturation = containMetricInstrument(METRICS?.gauge(
+	'pressure_saturation', 'Worker saturation, 0 healthy to 1 at the configured thresholds'
+));
+const gPressureReason = containMetricInstrument(METRICS?.gauge(
+	'pressure_reason', 'Pressure reason as a severity-ordered code (0 none to 6 memory)'
+));
+const mPressureReasonTransitions = containMetricInstrument(METRICS?.counter(
+	'pressure_reason_transitions_total', 'Pressure reason changes, including incidents and recoveries', ['from', 'to']
+));
+const gResidentBytes = containMetricInstrument(METRICS?.gauge(
+	'resident_memory_bytes', 'Resident set size of the process'
+));
+const gHeapUsedRatio = containMetricInstrument(METRICS?.gauge(
+	'heap_used_ratio', 'Used fraction of the nearest memory wall (heap vs the V8 limit, resident set vs the cgroup memory limit, worst-of)'
+));
+// Freshness of the sample the gauges above were written from. The pressure
+// timer is unref'd and driven from one interval; if it ever stops, every gauge
+// here keeps serving its last value against a target that still reads up.
+// Alerting on the age of this timestamp is what separates "healthy and steady"
+// from "frozen".
+const gSampleTimestamp = containMetricInstrument(METRICS?.gauge(
+	'pressure_sample_timestamp_seconds', 'Unix time of the most recent pressure sample; alert on its age'
+));
+// Kernel pressure readings. Availability is probed ONCE here rather than
+// discovered on the first sample, so these register at startup like every other
+// instrument: creating an instrument inside the 1 Hz tick would put a
+// configuration fault (a registry that throws on registration, which is meant
+// to fail loudly at boot) into a timer callback that repeats forever. A host
+// without the source registers nothing, so the gauges are absent rather than
+// serving a zero that reads as "no pressure".
+const OS_PRESSURE_SOURCES = METRICS == null ? null : probeOsPressureSources();
+const gPsiCpuSome = OS_PRESSURE_SOURCES?.psi !== false
+	? containMetricInstrument(METRICS?.gauge(
+		'psi_cpu_some_avg10', 'Kernel pressure-stall CPU some avg10'
+	))
+	: undefined;
+const gPsiMemoryFull = OS_PRESSURE_SOURCES?.psi !== false
+	? containMetricInstrument(METRICS?.gauge(
+		'psi_memory_full_avg10', 'Kernel pressure-stall memory full avg10'
+	))
+	: undefined;
+const gPsiIoFull = OS_PRESSURE_SOURCES?.psi !== false
+	? containMetricInstrument(METRICS?.gauge(
+		'psi_io_full_avg10', 'Kernel pressure-stall IO full avg10'
+	))
+	: undefined;
+const gCpuThrottled = OS_PRESSURE_SOURCES?.cpuThrottle !== false
+	? containMetricInstrument(METRICS?.gauge(
+		'cpu_throttled_ratio', 'Fraction of the window the cgroup CPU quota held the process suspended'
+	))
+	: undefined;
+// Descriptor observability. Worker threads share one process-wide fd table, so
+// any worker's registry reports the whole-process truth. Each gauge registers
+// only where its source exists (Linux/macOS; null on Windows). The soft limit
+// is captured once - an external prlimit change mid-flight is rare enough to
+// ignore.
+const FD_SOFT_LIMIT = METRICS == null ? null : (readFdLimits()?.soft ?? null);
+const gOpenFds = METRICS != null && countOpenFds() !== null
+	? containMetricInstrument(METRICS?.gauge(
+		'open_fds', 'File descriptors currently open by the process'
+	))
+	: undefined;
+const gFdSoftLimit = FD_SOFT_LIMIT !== null && Number.isFinite(FD_SOFT_LIMIT)
+	? containMetricInstrument(METRICS?.gauge(
+		'fd_soft_limit', 'Soft file-descriptor limit; new sockets fail with EMFILE at this count'
+	))
+	: undefined;
+gFdSoftLimit?.set(FD_SOFT_LIMIT);
+// Cross-worker state-hash divergence detections. Registered, never incremented
+// here: the detector that would raise one lives with the state-hash lane, which
+// this runtime does not build. A registered required counter with no mirrored
+// value is a truthful zero-event family to the cluster merge, so registration
+// is the whole of what this signal honestly owes.
+const mStateDivergence = containMetricInstrument(METRICS?.counter(
+	'state_divergence_total', 'Cross-worker state hash divergence detections', ['role']
+));
+// Relayed frames this worker was sent and never received. Same story: the
+// contiguity check that finds a gap reads the per-topic stream stamps, and
+// `streamTracking` is never armed in this runtime, so this family is
+// registered and stays at its honest zero.
+const mRelayGap = containMetricInstrument(METRICS?.counter(
+	'relay_gap_frames_total', 'Relayed frames proven lost to this worker', []
+));
+// Primary-owned spill incidents, attributed exactly once to a healthy worker
+// registry. Counts stay cluster-summable without pretending the primary has a
+// metrics registry of its own.
+const mRelaySpillQuarantines = containMetricInstrument(METRICS?.counter(
+	'relay_spill_quarantines_total', 'Workers quarantined after a relay spill ceiling', ['reason']
+));
+const mRelaySpillDroppedBytes = containMetricInstrument(METRICS?.counter(
+	'relay_spill_dropped_bytes_total', 'Pending relay bytes discarded when a lagging worker was quarantined', []
+));
+const gRelaySpillPendingAge = containMetricInstrument(METRICS?.gauge(
+	'relay_spill_pending_age_seconds', 'Worst oldest-pending age observed at relay spill quarantine', []
+));
+// A refusal is decided on THIS worker (the sender), so the count lands here
+// directly; handler/relay.js reaches it through the hook below.
+const mRelayFrameRefused = containMetricInstrument(METRICS?.counter(
+	'relay_frame_refused_total', 'Publishes refused by the sender-side relay frame ceiling; local subscribers still received them', ['lane']
+));
+counters.relayFrameRefusedHook = mRelayFrameRefused === undefined
+	? null
+	: (lane) => mRelayFrameRefused?.inc({ lane: lane === 'batched' ? 'batched' : 'publish' });
+// A publish refused by an egress ceiling is decided on THIS worker, so the
+// cumulative count lands here directly; the per-window figures ride the
+// pressure snapshot. Always assigned (hook or null) so a module re-run replaces
+// any previous hook.
+const mEgressRefused = containMetricInstrument(METRICS?.counter(
+	'egress_refused_total', 'Publishes refused by a configured egress ceiling; nothing was delivered or relayed for them', ['scope']
+));
+counters.egressRefusedHook = mEgressRefused === undefined
+	? null
+	: (scope) => mEgressRefused?.inc({ scope: scope === 'tenant' ? 'tenant' : 'topic' });
+const mEgressEvicted = containMetricInstrument(METRICS?.counter(
+	'egress_window_evicted_total', 'Live usage windows evicted at the ledger cap; each one stops enforcing its ceiling for the rest of its window', ['scope']
+));
+counters.egressEvictedHook = mEgressEvicted === undefined
+	? null
+	: (scope) => mEgressEvicted?.inc({ scope: scope === 'tenant' ? 'tenant' : 'topic' });
+// An oversized-frame stop is a primary-side incident with no registry of its
+// own; like the spill quarantines it is attributed exactly once to a surviving
+// worker registry via a posted notice.
+const mRelayFrameOversized = containMetricInstrument(METRICS?.counter(
+	'relay_frame_oversized_total', 'Relay frames refused at the reassembly ceiling; the sending worker relay stream was stopped', []
+));
+let relaySpillPendingAgePeak = 0;
+if (parentPort) {
+	parentPort.on('message', (msg) => {
+		if (!msg) return;
+		if (msg.type === 'relay-frame-oversized') {
+			mRelayFrameOversized?.inc();
+			return;
+		}
+		if (msg.type !== 'relay-spill-overflow') return;
+		const reason = msg.reason === 'age' ? 'age' : 'bytes';
+		const droppedBytes = Number.isFinite(msg.droppedBytes) ? Math.max(0, msg.droppedBytes) : 0;
+		const pendingAgeMs = Number.isFinite(msg.pendingAgeMs) ? Math.max(0, msg.pendingAgeMs) : 0;
+		mRelaySpillQuarantines?.inc({ reason });
+		mRelaySpillDroppedBytes?.inc({}, droppedBytes);
+		relaySpillPendingAgePeak = Math.max(relaySpillPendingAgePeak, pendingAgeMs / 1000);
+		gRelaySpillPendingAge?.set(relaySpillPendingAgePeak);
+	});
+}
+// Route the framework's own invariant violations (assert/fatal) into the same
+// registry, labelled by category and severity, so the `metrics` option lights
+// up `framework_assertion_violations_total` without the app touching the
+// internal assert seam. The emit itself is best-effort inside the assert path,
+// so a throwing registry can never turn an invariant check into a crash.
+if (METRICS) wireAssertionMetrics(METRICS);
+
+// The waiting room's live depth, read by the sampling hook below. Null when no
+// room is configured, which is also when the estimate has no meaning.
+const queueDepthProbe = pollCounter === null ? null : () => pollCounter.depth(now());
+
+// - Optional resource-growth trend auditor -----------------------------------
+// Distinct from the consistency auditor above (which checks point-in-time
+// invariants): this one trends the SIZE of the live bookkeeping collections
+// across samples and flags a series that grows monotonically - the signature
+// of a close / unsubscribe / eviction path that stopped shedding. It reads
+// ONLY Map/Set `.size` (never a monotonic-by-design counter), rides its own
+// slow, seam-jittered, unref'd timer, and is OBSERVE-ONLY: a suspected trend
+// increments a metric and logs at most one throttled warning, and NEVER asserts
+// or terminates. Off by default (interval 0), because a trend signal is
+// inherently probabilistic and the always-on structural guard is the
+// deterministic simulator, not production.
+const RESOURCE_GROWTH_AUDIT_INTERVAL_MS = wsOptions.resourceGrowthAuditIntervalMs ?? 0;
+if (RESOURCE_GROWTH_AUDIT_INTERVAL_MS > 0) {
+	const mResourceGrowth = containMetricInstrument(METRICS?.counter(
+		'framework_resource_growth_suspected_total',
+		'Sustained resource-growth suspicions raised by the optional auditor',
+		['resource']
+	));
+	let growthWarned = false;
+	const growthAuditor = createResourceGrowthAuditor({
+		// Self-healing / bounded collections only, so a rising trend really is a
+		// leak: wsConnections shrinks as clients disconnect, topicPublishStats is
+		// cleared every pressure tick, and lastPublishWarnAt / decodeCache /
+		// envelopePrefixCache are LRU-evicted while staticCache plateaus at the
+		// finite asset set. The per-topic registries topicSeqs and sharedTopics
+		// grow with topic cardinality BY DESIGN, so probing them here would
+		// self-fire a false leak: topicSeqs is held to its configured ceiling by
+		// the seq bound (handler/seq-bound.js), which can only evict a topic no
+		// client is on, and sharedTopics has no such bound at all.
+		probes: structuralResourceProbes({
+			wsConnections,
+			topicPublishStats,
+			lastPublishWarnAt,
+			decodeCache,
+			envelopePrefixCache,
+			staticCache
+		}),
+		intervalMs: RESOURCE_GROWTH_AUDIT_INTERVAL_MS,
+		metrics: mResourceGrowth,
+		onGrowth(report) {
+			// One throttled warning for the whole worker lifetime; the auditor
+			// observes a direction, and repeating the same line every tick would
+			// bury the rest of the log without adding a fact.
+			if (growthWarned) return;
+			growthWarned = true;
+			console.warn(adapterConsoleLine(ADAPTER_ERROR_IDS.RESOURCE_GROWTH,
+				`'${report.name}' size trending upward (delta ${report.delta} over ${report.n} samples); investigate a close/unsubscribe/eviction path that stopped shedding.`));
+		}
+	});
+	counters.resourceGrowthAuditor = growthAuditor;
+	growthAuditor.start();
+}
+
+// Gauge sampling rides the existing 1 Hz pressure timer - no new timer. Always
+// assigned (hook or null) so a module re-run replaces any previous hook and a
+// stale closure can never outlive its server. Counting open fds is a directory
+// read whose cost scales with the count itself, so it rides every 5th sample
+// (~5s) instead of every tick; seeded one below the modulus so the very first
+// sample publishes a value.
+let fdSampleTick = 4;
+counters.metricsSampleHook = METRICS == null ? null : (telemetry) => {
+	const lvl = postureLevel();
+	gPostureState?.set(lvl === 'siege' ? 2 : lvl === 'elevated' ? 1 : 0);
+	gUpgradeInflight?.set(admission.inFlight);
+	gUpgradeDeferredDepth?.set(admission.deferredDepth);
+	gUpgradeDeferredOldestAge?.set(admission.deferredOldestAgeMs / 1000);
+	gQueueDepth?.set(queueDepthProbe !== null ? queueDepthProbe() : 0);
+	// Read the snapshot the sampler just folded (this hook runs later in the
+	// same tick), so these track the current window's backpressure figures.
+	gBackpressureMaxBytes?.set(pressureSnapshot.maxBufferedBytes);
+	gBackpressureConnections?.set(pressureSnapshot.backpressuredConnections);
+	// Healthy workers publish an explicit zero, so absent-vs-zero stays
+	// queryable and the completeness gate can be satisfied by a worker that has
+	// never seen a quarantine. The IPC handler raises the peak the moment a
+	// spill happens; this rewrite never lowers it.
+	gRelaySpillPendingAge?.set(relaySpillPendingAgePeak);
+	if (counters.lastDroppedFrames > 0) mDroppedFrames?.inc({}, counters.lastDroppedFrames);
+	if (counters.lastDroppedBytes > 0) mDroppedBytes?.inc({}, counters.lastDroppedBytes);
+	gConnections?.set(counters.lastConnections);
+	gSubscriptions?.set(counters.totalSubscriptions);
+	gPressureSaturation?.set(pressureSnapshot.value);
+	// Unknown reasons floor to 0 rather than throwing: the vocabulary is
+	// source-declared, so an unmapped value means the two lists drifted, and
+	// silently reading "no pressure" is the safer of two wrong answers here only
+	// because the reason string also reaches the log and the export.
+	gPressureReason?.set(PRESSURE_REASON_CODES[pressureSnapshot.reason] ?? 0);
+	gResidentBytes?.set(counters.lastResidentBytes);
+	gHeapUsedRatio?.set(counters.lastHeapUsedRatio);
+	if (counters.lastSampleWallMs > 0) gSampleTimestamp?.set(counters.lastSampleWallMs / 1000);
+	if (counters.lastPublishCount > 0) mPublishes?.inc({}, counters.lastPublishCount);
+	emitPressureMetricTelemetry(telemetry, {
+		reasonTransitions: mPressureReasonTransitions,
+		psiCpuSome: gPsiCpuSome,
+		psiMemoryFull: gPsiMemoryFull,
+		psiIoFull: gPsiIoFull,
+		cpuThrottled: gCpuThrottled
+	});
+	if (gOpenFds !== undefined && ++fdSampleTick >= 5) {
+		fdSampleTick = 0;
+		const openFds = countOpenFds();
+		if (openFds !== null) gOpenFds.set(openFds);
+	}
+};
+
+// One RED observation per completed HTTP exchange, emitted from the single
+// terminal hook handler/request.js already runs. Null when no registry is
+// configured, so the request path reads one property and allocates nothing.
+counters.httpRequestHook = mHttpRequests === undefined && hHttpDuration === undefined
+	? null
+	: (method, status, aborted, seconds) => {
+		const labels = httpLabels(method, aborted ? 'aborted' : httpOutcome(status));
+		mHttpRequests?.inc(labels);
+		hHttpDuration?.observe(labels, seconds);
+	};
 
 // Graduated protection posture over the 1 Hz pressure signal. Opt-in via the
 // `protection` option; absent or `'normal'` leaves `counters.activePosture`
@@ -278,6 +685,7 @@ counters.activePosture = (PROTECTION_MODE === 'normal')
 		// Dwell-gated by the machine, so it can never flood. No client identity
 		// on the line: rate and reason only.
 		onTransition: (from, to) => {
+			mPostureTransitions?.inc({ from, to });
 			console.warn(adapterConsoleLine(
 				ADAPTER_ERROR_IDS.POSTURE_TRANSITION,
 				`${from} -> ${to} rejected/s=${counters.activePosture !== null ? counters.activePosture.rejectedPerSecond : 0} ` +
@@ -330,6 +738,7 @@ function releaseConnectionPermitFor(userData) {
 	if (!userData[WS_CONNECTION_PERMIT]) return;
 	userData[WS_CONNECTION_PERMIT] = undefined;
 	admission.releaseConnection();
+	gConnectionHeadroom?.set(admission.connectionHeadroom);
 }
 
 // Rate limiters for the two doors, sharing one implementation so a
@@ -343,14 +752,18 @@ const upgradeRateLimiter = createSlidingWindowLimiter({
 	windowMs: (wsOptions.upgradeRateLimitWindow ?? 10) * 1000,
 	maxEntries: MAX_RATE_ENTRIES,
 	evictionSample: RATE_MAP_EVICTION_SAMPLE,
-	maxKeyLen: MAX_RATE_KEY_LEN
+	maxKeyLen: MAX_RATE_KEY_LEN,
+	// An eviction at the map cap stops rate-limiting whatever identity it
+	// dropped, so it is reported per door rather than folded into one number.
+	onEvict: mUpgradeRateEvicted === undefined ? undefined : () => mUpgradeRateEvicted.inc({ door: 'upgrade' })
 });
 const authPathRateLimiter = createSlidingWindowLimiter({
 	maxPerWindow: wsOptions.authPathRateLimit ?? 30,
 	windowMs: (wsOptions.authPathRateLimitWindow ?? 10) * 1000,
 	maxEntries: MAX_RATE_ENTRIES,
 	evictionSample: RATE_MAP_EVICTION_SAMPLE,
-	maxKeyLen: MAX_RATE_KEY_LEN
+	maxKeyLen: MAX_RATE_KEY_LEN,
+	onEvict: mUpgradeRateEvicted === undefined ? undefined : () => mUpgradeRateEvicted.inc({ door: 'auth' })
 });
 // The periodic sweep keeps stale identities from pinning the maps.
 const _rateSweepTimer = setIntervalTimer(() => {
@@ -393,13 +806,20 @@ wss.on('headers', (headers, req) => {
 });
 
 /**
- * One span per REJECTED admission, so a trace shows why a socket never
- * opened. Fires only with a provider armed; accepted upgrades get their span
- * around the upgrade itself.
+ * Record one REJECTED admission: the counter always, and a span when a tracing
+ * provider is armed, so a trace shows why a socket never opened. Accepted
+ * upgrades get their span around the upgrade itself.
+ *
+ * The counter lives here rather than beside each branch so the reason
+ * vocabulary has exactly one emit point: a branch that reports a reason to a
+ * trace and not to the registry is the shape that leaves an operator's
+ * dashboard short of a rejection the trace can see.
+ *
  * @param {Record<string, string> | null} headers
  * @param {string} reason
  */
-function traceUpgradeRejection(headers, reason) {
+function noteUpgradeRejection(headers, reason) {
+	mUpgradeRejected?.inc({ reason });
 	if (!tracingEnabled) return;
 	traceOperation('adapter.websocket.admission', {
 		kind: 'server',
@@ -418,6 +838,32 @@ const STATUS_TEXT = {
 	503: 'Service Unavailable', 504: 'Gateway Timeout'
 };
 
+// Upgrade-decision timing, keyed by the socket the decision is about. There is
+// no response object to instrument on this transport: the upgrade either hands
+// the socket to `ws` or writes a refusal onto the raw socket, so the clock is
+// started when the path is known to be the WebSocket path and stamped at
+// whichever of those two ends the attempt. Absent when no histogram is armed,
+// which is what keeps an unconfigured deployment allocation-free here.
+/** @type {WeakMap<import('node:stream').Duplex, { started: number }>} */
+const upgradeTimings = new WeakMap();
+
+/**
+ * Stamp one upgrade decision, once. A socket with no entry either never
+ * started a decision (a non-WebSocket path) or already settled.
+ *
+ * @param {import('node:stream').Duplex} socket
+ * @param {'admitted' | 'rejected' | 'aborted' | 'error'} outcome
+ */
+function observeUpgradeOutcome(socket, outcome) {
+	const timing = upgradeTimings.get(socket);
+	if (timing === undefined) return;
+	upgradeTimings.delete(socket);
+	hUpgradeDuration?.observe(
+		OUTCOME_ONLY_LABELS[outcome],
+		Math.max(0, monotonicNow() - timing.started) / 1000
+	);
+}
+
 /**
  * Answer an upgrade attempt with a plain HTTP response on the raw socket. The
  * upgrade listener owns the socket outright - there is no ServerResponse to
@@ -433,6 +879,10 @@ const STATUS_TEXT = {
  * @param {string | Array<[string, string]>} [extraHeaders]
  */
 function refuseUpgrade(socket, status, text, extraHeaders) {
+	// Every refusal on the WebSocket path writes through here (the waiting-room
+	// and capacity documents reach it via upgradeRefusalResponse), so this is
+	// the one place the rejected leg of the upgrade timing has to be stamped.
+	observeUpgradeOutcome(socket, 'rejected');
 	const line = STATUS_TEXT[status] || 'Error';
 	let head = `HTTP/1.1 ${status} ${line}\r\nConnection: close\r\n`;
 	let hasType = false;
@@ -558,6 +1008,9 @@ export async function handleUpgrade(req, socket, head) {
 		refuseUpgrade(socket, 404, 'Not Found');
 		return;
 	}
+	// The decision clock starts once the path is known to be the WebSocket path,
+	// so a 404 on some other path never seats a series here.
+	if (hUpgradeDuration !== undefined) upgradeTimings.set(socket, { started: monotonicNow() });
 	if (isDraining()) {
 		refuseUpgrade(socket, 503, 'Service Unavailable');
 		return;
@@ -619,7 +1072,7 @@ export async function handleUpgrade(req, socket, head) {
 	// escalated.
 	if (postureLevel() === 'siege') {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		traceUpgradeRejection(null, 'siege');
+		noteUpgradeRejection(null, 'siege');
 		serveUpgradeRefusal();
 		return;
 	}
@@ -636,7 +1089,7 @@ export async function handleUpgrade(req, socket, head) {
 		// Count the over-capacity reject (and only this one) so the posture's
 		// rolling reject rate reflects true gate pressure.
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		traceUpgradeRejection(null, isCursor ? 'cursor_lane' : 'over_capacity');
+		noteUpgradeRejection(null, isCursor ? 'cursor_lane' : 'over_capacity');
 		serveUpgradeRefusal();
 		return;
 	}
@@ -647,6 +1100,7 @@ export async function handleUpgrade(req, socket, head) {
 		if (!connectionPermitHeld || connectionPermitTransferred) return;
 		connectionPermitHeld = false;
 		admission.releaseConnection();
+		gConnectionHeadroom?.set(admission.connectionHeadroom);
 	}
 	function releaseInFlight() {
 		if (!inFlightReleased) {
@@ -662,7 +1116,8 @@ export async function handleUpgrade(req, socket, head) {
 	}
 	function rejectDeferredOverflow() {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		traceUpgradeRejection(null, 'deferred_overflow');
+		noteUpgradeRejection(null, 'deferred_overflow');
+		mUpgradeDeferredRejected?.inc();
 		releaseInFlight();
 		serveUpgradeRefusal();
 	}
@@ -671,12 +1126,13 @@ export async function handleUpgrade(req, socket, head) {
 	// too, so concurrent upgrades cannot overshoot the live-connection ceiling.
 	if (!admission.tryAcquireConnection()) {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		traceUpgradeRejection(null, 'connection_capacity');
+		noteUpgradeRejection(null, 'connection_capacity');
 		releaseInFlight();
 		serveUpgradeRefusal();
 		return;
 	}
 	connectionPermitHeld = admission.maxConnections > 0;
+	gConnectionHeadroom?.set(admission.connectionHeadroom);
 
 	// Returns the reservations early when the socket is DESTROYED while the
 	// admission hook is parked - the error path above does that, and so does a
@@ -694,7 +1150,7 @@ export async function handleUpgrade(req, socket, head) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
-		traceUpgradeRejection(null, 'duplicate_header');
+		noteUpgradeRejection(null, 'duplicate_header');
 		refuseUpgrade(socket, 400, 'Bad Request');
 		releaseInFlight();
 		return;
@@ -709,7 +1165,7 @@ export async function handleUpgrade(req, socket, head) {
 		// over-capacity one, so an attack-driven 429 storm can never escalate
 		// the protection posture toward siege.
 		if (counters.activePosture !== null) counters.activePosture.recordRateLimitReject();
-		traceUpgradeRejection(headers, 'ip_rate_limit');
+		noteUpgradeRejection(headers, 'ip_rate_limit');
 		refuseUpgrade(socket, 429, 'Too Many Requests');
 		releaseInFlight();
 		return;
@@ -728,7 +1184,7 @@ export async function handleUpgrade(req, socket, head) {
 		isTls: is_tls,
 		hasUpgradeHook: !!wsModule.upgrade
 	})) {
-		traceUpgradeRejection(headers, 'bad_origin');
+		noteUpgradeRejection(headers, 'bad_origin');
 		refuseUpgrade(socket, 403, 'Origin not allowed');
 		releaseInFlight();
 		return;
@@ -773,13 +1229,13 @@ export async function handleUpgrade(req, socket, head) {
 			const result = await Promise.race([hookRun, deadline]);
 			if (timer) clearTimeout(timer); // determinism-allow: pairs with the admission deadline above
 			if (result === TIMEOUT) {
-				traceUpgradeRejection(headers, 'auth_timeout');
+				noteUpgradeRejection(headers, 'auth_timeout');
 				refuseUpgrade(socket, 504, 'Upgrade timed out');
 				releaseInFlight();
 				return;
 			}
 			if (result === false) {
-				traceUpgradeRejection(headers, 'auth_rejected');
+				noteUpgradeRejection(headers, 'auth_rejected');
 				refuseUpgrade(socket, 401, 'Unauthorized');
 				releaseInFlight();
 				return;
@@ -805,7 +1261,7 @@ export async function handleUpgrade(req, socket, head) {
 					message: 'The WebSocket upgrade hook failed.',
 					attributes: { requestId: wsRequestId, error: diagnosticError(err) }
 				});
-				traceUpgradeRejection(headers, 'hook_error');
+				noteUpgradeRejection(headers, 'hook_error');
 				refuseUpgrade(socket, 500, 'Internal Server Error', 'X-Request-ID: ' + wsRequestId);
 			}
 			releaseInFlight();
@@ -817,13 +1273,14 @@ export async function handleUpgrade(req, socket, head) {
 	// refuse; ws would notice on its own, but skipping the accept avoids
 	// tearing down a connection that never opened.
 	if (socket.destroyed) {
+		observeUpgradeOutcome(socket, 'aborted');
 		releaseInFlight();
 		return;
 	}
 
 	const acceptUpgrade = () => {
 		// Between admission and a paced execution the client may have hung up.
-		if (socket.destroyed) { releaseInFlight(); return; }
+		if (socket.destroyed) { observeUpgradeOutcome(socket, 'aborted'); releaseInFlight(); return; }
 		try {
 			const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 			const merged = { remoteAddress, .../** @type {any} */ (userData) };
@@ -853,6 +1310,8 @@ export async function handleUpgrade(req, socket, head) {
 					// The accept landed, so the permit now belongs to the
 					// connection and close is what returns it.
 					if (connectionPermitHeld) connectionPermitTransferred = true;
+					mUpgradeAdmitted?.inc();
+					observeUpgradeOutcome(socket, 'admitted');
 					try {
 						openConnection(ws, merged, wsRequestId, connectionTraceContext);
 					} catch (err) {
@@ -883,8 +1342,13 @@ export async function handleUpgrade(req, socket, head) {
 					connectionPermitCarrier.rollback(merged, carrier);
 				}
 				releaseConnectionPermit();
+				observeUpgradeOutcome(socket, 'error');
 				throw error;
 			}
+			// handleUpgrade has a third outcome: it answers the peer itself and
+			// calls nothing back (a non-GET, a bad key, an unsupported version).
+			// That is a refusal, and a no-op once the accept above stamped.
+			observeUpgradeOutcome(socket, 'rejected');
 		} finally {
 			releaseInFlight();
 		}
@@ -1014,13 +1478,28 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 
 	rawWs.on('message', (raw, isBinary) => {
 		lastActivity = monotonicNow();
-		void handleMessage(rawWs, facade, userData, /** @type {Buffer} */ (raw), !!isBinary).catch((err) => {
-			console.error('[svelte-adapter-ws] message handling failed:', err);
-		});
+		// One RED observation per inbound message. `ws` dispatches per socket, so
+		// the timing wraps this dispatch rather than a shared behavior object.
+		const kind = isBinary ? 'binary' : 'text';
+		const startedAt = hWsMessageDuration === undefined ? 0 : monotonicNow();
+		void handleMessage(rawWs, facade, userData, /** @type {Buffer} */ (raw), !!isBinary).then(
+			() => observeWsMessage(kind, 'ok', startedAt),
+			(err) => {
+				observeWsMessage(kind, 'error', startedAt);
+				console.error('[svelte-adapter-ws] message handling failed:', err);
+			}
+		);
 	});
 
 	rawWs.on('close', (code, reason) => {
 		if (idleTimer !== null) clearIntervalTimer(idleTimer);
+		// 1000 (normal) and 1001 (going away) are the two codes a peer sends
+		// deliberately; everything else - including the 1006 a dropped TCP
+		// connection synthesizes - is an abnormal end.
+		hWsConnectionDuration?.observe(
+			OUTCOME_ONLY_LABELS[code === 1000 || code === 1001 ? 'clean' : 'abnormal'],
+			Math.max(0, monotonicNow() - userData[WS_STATS].openedAt) / 1000
+		);
 		closeConnection(rawWs, facade, userData, code, reason);
 	});
 
@@ -1033,8 +1512,22 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	}
 }
 
+/**
+ * One completed inbound message, by kind and outcome.
+ * @param {'text' | 'binary'} kind
+ * @param {'ok' | 'error'} outcome
+ * @param {number} startedAt
+ */
+function observeWsMessage(kind, outcome, startedAt) {
+	if (mWsMessages === undefined && hWsMessageDuration === undefined) return;
+	const labels = WS_MESSAGE_METRIC_LABELS[kind][outcome];
+	mWsMessages?.inc(labels);
+	hWsMessageDuration?.observe(labels, Math.max(0, monotonicNow() - startedAt) / 1000);
+}
+
 /** @param {object} facade @param {any} rejection */
 function rejectApplicationMessage(facade, rejection) {
+	mMessageAdmissionRejected?.inc({ reason: rejection.reason, scope: rejection.scope });
 	const frame = messageOverloadedFrame(rejection);
 	try {
 		/** @type {any} */ (facade).send(frame, false, false);
@@ -1768,6 +2261,10 @@ async function runAuthenticateRoute(req, res) {
 	const direct = req.socket?.remoteAddress || '';
 	const clientIp = resolveClientIp(direct, headers, direct);
 	if (authPathRateLimiter.exceeded(clientIp, now())) {
+		// The preflight door has its own reason: a 429 here never reached the
+		// upgrade gate, and folding it into ip_rate_limit would hide which door
+		// an attack is hitting.
+		mUpgradeRejected?.inc({ reason: 'auth_rate_limit' });
 		res.writeHead(429, { 'content-type': 'text/plain' });
 		res.end('Too Many Requests');
 		return;

@@ -194,6 +194,7 @@ export class Server {
  *   replace?: Partial<Record<string, string>>,
  *   serverSource?: string,
  *   manifestSource?: string,
+ *   metricsRegistrySource?: string,
  *   waitingRoomRendererSource?: string,
  *   files?: Record<string, string | Buffer>,
  *   mtime?: Date
@@ -210,6 +211,7 @@ export function buildRuntime(options = {}) {
 		SERVER: './server/index.js',
 		KIT_NODE: './server/kit-node.js',
 		WS_HANDLER: './server/ws-handler.js',
+		METRICS_REGISTRY: './server/metrics-registry.js',
 		TRACING_PROVIDER: './tracing-provider.js',
 		WAITING_ROOM_RENDERER: './server/waiting-room-renderer.js',
 		ENV_PREFIX: JSON.stringify(''),
@@ -245,6 +247,14 @@ export function buildRuntime(options = {}) {
 	mkdirSync(path.join(dir, 'server'), { recursive: true });
 	writeFileSync(path.join(dir, 'server', 'index.js'), options.serverSource ?? FIXTURE_SERVER);
 	writeFileSync(path.join(dir, 'server', 'ws-handler.js'), options.wsHandlerSource ?? '// No WebSocket handler configured\n');
+	// The metrics-registry stub adapt() always writes, WebSocket lane or not:
+	// metrics-bridge.js imports the placeholder unconditionally, so an absent
+	// module is a hard resolution failure for the whole payload. A test that
+	// configures a registry overrides with metricsRegistrySource.
+	writeFileSync(
+		path.join(dir, 'server', 'metrics-registry.js'),
+		options.metricsRegistrySource ?? 'export default null;\n'
+	);
 	// The waiting-room renderer stub adapt() writes when no renderer module is
 	// configured; a test that ships one overrides with waitingRoomRendererSource.
 	writeFileSync(

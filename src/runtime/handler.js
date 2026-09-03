@@ -39,6 +39,11 @@ export { beginDrain, lifecycleState, isDraining, platform };
 export { relayPublish, relayPublishBatched } from './handler/platform.js';
 export { setRelayRingWriter, setRelayFrameCeiling } from './handler/relay.js';
 
+// The cluster metrics round trip. The worker branch of the process entry
+// answers the primary's collect with this worker's mirrored values and hands
+// the merged result back to whichever scrape asked for it.
+export { collectLocalMetrics, resolveMetricsSnapshot } from './handler/metrics-snapshot.js';
+
 /**
  * Graceful shutdown, realtime included: readiness flips, live WebSockets are
  * advised and closed within the budget, then the HTTP drain runs.

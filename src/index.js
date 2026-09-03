@@ -72,7 +72,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * error at the only moment anyone is watching.
  */
 const UNSHIPPED_WEBSOCKET_KEYS = [
-	'metrics', 'stateHashIntervalMs'
+	'stateHashIntervalMs'
 ];
 
 /**
@@ -597,6 +597,16 @@ export default function (opts = {}) {
 				`got ${JSON.stringify(websocket.handler)}.`
 			);
 		}
+		if (websocket.metrics != null && typeof websocket.metrics !== 'string') {
+			throw new Error(
+				"websocket.metrics must be a module path string (e.g. './src/lib/server/metrics.js') " +
+				'whose default export is your registry. Passing a live registry object no longer works: ' +
+				'adapter options are serialized into the build, so a live object never reached the ' +
+				'production runtime. Move `export const metrics = createMetrics()` into its own module, ' +
+				'point `websocket.metrics` at that path, and read the populated registry at runtime via ' +
+				'`platform.metrics` (e.g. in a /metrics +server.js route). See the README metrics section.'
+			);
+		}
 		// The holding page an operator supplies, judged here rather than at
 		// boot: a renderer is a module PATH (a live function cannot survive the
 		// options serialization), the two override forms are mutually
@@ -777,6 +787,54 @@ export default function (opts = {}) {
 				writeFileSync(`${tmp}/ws-handler.js`, '// No WebSocket handler configured\n');
 			}
 
+			// - Metrics registry module -------------------------------------------
+			// `websocket.metrics` is a module PATH (like `handler`): adapter options
+			// are serialized into the build, so a live registry object could never
+			// reach the runtime - it must arrive as bundled code. The generated
+			// module re-exports the user's registry as its default export; the
+			// runtime imports it, populates it, and exposes it on `platform.metrics`
+			// for a scrape route to read. A `null` stub is ALWAYS written, even with
+			// the WebSocket lane off, so the placeholder import resolves.
+			const metricsPath = websocket?.metrics;
+			if (metricsPath && existsSync(`${tmp}/metrics-registry.js`)) {
+				// The plugin emitted the registry as a chunk of the app's SSR build,
+				// so the user's module lands in a shared chunk imported by BOTH this
+				// entry and every route that imports it - one instance, and an app
+				// scrape route that reads the module directly sees the adapter's
+				// counters. Verify it bundled the module this config names.
+				assertBundledMetricsMatches(metricsPath, readMetricsOrigin(tmp), builder.log);
+				builder.log.minor('Metrics registry: built by Vite plugin (one instance, shared with the app graph)');
+			} else if (metricsPath) {
+				const metricsEntry = `${tmp}/metrics-entry-src.js`;
+				// Pass the namespace through a function so esbuild does not statically
+				// resolve `.default`/`.metrics`/`.registry` against the user's module
+				// and warn for whichever export form they did not use.
+				writeFileSync(
+					metricsEntry,
+					`import * as m from ${JSON.stringify(path.resolve(metricsPath))};\n` +
+					'const pick = (ns) => ns.default ?? ns.metrics ?? ns.registry ?? null;\n' +
+					'export default pick(m);\n'
+				);
+				await esbuildServerModule(builder, metricsEntry, `${tmp}/metrics-registry.js`);
+				builder.log.minor(`Metrics registry: ${metricsPath}`);
+				// A standalone bundle is its own instance of the module. Adapter
+				// counters land on it; an app-graph import instantiates a second
+				// copy, reads that one, and re-runs any module-level side effect.
+				// Only reachable without the Vite plugin, which bundles the registry
+				// into the app graph instead - so say exactly what restores the
+				// single instance.
+				builder.log.warn(
+					'websocket.metrics was bundled standalone: the adapter writes its counters ' +
+					`to this copy of '${metricsPath}', and any app module importing it ` +
+					'instantiates and reads a second copy. Read the populated registry via ' +
+					"platform.metrics, or add the adapter's Vite plugin (import ws from " +
+					"'svelte-adapter-ws/vite') so the registry is bundled into the app graph " +
+					'as one shared instance.'
+				);
+			} else {
+				writeFileSync(`${tmp}/metrics-registry.js`, 'export default null;\n');
+			}
+
 			// - primaryInit module ------------------------------------------------
 			// Like `handler`, this is a module PATH, not a live function: it is
 			// bundled as its own isolated rollup entry whose default export (or a
@@ -833,6 +891,7 @@ export default function (opts = {}) {
 				manifest: `${tmp}/manifest.js`,
 				'kit-node': `${tmp}/kit-node.js`,
 				'ws-handler': `${tmp}/ws-handler.js`,
+				'metrics-registry': `${tmp}/metrics-registry.js`,
 				'primary-init': `${tmp}/primary-init.js`
 			};
 
@@ -1016,6 +1075,7 @@ export default function (opts = {}) {
 					SERVER: './server/index.js',
 					KIT_NODE: './server/kit-node.js',
 					WS_HANDLER: './server/ws-handler.js',
+					METRICS_REGISTRY: './server/metrics-registry.js',
 					TRACING_PROVIDER: './tracing-provider.js',
 					WAITING_ROOM_RENDERER: './server/waiting-room-renderer.js',
 					ENV_PREFIX: JSON.stringify(envPrefix),

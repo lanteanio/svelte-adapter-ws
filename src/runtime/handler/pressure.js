@@ -65,7 +65,11 @@ const osPressure = createOsPressureSampler();
  */
 export function samplePressureOnce(thresholds) {
 	const interval = thresholds.sampleIntervalMs / 1000;
-	const publishRate = interval > 0 ? counters.publishCountWindow / interval : 0;
+	// Retained before the window is drained: the metrics hook below runs after
+	// this fold and cannot read a counter the fold zeroes as it reads it.
+	const publishCount = counters.publishCountWindow;
+	counters.lastPublishCount = publishCount;
+	const publishRate = interval > 0 ? publishCount / interval : 0;
 	counters.publishCountWindow = 0;
 
 	// Publish-egress figures for the window just closed, drained exactly like
@@ -81,12 +85,17 @@ export function samplePressureOnce(thresholds) {
 	counters.egressRefusedTenantWindow = 0;
 
 	const connections = wsConnections.size;
+	counters.lastConnections = connections;
 	const subscriberRatio = connections > 0 ? counters.totalSubscriptions / connections : 0;
 
 	const { maxBufferedBytes, backpressuredConnections } = foldConnectionBackpressure(
 		/** @type {any} */ (wsConnections), BACKPRESSURE_SAMPLE_CAP, BACKPRESSURE_SAMPLE_THRESHOLD_BYTES
 	);
 	const { droppedFrames, droppedBytes } = takeBackpressureDropWindow(counters);
+	// The shed window is consumed by the call above, so the cumulative counters
+	// the metrics hook advances have to read it from here.
+	counters.lastDroppedFrames = droppedFrames;
+	counters.lastDroppedBytes = droppedBytes;
 
 	const mem = process.memoryUsage();
 	// Distance to the nearest memory WALL, not arena fullness: heapUsed
@@ -95,6 +104,7 @@ export function samplePressureOnce(thresholds) {
 	const heapUsedRatio = memoryWall.ratio(mem);
 	const memoryMB = mem.rss / (1024 * 1024);
 	counters.lastHeapUsedRatio = heapUsedRatio;
+	counters.lastResidentBytes = mem.rss;
 
 	const os = osPressure.sample(thresholds.sampleIntervalMs);
 	/** @type {any} */
@@ -127,7 +137,10 @@ export function samplePressureOnce(thresholds) {
 
 	const previousReason = pressureSnapshot.reason;
 	const transitioned = effectiveReason !== previousReason;
-	pressureSnapshot.sampledAt = wallEpoch();
+	// Stamp the fold as complete before anything publishes it, so the freshness
+	// gauge dates the sample it is exported with rather than the previous one.
+	counters.lastSampleWallMs = wallEpoch();
+	pressureSnapshot.sampledAt = counters.lastSampleWallMs;
 	pressureSnapshot.value = value;
 	pressureSnapshot.subscriberRatio = subscriberRatio;
 	pressureSnapshot.publishRate = publishRate;
@@ -150,6 +163,17 @@ export function samplePressureOnce(thresholds) {
 	// the layered activity back would mean the relaxation dwell never sees a
 	// calm sample and the level could never come down.
 	if (counters.activePosture !== null) counters.activePosture.tick({ active: reason !== 'NONE' });
+
+	// Sample the registry gauges on the same cadence. Null unless a metrics
+	// registry is configured, so the zero-config sampler is unchanged. This is
+	// the ONLY driver for every sampled gauge the signal manifest declares
+	// required, so it runs on the live fold above, never on a second timer.
+	if (counters.metricsSampleHook !== null) {
+		counters.metricsSampleHook({
+			transition: transitioned ? { from: previousReason, to: effectiveReason } : null,
+			os
+		});
+	}
 
 	// Push the posture line to export subscribers on the same cadence - the
 	// 1 Hz heartbeat is the export contract, and silence means the adapter is

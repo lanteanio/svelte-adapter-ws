@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `websocket.metrics`: transport, admission and posture observability, which
+  the build previously refused. A module path (not a live object - adapter
+  options are serialized into the build) whose default, `metrics` or
+  `registry` export is a Prometheus-shaped registry; the adapter registers the
+  manifest's worker signals into it and emits them from the request, upgrade,
+  message and publish paths, with gauges riding the existing 1 Hz pressure
+  sampler. It is republished as `platform.metrics`, and
+  `platform.metricsSnapshot()` merges the whole cluster from the values the
+  adapter wrote rather than from rendered text, so it needs no `serialize()`
+  and keeps canonical unprefixed names whatever the registry renders. No
+  client identity reaches a label. The adapter serves no scrape route: the app
+  writes its own `+server.js`. A worker counts toward
+  `metrics_snapshot_workers_reporting` only once it has registered every
+  required counter family and sampled every required gauge. A worker missing
+  from a merge and a scrape that never reached the primary are reported apart:
+  the first shows as a reporting shortfall, the second sets
+  `metrics_snapshot_degraded` and answers with the requesting worker alone.
+
 - `websocket.protection`: the graduated protection posture over the 1 Hz
   pressure signal, which the build previously refused. It governs the admission
   of NEW upgrades only - an open connection is never touched at any level.

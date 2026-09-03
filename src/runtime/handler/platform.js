@@ -35,6 +35,8 @@ import { now, monotonicNow, randomFloat, randomU32, randomUuid, randomBytes, set
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
+import { metricsRegistry } from '../metrics-bridge.js';
+import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
 import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
 import { seqBound } from './seq-bound.js';
@@ -337,6 +339,7 @@ function publish(topic, event, data, options) {
 	// stats, worker window counters, and the ceiling account. Wire bytes are
 	// the envelope's UTF-8 encoding times the local recipients.
 	counters.publishCountWindow++;
+	counters.publishOutcomeHook?.(recipients > 0);
 	chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
@@ -599,6 +602,14 @@ export const platform = {
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
 			counters.publishCountWindow++;
+			// The excluded socket is deducted per ENTRY, the way the single
+			// publish lanes do it. Reading the bare topic count instead reports
+			// a publish that reached nobody as delivered, and "broadcast to the
+			// room excluding the sender" makes that every publish into a room
+			// of one.
+			counters.publishOutcomeHook?.(
+				(excludedRecipient(msgExcludes[i], m.topic) ? recipients - 1 : recipients) > 0
+			);
 			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
 			events[i] = {
 				topic: m.topic,
@@ -723,7 +734,10 @@ export const platform = {
 			? (typeof relaySeqOption === 'number' ? relaySeqOption : null)
 			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
-		if (!isRelay) counters.publishCountWindow++;
+		if (!isRelay) {
+			counters.publishCountWindow++;
+			counters.publishOutcomeHook?.(recipients > 0);
+		}
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 		const compressIntent = compressOption === true;
 		const compress = WS_COMPRESSION_ON && compressIntent;
@@ -955,6 +969,16 @@ export const platform = {
 		// serialised, so an aborted batch never creates the topic's stats.
 		chargePublishEgress(topic, egressTenant, count, deliveries, batchBytes, batchWireBytes);
 		counters.publishCountWindow += count;
+		// One outcome per LOGICAL publish, so the outcome family always sums to
+		// the publish family. Every entry shares this topic's subscriber set,
+		// but not its exclusion: exDeduct already holds whether THIS entry's
+		// excluded socket was one of them, and reading the bare count instead
+		// would report an entry that reached nobody as delivered.
+		if (counters.publishOutcomeHook !== null) {
+			for (let i = 0; i < count; i++) {
+				counters.publishOutcomeHook(recipients - (exDeduct === null ? 0 : exDeduct[i]) > 0);
+			}
+		}
 		// Cross-worker relay: one relay envelope per entry, exactly as N
 		// publishWire calls would send - the receive path re-encodes each
 		// entry through publishWire on its own worker, so batching stays a
@@ -1264,9 +1288,22 @@ export const platform = {
 		return counters.activePosture !== null ? counters.activePosture.level : 'normal';
 	},
 
-	get metrics() { return null; },
+	/**
+	 * The registry the build resolved from `websocket.metrics`, or null when
+	 * the option is unset. The operator's own object, not the mirroring
+	 * wrapper the runtime registers through, so an app's scrape route reads
+	 * exactly what it configured.
+	 */
+	get metrics() { return metricsRegistry; },
 
-	metricsSnapshot() { return Promise.resolve(null); },
+	/**
+	 * The merged cluster metrics document as Prometheus text, or null when no
+	 * registry is configured. Single-process deployments take the same merge
+	 * minus the round trip, so the shape a scrape route parses does not depend
+	 * on the deployment mode.
+	 * @param {{ timeoutMs?: number }} [options]
+	 */
+	metricsSnapshot(options) { return metricsSnapshot(options); },
 
 	/**
 	 * Register a callback fired when the pressure `reason` TRANSITIONS -
@@ -1496,6 +1533,7 @@ export const platform = {
 			if (!admitPublishEgress(topic, egressTenant, 1, recipients)) return { seq: null, delivered: 0 };
 		}
 		counters.publishCountWindow++;
+		counters.publishOutcomeHook?.(recipients > 0);
 		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
 		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));

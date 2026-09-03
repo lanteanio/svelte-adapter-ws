@@ -144,11 +144,29 @@ describe('adapter factory options', () => {
 		const defaults = serializeWsOptions({}, '/__realtime');
 		expect(defaults.consistencyAuditIntervalMs).toBe(5000);
 		expect(defaults.resourceGrowthAuditIntervalMs).toBe(0);
-		// The clustered state-hash lane and the metrics registry still refuse.
-		for (const key of ['metrics', 'stateHashIntervalMs']) {
+		// The clustered state-hash lane still refuses.
+		for (const key of ['stateHashIntervalMs']) {
 			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
 				.toThrow(/is not supported by svelte-adapter-ws/);
 		}
+	});
+
+	it('accepts a metrics module path and refuses anything that is not one', () => {
+		// A module PATH, not a live registry: adapter options are serialized into
+		// the build, so an object handed here could never reach the runtime.
+		expect(() => adapter({ websocket: { metrics: './src/lib/server/metrics.js' } })).not.toThrow();
+		expect(adapter({ websocket: { metrics: './src/lib/server/metrics.js' } }).websocketMetrics)
+			.toBe('./src/lib/server/metrics.js');
+		// Absent stays absent - the adapter publishes null so the Vite plugin can
+		// tell "not configured" from "configured to this path".
+		expect(adapter({ websocket: {} }).websocketMetrics).toBe(null);
+		expect(() => adapter({ websocket: { metrics: { counter() {} } } }))
+			.toThrow(/websocket\.metrics must be a module path string/);
+		expect(() => adapter({ websocket: { metrics: 42 } }))
+			.toThrow(/websocket\.metrics must be a module path string/);
+		// The refusal names the read point an app is meant to use instead.
+		expect(() => adapter({ websocket: { metrics: { counter() {} } } }))
+			.toThrow(/platform\.metrics/);
 	});
 
 	it('accepts maxTopicSeqEntries and refuses a misshaped cap at factory time', () => {

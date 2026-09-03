@@ -13,6 +13,7 @@ import { collectRequestHeaders } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { lifecycleState, requestDone } from './lifecycle.js';
+import { monotonicNow } from '../runtime.js';
 
 const IS_WIN32 = process.platform === 'win32';
 
@@ -43,6 +44,13 @@ export function installRealtimeRoutes(routes) {
 export function handleRequest(req, res) {
 	counters.inFlightCount++;
 	const state = { aborted: false };
+	// The RED observation rides the SAME terminal hook as the in-flight
+	// accounting, so probes, realtime routes, static assets and SSR are all
+	// counted through one funnel with the aborted/finished distinction already
+	// made. Null unless a metrics registry is configured, which keeps the
+	// zero-config path at one property read and no clock call.
+	const metricsHook = counters.httpRequestHook;
+	const startedAt = metricsHook === null ? 0 : monotonicNow();
 	// 'close' fires exactly once per exchange - after a finished response AND
 	// after a torn-down one - so it is the single accounting point. A close
 	// before the response finished is a client abort.
@@ -50,6 +58,9 @@ export function handleRequest(req, res) {
 		if (!res.writableFinished) state.aborted = true;
 		counters.inFlightCount--;
 		requestDone();
+		if (metricsHook !== null) {
+			metricsHook(req.method || '', res.statusCode, state.aborted, (monotonicNow() - startedAt) / 1000);
+		}
 	});
 
 	const url = req.url || '/';

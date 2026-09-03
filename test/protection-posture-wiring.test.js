@@ -191,7 +191,7 @@ describe('the production upgrade path counts each refusal on the right accumulat
 		);
 		expect(rateLimit).toContain('recordRateLimitReject()');
 		expect(rateLimit).not.toContain('recordCapacityReject()');
-		expect(rateLimit).toContain("traceUpgradeRejection(headers, 'ip_rate_limit')");
+		expect(rateLimit).toContain("noteUpgradeRejection(headers, 'ip_rate_limit')");
 	});
 
 	it('refuses at siege before any slot is acquired', () => {
@@ -201,7 +201,7 @@ describe('the production upgrade path counts each refusal on the right accumulat
 			'\n\t}'
 		);
 		expect(siege).toContain('recordCapacityReject()');
-		expect(siege).toContain("traceUpgradeRejection(null, 'siege')");
+		expect(siege).toContain("noteUpgradeRejection(null, 'siege')");
 		expect(siege).toContain('serveUpgradeRefusal()');
 		expect(siege).not.toContain('tryAcquire');
 		// Placement is the whole point: a short-circuit that ran after the gate

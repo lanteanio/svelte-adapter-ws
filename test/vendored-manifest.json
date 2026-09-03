@@ -770,6 +770,9 @@
 		]
 	},
 	{
+		"file": "test/assertion-metrics.test.js"
+	},
+	{
 		"file": "test/auditor-safety.test.js"
 	},
 	{
@@ -954,6 +957,9 @@
 	},
 	{
 		"file": "test/lock.test.js"
+	},
+	{
+		"file": "test/metrics-snapshot.test.js"
 	},
 	{
 		"file": "test/middleware.test.js"

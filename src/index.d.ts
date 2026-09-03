@@ -279,6 +279,37 @@ export interface WebSocketOptions {
 	 * @default false
 	 */
 	adminAuthAcknowledged?: boolean;
+	/**
+	 * Prometheus-style registry for transport, admission and posture
+	 * observability. Off by default; when set, the adapter registers the
+	 * manifest's worker signals and emits them from the request, upgrade,
+	 * message and publish paths, with gauges riding the existing 1 Hz pressure
+	 * sampler. No client identity - address or session - ever reaches a label.
+	 *
+	 * This is a **module path**, like `handler`, not a live object: adapter
+	 * options are serialized into the build, so a registry constructed in
+	 * `svelte.config.js` could never reach the production runtime. Point it at
+	 * a module whose default export (or a named `metrics` / `registry` export)
+	 * is the registry; the adapter populates it and exposes it as
+	 * `platform.metrics`.
+	 *
+	 * The adapter serves no scrape route of its own - the app writes an
+	 * ordinary `+server.js` reading `platform.metrics.serialize()`, or awaits
+	 * `platform.metricsSnapshot()` for the cluster-wide merge.
+	 *
+	 * **One instance, with the Vite plugin.** With
+	 * `import ws from 'svelte-adapter-ws/vite'` in `vite.config.js` - the
+	 * standard setup, which also provides dev WebSockets - the registry is
+	 * bundled into the app's own server graph and deduplicated with every
+	 * route that imports it, so `platform.metrics` and a direct
+	 * `import { metrics } from '$lib/server/metrics.js'` read the SAME object.
+	 * Without the plugin the adapter falls back to a standalone bundle, which
+	 * instantiates the module a second time: adapter counters land on a copy
+	 * only `platform.metrics` reaches, an app-graph import reads the other,
+	 * empty one, and any module-level side effect runs twice per process. The
+	 * build warns when it takes that fallback.
+	 */
+	metrics?: string;
 	/** Max inbound frame bytes (default 1 MiB). */
 	maxPayloadLength?: number;
 	/** Idle reap timeout in seconds; 0 disables (default 120). */
@@ -712,7 +743,29 @@ export interface Platform {
 	readonly connections: number;
 	readonly pressure: PressureSnapshot;
 	readonly protection: 'normal' | 'elevated' | 'siege';
-	readonly metrics: unknown;
+	/**
+	 * The registry `WebSocketOptions.metrics` names, or `null` when unset. The
+	 * SAME instance the adapter populates, so a scrape route can render it
+	 * directly - and with the Vite plugin the module is bundled into the app's
+	 * own server graph, so a direct import reads this instance too.
+	 */
+	readonly metrics: MetricsRegistry | null;
+	/**
+	 * Cluster-wide metrics in Prometheus text, or `null` when no registry is
+	 * configured. Built from the values the adapter wrote rather than from
+	 * rendered text, so it needs no `serialize()` and stays on canonical
+	 * unprefixed manifest names however the registry renders its own output.
+	 * Under `CLUSTER_WORKERS` the primary collects every worker and merges,
+	 * and the two ways that can fall short are reported apart. A worker that
+	 * misses the primary's deadline is absent from the merge: the document
+	 * renders what arrived and `metrics_snapshot_workers_reporting` falls
+	 * below `..._expected`, with `metrics_snapshot_degraded` still `0`. A
+	 * scrape that never hears back from the primary answers with the
+	 * requesting worker ALONE and sets `metrics_snapshot_degraded` - the
+	 * expected/reporting pair cannot say so, because a worker that got no
+	 * answer does not know how many siblings it has.
+	 */
+	metricsSnapshot(options?: { timeoutMs?: number }): Promise<string | null>;
 	readonly assertions: Map<string, number>;
 	readonly closedWsAborts: number;
 	readonly maxPayloadLength: number;

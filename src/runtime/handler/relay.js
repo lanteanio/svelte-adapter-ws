@@ -1,6 +1,6 @@
 import { parentPort, threadId } from 'node:worker_threads';
 import { processMonotonicNow, setTimer } from '../runtime.js';
-import { streamTracking } from './state.js';
+import { counters, streamTracking } from './state.js';
 import { encodePublishFrame, encodePublishBatchedFrame } from '../relay-ring.js';
 
 /**
@@ -117,6 +117,9 @@ export function setRelayFrameCeiling(bytes, onRefused) {
 
 /** A refusal is never silent: the publish reached local subscribers, the cluster did not. */
 function refuseRelayFrame(lane, topic, bytes) {
+	// The lane is decided on THIS worker, so the cumulative count lands on this
+	// worker's registry directly; the injected sink carries the log line.
+	try { counters.relayFrameRefusedHook?.(lane); } catch { /* never break a publish */ }
 	try { onRelayFrameRefused?.(lane, topic, bytes, maxRelayEnvelopeBytes); } catch { /* never break a publish */ }
 }
 

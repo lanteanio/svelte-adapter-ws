@@ -18,6 +18,7 @@ import { monotonicNow, wallEpoch, setTimer, setIntervalTimer, clearTimer, clearI
 import { createRelayRingBuffer, RingWriter, RingReader, decodeRelayFrame } from './relay-ring.js';
 import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible, relayRingEligible } from './relay-spill-policy.js';
 import { createRestartSupervisor } from './restart-supervisor.js';
+import { createMetricsCollections } from './metrics-collector.js';
 import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
 import { certExpiryAlert, createCertWatcher, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
 import { readFdLimits, fdPreflightWarning } from './utils/fd-limit.js';
@@ -379,6 +380,46 @@ if (is_primary) {
 		stableMs: RESTART_STABLE_MS
 	});
 
+	// Cluster metrics collection. Every worker thread holds its own registry and
+	// they all serve one port, so a scrape can only see the whole cluster by
+	// asking the primary to gather every worker's mirrored values. The primary is
+	// a router and nothing more: it holds no registry, applies no aggregation
+	// law, and never looks inside a sample - it forwards structured values back
+	// to the workers that asked, which merge them against the manifest.
+	//
+	// At most ONE collection runs at a time and later requests join it. That
+	// bound has to live here: a per-worker guard lets N workers each start one
+	// and each fan out to all N, and this thread is also the cross-worker publish
+	// relay, so that amplification would land on the latency every WebSocket
+	// client depends on.
+	const metricsCollections = createMetricsCollections();
+
+	/** Answer every requester with whatever arrived, and forget the collection. */
+	const finishMetricsCollection = () => {
+		const entry = metricsCollections.take();
+		if (entry === null) return;
+		clearTimer(entry.timer);
+		// Three contributions, each counted exactly once: what arrived, the last
+		// known counter totals of workers that were asked and did not answer, and
+		// the carried totals of workers that have exited. The second is what keeps
+		// a merely-slow worker from dropping the cluster counter and then
+		// restoring it, which Prometheus would record as a reset.
+		const carried = metricsCollections.retiredReport();
+		const reports = [...entry.reports];
+		if (entry.stale.length > 0) reports.push({ worker: 'stale', samples: entry.stale });
+		if (carried !== null) reports.push(carried);
+		for (const { worker: requester, id } of entry.requesters) {
+			try {
+				requester.postMessage({
+					type: 'metrics-result', id, reports, expected: entry.expected, reporting: entry.answered
+				});
+			} catch {
+				// Requester exited while the collection was out; its own deadline
+				// already answered whatever route was waiting.
+			}
+		}
+	};
+
 	// Worker health monitoring: send a heartbeat every 10 s. A worker that has
 	// not responded within 30 s is assumed stuck (deadlock / infinite loop)
 	// and asked to exit so the exit handler can restart it. lastHeartbeat 0
@@ -654,6 +695,57 @@ if (is_primary) {
 				for (const [w, m] of workers) {
 					if (w !== worker && relayEligible(m)) w.postMessage(msg);
 				}
+			} else if (msg.type === 'metrics-request') {
+				// A worker's scrape route wants the cluster-wide picture. Ask every
+				// worker that has confirmed ready - an unbooted one has no registry
+				// to report and would only burn the deadline - then hand the replies
+				// back to the requester to merge. Join a collection already in
+				// flight rather than starting a second.
+				if (!metricsCollections.join(worker, msg.id)) {
+					// Every worker the cluster is CONFIGURED to run, not just those
+					// currently ready. A worker that is down or restarting is exactly
+					// the case an operator needs to see, and counting only the live
+					// roster would report a shrunken cluster as complete.
+					const targets = [];
+					for (const [w, m] of workers) if (m.ready) targets.push({ worker: w, threadId: m.threadId });
+					if (targets.length === 0) {
+						// No worker is ready - a restart storm, which is exactly when
+						// the carried counter totals matter most. Omitting them here
+						// would make every counter family vanish from the document and
+						// reappear later at its carried value, which Prometheus reads
+						// as a new series rather than a continuing one.
+						const only = metricsCollections.retiredReport();
+						try {
+							worker.postMessage({
+								type: 'metrics-result', id: msg.id,
+								reports: only === null ? [] : [only], expected: num, reporting: 0
+							});
+						} catch { /* requester already gone */ }
+					} else {
+						const entry = metricsCollections.begin(worker, msg.id, targets.map((t) => t.threadId));
+						entry.expected = num;
+						// The primary's deadline is shorter than the requester's, so the
+						// requester's timer is a backstop rather than the normal path and
+						// a partial answer still reports which workers were missing.
+						const budget = Math.max(25, Math.floor((typeof msg.timeoutMs === 'number' ? msg.timeoutMs : 2000) * 0.8));
+						entry.timer = setTimer(finishMetricsCollection, budget);
+						if (typeof entry.timer?.unref === 'function') entry.timer.unref();
+						let done = false;
+						for (const t of targets) {
+							try {
+								t.worker.postMessage({ type: 'metrics-collect', id: msg.id });
+							} catch {
+								// Worker died between the ready check and the send. Counted
+								// off by thread id so it cannot be double-counted, and its
+								// last known counter totals still reach the document.
+								done = metricsCollections.missed(t.threadId);
+							}
+						}
+						if (done) finishMetricsCollection();
+					}
+				}
+			} else if (msg.type === 'metrics-report') {
+				if (metricsCollections.note(msg.id, msg.threadId, msg.samples)) finishMetricsCollection();
 			}
 		});
 
@@ -666,6 +758,16 @@ if (is_primary) {
 			// The id stamped at spawn, NOT worker.threadId: Node nulls the
 			// handle before emitting 'exit', so reading it here yields -1.
 			const deadThreadId = meta?.threadId ?? -1;
+			// Carry this worker's final COUNTER totals forward. Its replacement
+			// starts from zero, and without the carry the cluster sum would drop by
+			// whatever it had accumulated - which Prometheus reads as a counter
+			// reset, spiking every rate() on every routine worker restart.
+			metricsCollections.retire(deadThreadId);
+			// A dead worker will never answer an open collection. Counting it off
+			// here - keyed, so a worker that already answered is not counted twice -
+			// lets the collection finish now instead of waiting out its full
+			// deadline, which every scrape overlapping a restart would otherwise pay.
+			if (metricsCollections.missed(deadThreadId)) finishMetricsCollection();
 			// Release the relay rings: close() unblocks each side's pending
 			// Atomics wait so no promise (or the SharedArrayBuffer it retains)
 			// outlives the worker.
@@ -1122,6 +1224,23 @@ if (is_primary) {
 				// itself ready at all (start() commits readiness only from the
 				// starting state).
 				applyDrain();
+				return;
+			}
+			if (msg.type === 'metrics-collect') {
+				// Answered NOW, never buffered. The mirror is module state that
+				// exists before the handler graph finishes booting, so even a
+				// still-booting worker can report (with nothing, which is the
+				// truth); buffering would instead reply after the collection it
+				// belongs to has already timed out. Reading the mirror touches no
+				// app code and no registry, so this cannot run an app callback on
+				// a worker that is still inside `init`.
+				try {
+					parentPort.postMessage({ type: 'metrics-report', id: msg.id, threadId, samples: handler.collectLocalMetrics() });
+				} catch { /* primary gone; its own deadline answers the requester */ }
+				return;
+			}
+			if (msg.type === 'metrics-result') {
+				handler.resolveMetricsSnapshot(msg.id, msg.reports, msg.expected, msg.reporting);
 				return;
 			}
 			const action = routeWorkerMessage(msg.type, booted);

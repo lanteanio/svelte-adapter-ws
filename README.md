@@ -137,8 +137,8 @@ Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
 `allowedOrigins`, `upgradeTimeout`, `upgradeRateLimit`, `upgradeAdmission`,
 `messageAdmission`, `maxTopicSeqEntries`, `pressure`, `egress`, `protection`,
 `postureExport`, `consistencyAuditIntervalMs`,
-`resourceGrowthAuditIntervalMs`, `primaryInit`, `workers`, and the shared
-policy flags). The typed surface in `src/index.d.ts` is the reference.
+`resourceGrowthAuditIntervalMs`, `metrics`, `primaryInit`, `workers`, and the
+shared policy flags). The typed surface in `src/index.d.ts` is the reference.
 
 `websocket.maxTopicSeqEntries` (default `1000000`) caps the per-topic sequence
 registry. Past the cap the least recently published unprotected topic is
@@ -208,6 +208,69 @@ deferred worker restart. `0` disables it and schedules no timer.
 observe-only counterpart: it trends the SIZE of the live bookkeeping
 collections and logs one throttled warning when a series climbs monotonically,
 the signature of a close, unsubscribe or eviction path that stopped shedding.
+
+### Metrics
+
+`websocket.metrics` is a **module path**, not a live object - adapter options
+are serialized into the build, so a registry constructed in
+`svelte.config.js` could never reach the production runtime. Point it at a
+module whose default export (or a named `metrics` / `registry` export) is a
+Prometheus-shaped registry; the adapter populates it and republishes it as
+`platform.metrics`.
+
+```js
+// src/lib/server/metrics.js
+import { createMetrics } from 'svelte-adapter-uws-extensions/prometheus';
+export const metrics = createMetrics();
+
+// svelte.config.js
+adapter({ websocket: { metrics: './src/lib/server/metrics.js' } })
+```
+
+The adapter serves no scrape route of its own - write an ordinary one:
+
+```js
+// src/routes/metrics/+server.js
+export const GET = ({ platform }) =>
+	new Response(platform.metrics.serialize(), {
+		headers: { 'content-type': 'text/plain; version=0.0.4' }
+	});
+```
+
+The registry only needs `counter(name, help, labelNames?)` and
+`gauge(name, help)`, each returning `{ inc }` / `{ set }`; `histogram` and
+`serialize` are optional. No client identity - address or session - ever
+reaches a label.
+
+`await platform.metricsSnapshot()` is the cluster-wide read. It is built from
+the values the adapter wrote rather than from rendered text, so it needs no
+`serialize()` and stays on canonical unprefixed manifest names however the
+registry renders its own output. Under `CLUSTER_WORKERS` the primary collects
+every worker and merges.
+
+Two different things can go wrong, and they are reported by different signals.
+A worker that misses the primary's deadline is simply absent from the merge:
+the document renders what arrived and `metrics_snapshot_workers_reporting`
+falls below `..._expected`, with `metrics_snapshot_degraded` still `0`. A
+scrape that never hears back from the primary at all answers with the
+requesting worker ALONE and sets `metrics_snapshot_degraded 1` - the
+expected/reporting pair cannot say so, because a worker that got no answer
+does not know how many siblings it has. Alert on both: degraded means the
+collection failed, a reporting shortfall means it succeeded and someone was
+missing.
+
+`metrics_snapshot_workers_expected` and `..._reporting` are how you tell a
+healthy fleet from a partial one - a worker counts as reporting only once it
+has registered every required counter family and sampled every required
+gauge.
+
+With the Vite plugin installed - the standard setup - the registry is bundled
+into the app's own server graph and deduplicated with every route that imports
+it, so `platform.metrics` and a direct import read the same object. Without
+it the adapter falls back to a standalone bundle, which instantiates the
+module twice: adapter counters land on a copy only `platform.metrics` reaches
+and an app-graph import reads the other, empty one. The build warns when it
+takes that fallback.
 
 ### The reserved `/__realtime/*` admin route
 
@@ -380,10 +443,9 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    request-n, game, and the oversized-control-frame refusal. The
    `authenticate` preflight endpoint with CSRF defense and rate limiting is
    in; app hooks fire through the same lifecycle as the lead adapter (init
-   before readiness, shutdown inside the drain budget). The `websocket.*`
-   options whose lanes have not shipped here (`metrics`, and the protection
-   and posture group - `protection`, `postureExport` and the three audit
-   intervals) refuse the build loudly.
+   before readiness, shutdown inside the drain budget). The one `websocket.*`
+   option whose lane has not shipped here, `stateHashIntervalMs`, refuses the
+   build loudly rather than silently no-op'ing.
    Graceful shutdown drains live sockets itself (`http.close()` never
    completes while one is open): new upgrades are refused the moment drain
    begins, every client gets the reconnect advisory with the

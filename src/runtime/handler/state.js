@@ -76,6 +76,49 @@ export const counters = {
 	 * @type {((scope: string) => void) | null}
 	 */
 	egressEvictedHook: null,
+	/**
+	 * Cumulative hook for one relayed publish refused by the sender-side frame
+	 * ceiling (null when metrics are disabled), called with the lane.
+	 * @type {((lane: string) => void) | null}
+	 */
+	relayFrameRefusedHook: null,
+	/**
+	 * Aggregate delivery outcome for one counted publish call (null when
+	 * metrics are disabled). `true` means at least one local subscriber held
+	 * the topic.
+	 * @type {((delivered: boolean) => void) | null}
+	 */
+	publishOutcomeHook: null,
+	/**
+	 * One completed HTTP exchange, from the terminal hook in handler/request.js
+	 * (null when metrics are disabled). The status is the response's own; the
+	 * aborted flag is what separates a client hang-up from a real status, and it
+	 * cannot be derived from the code.
+	 * @type {((method: string, status: number, aborted: boolean, seconds: number) => void) | null}
+	 */
+	httpRequestHook: null,
+	/**
+	 * Gauge-sampling hook, called once per pressure fold with the reason
+	 * transition (or null) and the kernel readings that fold already paid for.
+	 * Null when no metrics registry is configured, so the zero-config sampler
+	 * is unchanged.
+	 * @type {((telemetry: { transition: { from: string, to: string } | null, os: any }) => void) | null}
+	 */
+	metricsSampleHook: null,
+	/**
+	 * Readings the pressure fold produced and the metrics hook cannot
+	 * recompute: `publishCountWindow` is zeroed as it is read, and the memory
+	 * figures come from the one `process.memoryUsage()` the fold already paid
+	 * for. `lastSampleWallMs` is the wall time the fold completed - 0 until
+	 * the first sample, which is what keeps the freshness gauge from dating a
+	 * document that has never been measured.
+	 */
+	lastPublishCount: 0,
+	lastConnections: 0,
+	lastDroppedFrames: 0,
+	lastDroppedBytes: 0,
+	lastResidentBytes: 0,
+	lastSampleWallMs: 0,
 	/** Live logical subscription count across every connection. */
 	totalSubscriptions: 0,
 	/** Worst client-reported send-gate backlog since the last sample. */
