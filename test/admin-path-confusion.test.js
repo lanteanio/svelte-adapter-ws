@@ -65,15 +65,16 @@ export function admin(request) {
  *
  * @param {number} port
  * @param {string} target
+ * @param {string} [method]
  * @returns {Promise<{ status: number, body: string, head: string }>}
  */
-function rawGet(port, target) {
+function rawGet(port, target, method = 'GET') {
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(port, '127.0.0.1');
 		let out = '';
 		socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw request timed out')); });
 		socket.on('connect', () => {
-			socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+			socket.write(`${method} ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
 		});
 		socket.on('data', (chunk) => { out += chunk.toString(); });
 		socket.on('error', reject);
@@ -175,6 +176,17 @@ describe('an admin target that normalizes out of the prefix is refused', () => {
 		expect(res.status).toBe(400);
 		expect(res.head, 'refusal answered chunked').not.toContain('transfer-encoding: chunked');
 		expect(res.head).toContain(`content-length: ${Buffer.byteLength(res.body)}`);
+
+		// HEAD is the other half of the reason, and the half a GET cannot show:
+		// node strips the body itself, so without the header the reply carries
+		// no size at all rather than a wrong one. The length must still be the
+		// one a GET would have returned.
+		const head = await rawGet(rt.port, '/__realtime/../reflect', 'HEAD');
+		expect(head.status).toBe(400);
+		expect(head.body, 'node must strip a HEAD body').toBe('');
+		expect(head.head, 'HEAD refusal carried no size').toContain(
+			`content-length: ${Buffer.byteLength(res.body)}`
+		);
 	});
 
 	it('serves a target that resolves onto the bare prefix', async () => {
@@ -234,6 +246,17 @@ describe('the harness refuses the same targets', () => {
 
 		const inside = await rawGet(port, '/__realtime/a/../introspect');
 		expect(inside.status).toBe(200);
+
+		// The harness frames the way the runtime does, on BOTH answers. It
+		// emulates a server that derives a length from the body it is handed,
+		// so answering chunked here would have an app's own tests reading
+		// framing production never produces.
+		for (const [label, res] of [['refusal', escaped], ['success', inside]]) {
+			expect(res.head, `harness ${label} answered chunked`).not.toContain('transfer-encoding: chunked');
+			expect(res.head, `harness ${label} carried no length`).toContain(
+				`content-length: ${Buffer.byteLength(res.body)}`
+			);
+		}
 
 		// The refusal never reached the handler; the resolved target did, and
 		// carried the path it resolved to.

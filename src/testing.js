@@ -322,6 +322,24 @@ function createNodeApp() {
 				if (aborted || ended) return res;
 				ended = true;
 				try {
+					// uWS derives the length from the body handed to end(), so a
+					// facade that leaves it off answers chunked where the real
+					// server answers with a length, and leaves a HEAD reply -
+					// whose body node strips - with no size at all. An app
+					// testing against this harness would be reading framing the
+					// runtime does not produce. Only filled in when the caller
+					// wrote none, and never on a status defined to carry no
+					// body. There is no write() on this facade, so end() always
+					// sees the whole body.
+					if (
+						!pendingHeaders.has('content-length') &&
+						statusCode >= 200 && statusCode !== 204 && statusCode !== 304
+					) {
+						const bytes = body === undefined || body === null
+							? 0
+							: typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength;
+						pendingHeaders.set('content-length', String(bytes));
+					}
 					nodeRes.writeHead(statusCode, statusText || undefined, Object.fromEntries(pendingHeaders));
 					if (body === undefined || body === null) nodeRes.end();
 					else if (typeof body === 'string' || Buffer.isBuffer(body)) nodeRes.end(body);

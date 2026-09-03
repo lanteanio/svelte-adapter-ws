@@ -17,25 +17,44 @@ export const FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK']);
 // methods ALLOWED_METHODS carries, which is what this adapter can deliver.
 const ALLOW_HEADER = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
 
+// Every one of these is length-framed. uWS derives a content-length from the
+// body handed to `res.end()`, so leaving it off answers chunked where the
+// family answers with a length, and leaves a HEAD reply - whose body node
+// strips - carrying no size at all. The bodies here are fixed, so the length
+// is exact rather than an estimate.
+
 /** @param {import('node:http').ServerResponse} res */
 export function send405(res) {
 	if (res.headersSent) return;
-	res.writeHead(405, { allow: ALLOW_HEADER, 'content-type': 'text/plain' });
-	res.end('Method Not Allowed');
+	const body = 'Method Not Allowed';
+	res.writeHead(405, {
+		allow: ALLOW_HEADER,
+		'content-type': 'text/plain',
+		'content-length': String(Buffer.byteLength(body))
+	});
+	res.end(body);
 }
 
 /** @param {import('node:http').ServerResponse} res */
 export function send400(res) {
 	if (res.headersSent) return;
-	res.writeHead(400, { 'content-type': 'text/plain' });
-	res.end('Bad Request');
+	const body = 'Bad Request';
+	res.writeHead(400, {
+		'content-type': 'text/plain',
+		'content-length': String(Buffer.byteLength(body))
+	});
+	res.end(body);
 }
 
 /** @param {import('node:http').ServerResponse} res */
 export function send413(res) {
 	if (res.headersSent) return;
-	res.writeHead(413, { 'content-type': 'text/plain' });
-	res.end('Content Too Large');
+	const body = 'Content Too Large';
+	res.writeHead(413, {
+		'content-type': 'text/plain',
+		'content-length': String(Buffer.byteLength(body))
+	});
+	res.end(body);
 }
 
 /**
@@ -44,9 +63,13 @@ export function send413(res) {
  */
 export function send500(res, requestId) {
 	if (res.headersSent) return;
+	const body = 'Internal Server Error';
 	/** @type {Record<string, string>} */
-	const headers = { 'content-type': 'text/plain' };
+	const headers = {
+		'content-type': 'text/plain',
+		'content-length': String(Buffer.byteLength(body))
+	};
 	if (requestId) headers['x-request-id'] = requestId;
 	res.writeHead(500, headers);
-	res.end('Internal Server Error');
+	res.end(body);
 }

@@ -269,6 +269,12 @@ describe('the reserved admin route on the built runtime', () => {
 		);
 		expect(raw.startsWith('HTTP/1.1 405')).toBe(true);
 		expect(raw.toLowerCase()).toContain('allow: get, head, post, put, patch, delete, options');
+		// The admin lane must not frame its own answers two ways: the refusals
+		// it writes itself carry a length, so this one does too. Without it
+		// node falls back to chunked, and a HEAD would carry no size at all.
+		const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
+		expect(head, '405 answered chunked').not.toContain('transfer-encoding: chunked');
+		expect(head).toContain(`content-length: ${'Method Not Allowed'.length}`);
 	});
 
 	it('refuses a declared content-length over the body cap with 413', async () => {
