@@ -244,14 +244,18 @@ export const KNOWN_ADAPTER_OPTION_KEYS = new Set([
 ]);
 
 /**
- * Top-level keys the adapter does not recognize.
+ * Top-level keys the adapter does not recognize, each annotated with the
+ * closest documented key when one is close enough to name. A `websocket.*`
+ * option typed at the top level - the most likely way to lose a real option
+ * here - is pointed to its nested home.
  *
  * @param {Record<string, unknown> | null | undefined} opts - raw adapter options
  * @returns {string[]}
  */
 export function unknownAdapterOptionKeys(opts) {
-	if (!opts || typeof opts !== 'object') return [];
-	return Object.keys(opts).filter((key) => !KNOWN_ADAPTER_OPTION_KEYS.has(key));
+	return describeUnknownOptionKeys(opts, KNOWN_ADAPTER_OPTION_KEYS, (key) =>
+		KNOWN_WEBSOCKET_OPTION_KEYS.has(key) ? `websocket.${key}` : null
+	);
 }
 
 /**

@@ -109,6 +109,21 @@ describe('adapter factory options', () => {
 		}
 	});
 
+	// The warning is only useful if it names the key the operator meant. A
+	// casing slip or one transposed letter is the usual mistake, and a
+	// `websocket.*` option typed at the top level is the most likely way to
+	// lose a real option outright - it is spelled correctly, so nothing but
+	// this suggestion points at its nested home.
+	it('names the closest documented key for an unknown top-level option', () => {
+		expect(unknownAdapterOptionKeys({ precompres: true }))
+			.toEqual(["precompres (did you mean 'precompress'?)"]);
+		expect(unknownAdapterOptionKeys({ HealthCheckPath: '/healthz' }))
+			.toEqual(["HealthCheckPath (did you mean 'healthCheckPath'?)"]);
+		expect(unknownAdapterOptionKeys({ allowedOrigins: '*' }))
+			.toEqual(["allowedOrigins (did you mean 'websocket.allowedOrigins'?)"]);
+		expect(unknownAdapterOptionKeys({ turboMode: true })).toEqual(['turboMode']);
+	});
+
 	it('renders the dotfile warning to survive its own list', () => {
 		const warning = renderRefusedDotfileWarning(['.env', '.well-known/.nested']);
 		expect(warning).toContain('.env');
