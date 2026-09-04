@@ -156,10 +156,13 @@ describe('graceful shutdown', () => {
 			// The truncated exchange surfaces as an error or an aborted body -
 			// never a clean 200 with the full payload.
 			const outcome = await slow;
-			if (outcome instanceof Error) {
-				expect(String(outcome.cause ?? outcome)).toBeTruthy();
+			// By SHAPE, not by `instanceof Error`: each test file runs in its own
+			// VM context, where an Error built in another realm is still an error
+			// and still not an instance of this realm's constructor.
+			if (typeof (/** @type {any} */ (outcome)?.text) === 'function') {
+				await expect(/** @type {any} */ (outcome).text()).rejects.toThrow();
 			} else {
-				await expect(outcome.text()).rejects.toThrow();
+				expect(String(/** @type {any} */ (outcome)?.cause ?? outcome)).toBeTruthy();
 			}
 		} finally {
 			console.error = originalError;
@@ -244,8 +247,13 @@ export class Server {
 			const dropped = errorLines.filter((line) => line.includes('ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED'));
 			expect(dropped.length).toBe(1);
 			const outcome = await slow;
-			if (!(outcome instanceof Error)) {
-				await expect(outcome.text()).rejects.toThrow();
+			// A rejection is the ordinary outcome and a truncated Response the
+			// other one. Tested by SHAPE, not by `instanceof Error`: each test
+			// file runs in its own VM context, where an Error built in another
+			// realm is still an error and still not an instance of this realm's
+			// constructor.
+			if (typeof (/** @type {any} */ (outcome)?.text) === 'function') {
+				await expect(/** @type {any} */ (outcome).text()).rejects.toThrow();
 			}
 		} finally {
 			console.error = originalError;

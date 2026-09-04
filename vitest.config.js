@@ -33,10 +33,13 @@ export default defineConfig({
 		// Restore `globalThis.WebSocket` / `window` after each test FILE, and
 		// stop any runtime a suite left listening. See the helpers.
 		setupFiles: ['./test/helpers/restore-globals.js', './test/helpers/stop-leaked-runtimes.js'],
-		// The integration lane boots real node:http servers on ephemeral ports;
-		// keep the default forks pool so a wedged server cannot hang the runner.
-		// This is the one place this config deliberately differs from the lead's,
-		// which runs vmForks against a native transport.
+		// vmForks, as the lead runs. Still process-based, so a wedged node:http
+		// server cannot hang the runner - and each file gets its own module
+		// registry, which is what the real-runtime suites need: the runtime reads
+		// several settings at module eval, Node cannot re-evaluate a cached module,
+		// and two suites sharing a worker would otherwise test a server neither of
+		// them configured.
+		pool: 'vmForks',
 		testTimeout: 15000,
 		hookTimeout: 15000
 	}
