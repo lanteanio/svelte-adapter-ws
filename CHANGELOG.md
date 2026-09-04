@@ -449,6 +449,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The posture export describes the deployment when CLUSTER_WORKERS is set. It
+  is one socket path and the option is a build-time constant, so every worker
+  evaluated the same install: each unlinked the previous owner's socket and
+  bound its own, leaving only the last to bind reachable while the rest
+  listened on orphaned inodes, and the first worker to shut down removed
+  whichever socket was live at that moment. A consumer read one
+  bind-order-chosen thread's posture and believed it was the server's - worse
+  than reading none, since the export exists so an edge-defense daemon can act
+  on it, and it would have acted on a quiet worker while a sibling was under
+  siege. The primary owns the socket now. Each worker reports its posture
+  inward on the same two occasions it used to push locally - every transition
+  and every 1 Hz sample - and the primary serves the aggregate: the highest
+  posture any worker is in, carrying THAT worker's own `reason` and pressure
+  numbers so the line stays internally consistent, plus a `workers` count of
+  the threads it summarizes. A worker that exits is dropped rather than
+  remembered, because the aggregate is the worst worker and a thread that died
+  in siege would otherwise pin the deployment there for as long as the primary
+  ran. The 1 Hz cadence is driven by the primary at a fixed rate rather than by
+  the workers' samples, which would have made it a function of the worker
+  count; when no worker has reported, the cadence stops, which is what the
+  contract already means by silence. Single-process deployments are untouched:
+  the worker still binds its own socket and its line carries no `workers`
+  field. The path travels to the primary with the first report rather than
+  through the environment, so the option stays the one place it is configured.
+
 - A publish can no longer talk its way past the cluster sequence authority by
   claiming to be a relayed frame. `publishWire` has an origin side and a relay
   receive side, and one boolean picks between them: the relay side skips the

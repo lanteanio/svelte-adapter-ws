@@ -19,6 +19,8 @@ import { createRelayRingBuffer, RingWriter, RingReader, decodeRelayFrame } from 
 import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible, relayRingEligible } from './relay-spill-policy.js';
 import { createRestartSupervisor } from './restart-supervisor.js';
 import { createMetricsCollections } from './metrics-collector.js';
+import { createPostureAggregator } from './posture-collector.js';
+import { startPostureExport } from './utils/posture-export.js';
 import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
 import { certExpiryAlert, createCertWatcher, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
 import { readFdLimits, fdPreflightWarning } from './utils/fd-limit.js';
@@ -394,6 +396,49 @@ if (is_primary) {
 	// client depends on.
 	const metricsCollections = createMetricsCollections();
 
+	// The posture export's socket, owned here rather than in the workers. One
+	// path cannot have N owners, so each worker reports its posture inward and
+	// this thread serves the deployment aggregate (posture-collector.js says
+	// why, and what the aggregate means). Bound lazily on the first report: the
+	// primary never sees the per-build websocket options, so the path arrives
+	// with the report rather than through the environment, which keeps the
+	// adapter option the single place it is configured.
+	const postureAggregate = createPostureAggregator();
+	/** @type {{ broadcast: () => void, close: () => void, clientCount: () => number } | null} */
+	let postureExporter = null;
+	/** @type {any} */
+	let postureCadence = null;
+	const bindPostureExport = (exportPath) => {
+		if (postureExporter !== null || shutting_down) return;
+		if (typeof exportPath !== 'string' || exportPath.length === 0) return;
+		// Every worker evaluates one build, so every announcement carries the
+		// same path and the first one settles it.
+		postureExporter = startPostureExport(exportPath, () => postureAggregate.line());
+		// The 1 Hz cadence is part of the export's contract - a consumer that
+		// stops receiving lines knows the adapter is gone without any extra
+		// liveness protocol - so it is driven from here at a fixed rate rather
+		// than from the workers' own samples, which would push N lines a second
+		// and make the cadence a function of the worker count.
+		postureCadence = setIntervalTimer(() => {
+			if (postureExporter === null) return;
+			// No live worker has reported: the cadence stops, which is what the
+			// contract already means by silence and is the honest answer while
+			// nothing is serving.
+			if (postureAggregate.line() === null) return;
+			postureExporter.broadcast();
+		}, 1000);
+	};
+	const closePostureExport = () => {
+		if (postureCadence !== null) {
+			clearIntervalTimer(postureCadence);
+			postureCadence = null;
+		}
+		if (postureExporter !== null) {
+			postureExporter.close();
+			postureExporter = null;
+		}
+	};
+
 	/** Answer every requester with whatever arrived, and forget the collection. */
 	const finishMetricsCollection = () => {
 		const entry = metricsCollections.take();
@@ -665,6 +710,17 @@ if (is_primary) {
 				if (meta?.slot) restartSupervisor.noteReady(meta.slot);
 			} else if (msg.type === 'heartbeat-ack') {
 				// Liveness only; the clock already advanced above.
+			} else if (msg.type === 'posture') {
+				// A worker's own posture, for the socket this thread owns. The
+				// path rides the report because the primary never sees the
+				// per-build websocket options; binding is idempotent.
+				bindPostureExport(msg.path);
+				// A transition earns an immediate push: a defense daemon
+				// reacting to the deployment entering siege must not wait out
+				// the rest of the cadence window.
+				if (postureAggregate.note(msg.threadId, msg.line) && postureExporter !== null) {
+					postureExporter.broadcast();
+				}
 			} else if (msg.type === 'publish') {
 				// Single relay (postMessage fallback lane). Like every relay
 				// forward below, a quarantined peer is skipped: these
@@ -763,6 +819,10 @@ if (is_primary) {
 			// whatever it had accumulated - which Prometheus reads as a counter
 			// reset, spiking every rate() on every routine worker restart.
 			metricsCollections.retire(deadThreadId);
+			// Drop its posture too. A worker that died while in siege would
+			// otherwise hold the deployment at siege for as long as the primary
+			// runs, and the aggregate is the WORST worker by design.
+			postureAggregate.retire(deadThreadId);
 			// A dead worker will never answer an open collection. Counting it off
 			// here - keyed, so a worker that already answered is not counted twice -
 			// lets the collection finish now instead of waiting out its full
@@ -986,6 +1046,12 @@ if (is_primary) {
 			console.log(`[primary] Waiting ${shutdown_delay}ms for load balancer drain...`);
 			await new Promise((resolve) => setTimer(resolve, shutdown_delay));
 		}
+
+		// The export's readers are told the only way the contract has: the
+		// cadence stops. Closing here rather than at the last worker's exit
+		// releases the path while this thread still owns it, so a restarted
+		// deployment binds a path nothing is holding.
+		closePostureExport();
 
 		// Step 3: tell workers to drain and exit. Each worker bounds its OWN
 		// whole teardown (hooks plus both drains) by SHUTDOWN_TIMEOUT.

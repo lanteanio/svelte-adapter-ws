@@ -34,7 +34,7 @@ import {
 import { emitPressureMetricTelemetry, probeOsPressureSources } from '../utils/os-pressure.js';
 import { countOpenFds, readFdLimits } from '../utils/fd-limit.js';
 import { PRESSURE_REASON_CODES } from '../observability-manifest.js';
-import { parentPort } from 'node:worker_threads';
+import { parentPort, threadId } from 'node:worker_threads';
 import { isOriginAllowed, isAuthOriginAccepted, describeUnsafeSameOriginConfig } from '../utils/origin.js';
 import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
@@ -53,6 +53,7 @@ import {
 import { createConnectionPermitCarrier } from '../utils/connection-permit.js';
 import { createPosture } from '../utils/pressure.js';
 import { startPostureExport } from '../utils/posture-export.js';
+import { hasMultipleWorkers } from './cluster-sequence-policy.js';
 import { createConsistencyAuditor } from '../auditor.js';
 import { buildConnectionAuditSnapshot } from '../audit-snapshot.js';
 import { createResourceGrowthAuditor, structuralResourceProbes } from '../leak-probes.js';
@@ -724,16 +725,37 @@ if (POSTURE_EXPORT !== undefined && POSTURE_EXPORT !== false) {
 	if (typeof exportPath !== 'string' || exportPath.length === 0) {
 		throw new Error("websocket.postureExport must be a socket path string or { path } (or omitted)");
 	}
-	const exporter = startPostureExport(exportPath, () => ({
+	const postureLine = () => ({
 		v: 1,
 		posture: postureLevel(),
 		reason: pressureSnapshot.reason,
 		value: pressureSnapshot.value,
 		psi: pressureSnapshot.psi ?? null,
 		cpuThrottle: pressureSnapshot.cpuThrottle ?? null
-	}));
-	counters.postureExporter = exporter;
-	counters.postureExportHook = () => exporter.broadcast();
+	});
+	if (parentPort && hasMultipleWorkers()) {
+		// One path, N workers: whoever binds last owns it and everyone else
+		// is listening on an orphaned inode, so a consumer would read one
+		// bind-order-chosen thread's posture and believe it was the server's.
+		// The primary binds instead (see runtime/posture-collector.js) and
+		// this worker reports inward on the same two occasions it would have
+		// pushed locally - every transition and every sample. The path travels
+		// with the first report rather than through the environment, so the
+		// option stays the one place it is configured.
+		counters.postureExporter = null;
+		counters.postureExportHook = () => {
+			try {
+				parentPort.postMessage({ type: 'posture', threadId, path: exportPath, line: postureLine() });
+			} catch { /* the primary is gone; the cadence stopping IS the signal */ }
+		};
+		// One report before the first sample, so a consumer that connects
+		// during boot is not answered with silence for up to a second.
+		counters.postureExportHook();
+	} else {
+		const exporter = startPostureExport(exportPath, postureLine);
+		counters.postureExporter = exporter;
+		counters.postureExportHook = () => exporter.broadcast();
+	}
 } else {
 	// Assigned on BOTH branches, so a re-run of this module replaces a stale
 	// hook rather than leaving one pointed at a closed exporter.

@@ -455,6 +455,9 @@
 		"file": "src/runtime/observability-manifest.js"
 	},
 	{
+		"file": "src/runtime/posture-collector.js"
+	},
+	{
 		"file": "src/runtime/sim-cluster.js",
 		"adaptations": [
 			{
@@ -978,6 +981,9 @@
 				"ours": "// in the lead adapter's test/cluster-sequence-policy-real.test.js (group-roundtrip and"
 			}
 		]
+	},
+	{
+		"file": "test/posture-collector.test.js"
 	},
 	{
 		"file": "test/presence-client.test.js"
