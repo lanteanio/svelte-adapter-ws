@@ -495,6 +495,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The built config module reports the resolved `PROXY_PROTOCOL` value. It read
+  the variable only to refuse `PROXY_PROTOCOL=1` and exported nothing, so the
+  one eval-time knob every other one exposes was absent from the config
+  surface, and a reader could not tell an adapter that declines the flag from
+  one that ignores it. The refusal is unchanged: `PROXY_PROTOCOL=1` is still
+  fatal at boot, so the value a built module carries is always `false`.
+
 - The server says when it is ready for traffic. It announced the bind and then
   went quiet, and "Listening" is not the same claim: the socket is bound before
   the app's init hook and before warmup, so an operator reading only that line

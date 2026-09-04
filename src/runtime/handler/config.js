@@ -78,11 +78,21 @@ export const body_size_limit = parse_as_bytes(env('BODY_SIZE_LIMIT', '512K'));
  */
 export const trusted_proxies = createTrustedProxyMatcher(env('TRUSTED_PROXIES', ''));
 
-// PROXY protocol v2 requires parsing the preamble off the raw socket, which
-// this adapter does not do yet. A deployment that sets the flag must not
-// silently run with spoofable client addresses, so the misconfiguration is
-// fatal at boot rather than quietly ignored.
-if (env('PROXY_PROTOCOL', '') === '1') {
+/**
+ * Whether the PROXY protocol v2 preamble is parsed off the raw socket. Always
+ * false here: the refusal below makes `1` fatal at module eval, so a module
+ * that finished evaluating never carries any other value. It is exported all
+ * the same, because the resolved value is part of the config surface every
+ * other eval-time knob exposes, and a reader that cannot see this one cannot
+ * tell an adapter that declines the flag from one that ignores it.
+ */
+export const proxy_protocol = env('PROXY_PROTOCOL', '') === '1';
+
+// Parsing the preamble means reading it off the socket before the HTTP parser
+// sees the stream, which this adapter does not do. A deployment that sets the
+// flag must not silently run with spoofable client addresses, so the
+// misconfiguration is fatal at boot rather than quietly ignored.
+if (proxy_protocol) {
 	throw new Error(
 		'[svelte-adapter-ws] PROXY_PROTOCOL=1 is not supported by this adapter. ' +
 		'Terminate the PROXY protocol at the fronting load balancer and forward the ' +
