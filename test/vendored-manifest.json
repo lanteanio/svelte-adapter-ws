@@ -1033,6 +1033,19 @@
 		"file": "test/ratelimit.test.js"
 	},
 	{
+		"file": "test/relay-gap.test.js",
+		"adaptations": [
+			{
+				"lead": "const src = read('../src/runtime/handler/lifecycle.js');",
+				"ours": "const src = read('../src/runtime/handler/platform.js');"
+			},
+			{
+				"lead": "const src = read('../src/runtime/handler.js');",
+				"ours": "const src = read('../src/runtime/handler/realtime.js');"
+			}
+		]
+	},
+	{
 		"file": "test/relay-marker-authority.test.js",
 		"adaptations": [
 			{

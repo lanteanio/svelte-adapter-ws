@@ -26,7 +26,7 @@ import {
 import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
-	resolveEntrySeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, wrapBatchEnvelope
+	resolveEntrySeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
@@ -1841,6 +1841,89 @@ export function relayPublishWire(topic, event, data, capability, seq, compress) 
 	// workers.
 	platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);
 	return true;
+}
+
+/**
+ * The capability a client advertises to say it can act on a gap marker: drop
+ * the resume offset that has already stepped past a hole, and re-snapshot.
+ * The bundled client always advertises it (src/client.js), so this is a
+ * negotiation with older or third-party clients, not with ours.
+ */
+export const RELAY_RESYNC_CAP = 'relay.resync:1';
+
+/**
+ * Tell the affected subscribers that this worker lost frames they were owed.
+ *
+ * The operator hears through the diagnostic event; this is the CLIENTS
+ * hearing. A subscriber whose resume offset has already stepped past the hole
+ * would otherwise gap-fill straight over it and never know, so each gapped
+ * topic gets two things: the marker, pushed to every opted-in subscriber, and
+ * a freshly minted topic generation installed HERE - the only worker whose
+ * current answer a pre-loss offset can still match - so a client that was not
+ * reachable now cold-rehydrates at its next resume instead.
+ *
+ * Reserved lanes (a `__`-prefixed topic) and topics outside the sequence
+ * registry are skipped: they carry no resume offset to poison.
+ *
+ * @param {Array<{ topic: string, count: number }>} gaps
+ * @returns {Map<string, { signalled: number, closed: number, epoch: number }>}
+ */
+export function signalRelayGaps(gaps) {
+	/** @type {Map<string, { lost: number, marker: string, signalled: number, closed: number, epoch: number }>} */
+	const byTopic = new Map();
+	for (const gap of gaps) {
+		if (gap.topic.charCodeAt(0) === 95 && gap.topic.charCodeAt(1) === 95) continue;
+		if (!maxSeenSeq.has(gap.topic)) continue;
+		const entry = byTopic.get(gap.topic);
+		if (entry === undefined) byTopic.set(gap.topic, { lost: gap.count, marker: '', signalled: 0, closed: 0, epoch: 0 });
+		else entry.lost += gap.count;
+	}
+	if (byTopic.size === 0) return byTopic;
+	for (const [topic, entry] of byTopic) {
+		// De-herd the re-snapshot the marker provokes: a busy topic asks its
+		// subscribers to spread their follow-up over a window rather than
+		// arriving together.
+		const jitterMs = Math.min(2000, numSubscribers(topic));
+		entry.marker =
+			'{"topic":' + JSON.stringify('__replay:' + topic) + ',"event":"gap","data":{"lost":' + entry.lost + '}' +
+			(jitterMs > 0 ? ',"j":' + jitterMs : '') + '}';
+		// The durable half: mint the topic's new generation and install it on
+		// THIS worker - the only worker whose current answer a pre-loss offset
+		// can still match. The mint precedes the walk so a subscriber
+		// signalled below and one that resumes a moment later read one
+		// consistent epoch.
+		entry.epoch = randomU32();
+		overrideTopicEpoch(topic, entry.epoch);
+	}
+	for (const facade of wsConnections) {
+		let ud;
+		try { ud = /** @type {any} */ (facade).getUserData(); } catch { counters.closedWsAborts++; continue; }
+		const caps = ud[WS_CAPS];
+		if (caps === undefined || !caps.has(RELAY_RESYNC_CAP)) continue;
+		const subs = ud[WS_SUBSCRIPTIONS];
+		if (!subs || subs.size === 0) continue;
+		let gone = false;
+		for (const [topic, entry] of byTopic) {
+			if (gone || !subs.has(topic)) continue;
+			let result;
+			try { result = /** @type {any} */ (facade).send(entry.marker, false, false); }
+			catch { counters.closedWsAborts++; gone = true; continue; }
+			if (result === 2) {
+				// The socket cannot even take the marker, so it cannot be told.
+				// Closing it is what forces the reconnect that repairs it.
+				try { /** @type {any} */ (facade).end(1013, 'Resync required'); entry.closed++; }
+				catch { counters.closedWsAborts++; }
+				gone = true;
+				continue;
+			}
+			bumpOut(ud, entry.marker);
+			entry.signalled++;
+		}
+	}
+	/** @type {Map<string, { signalled: number, closed: number, epoch: number }>} */
+	const outcomes = new Map();
+	for (const [topic, entry] of byTopic) outcomes.set(topic, { signalled: entry.signalled, closed: entry.closed, epoch: entry.epoch });
+	return outcomes;
 }
 
 /**

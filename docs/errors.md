@@ -242,6 +242,24 @@ Log line begins:
 
 **What to do.** Check whether topic names embed unbounded identifiers (per-user, per-request). The line fires once per process, so it will not tell you whether cardinality later fell or kept climbing - the naming scheme is what settles that. Unbounded cardinality is a slow leak rather than a spike, so act at the warning rather than at exhaustion.
 
+## ADAPTER-ERR-RELAY-GAP
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.relay-gap event=runtime.relay-gap.detected severity=error] This worker is missing relayed state that sibling workers received.
+```
+
+**Cause.** A gap was detected in the relayed sequence this worker received from its siblings.
+
+**Consequence.** Clients on this worker are missing events that clients on other workers received, so they disagree about state.
+
+**Automatic recovery.** The lost frames are gone and are never back-filled. Subscribers of a gapped sequence-lane topic that negotiated the relay.resync:1 capability (the bundled client always does) are pushed a gap marker that drops their poisoned resume offset and prompts a re-snapshot; the diagnostic reports them as signalledClients, and a subscriber whose socket refuses even the marker is closed 1013 (closedClients). The topic also gets a freshly minted generation on this worker, so a pre-loss offset presented with its recorded epoch - by a subscriber that disconnected before confirmation, or by a client that never negotiated the capability - cold-rehydrates at its next resume instead of gap-filling past the hole.
+
+**What to do.** Treat as a correctness incident. Check for accompanying relay frame or spill events, which usually name the cause of the loss. A signalledClients of 0 with live subscribers means those clients hear nothing until their next resume, where the minted generation repairs any that present epochs; a client that resumes without presenting epochs is the one case nothing repairs. A gap on a topic outside the signal scope (seq: false, or a reserved lane) always reports 0.
+
 ## ADAPTER-ERR-DIVERGENCE
 
 Severity: error

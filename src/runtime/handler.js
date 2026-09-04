@@ -36,7 +36,8 @@ export { beginDrain, lifecycleState, isDraining, platform };
 // relay receive pair delivers a sibling worker's pre-stamped publishes into
 // this worker's local subscribers, and the two setters wire the shared-memory
 // ring writer and the sender-side frame ceiling at worker startup.
-export { relayPublish, relayPublishBatched } from './handler/platform.js';
+export { relayPublish, relayPublishBatched, signalRelayGaps, RELAY_RESYNC_CAP } from './handler/platform.js';
+export { markRelayAttached } from './handler/state.js';
 export { setRelayRingWriter, setRelayFrameCeiling } from './handler/relay.js';
 
 // The cluster metrics round trip. The worker branch of the process entry

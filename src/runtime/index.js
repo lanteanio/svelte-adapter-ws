@@ -933,6 +933,22 @@ if (is_primary) {
 						finishDivergenceCollection(msg.diagnosticId);
 					}
 				}
+			} else if (msg.type === 'relay-gap') {
+				// A worker found a hole in a relay stream that is dense by
+				// construction, so it lost frames its siblings received - it has
+				// already logged which ones and counted them on its own registry.
+				// Nothing is compared here: unlike a divergent hash, the reporter
+				// names ITSELF, so there is no majority to weigh and no way to act
+				// on the wrong worker. Only a thread id and a frame count crossed
+				// the boundary.
+				console.error('[primary] relay-gap worker=%d frames=%d', msg.threadId, msg.count);
+				// Same action gate as a divergence, for the same reason: the worker
+				// is missing state its siblings have, and a restart is what re-syncs
+				// it. Off by default - logged and counted, never auto-killed.
+				if (restart_on_state_divergence) {
+					console.error('[primary] asking worker %d to exit to re-sync after a relay gap (RESTART_ON_STATE_DIVERGENCE=1)', msg.threadId);
+					requestWorkerExit(worker, 1);
+				}
 			} else if (msg.type === 'metrics-request') {
 				// A worker's scrape route wants the cluster-wide picture. Ask every
 				// worker that has confirmed ready - an unbooted one has no registry
@@ -1607,5 +1623,16 @@ if (is_primary) {
 			// first frame the primary sends has somewhere to be drained to.
 			try { parentPort?.postMessage({ type: 'relay-attached' }); } catch { /* primary already gone */ }
 		}
+		// From here on a frame this worker never sees is a frame it LOST, and a
+		// stream whose first ordinal arrives above 1 is one this worker joined
+		// mid-flight rather than a hole. Outside the ring branch on purpose: a
+		// worker with no ring still receives relays over postMessage, and one
+		// that never latched would read every stream as born after its attach
+		// and report whole histories as lost. Latched LAST, so every frame
+		// already taken from the boot backlog or sitting in a ring counts as a
+		// stream joined mid-flight - which at worst under-reports, and
+		// over-reporting is the failure that would restart a healthy worker.
+		const { markRelayAttached } = handler;
+		markRelayAttached();
 	}
 }

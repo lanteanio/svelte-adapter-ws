@@ -63,14 +63,16 @@ import {
 	createLeaseState, leaseGrantFrame, leaseReportedSaturation,
 	controlFrameTooLargeFrame, DEFAULT_GRANT
 } from '../wire.js';
-import { now, monotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
+import { now, monotonicNow, processMonotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
-import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
+import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorDefinition, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import {
-	capCounts, counters, decodeCache, divergenceDiagnostics, envelopePrefixCache, lastPublishWarnAt,
-	maxSeenSeq, pressureSnapshot, staticCache, subscribeAuth, topicPublishStats, wsConnections, wsWrappers
+	capCounts, counters, decodeCache, divergenceDiagnostics, envelopePrefixCache, GAP_CONFIRM_MS,
+	lastPublishWarnAt, maxSeenSeq, originStreams, pressureSnapshot, staticCache, streamTracking,
+	subscribeAuth, takeConfirmedGaps, topicPublishStats, wsConnections, wsWrappers
 } from './state.js';
+import { signalRelayGaps } from './platform.js';
 import { seqBound } from './seq-bound.js';
 import { computeStateHash, partitionActiveTopics } from '../invariants.js';
 import { DIVERGENCE_TOPIC_LIMIT, summarizeTopicSequences } from '../divergence-diagnostics.js';
@@ -214,6 +216,10 @@ if (CONSISTENCY_AUDIT_INTERVAL_MS > 0) {
 // unconfigured deployment schedules no timer and pays nothing.
 const STATE_HASH_INTERVAL_MS = wsOptions.stateHashIntervalMs ?? 0;
 if (parentPort && STATE_HASH_INTERVAL_MS > 0) {
+	// The same gate arms the relay-contiguity stamps, so the tracker only
+	// runs where something will read what it tracks. Armed off, the relay
+	// receive lanes pay one boolean test and allocate nothing.
+	streamTracking.enabled = true;
 	// Reporter-side activity tracking, diffed per tick against the previous
 	// snapshot so the publish and relay hot paths pay nothing for the split.
 	// The two mirrors hold the same topic strings by reference and are bounded
@@ -247,6 +253,43 @@ if (parentPort && STATE_HASH_INTERVAL_MS > 0) {
 		const hash = computeStateHash({ topicSeqs: active });
 		const quietHash = computeStateHash({ topicSeqs: quiet });
 		parentPort.postMessage({ type: 'state-hash', hash, quietHash, threadId, intervalMs: STATE_HASH_INTERVAL_MS });
+
+		// A maximum only ever reveals a lost TAIL. A lost INTERIOR frame moves
+		// no maximum - a worker that got [2,3] of a stream and one that got
+		// [1,2,3] both report 3 - so it is caught by contiguity instead, and
+		// REPORTED rather than voted on: this worker found the hole in a stream
+		// that is dense by construction, so it already knows it lost the frames
+		// and no comparison could tell it more. Each hole drains once, so this
+		// is silent until something is actually lost.
+		//
+		// The event's identity comes from the registry entry rather than inline
+		// literals, so the entry and the emission cannot drift apart.
+		const RELAY_GAP = adapterErrorDefinition(ADAPTER_ERROR_IDS.RELAY_GAP);
+		const confirmedGaps = takeConfirmedGaps(originStreams, processMonotonicNow(), GAP_CONFIRM_MS);
+		// The operator hears below; this is the affected CLIENTS hearing.
+		const gapSignals = signalRelayGaps(confirmedGaps);
+		for (const gap of confirmedGaps) {
+			const signal = gapSignals.get(gap.topic);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: RELAY_GAP.component,
+				event: RELAY_GAP.event,
+				severity: RELAY_GAP.severity,
+				dataClass: 'pseudonymous',
+				message: RELAY_GAP.problemPrefix,
+				attributes: {
+					count: gap.count,
+					topic: privateValueMetadata(gap.topic, 'topic'),
+					originWorker: gap.origin,
+					fromOrdinal: gap.from,
+					toOrdinal: gap.to,
+					signalledClients: signal === undefined ? 0 : signal.signalled,
+					closedClients: signal === undefined ? 0 : signal.closed
+				}
+			});
+			mRelayGap?.inc({}, gap.count);
+			parentPort.postMessage({ type: 'relay-gap', threadId, count: gap.count });
+		}
 	};
 	// Spread the FIRST report by a per-worker jitter, drawn from the injectable
 	// RNG so a seeded harness reproduces the phase, then report on a FIXED
@@ -580,10 +623,10 @@ gFdSoftLimit?.set(FD_SOFT_LIMIT);
 const mStateDivergence = containMetricInstrument(METRICS?.counter(
 	'state_divergence_total', 'Cross-worker state hash divergence detections', ['role']
 ));
-// Relayed frames this worker was sent and never received. Same story: the
-// contiguity check that finds a gap reads the per-topic stream stamps, and
-// `streamTracking` is never armed in this runtime, so this family is
-// registered and stays at its honest zero.
+// Relayed frames this worker was sent and never received. The contiguity
+// check that finds a gap reads the per-topic stream stamps, which the
+// state-hash reporter arms - so a deployment without that reporter never
+// tracks, never drains, and this family stays at its honest zero.
 const mRelayGap = containMetricInstrument(METRICS?.counter(
 	'relay_gap_frames_total', 'Relayed frames proven lost to this worker', []
 ));

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Relay-gap detection rides the same reporter. A per-topic maximum only ever
+  reveals a lost TAIL: two workers, one that received [2,3] of a stream and one
+  that received [1,2,3], both report 3 and hash identically. The per-origin
+  relay ordinal is dense by construction, so a hole in it is a dropped frame and
+  nothing else, and the worker that finds one already knows it lost them - there
+  is no majority to weigh, so a gap is REPORTED rather than voted on.
+
+  Subscribers hear too. A client whose resume offset has already stepped past
+  the hole would gap-fill straight over it, so every gapped topic gets a marker
+  pushed to each subscriber that negotiated  (the bundled client
+  always does) and a freshly minted topic generation on this worker, so a client
+  that was not reachable cold-rehydrates at its next resume instead. A socket
+  that cannot take even the marker is closed 1013. Reserved lanes and topics
+  outside the sequence registry carry no offset to poison and are skipped.
+
 - `websocket.stateHashIntervalMs`: the cross-worker state-hash reporter, which
   the build previously refused. Above `0` and under `CLUSTER_WORKERS`, each
   worker folds a structure-only projection of its per-topic delivered-sequence

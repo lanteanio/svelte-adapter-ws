@@ -32,6 +32,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	PRESSURE_RUNAWAY_PUBLISHER: 'ADAPTER-ERR-PRESSURE-RUNAWAY-PUBLISHER',
 	PRESSURE_TOPIC_REGISTRY: 'ADAPTER-ERR-PRESSURE-TOPIC-REGISTRY',
 	DIVERGENCE: 'ADAPTER-ERR-DIVERGENCE',
+	RELAY_GAP: 'ADAPTER-ERR-RELAY-GAP',
 	DIVERGENCE_QUIET: 'ADAPTER-ERR-DIVERGENCE-QUIET',
 	RESUME_HOOK: 'ADAPTER-ERR-RESUME-HOOK',
 	AUTHENTICATE: 'ADAPTER-ERR-AUTHENTICATE',
@@ -315,6 +316,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		sources: Object.freeze(['src/runtime/handler/platform.js']),
 		anchor: 'adapter-err-pressure-topic-registry',
 		help: 'docs/errors.md#adapter-err-pressure-topic-registry'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.RELAY_GAP,
+		code: null,
+		event: 'runtime.relay-gap.detected',
+		component: 'runtime.relay-gap',
+		severity: 'error',
+		emission: 'direct',
+		problemPrefix: 'This worker is missing relayed state that sibling workers received.',
+		messagePrefix: direct('runtime.relay-gap', 'runtime.relay-gap.detected', 'error', 'This worker is missing relayed state that sibling workers received.'),
+		cause: 'A gap was detected in the relayed sequence this worker received from its siblings.',
+		consequence: 'Clients on this worker are missing events that clients on other workers received, so they disagree about state.',
+		automaticRecovery: 'The lost frames are gone and are never back-filled. Subscribers of a gapped sequence-lane topic that negotiated the relay.resync:1 capability (the bundled client always does) are pushed a gap marker that drops their poisoned resume offset and prompts a re-snapshot; the diagnostic reports them as signalledClients, and a subscriber whose socket refuses even the marker is closed 1013 (closedClients). The topic also gets a freshly minted generation on this worker, so a pre-loss offset presented with its recorded epoch - by a subscriber that disconnected before confirmation, or by a client that never negotiated the capability - cold-rehydrates at its next resume instead of gap-filling past the hole.',
+		nextAction: 'Treat as a correctness incident. Check for accompanying relay frame or spill events, which usually name the cause of the loss. A signalledClients of 0 with live subscribers means those clients hear nothing until their next resume, where the minted generation repairs any that present epochs; a client that resumes without presenting epochs is the one case nothing repairs. A gap on a topic outside the signal scope (seq: false, or a reserved lane) always reports 0.',
+		sources: Object.freeze(['src/runtime/handler/realtime.js', 'src/runtime/handler/platform.js']),
+		anchor: 'adapter-err-relay-gap',
+		help: 'docs/errors.md#adapter-err-relay-gap'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.DIVERGENCE,
