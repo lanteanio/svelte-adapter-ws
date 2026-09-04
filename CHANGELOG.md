@@ -537,8 +537,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime it is then the cluster sequence authority that turns it away, because
   an ordinary publish carrying no `{ seq, relay }` pair is exactly what that
   check refuses - so a clustered app that was relying on the old keys sees a
-  throw where it previously saw a publish. `svelte-adapter-ws/testing` and the
-  dev plugin take the same decisions.
+  throw where it previously saw a publish. `svelte-adapter-ws/testing` carries
+  its own copy of this lane and decides the same way; the dev plugin has no
+  cross-worker relay to re-enter at all.
 
 - The marker a batch uses to say "this call's egress decision is already taken"
   is compared by identity too. A batch is admitted whole or not at all, so its

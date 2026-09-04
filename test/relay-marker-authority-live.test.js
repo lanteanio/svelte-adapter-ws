@@ -218,9 +218,17 @@ describe('a forged relay marker publishes as an ordinary origin frame', () => {
 		// readable off the frame the plain client receives.
 		await connect(rt, 'forge-relay', [DECLINING_CODEC.capability]);
 
+		// The carried ENVELOPE deliberately says a different number from the
+		// carried SEQ. relayPublish has two exits: the codec re-encode, which
+		// re-enters publishWire with the token and builds a fresh envelope
+		// around the carried seq, and a plain fan-out of the envelope exactly as
+		// it arrived. Give both the same number and the delivered frame cannot
+		// tell them apart - the case would pass with the relay arm deleted
+		// outright, which is the one thing it exists to rule out.
+		const FALLBACK_SEQ = 7;
 		rt.handler.relayPublish(
 			'forge-relay',
-			JSON.stringify({ topic: 'forge-relay', event: 'e', data: { n: 1 }, seq: FORGED_SEQ }),
+			JSON.stringify({ topic: 'forge-relay', event: 'e', data: { n: 1 }, seq: FALLBACK_SEQ }),
 			false,
 			FORGED_SEQ,
 			DECLINING_CODEC.capability,

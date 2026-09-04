@@ -104,11 +104,13 @@ describe('the relay origin-seq marker', () => {
 	});
 
 	it('keeps a received frame relayed when it carries no seq at all', async () => {
-		// The set site normalizes a missing seq to null, and this is the whole
-		// reason it has to: `undefined` is indistinguishable from an absent
-		// marker, so an unsequenced relayed frame would read as an ORIGIN
-		// publish on every worker that received it - drawing their counters and
-		// relaying onward, which is the fan-out loop the marker exists to stop.
+		// A relayed frame legitimately arrives with no seq, and the READ side is
+		// what coerces it: the relay arm is chosen by the token beside the
+		// options, so a missing seq can no longer be mistaken for an absent
+		// marker, and what remains to guarantee is the number that reaches the
+		// wire. Without that coercion an unsequenced frame is stamped verbatim,
+		// and the frame still has to stay a relay rather than drawing this
+		// worker's counter and being relayed onward.
 		const onward = [];
 		server = await relayServer({ __onPublish: (frame) => onward.push(frame) });
 		server.platform.registerWireCodec(makeCodec());

@@ -14,8 +14,14 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'acorn';
 import { describe, expect, it } from 'vitest';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const uwsRoot = process.env.UWS_SRC || path.resolve(repoRoot, '..', 'svelte-adapter-uws');
+import { LEAD, readLeadAtPin, repoRoot, uwsRoot } from './lead-pin.js';
+
+// The lead is read at the revision this repo vendored from, never from its
+// working tree: that checkout belongs to a live session, and a file saved
+// there mid-edit would move this gate on a change that is not ours and is not
+// even committed. It also makes the verdict reproducible - the same two
+// checkouts answer the same way on any machine.
+const LEAD_SOURCES = readLeadAtPin(['src/runtime/handler/platform.js', 'protocol.schema.json']);
 
 /**
  * Collect the non-computed own property keys of the first object literal
@@ -25,8 +31,7 @@ const uwsRoot = process.env.UWS_SRC || path.resolve(repoRoot, '..', 'svelte-adap
  * @param {string} filePath
  * @returns {Set<string>}
  */
-function platformKeys(filePath) {
-	const source = readFileSync(filePath, 'utf8');
+function platformKeys(source) {
 	const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
 	/** @type {Set<string>} */
 	const keys = new Set();
@@ -56,8 +61,14 @@ describe('platform surface parity with the lead adapter', () => {
 	});
 
 	it('carries every key of the lead production platform', () => {
-		const lead = platformKeys(path.join(uwsRoot, 'src', 'runtime', 'handler', 'platform.js'));
-		const ours = platformKeys(path.join(repoRoot, 'src', 'runtime', 'handler', 'platform.js'));
+		const leadSource = LEAD_SOURCES.get('src/runtime/handler/platform.js');
+		expect(
+			leadSource,
+			`the lead checkout at ${uwsRoot} has no commit ${LEAD.rev}; fetch it, or bump ` +
+			'rev in test/vendored-lead.json to a revision it does have'
+		).not.toBe(null);
+		const lead = platformKeys(/** @type {string} */ (leadSource));
+		const ours = platformKeys(readFileSync(path.join(repoRoot, 'src', 'runtime', 'handler', 'platform.js'), 'utf8'));
 		expect(lead.size).toBeGreaterThan(5);
 		expect(ours.size).toBeGreaterThan(5);
 		const missing = [...lead].filter((key) => !ours.has(key));
@@ -74,8 +85,13 @@ describe('wire revision parity', () => {
 		const ours = readFileSync(path.join(repoRoot, 'protocol.schema.json'));
 		const schema = JSON.parse(ours.toString());
 		expect(schema.$id).toMatch(/revision-1$/);
-		const leadSchemaPath = path.join(uwsRoot, 'protocol.schema.json');
-		expect(existsSync(leadSchemaPath)).toBe(true);
-		expect(ours.equals(readFileSync(leadSchemaPath))).toBe(true);
+		const leadSchema = LEAD_SOURCES.get('protocol.schema.json');
+		expect(
+			leadSchema,
+			`the lead checkout at ${uwsRoot} has no protocol.schema.json at ${LEAD.rev}`
+		).not.toBe(null);
+		// Byte-identical, and the schema is checked out with -text so no
+		// line-ending normalization stands between the two copies.
+		expect(ours.toString()).toBe(leadSchema);
 	});
 });
