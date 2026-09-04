@@ -129,7 +129,16 @@ export async function start(server, host, port, opts = {}) {
 
 	// A shutdown signal that arrived during boot has already moved the state
 	// past 'starting'; it wins.
-	if (lifecycle_state === 'starting') setLifecycleState('ready');
+	if (lifecycle_state === 'starting') {
+		setLifecycleState('ready');
+		// Announced, and only by a worker that serves traffic. "Listening" is
+		// not the same claim: the socket is bound before the init hook and
+		// before warmup, so an operator reading only that line cannot tell a
+		// server that is taking requests from one still rendering its warmup
+		// paths. The elapsed figure is measured from the same t0 the bind line
+		// reports against.
+		if (doListen) console.log(`[svelte-adapter-ws] Ready for traffic (${(monotonicNow() - t0).toFixed(0)}ms since boot)`);
+	}
 }
 
 /** @type {Promise<void> | null} */

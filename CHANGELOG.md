@@ -495,6 +495,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The server says when it is ready for traffic. It announced the bind and then
+  went quiet, and "Listening" is not the same claim: the socket is bound before
+  the app's init hook and before warmup, so an operator reading only that line
+  cannot tell a server that is taking requests from one still rendering its
+  warmup paths. The line reports elapsed boot time and is printed only by a
+  worker that serves traffic.
+
+- `warmSSR`, `runWarmup` and `isWarmupRequest` are re-exported from the runtime
+  handler, where the rest of the lifecycle surface already lives.
+
 - The boot banner names this adapter, reports its own version, and is printed
   at all. It read the packaged metadata from `meta/svelte-adapter-uws/` while
   the build writes `meta/svelte-adapter-ws/`, so a production build found

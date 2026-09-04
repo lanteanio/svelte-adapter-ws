@@ -37,6 +37,8 @@ export { beginDrain, lifecycleState, isDraining, platform };
 // this worker's local subscribers, and the two setters wire the shared-memory
 // ring writer and the sender-side frame ceiling at worker startup.
 export { relayPublish, relayPublishBatched, signalRelayGaps, RELAY_RESYNC_CAP } from './handler/platform.js';
+export { warmSSR, runWarmup } from './handler/warmup.js';
+export { isWarmupRequest } from './handler/warmup-registry.js';
 export { markRelayAttached } from './handler/state.js';
 export { setRelayRingWriter, setRelayFrameCeiling } from './handler/relay.js';
 
