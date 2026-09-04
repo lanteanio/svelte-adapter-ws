@@ -214,6 +214,12 @@ export { realtime };
  * @returns {Promise<void>}
  */
 export async function start(host, port, opts = {}) {
+	// The drain latch belongs to ONE lifecycle. Read before lifecycleStart,
+	// which re-arms the state itself, so this sees the closed lifecycle it is
+	// replacing rather than the fresh one. The latch is what makes two
+	// concurrent callers share a single drain, so it is cleared between
+	// lifecycles and never within one.
+	if (lifecycleState() === 'closed') shutdownRun = null;
 	return lifecycleStart(server, host, port, {
 		warmupPaths: WARMUP_PATHS,
 		listen: opts.listen,

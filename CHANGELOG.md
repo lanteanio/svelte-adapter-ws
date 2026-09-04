@@ -514,6 +514,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A handler module can be started again after it has been shut down. The drain
+  latch and the lifecycle state belong to one lifecycle, but both were
+  module-scope and neither was ever cleared, so a second `start()` ran against a
+  state left at `closed`. Since draining means "not ready", that boot bound its
+  port, answered HTTP, and refused every WebSocket upgrade with 503 - reachable
+  and useless for the thing the adapter is for. A third reached `listen()` on a
+  server that was never unbound.
+
+  Both are re-armed at the top of a new `start()` rather than by relaxing the
+  readiness flip, which stays guarded on `starting` so that a stop signal
+  arriving during a boot still wins over it. Within a single lifecycle the drain
+  latch is untouched, so two concurrent callers still share one run and live
+  sockets get one advisory and one close frame.
+
 - A failed bind says which address failed and why. It printed neither: the emit
   built a record with a `dataClass` the observability schema does not declare,
   so the record was rejected, the rejection was swallowed (telemetry must not

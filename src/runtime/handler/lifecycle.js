@@ -78,6 +78,20 @@ export function requestDone() {
  * @returns {Promise<void>}
  */
 export async function start(server, host, port, opts = {}) {
+	// A lifecycle that ran to completion leaves the state 'closed' and the drain
+	// latched, and neither ever cleared - so a second start served a runtime that
+	// was permanently draining, refusing every upgrade with 503, and a third
+	// called listen() on a still-listening server.
+	//
+	// Re-armed HERE, at the top, and never by forcing 'ready' at the end. The
+	// ready flip below is guarded on 'starting' precisely so that a stop signal
+	// arriving DURING a boot wins over it; beginning the new lifecycle from
+	// 'starting' keeps that race decided the same way, where relaxing the flip
+	// itself would re-open it.
+	if (lifecycle_state === 'closed') {
+		setLifecycleState('starting');
+		shutdownPromise = null;
+	}
 	const doListen = opts.listen !== false;
 	const t0 = monotonicNow();
 	if (doListen) {
