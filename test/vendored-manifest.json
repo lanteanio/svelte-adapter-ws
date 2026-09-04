@@ -537,6 +537,9 @@
 		"file": "src/runtime/utils/pressure.js"
 	},
 	{
+		"file": "src/runtime/utils/static-headers.js"
+	},
+	{
 		"file": "src/runtime/utils/subscribe-policy.js"
 	},
 	{

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { manifest, prerendered } from '../manifest-bridge.js';
 import { excludedDotPath } from '../utils/dot-path.js';
 import { mimeLookup } from '../utils/mime.js';
-import { mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
+import { contentDispositionValue, mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
 import { send400 } from './http-helpers.js';
@@ -196,13 +196,10 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 
 		const ext = path.extname(relPath).toLowerCase();
 		if (DOWNLOAD_EXTENSIONS.has(ext)) {
-			const basename = path.basename(relPath);
-			// Strip quote/backslash (not allowed in a quoted Content-Disposition
-			// filename) and every control character: a filesystem name with an
-			// embedded newline is legal on POSIX, and node throws from inside
-			// the request listener on an invalid header value.
-			const safe = basename.replace(/["\\]|[^\x20-\x7e]/g, '');
-			headers.push(['content-disposition', `attachment; filename="${safe}"`]);
+			// The rule lives in utils/static-headers.js rather than here, so a unit
+			// test can drive THIS and not a copy of it: this module imports the
+			// build's manifest placeholder and cannot be imported by one.
+			headers.push(['content-disposition', contentDispositionValue(path.basename(relPath))]);
 		}
 
 		const merged = mergeStaticHeaders(headers, staticHeaders);
