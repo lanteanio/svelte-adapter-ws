@@ -38,15 +38,30 @@ describe('normalizeStaticHeaders', () => {
 		expect(() => normalizeStaticHeaders({ 'x-num': 5 })).toThrow(/must be a string/);
 	});
 
-	it('refuses header names that are not RFC 7230 tokens', () => {
-		expect(() => normalizeStaticHeaders({ 'x-bad name': 'v' })).toThrow(/RFC 7230/);
-		expect(() => normalizeStaticHeaders({ 'x-bad:colon': 'v' })).toThrow(/RFC 7230/);
+	it('refuses header names that are not valid HTTP field names', () => {
+		expect(() => normalizeStaticHeaders({ 'x-bad name': 'v' })).toThrow(/valid HTTP field name/);
+		expect(() => normalizeStaticHeaders({ 'x-bad:colon': 'v' })).toThrow(/valid HTTP field name/);
 	});
 
 	it('refuses control characters in values (response-splitting shape)', () => {
 		const crlf = String.fromCharCode(13) + String.fromCharCode(10);
-		expect(() => normalizeStaticHeaders({ 'x-foo': `bar${crlf}set-cookie: evil=1` })).toThrow(/control character/);
-		expect(() => normalizeStaticHeaders({ 'x-foo': 'bar' + String.fromCharCode(0) })).toThrow(/control character/);
+		expect(() => normalizeStaticHeaders({ 'x-foo': `bar${crlf}set-cookie: evil=1` }))
+			.toThrow(/byte a header value may not carry/);
+		expect(() => normalizeStaticHeaders({ 'x-foo': 'bar' + String.fromCharCode(0) }))
+			.toThrow(/byte a header value may not carry/);
+	});
+
+	it('carries a configured __proto__ instead of dropping it into the prototype', () => {
+		// A plain accumulator makes `headers['__proto__'] = 'x'` a silent no-op
+		// for a string value, so an operator's header vanishes with no throw and
+		// no warning. `__proto__` is a valid field-name token, so the name check
+		// above deliberately does not catch it either.
+		//
+		// Computed key, because `{ __proto__: 'a' }` in a literal sets the
+		// PROTOTYPE rather than an own property. The input has to carry it the
+		// way a JSON config or a spread would.
+		const { headers } = normalizeStaticHeaders({ ['__proto__']: 'a', 'x-real': 'b' });
+		expect(Object.keys(/** @type {object} */ (headers)).sort()).toEqual(['__proto__', 'x-real']);
 	});
 });
 

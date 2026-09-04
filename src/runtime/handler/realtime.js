@@ -88,7 +88,14 @@ import { isDraining } from './lifecycle.js';
 
 const OPEN = 1;
 
-const wsOptions = WS_OPTIONS || {};
+// A bare alias, deliberately. This module is imported only from inside the
+// `if (WS_ENABLED)` branch, and the build sets WS_ENABLED from the same
+// truthiness that decides whether WS_OPTIONS is an object, so the `|| {}` that
+// used to sit here could never fire. It was not harmless: the option-contract
+// scan follows aliases of WS_OPTIONS through bare identifiers only, so a
+// logical expression here made every option this module reads invisible to the
+// check that exists to catch an option declared and never read.
+const wsOptions = WS_OPTIONS;
 const MAX_PAYLOAD_LENGTH = wsOptions.maxPayloadLength ?? 1024 * 1024;
 const MAX_BACKPRESSURE = wsOptions.maxBackpressure ?? 1024 * 1024;
 const CLOSE_ON_BACKPRESSURE_LIMIT = wsOptions.closeOnBackpressureLimit === true;
@@ -2426,8 +2433,10 @@ function httpRefusalResponse(res) {
 	// Null-prototype: header names arrive lowercased from a writer, and a name
 	// like `__proto__` assigned into a plain object hits Object.prototype's
 	// setter - the write lands nowhere, the key never appears among the own
-	// properties, and nothing throws, so the header is dropped in silence. The
-	// same shape is already refused for staticHeaders at build time.
+	// properties, and nothing throws, so the header is dropped in silence.
+	// `normalizeStaticHeaders` takes the same precaution for the same reason:
+	// `__proto__` is a valid field-name token, so no name check refuses it and
+	// only a null-prototype accumulator carries it.
 	/** @type {Record<string, string>} */
 	const headers = Object.create(null);
 	const facade = {

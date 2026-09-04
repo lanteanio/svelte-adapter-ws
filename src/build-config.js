@@ -4,6 +4,13 @@
 // output into the placeholder replace map.
 
 import { RESERVED_STATIC_HEADER_KEYS } from './runtime/utils/static-headers.js';
+// The SAME predicates the handshake lane uses, imported rather than restated.
+// That module is the single definition on purpose, and its own history is the
+// argument: a narrower class listing only CR, LF and NUL was tried there and
+// reverted, because it let VT, FF and DEL through to the wire - values this
+// package accepted while `cookies.set()` in the same package refused them, and
+// which a Node-based proxy throws on when it re-emits the header.
+import { UPGRADE_HEADER_NAME_RE, UPGRADE_HEADER_VALUE_RE } from './runtime/utils/upgrade-headers.js';
 
 /**
  * @typedef {Object} NormalizedStaticHeaders
@@ -30,8 +37,15 @@ export function normalizeStaticHeaders(input) {
 			"e.g. { 'x-frame-options': 'DENY', 'referrer-policy': 'strict-origin-when-cross-origin' }."
 		);
 	}
-	/** @type {Record<string, string>} */
-	const headers = {};
+	/**
+	 * Null-prototype, so a configured `__proto__` key becomes an own property
+	 * instead of hitting `Object.prototype`'s setter and vanishing. On a plain
+	 * object `headers['__proto__'] = 'x'` is a silent no-op for a string value,
+	 * which would drop an operator's header with no throw and no warning - the
+	 * exact quiet substitution this function refuses to make everywhere else.
+	 * @type {Record<string, string>}
+	 */
+	const headers = Object.create(null);
 	/** @type {string[]} */
 	const dropped = [];
 	for (const rawKey of Object.keys(/** @type {Record<string, unknown>} */ (input))) {
@@ -41,22 +55,30 @@ export function normalizeStaticHeaders(input) {
 				`adapter option \`staticHeaders['${rawKey}']\` must be a string, got ${typeof value}.`
 			);
 		}
-		// The name must be an RFC 7230 token and the value a single line of
-		// visible characters. These strings are baked into the build and handed
-		// to res.writeHead on every static response; node refuses an invalid
-		// field with an exception FROM INSIDE the request listener, so a value
-		// that passed the build silently would crash the server on its first
-		// static request - a CR/LF here is also the response-splitting shape.
-		if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(rawKey)) {
+		// Validated on the RAW key, before lowercasing. Some non-ASCII letters
+		// case-fold INTO the token alphabet - the Kelvin sign lowercases to `k` -
+		// so checking the folded form would ship a header under a name the
+		// operator never wrote.
+		if (!UPGRADE_HEADER_NAME_RE.test(rawKey)) {
 			throw new Error(
-				`adapter option \`staticHeaders\` has an invalid header name ${JSON.stringify(rawKey)}: ` +
-				'header names must be RFC 7230 tokens (no spaces, separators or control characters).'
+				`adapter option \`staticHeaders['${rawKey}']\` has a header name that is not a valid HTTP field name. ` +
+				'Names are RFC 9110 tokens: letters, digits and !#$%&\'*+-.^_`|~ only.'
 			);
 		}
-		if (/[^\t\x20-\x7e\x80-\xff]/.test(value)) {
+		// A value written into the header block verbatim can end the field and
+		// start whatever follows - another header, or after a blank line a second
+		// response. Refused at BUILD time rather than sanitised at request time,
+		// because rewriting an operator's configured value would leave them
+		// believing the header they wrote is the one being served.
+		//
+		// Both predicates are the handshake lane's, imported: see the note over
+		// the import for why this file does not get its own spelling of them.
+		if (UPGRADE_HEADER_VALUE_RE.test(value)) {
 			throw new Error(
-				`adapter option \`staticHeaders['${rawKey}']\` contains a control character. ` +
-				'Header values must be a single line with no CR, LF or other controls.'
+				`adapter option \`staticHeaders['${rawKey}']\` contains a byte a header value may not carry ` +
+				'(a control character such as CR, LF, NUL, VT, FF or DEL). Those bytes end or truncate a header ' +
+				'field on the wire, so a value carrying them could inject headers or a whole second response. ' +
+				'Remove them, or fold the value onto one line.'
 			);
 		}
 		const key = rawKey.toLowerCase();
