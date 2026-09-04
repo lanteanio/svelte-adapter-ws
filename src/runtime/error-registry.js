@@ -95,15 +95,22 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		id: ADAPTER_ERROR_IDS.LISTEN,
 		code: 'LISTEN_FAILED',
 		event: 'runtime.listen.failed',
-		component: 'runtime.lifecycle',
-		severity: 'error',
-		emission: 'direct',
-		problemPrefix: null,
-		messagePrefix: direct('runtime.lifecycle', 'runtime.listen.failed', 'error', 'Failed to bind '),
+		component: 'runtime.listener',
+		severity: 'fatal',
+		emission: 'composed',
+		problemPrefix: 'Could not bind the server listener on',
+		// Built through `direct` rather than written out, so the head cannot
+		// drift from HEAD or from this entry's own component/event/severity.
+		// The composed body repeats the event before the problem, which is what
+		// `composedMessage` emits.
+		messagePrefix: direct(
+			'runtime.listener', 'runtime.listen.failed', 'fatal',
+			'runtime.listen.failed: Could not bind the server listener on'
+		),
 		cause: 'The configured address or port could not be bound, or the process lacks permission.',
-		consequence: 'The process never becomes ready and exits with status 1.',
-		automaticRecovery: 'None inside the process. If a process manager restarts it, the replacement retries the same bind and a persistent conflict fails the same way each time.',
-		nextAction: 'Check address availability, port conflicts, and bind permissions, then restart the process.',
+		consequence: 'The process never becomes ready. Single-process, the bind failure exits with status 1. Under CLUSTER_WORKERS only the failing worker exits; the process stays up while the supervisor respawns it.',
+		automaticRecovery: "None single-process. Under CLUSTER_WORKERS the supervisor respawns the failed worker and the replacement retries the same bind - under a persistent conflict each attempt fails the same way, each is charged against the slot's restart budget, and an exhausted slot takes the whole service down, the outcome ADAPTER-ERR-WORKER-RESTART-LIMIT documents from the other end.",
+		nextAction: 'Check address availability, port conflicts, and bind permissions, then restart the process. A repeating restart line for the same worker slot beside this one is the same conflict burning restart budget, not a second fault.',
 		sources: Object.freeze(['src/runtime/index.js', 'src/runtime/handler/lifecycle.js']),
 		anchor: 'adapter-err-listen',
 		help: 'docs/errors.md#adapter-err-listen',

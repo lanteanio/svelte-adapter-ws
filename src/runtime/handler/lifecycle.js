@@ -6,7 +6,7 @@
 // rolling restart (lossless handover); readiness flips to 'ready' only after
 // the warmup pass, so a balancer never routes a cold instance.
 
-import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { emitOperationalDiagnostic, listenFailureDiagnostic } from '../utils/operational-diagnostic.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 import { monotonicNow, setTimer, clearTimer } from '../runtime.js';
 import { counters } from './state.js';
@@ -96,15 +96,19 @@ export async function start(server, host, port, opts = {}) {
 				});
 			}
 		}).catch((err) => {
-			emitOperationalEvent({
-				source: 'svelte-adapter-ws',
-				component: 'runtime.lifecycle',
-				event: 'runtime.listen.failed',
-				severity: 'error',
-				dataClass: 'none',
-				message: `Failed to bind ${host}:${port}.`,
-				attributes: { error: diagnosticError(err) }
-			});
+			// Through the registry, so the printed line and the catalog entry an
+			// operator looks the ID up in are the same bytes. The previous emit
+			// built its own record with a dataClass the schema does not declare,
+			// which made every bind failure print an invalid-record-shape line
+			// instead of the address that could not be bound.
+			// The registry builds the record so the printed line and the catalog
+			// entry an operator looks the ID up in stay the same bytes. Its own
+			// `error` slot carries a placeholder, because the lead's transport
+			// reports a bind failure as a falsy token with no error to pass;
+			// node rejects with the real one, so it goes in the same declared
+			// field rather than a new one - EADDRINUSE is the whole answer on
+			// the failure an operator hits most.
+			emitOperationalDiagnostic({ ...listenFailureDiagnostic(host, port), error: err });
 			process.exit(1);
 		});
 		const address = /** @type {import('node:net').AddressInfo} */ (server.address());

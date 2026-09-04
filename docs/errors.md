@@ -6,21 +6,21 @@ Every operator-facing failure the runtime can emit, indexed by its stable
 
 ## ADAPTER-ERR-LISTEN
 
-Severity: error
+Severity: fatal
 
 Log line begins:
 
 ```
-[lantean/diagnostic source=svelte-adapter-ws component=runtime.lifecycle event=runtime.listen.failed severity=error] Failed to bind 
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.listener event=runtime.listen.failed severity=fatal] runtime.listen.failed: Could not bind the server listener on
 ```
 
 **Cause.** The configured address or port could not be bound, or the process lacks permission.
 
-**Consequence.** The process never becomes ready and exits with status 1.
+**Consequence.** The process never becomes ready. Single-process, the bind failure exits with status 1. Under CLUSTER_WORKERS only the failing worker exits; the process stays up while the supervisor respawns it.
 
-**Automatic recovery.** None inside the process. If a process manager restarts it, the replacement retries the same bind and a persistent conflict fails the same way each time.
+**Automatic recovery.** None single-process. Under CLUSTER_WORKERS the supervisor respawns the failed worker and the replacement retries the same bind - under a persistent conflict each attempt fails the same way, each is charged against the slot's restart budget, and an exhausted slot takes the whole service down, the outcome ADAPTER-ERR-WORKER-RESTART-LIMIT documents from the other end.
 
-**What to do.** Check address availability, port conflicts, and bind permissions, then restart the process.
+**What to do.** Check address availability, port conflicts, and bind permissions, then restart the process. A repeating restart line for the same worker slot beside this one is the same conflict burning restart budget, not a second fault.
 
 Further reading: https://svti.me/listen-failed
 

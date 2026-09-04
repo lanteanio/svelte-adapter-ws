@@ -514,6 +514,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A failed bind says which address failed and why. It printed neither: the emit
+  built a record with a `dataClass` the observability schema does not declare,
+  so the record was rejected, the rejection was swallowed (telemetry must not
+  turn the failure it reports into a crash), and the last line before
+  `exit(1)` was a complaint about an invalid record shape. The catalog entry
+  could not have rescued it either - its problem prefix was null, which makes
+  the registry-built diagnostic unbuildable.
+
+  `ADAPTER-ERR-LISTEN` is now a composed fatal on `runtime.listener`, emitted
+  through the registry so the printed line and the catalog entry an operator
+  looks the ID up in are the same bytes, and it carries the real `errno`:
+  a port conflict reports `EADDRINUSE` against the host and port that failed.
+  Its consequence and recovery text describes the two modes this adapter has -
+  single-process, and a respawned worker under `CLUSTER_WORKERS`.
+
 - The built config module reports the resolved `PROXY_PROTOCOL` value. It read
   the variable only to refuse `PROXY_PROTOCOL=1` and exported nothing, so the
   one eval-time knob every other one exposes was absent from the config
