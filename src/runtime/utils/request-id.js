@@ -13,6 +13,18 @@
  * @param {string | undefined | null} value
  * @returns {string | null}
  */
+/**
+ * String-keyed slot used to carry the per-connection requestId from the
+ * upgrade to the open hook. A string rather than a Symbol because it has to
+ * survive the userData handed across the upgrade, and the open hook deletes it
+ * after promoting the value into the Symbol-keyed platform clone, so it never
+ * appears in userData while an app hook is running.
+ *
+ * Declared here, where the rest of the request-id rules live, so the runtime
+ * and the harness cannot each hold their own spelling of one wire slot.
+ */
+export const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';
+
 export function resolveRequestId(value) {
 	if (typeof value !== 'string') return null;
 	const trimmed = value.trim();
