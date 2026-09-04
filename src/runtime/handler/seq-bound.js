@@ -12,7 +12,7 @@
 import { createSeqBound } from '../utils/seq-bound.js';
 import { TOPIC_SEQS_WARN_THRESHOLD } from '../utils/caps.js';
 import { numSubscribers } from './topic-registry.js';
-import { topicSeqs } from './state.js';
+import { topicSeqs, maxSeenSeq } from './state.js';
 import { resumeTopicHeld } from './resume-capture.js';
 import { maybeWarnTopicRegistry } from './pressure-metrics.js';
 
@@ -28,14 +28,6 @@ function resolveCapacity() {
 }
 
 const CAPACITY = resolveCapacity();
-
-/**
- * The divergence detector's max-seen registry arms with the state-hash lane;
- * until then the bound keeps eviction consistent across both maps by
- * tracking this one empty.
- * @type {Map<string, number>}
- */
-export const maxSeenSeq = new Map();
 
 /**
  * The shared bound over the runtime's seq registries, threaded into every

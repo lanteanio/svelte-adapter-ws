@@ -31,14 +31,14 @@ import {
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
 import { readAssertionCounts, fatal } from '../utils/assertions.js';
-import { now, monotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
+import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
-import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { capCounts, counters, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
 import { seqBound } from './seq-bound.js';
 import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, markAdmitted, admittedByBatch } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
@@ -333,6 +333,16 @@ function publish(topic, event, data, options) {
 	}
 
 	const seq = stampSeqValue(seqOption, topicSeqs, topic, seqBound);
+	// Track the highest observed seq for this topic. An explicit numeric
+	// authority takes the monotone-max guard, because several workers can
+	// issue those and they arrive here in any order; the in-memory counter
+	// skips the compare and keeps the membership report. Skipped when
+	// stamping is off, so a { seq: false }-only topic never enters the
+	// convergence comparison at all.
+	if (seq !== null) {
+		if (typeof seqOption === 'number' || typeof seqOption === 'bigint') recordSeen(maxSeenSeq, topic, seq, seqBound);
+		else recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
+	}
 	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
 		_warnedTopicSeqCardinality = true;
 		console.warn(adapterConsoleLine(
@@ -620,6 +630,12 @@ export const platform = {
 				(excludedRecipient(msgExcludes[i], m.topic) ? recipients - 1 : recipients) > 0
 			);
 			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
+			// See publish(): the compare-free record for the monotonic in-memory
+			// counter, the monotone-max guard for an explicit numeric seq.
+			if (seq !== null) {
+				if (typeof msgSeqs[i] === 'number' || typeof msgSeqs[i] === 'bigint') recordSeen(maxSeenSeq, m.topic, seq, seqBound);
+				else recordStampedSeen(maxSeenSeq, m.topic, seq, seqBound);
+			}
 			events[i] = {
 				topic: m.topic,
 				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null),
@@ -757,6 +773,18 @@ export const platform = {
 		const seq = isRelay
 			? (typeof relaySeq === 'number' ? relaySeq : null)
 			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
+		// Track the highest observed seq for this topic. An explicit numeric
+		// authority takes the monotone-max guard, because several workers can
+		// issue those and they arrive here in any order; the in-memory counter
+		// skips the compare and keeps the membership report. Skipped when
+		// stamping is off, so a { seq: false }-only topic never enters the
+		// convergence comparison at all.
+		// Skipped on the relay path: relayPublish already recorded the carried
+		// seq through the guard the reorder-prone receive path needs.
+		if (!isRelay && seq !== null) {
+			if (typeof seqOption === 'number' || typeof seqOption === 'bigint') recordSeen(maxSeenSeq, topic, seq, seqBound);
+			else recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
+		}
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) {
 			counters.publishCountWindow++;
@@ -976,6 +1004,10 @@ export const platform = {
 		const envelopes = new Array(count);
 		let batchBytes = 0;
 		let batchWireBytes = 0;
+		// The batch records ONE watermark when every entry drew the counter -
+		// they are monotone, so the highest is the only one that moves it - and
+		// falls back to a per-entry pass when an explicit authority is mixed in.
+		let highestSeq = null;
 		for (let i = 0; i < count; i++) {
 			// An explicit entry seq is authoritative for its entry; every other
 			// entry draws from the batch options, so `{ seq: false }` - the one
@@ -984,12 +1016,26 @@ export const platform = {
 			// and relaying the forked number cluster-wide.
 			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic, seqBound) ?? 0;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
+			if (seqs[i] !== 0 && (highestSeq === null || seqs[i] > highestSeq)) highestSeq = seqs[i];
 			batchBytes += envelopes[i].length;
 			// Per-entry wire bytes: the envelope's UTF-8 encoding times the
 			// recipients this entry actually reaches (its exclusion deducted).
 			// Charged at the envelope size because the binary batch frame is
 			// recipient-specific, the same rule as publishWire's stateful walk.
 			batchWireBytes += chargeableBytes(envelopes[i], recipients - (exDeduct === null ? 0 : exDeduct[i]));
+		}
+		// An explicit per-entry authority can interleave with a sibling
+		// worker's numbers, so those entries go through the monotone-max
+		// guard in entry order, as N separate calls would have. A batch
+		// whose entries all drew the counter moves the watermark once.
+		if (sawEntrySeq) {
+			for (let i = 0; i < count; i++) {
+				if (seqs[i] === 0) continue;
+				if (typeof entrySeqs[i] === 'number') recordSeen(maxSeenSeq, topic, seqs[i], seqBound);
+				else recordStampedSeen(maxSeenSeq, topic, seqs[i], seqBound);
+			}
+		} else if (highestSeq !== null) {
+			recordStampedSeen(maxSeenSeq, topic, highestSeq, seqBound);
 		}
 		// One charge for the whole batch - N logical publishes under one
 		// admission decision - taken only after every entry has stamped and
@@ -1562,6 +1608,7 @@ export const platform = {
 		counters.publishCountWindow++;
 		counters.publishOutcomeHook?.(recipients > 0);
 		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
+		if (seq !== null) recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
 		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));
 		if (resumeCaptureActive()) captureResumeFrame(topic, env);
@@ -1825,6 +1872,17 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 	// the dying frame would still hand the garbage to every local subscriber -
 	// the one outcome the escalation exists to prevent.
 	if (typeof topic !== 'string' || typeof envelope !== 'string' || envelope.length === 0) return;
+	// The carried seq advances this worker's observed watermark whether or
+	// not it has a local subscriber, so every worker that receives the frame
+	// converges. recordSeen ignores a non-number seq, which is how a
+	// { seq: false } topic stays out of the comparison.
+	recordSeen(maxSeenSeq, topic, seq, seqBound);
+	// A maximum only ever reveals a lost TAIL. The per-origin relay ordinal
+	// is dense by construction, so a hole in it is a dropped frame and this
+	// worker can decide that alone.
+	if (streamTracking.enabled) {
+		recordOriginStream(originStreams, topic, origin, ord, birth, relayAttach.at, processMonotonicNow);
+	}
 	// Codec-aware relay: a set `capability` always travels with its payload
 	// and only for a codec the origin found in its registry; the gate keys on
 	// `capability` alone, not on `data`, because a codec may legitimately
@@ -1883,6 +1941,18 @@ export function relayPublishBatched(events, compress) {
 		});
 		if (!topicOk || !envOk) return;
 	}
+	// The batch arrived as ONE frame but carries a publish per event, so each
+	// event advances its own topic's watermark and its own origin stream -
+	// ungated by the fan-out decision below and by whether this worker holds
+	// a local subscriber.
+	for (let i = 0; i < events.length; i++) {
+		recordSeen(maxSeenSeq, events[i].topic, events[i].seq, seqBound);
+		if (streamTracking.enabled) {
+			recordOriginStream(originStreams, events[i].topic, events[i].origin, events[i].ord, events[i].birth,
+				relayAttach.at, processMonotonicNow);
+		}
+	}
+
 	const compressGated = WS_COMPRESSION_ON && compress === true;
 
 	const firstTopic = events[0].topic;

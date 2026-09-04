@@ -1166,6 +1166,9 @@
 		"file": "test/smooth-wire.test.js"
 	},
 	{
+		"file": "test/state-convergence.test.js"
+	},
+	{
 		"file": "test/state-hash-detector.test.js"
 	},
 	{
