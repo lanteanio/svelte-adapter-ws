@@ -1212,6 +1212,9 @@
 		"file": "test/webhooks.test.js"
 	},
 	{
+		"file": "test/websocket-option-contract.test.js"
+	},
+	{
 		"file": "test/ws-handler-resolution.test.js",
 		"adaptations": [
 			{

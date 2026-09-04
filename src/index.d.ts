@@ -540,6 +540,32 @@ export interface WebSocketOptions {
 	primaryInit?: string;
 	/** Cluster worker roles: how many of the CLUSTER_WORKERS total are compute workers (no listen socket). */
 	workers?: { compute?: number };
+
+	/**
+	 * Interval in milliseconds for the cross-worker state-hash reporter
+	 * (clustered mode only). When greater than `0`, each worker periodically
+	 * folds a structure-only projection of its per-topic delivered-sequence
+	 * map into a single 32-bit hash and reports it to the primary, which
+	 * compares the live workers' hashes per primary-assigned epoch and logs a
+	 * `divergence.detected` event (and increments the `state_divergence_total`
+	 * metric when a `metrics` registry is configured) if they disagree at rest.
+	 *
+	 * Divergence means a publish that reached some workers did not reach
+	 * another - a relay drop, partial fan-out, or a frame one worker failed to
+	 * apply - which a single-worker deployment can never have. Only the integer
+	 * hash and the worker's thread id cross the thread boundary: no topic
+	 * strings, no payloads, no client identity.
+	 *
+	 * Off by default (`0`): no reporter timer is scheduled and the path costs
+	 * nothing. In single-process mode the reporter never runs regardless of
+	 * this value (there are no other workers to compare against). The detection
+	 * is observe-only; the optional auto-restart of a diverged worker is a
+	 * separate primary-level switch (`RESTART_ON_STATE_DIVERGENCE=1`) that
+	 * defaults off. `30000` (30s) is a sensible enabled value.
+	 *
+	 * @default 0 (disabled)
+	 */
+	stateHashIntervalMs?: number;
 }
 
 export interface AdapterOptions {

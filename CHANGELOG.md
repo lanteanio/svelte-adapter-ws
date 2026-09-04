@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `websocket.stateHashIntervalMs`: the cross-worker state-hash reporter, which
+  the build previously refused. Above `0` and under `CLUSTER_WORKERS`, each
+  worker folds a structure-only projection of its per-topic delivered-sequence
+  map into one 32-bit hash on a fixed period and reports it inward; the primary
+  buckets the reports by an epoch it assigns itself and judges a bucket once
+  every live worker has reported into it. A disagreement means a publish reached
+  some workers and not another - a relay drop, a partial fan-out, a frame one
+  worker failed to apply - which a single-process deployment cannot have.
+
+  Only the two integers and a thread id cross the thread boundary: no topic
+  strings, no payloads, no client identity. The log line names an opaque
+  diagnostic id and nothing else; the per-worker evidence behind it is a keyed
+  high-water summary, collected only after the aggregate fires and readable
+  through `platform.diagnostic(id)`, whose topic identifiers are HMACs under a
+  key that lives for one primary lifetime and never enters a log, a metric or a
+  response.
+
+  The comparison is split by activity. Topics whose sequence moved recently
+  carry the restart-authorized vote; quiet topics ride a separate log-only hash,
+  because a respawned worker legitimately holds none of its siblings' quiet
+  history and, with nobody publishing those topics, can never re-learn it.
+  Detection is observe-only by default: `RESTART_ON_STATE_DIVERGENCE=1` is a
+  separate primary-level switch that asks each minority worker to exit so its
+  replacement re-converges, and the quiet lane never restarts anyone whatever it
+  is set to. `STATE_HASH_EPOCH_MS` optionally overrides the bucket width, which
+  otherwise follows the period each worker advertises.
+
+  Off by default (`0`): no timer is scheduled and the path costs nothing. Each
+  worker jitters its FIRST report and then holds a fixed period, so the fleet is
+  spread without drifting out of the shared bucket.
+
 - `websocket.metrics`: transport, admission and posture observability, which
   the build previously refused. A module path (not a live object - adapter
   options are serialized into the build) whose default, `metrics` or

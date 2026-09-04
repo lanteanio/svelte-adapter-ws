@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { env } from './env.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from './error-registry.js';
-import { monotonicNow, wallEpoch, setTimer, setIntervalTimer, clearTimer, clearIntervalTimer } from './runtime.js';
+import { monotonicNow, wallEpoch, setTimer, setIntervalTimer, clearTimer, clearIntervalTimer, randomUuid, randomBytes as runtimeRandomBytes } from './runtime.js';
+import { createStateHashDetector } from './state-hash-detector.js';
+import { buildDivergenceDiagnostic, DIVERGENCE_DIAGNOSTIC_LIMIT, DIVERGENCE_TOPIC_LIMIT } from './divergence-diagnostics.js';
 import { createRelayRingBuffer, RingWriter, RingReader, decodeRelayFrame } from './relay-ring.js';
 import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible, relayRingEligible } from './relay-spill-policy.js';
 import { createRestartSupervisor } from './restart-supervisor.js';
@@ -120,6 +122,19 @@ const relay_frame_max_bytes = parseIntEnv(
 	env('CLUSTER_RELAY_MAX_FRAME_KB', String(Math.floor(relay_pending_max_bytes / 1024))),
 	0
 ) * 1024;
+
+// Cross-worker state-hash divergence ACTION gate. The primary owns
+// worker.terminate() and never sees the per-build websocket options, so the
+// restart action is threaded as a primary-level env var, like the other
+// cluster knobs above. Default off: a detected divergence is logged and
+// counted (via a notice the worker increments) but no worker is auto-killed.
+const restart_on_state_divergence = env('RESTART_ON_STATE_DIVERGENCE', '') === '1';
+// Optional primary override for the epoch-bucket width used to group worker
+// hash reports. Unset (0) derives it from each worker's advertised reporting
+// interval - twice the interval, so one fixed-period round from every worker
+// lands in one bucket - and it is set only to tune the bucketing without
+// rebuilding the workers.
+const state_hash_epoch_ms = parseIntEnv('STATE_HASH_EPOCH_MS', env('STATE_HASH_EPOCH_MS', '0'), 0);
 
 const is_primary = cluster_workers && isMainThread;
 
@@ -354,6 +369,66 @@ if (is_primary) {
 
 	/** @type {Map<import('node:worker_threads').Worker, WorkerMeta>} */
 	const workers = new Map();
+
+	// Cross-worker state-hash divergence detector. Buckets the workers' periodic
+	// hash reports by a primary-assigned monotonic epoch and judges a bucket once
+	// every live worker has reported into it. Inert until workers actually report
+	// - which they only do when stateHashIntervalMs is configured - so an
+	// unconfigured cluster never pays for it beyond an empty Map.
+	const stateHashDetector = createStateHashDetector({ epochMs: state_hash_epoch_ms > 0 ? state_hash_epoch_ms : 60000, monotonicNow });
+	// One random key is shared with every worker and every respawn in this
+	// primary lifetime. Workers use it only to HMAC topic names for a cold-path
+	// diagnostic snapshot; the key itself never crosses back into logs, metrics
+	// or the admin response. A restart rotates all stream identifiers.
+	const divergenceDiagnosticKey = runtimeRandomBytes(32);
+	/** @type {Map<string, { epoch: number, observedAt: number, expectedThreadIds: number[], minorityThreadIds: number[], reports: Map<number, any>, timer: any }>} */
+	const divergenceCollections = new Map();
+	/** @type {Map<string, any>} */
+	const completedDivergenceDiagnostics = new Map();
+
+	/** Finish one collection with complete or explicitly-partial evidence. */
+	function finishDivergenceCollection(diagnosticId) {
+		const entry = divergenceCollections.get(diagnosticId);
+		if (!entry) return;
+		divergenceCollections.delete(diagnosticId);
+		clearTimer(entry.timer);
+		const diagnostic = buildDivergenceDiagnostic({
+			diagnosticId,
+			epoch: entry.epoch,
+			observedAt: entry.observedAt,
+			expectedThreadIds: entry.expectedThreadIds,
+			minorityThreadIds: entry.minorityThreadIds,
+			reports: [...entry.reports.values()]
+		});
+		completedDivergenceDiagnostics.delete(diagnosticId);
+		completedDivergenceDiagnostics.set(diagnosticId, diagnostic);
+		while (completedDivergenceDiagnostics.size > DIVERGENCE_DIAGNOSTIC_LIMIT) {
+			completedDivergenceDiagnostics.delete(completedDivergenceDiagnostics.keys().next().value);
+		}
+		for (const [target] of workers) {
+			try { target.postMessage({ type: 'state-divergence-diagnostic', diagnostic }); } catch { /* worker already exiting */ }
+		}
+	}
+
+	/** Begin the bounded second stage after the aggregate detector fires. */
+	function beginDivergenceCollection(divergence, liveThreadIds) {
+		if (divergenceCollections.size >= DIVERGENCE_DIAGNOSTIC_LIMIT) {
+			finishDivergenceCollection(divergenceCollections.keys().next().value);
+		}
+		const diagnosticId = randomUuid();
+		const entry = {
+			epoch: divergence.epoch,
+			observedAt: wallEpoch(),
+			expectedThreadIds: liveThreadIds.slice().sort((a, b) => a - b),
+			minorityThreadIds: divergence.minorityThreadIds.slice(),
+			reports: new Map(),
+			timer: null
+		};
+		divergenceCollections.set(diagnosticId, entry);
+		entry.timer = setTimer(() => finishDivergenceCollection(diagnosticId), 1000);
+		if (entry.timer?.unref) entry.timer.unref();
+		return diagnosticId;
+	}
 
 	// Per-slot crash-restart budgets. A cluster has a fixed set of worker
 	// slots (io_count io + compute_count compute); the supervisor keeps each
@@ -598,7 +673,8 @@ if (is_primary) {
 				// sender-side ceiling is derived from the primary's spill
 				// budget, and every worker must apply the SAME one or a large
 				// publish is refused by some siblings and relayed by others.
-				relayMaxFrameBytes: relay_frame_max_bytes
+				relayMaxFrameBytes: relay_frame_max_bytes,
+				divergenceDiagnosticKey
 			}
 		});
 		// lastHeartbeat starts at 0 - the worker is confirmed alive only after
@@ -678,6 +754,14 @@ if (is_primary) {
 			meta.ringReader.start();
 		}
 		workers.set(worker, meta);
+		const replayDivergenceDiagnostics = () => {
+			// Ready means the handler graph has installed its diagnostic listener.
+			// Replaying earlier would let the boot-time control backlog consume an
+			// otherwise-unknown message before that listener exists.
+			for (const diagnostic of completedDivergenceDiagnostics.values()) {
+				worker.postMessage({ type: 'state-divergence-diagnostic', diagnostic });
+			}
+		};
 
 		worker.on('message', (msg) => {
 			const meta = workers.get(worker);
@@ -708,6 +792,7 @@ if (is_primary) {
 					sdReadyOnce();
 				}
 				if (meta?.slot) restartSupervisor.noteReady(meta.slot);
+				replayDivergenceDiagnostics();
 			} else if (msg.type === 'heartbeat-ack') {
 				// Liveness only; the clock already advanced above.
 			} else if (msg.type === 'posture') {
@@ -750,6 +835,103 @@ if (is_primary) {
 				// batch envelope, instead of degrading to N individual relays.
 				for (const [w, m] of workers) {
 					if (w !== worker && relayEligible(m)) w.postMessage(msg);
+				}
+			} else if (msg.type === 'state-hash') {
+				// A worker's periodic structure-only state hash. Stamp it with the
+				// primary's own epoch - which dodges worker wall-clock skew - and
+				// compare once every live worker has reported into that epoch. Only
+				// the integer hashes and a thread id crossed the boundary.
+				//
+				// Live = a worker that has confirmed itself alive at least once; a
+				// still-starting worker (lastHeartbeat 0) can neither stall the
+				// comparison nor be judged a phantom minority.
+				const liveThreadIds = [];
+				for (const [w, m] of workers) if (m.lastHeartbeat > 0) liveThreadIds.push(w.threadId);
+				// Bucket width: an explicit primary override, else twice the worker's
+				// advertised reporting interval, so one fixed-period round from every
+				// worker lands in one bucket. The reporter jitters only its first fire,
+				// which is what makes that true.
+				const epochMs = state_hash_epoch_ms > 0
+					? state_hash_epoch_ms
+					: 2 * (msg.intervalMs > 0 ? msg.intervalMs : 30000);
+				// The QUIET lane first: a disagreement over topics nobody is publishing
+				// is expected worker lifecycle - a respawn holds none of its siblings'
+				// quiet history and can never re-learn it - so it is a deduplicated
+				// log-only diagnostic and NEVER a restart trigger. Only counts and an
+				// epoch cross into the record.
+				if (typeof msg.quietHash === 'number') {
+					const quietDivergence = stateHashDetector.recordQuiet(msg.threadId, msg.quietHash, liveThreadIds, epochMs);
+					if (quietDivergence) {
+						emitOperationalEvent({
+							source: 'svelte-adapter-ws',
+							component: 'runtime.divergence',
+							event: 'divergence.quiet-state',
+							severity: 'warn',
+							dataClass: 'operational',
+							message: 'Workers disagree about quiet-topic history; this is expected after a worker restart and never triggers a restart.',
+							attributes: {
+								epoch: quietDivergence.epoch,
+								workers: liveThreadIds.length,
+								minorityWorkers: quietDivergence.minorityThreadIds.length
+							}
+						});
+					}
+				}
+				const divergence = stateHashDetector.record(msg.threadId, msg.hash, liveThreadIds, epochMs);
+				if (divergence) {
+					const minoritySet = new Set(divergence.minorityThreadIds);
+					const diagnosticId = beginDivergenceCollection(divergence, liveThreadIds);
+					// The production signal references ONLY an opaque diagnostic id.
+					// Per-thread hashes, roles and keyed sequence summaries are retained
+					// behind the authenticated lookup, not copied into logs.
+					emitOperationalEvent({
+						source: 'svelte-adapter-ws',
+						component: 'runtime.divergence',
+						event: 'divergence.detected',
+						severity: 'error',
+						dataClass: 'pseudonymous',
+						message: 'Cross-worker state divergence was detected; evidence is retained behind the authenticated diagnostic lookup.',
+						attributes: { diagnosticId }
+					});
+					// Notice each live worker so it increments its own registry counter
+					// with its role - the primary holds no registry over the thread
+					// boundary. Epoch-deduped at the detector, so one increment per role
+					// per divergent epoch.
+					for (const [w, workerMeta] of workers) {
+						if (!liveThreadIds.includes(workerMeta.threadId)) continue;
+						const role = minoritySet.has(workerMeta.threadId) ? 'minority' : 'majority';
+						w.postMessage({
+							type: 'state-divergence',
+							epoch: divergence.epoch,
+							role,
+							diagnosticId,
+							topicLimit: DIVERGENCE_TOPIC_LIMIT
+						});
+					}
+					// Action gate, default OFF: only when explicitly enabled does the
+					// primary terminate the minority worker(s); the existing exit handler
+					// respawns them under the restart budget so they reconnect and
+					// re-converge. Off means log and count, never auto-kill.
+					if (restart_on_state_divergence) {
+						for (const [w] of workers) {
+							if (minoritySet.has(w.threadId)) {
+								console.error('[primary] asking minority worker %d to exit to re-converge (RESTART_ON_STATE_DIVERGENCE=1)', w.threadId);
+								requestWorkerExit(w, 1);
+							}
+						}
+					}
+				}
+			} else if (msg.type === 'state-divergence-detail') {
+				const entry = divergenceCollections.get(msg.diagnosticId);
+				const reporter = meta?.threadId;
+				if (entry && Number.isInteger(reporter) && entry.expectedThreadIds.includes(reporter)) {
+					entry.reports.set(reporter, {
+						threadId: reporter,
+						summary: msg.summary
+					});
+					if (entry.reports.size === entry.expectedThreadIds.length) {
+						finishDivergenceCollection(msg.diagnosticId);
+					}
 				}
 			} else if (msg.type === 'metrics-request') {
 				// A worker's scrape route wants the cluster-wide picture. Ask every
@@ -823,6 +1005,10 @@ if (is_primary) {
 			// otherwise hold the deployment at siege for as long as the primary
 			// runs, and the aggregate is the WORST worker by design.
 			postureAggregate.retire(deadThreadId);
+			// And leaves the hash comparison. A thread that will never report
+			// again must not hold an epoch bucket open, or the lane stops judging
+			// the workers that are still alive.
+			stateHashDetector.forget(deadThreadId);
 			// A dead worker will never answer an open collection. Counting it off
 			// here - keyed, so a worker that already answered is not counted twice -
 			// lets the collection finish now instead of waiting out its full

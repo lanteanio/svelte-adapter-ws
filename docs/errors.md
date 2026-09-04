@@ -242,6 +242,42 @@ Log line begins:
 
 **What to do.** Check whether topic names embed unbounded identifiers (per-user, per-request). The line fires once per process, so it will not tell you whether cardinality later fell or kept climbing - the naming scheme is what settles that. Unbounded cardinality is a slow leak rather than a spike, so act at the warning rather than at exhaustion.
 
+## ADAPTER-ERR-DIVERGENCE
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.divergence event=divergence.detected severity=error] Cross-worker state divergence was detected; evidence is retained behind the authenticated diagnostic lookup.
+```
+
+**Cause.** Workers that should hold identical state reported different state hashes.
+
+**Consequence.** Clients on different workers can observe different state for the same topic. The log line carries only an opaque diagnostic id, because per-thread hashes and keyed sequence summaries are identifier-bearing.
+
+**Automatic recovery.** None by default: divergence is reported, never silently reconciled. With RESTART_ON_STATE_DIVERGENCE=1 the primary asks each minority worker to exit, and the exit handler respawns it under the same slot restart budget as any other worker exit, so the replacement reconnects and re-converges - automatic per incident, and only when that knob is explicitly on. The quiet lane never restarts anyone (see ADAPTER-ERR-DIVERGENCE-QUIET).
+
+**What to do.** Resolve the diagnosticId attribute to its retained per-worker evidence, then treat it as a correctness incident. In an adapter-only deployment that lookup is `platform.diagnostic(id)`; the authenticated admin HTTP route exists only where the realtime layer is configured to serve one.
+
+## ADAPTER-ERR-DIVERGENCE-QUIET
+
+Severity: warn
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.divergence event=divergence.quiet-state severity=warn] Workers disagree about quiet-topic history; this is expected after a worker restart and never triggers a restart.
+```
+
+**Cause.** The cross-worker comparison is split by activity: topics whose sequence moved recently carry the restart-authorized vote, while quiet topics ride this log-only lane. A worker that restarted holds none of its siblings' quiet-topic history, and with nobody publishing those topics it can never re-learn it, so the quiet hashes legitimately disagree. The report requires the same disagreement to persist across consecutive comparison epochs, so a one-round classification skew between report phases never logs.
+
+**Consequence.** No effect on current traffic: nothing is being delivered on a quiet topic by definition. The disagreement can also be the trace of a PAST loss - a final frame one worker missed on a topic that then went quiet surfaces here rather than in the restart lane - so it is visibility without kill authority, not proof of health. The record carries only counts and an epoch.
+
+**Automatic recovery.** The disagreement is reported once per distinct constellation (deduplicated), re-arms after agreement, and clears on its own when the quiet topics see traffic again or the cluster recycles together.
+
+**What to do.** Usually nothing: correlate with a recent worker restart. If no worker restarted and the constellation keeps changing, treat it as a lead for the active-lane divergence diagnostics instead.
+
 ## ADAPTER-ERR-RESUME-HOOK
 
 Severity: error

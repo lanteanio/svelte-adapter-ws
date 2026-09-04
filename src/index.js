@@ -71,9 +71,7 @@ export const KNOWN_WEBSOCKET_OPTION_KEYS = new Set([
  * loudly - a protection knob that silently does nothing is worse than an
  * error at the only moment anyone is watching.
  */
-const UNSHIPPED_WEBSOCKET_KEYS = [
-	'stateHashIntervalMs'
-];
+const UNSHIPPED_WEBSOCKET_KEYS = [];
 
 /**
  * Object-valued options whose CONTENTS are also checked, keyed by dotted path.
@@ -228,6 +226,10 @@ export function serializeWsOptions(websocket, adminPath) {
 		// The optional resource-growth trend auditor. Off by default: a trend
 		// signal is probabilistic, so it is opt-in rather than always paid for.
 		resourceGrowthAuditIntervalMs: websocket?.resourceGrowthAuditIntervalMs ?? 0,
+		// The cross-worker state-hash reporter cadence. Off by default: with no
+		// interval no timer is scheduled and the lane costs nothing, and in a
+		// single process it never runs whatever this says.
+		stateHashIntervalMs: websocket?.stateHashIntervalMs ?? 0,
 		// Publish-egress window and ceilings (plain numbers, so the section
 		// rides the JSON payload cleanly). The tenant resolver travels
 		// separately as the handler module's egressTenantOf export - the one

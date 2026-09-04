@@ -81,7 +81,9 @@ describe('a clustered worker reports its posture inward instead of binding', () 
 		expect(clustered).toContain(
 			"parentPort.postMessage({ type: 'posture', threadId, path: exportPath, line: postureLine() });"
 		);
-		expect(realtimeSource).toContain("import { parentPort, threadId } from 'node:worker_threads';");
+		// The report is keyed by the reporting thread, so the import naming it is
+		// what the pin is about - the list beside it grows with other lanes.
+		expect(realtimeSource).toMatch(/import \{[^}]*\bparentPort\b[^}]*\bthreadId\b[^}]*\} from 'node:worker_threads';/);
 		// A throw here would take down the sample that called it. The primary
 		// being gone is already reported by the cadence stopping.
 		expect(clustered).toMatch(/}\s*catch\s*{/);

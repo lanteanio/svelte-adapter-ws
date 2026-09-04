@@ -144,11 +144,22 @@ describe('adapter factory options', () => {
 		const defaults = serializeWsOptions({}, '/__realtime');
 		expect(defaults.consistencyAuditIntervalMs).toBe(5000);
 		expect(defaults.resourceGrowthAuditIntervalMs).toBe(0);
-		// The clustered state-hash lane still refuses.
-		for (const key of ['stateHashIntervalMs']) {
-			expect(() => adapter({ websocket: { [key]: '/x' } }), key)
-				.toThrow(/is not supported by svelte-adapter-ws/);
-		}
+		// The clustered state-hash reporter: off unless an interval is given,
+		// carried into the build when it is, and judged by the same interval
+		// guard every other cadence takes rather than by a bespoke check.
+		expect(defaults.stateHashIntervalMs).toBe(0);
+		expect(serializeWsOptions({ stateHashIntervalMs: 30_000 }, '/__realtime').stateHashIntervalMs)
+			.toBe(30_000);
+		// Judged where the section is serialized into the build, like every
+		// other bounded cadence: a value the reporter could not read would
+		// otherwise leave the lane silently off.
+		expect(() => serializeWsOptions({ stateHashIntervalMs: '/x' }, '/__realtime'))
+			.toThrow(/websocket.stateHashIntervalMs must be a number/);
+		// Nothing is refused as unshipped any more, and the refusal path itself
+		// still has to work: an empty list must not be a list that accepts
+		// anything, so the unknown-key walk is what answers for a typo.
+		expect(unknownWebsocketOptionKeys({ stateHashIntervalMS: 30_000 }))
+			.toEqual(['stateHashIntervalMS']);
 	});
 
 	it('accepts a metrics module path and refuses anything that is not one', () => {

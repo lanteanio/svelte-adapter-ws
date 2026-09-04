@@ -34,7 +34,7 @@ import {
 import { emitPressureMetricTelemetry, probeOsPressureSources } from '../utils/os-pressure.js';
 import { countOpenFds, readFdLimits } from '../utils/fd-limit.js';
 import { PRESSURE_REASON_CODES } from '../observability-manifest.js';
-import { parentPort, threadId } from 'node:worker_threads';
+import { parentPort, threadId, workerData } from 'node:worker_threads';
 import { isOriginAllowed, isAuthOriginAccepted, describeUnsafeSameOriginConfig } from '../utils/origin.js';
 import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
@@ -63,14 +63,17 @@ import {
 	createLeaseState, leaseGrantFrame, leaseReportedSaturation,
 	controlFrameTooLargeFrame, DEFAULT_GRANT
 } from '../wire.js';
-import { now, monotonicNow, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
+import { now, monotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import {
-	capCounts, counters, decodeCache, envelopePrefixCache, lastPublishWarnAt, pressureSnapshot,
-	staticCache, subscribeAuth, topicPublishStats, wsConnections, wsWrappers
+	capCounts, counters, decodeCache, divergenceDiagnostics, envelopePrefixCache, lastPublishWarnAt,
+	maxSeenSeq, pressureSnapshot, staticCache, subscribeAuth, topicPublishStats, wsConnections, wsWrappers
 } from './state.js';
+import { seqBound } from './seq-bound.js';
+import { computeStateHash, partitionActiveTopics } from '../invariants.js';
+import { DIVERGENCE_TOPIC_LIMIT, summarizeTopicSequences } from '../divergence-diagnostics.js';
 import { detachWireStates } from './wire-state.js';
 import { normalizePressureThresholds, startPressureSampler } from './pressure.js';
 import { configureEgress } from './egress-budget.js';
@@ -199,6 +202,103 @@ if (CONSISTENCY_AUDIT_INTERVAL_MS > 0) {
 	});
 	counters.consistencyAuditor = auditor;
 	auditor.start();
+}
+
+// - Cross-worker state-hash reporter (clustered mode only) ------------------
+// On a slow, seam-jittered interval each worker folds its observed-seq map
+// into one structure-only integer hash and reports it to the primary, which
+// compares the live workers' hashes per primary-assigned epoch. Only the
+// integer hashes and this thread id cross the boundary - no topic strings and
+// no payloads. Gated on parentPort (there is nobody to disagree with in a
+// single process) AND a positive interval (off by default), so an
+// unconfigured deployment schedules no timer and pays nothing.
+const STATE_HASH_INTERVAL_MS = wsOptions.stateHashIntervalMs ?? 0;
+if (parentPort && STATE_HASH_INTERVAL_MS > 0) {
+	// Reporter-side activity tracking, diffed per tick against the previous
+	// snapshot so the publish and relay hot paths pay nothing for the split.
+	// The two mirrors hold the same topic strings by reference and are bounded
+	// by maxSeenSeq's own cardinality: the partition prunes entries whose topic
+	// has left the live map, so the registry cap is these mirrors' cap too.
+	let reporterTick = 0;
+	/** @type {Map<string, number>} */
+	const reporterPrevSeqs = new Map();
+	/** @type {Map<string, number>} */
+	const reporterLastChanged = new Map();
+	// The registry bound may forget a subscriber-free topic to stay inside its
+	// ceiling, and a sibling that still holds it then reports a different hash.
+	// That is only safe while the forgotten topic is QUIET - the quiet lane logs
+	// a disagreement, the active lane can restart a worker over one - so the
+	// reporter lends the bound its activity window and eviction never takes a
+	// topic whose seq moved inside it. A single-process worker never installs
+	// this: it has no sibling to disagree with.
+	seqBound.useQuietProbe((topic) => {
+		const changedAt = reporterLastChanged.get(topic);
+		return changedAt !== undefined && reporterTick - changedAt > 1;
+	});
+	const reportStateHash = () => {
+		reporterTick++;
+		// The comparison is split: ACTIVE topics (seq moved within the last tick
+		// window) carry the restart-authorized vote, because an active divergence
+		// either self-heals on the next publish or is real; QUIET topics ride a
+		// separate log-only hash, because a respawned worker legitimately holds
+		// none of its siblings' quiet history and a maximum over a topic nobody
+		// publishes can never re-converge.
+		const { active, quiet } = partitionActiveTopics(maxSeenSeq, reporterPrevSeqs, reporterLastChanged, reporterTick);
+		const hash = computeStateHash({ topicSeqs: active });
+		const quietHash = computeStateHash({ topicSeqs: quiet });
+		parentPort.postMessage({ type: 'state-hash', hash, quietHash, threadId, intervalMs: STATE_HASH_INTERVAL_MS });
+	};
+	// Spread the FIRST report by a per-worker jitter, drawn from the injectable
+	// RNG so a seeded harness reproduces the phase, then report on a FIXED
+	// period. A fixed period keeps every worker on one cadence, so the primary -
+	// which sizes its epoch bucket to comfortably exceed the period - reliably
+	// collects one report from each. Jittering the PERIOD would let workers
+	// drift out of any shared bucket, and a real divergence could then go
+	// undetected: a silent false negative in the one mechanism that exists to
+	// catch silent divergence.
+	const firstReportDelay = randomFloat() * STATE_HASH_INTERVAL_MS;
+	const stateHashKickoff = setTimer(() => {
+		reportStateHash();
+		const stateHashTimer = setIntervalTimer(reportStateHash, STATE_HASH_INTERVAL_MS);
+		if (stateHashTimer.unref) stateHashTimer.unref();
+	}, firstReportDelay);
+	if (stateHashKickoff.unref) stateHashKickoff.unref();
+
+	// The primary cannot touch a registry counter across the thread boundary, so
+	// on a detected divergence it posts a notice back and the worker raises its
+	// own. A separate listener from the relay one above: they never overlap on a
+	// message type, and Node allows many.
+	parentPort.on('message', (msg) => {
+		if (msg && msg.type === 'state-divergence') {
+			mStateDivergence?.inc({ role: msg.role === 'minority' ? 'minority' : 'majority' });
+			// The aggregate detector deliberately carries no topic names. Only
+			// after it fires does the primary request this bounded, keyed
+			// high-water snapshot. The shared random key lives in workerData and
+			// never appears in a message, log, metric or admin response.
+			if (
+				typeof msg.diagnosticId === 'string' && msg.diagnosticId.length <= 128 &&
+				workerData?.divergenceDiagnosticKey
+			) {
+				parentPort.postMessage({
+					type: 'state-divergence-detail',
+					diagnosticId: msg.diagnosticId,
+					threadId,
+					summary: summarizeTopicSequences(
+						maxSeenSeq,
+						workerData.divergenceDiagnosticKey,
+						// Honor the primary's requested bound, capped by this worker's
+						// own limit so a compromised primary message cannot inflate
+						// the snapshot.
+						Number.isInteger(msg.topicLimit) && msg.topicLimit > 0
+							? Math.min(msg.topicLimit, DIVERGENCE_TOPIC_LIMIT)
+							: DIVERGENCE_TOPIC_LIMIT
+					)
+				});
+			}
+		} else if (msg && msg.type === 'state-divergence-diagnostic') {
+			divergenceDiagnostics.set(msg.diagnostic);
+		}
+	});
 }
 
 const messageAdmission = createMessageAdmission(wsOptions.messageAdmission);
@@ -473,11 +573,10 @@ const gFdSoftLimit = FD_SOFT_LIMIT !== null && Number.isFinite(FD_SOFT_LIMIT)
 	))
 	: undefined;
 gFdSoftLimit?.set(FD_SOFT_LIMIT);
-// Cross-worker state-hash divergence detections. Registered, never incremented
-// here: the detector that would raise one lives with the state-hash lane, which
-// this runtime does not build. A registered required counter with no mirrored
-// value is a truthful zero-event family to the cluster merge, so registration
-// is the whole of what this signal honestly owes.
+// Cross-worker state-hash divergence detections. The primary owns no registry
+// across the thread boundary, so it posts a notice back and the worker raises
+// its own counter - once per divergent epoch per role, since the primary
+// judges each bucket once.
 const mStateDivergence = containMetricInstrument(METRICS?.counter(
 	'state_divergence_total', 'Cross-worker state hash divergence detections', ['role']
 ));

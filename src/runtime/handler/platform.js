@@ -38,7 +38,7 @@ import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
-import { capCounts, counters, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { capCounts, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
 import { seqBound } from './seq-bound.js';
 import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, markAdmitted, admittedByBatch } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
@@ -1346,7 +1346,17 @@ export const platform = {
 
 	trace,
 
-	diagnostic(_diagnosticId) { return undefined; },
+	/**
+	 * Resolve one bounded state-divergence record by opaque id. Topic names are
+	 * never present; affected streams are per-primary-lifetime HMAC ids. Do not
+	 * expose this method on a public route.
+	 *
+	 * @param {string} diagnosticId
+	 * @returns {any | null}
+	 */
+	diagnostic(diagnosticId) {
+		return divergenceDiagnostics.get(diagnosticId);
+	},
 
 	get pressure() {
 		// The LIVE snapshot object, mutated in place by the 1 Hz sampler.
