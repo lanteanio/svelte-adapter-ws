@@ -205,6 +205,7 @@
 		"acorn": "^8.18.0",
 		"esbuild": "^0.28.2",
 		"publint": "^0.3.22",
+		"svelte-adapter-ws": "file:.",
 		"typescript": "^6.0.3",
 		"vitest": "^4.0.18"
 	}

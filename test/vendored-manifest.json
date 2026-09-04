@@ -937,6 +937,138 @@
 		"file": "test/egress-ceilings.test.js"
 	},
 	{
+		"file": "test/fixture/package.json"
+	},
+	{
+		"file": "test/fixture/src/app.html"
+	},
+	{
+		"file": "test/fixture/src/handshake-vectors.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.attribution.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.batchleak.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.crlf.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.egress.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.grant.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.hookcrash.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.park.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.parkjoin.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.parkmany.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.presence.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.recover.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.respawner.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.resumespill.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.strict-grant.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.subbatch.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.subhook.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.workercrash.js"
+	},
+	{
+		"file": "test/fixture/src/metrics.js"
+	},
+	{
+		"file": "test/fixture/src/primary-init.js"
+	},
+	{
+		"file": "test/fixture/src/routes/+page.server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/+page.svelte"
+	},
+	{
+		"file": "test/fixture/src/routes/__leak/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/cursors/+page.svelte"
+	},
+	{
+		"file": "test/fixture/src/routes/metrics-direct/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/metrics/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/slow-hold/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/smooth/+page.svelte"
+	},
+	{
+		"file": "test/fixture/src/routes/ssr-echo/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/ssr-first-chunk-fail/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/ssr-stream-fail/+server.js"
+	},
+	{
+		"file": "test/fixture/src/tracing.invalid.js"
+	},
+	{
+		"file": "test/fixture/src/waiting-room.renderer.js"
+	},
+	{
+		"file": "test/fixture/static/.htpasswd"
+	},
+	{
+		"file": "test/fixture/static/.well-known/.nested-secret"
+	},
+	{
+		"file": "test/fixture/static/.well-known/probe.txt"
+	},
+	{
+		"file": "test/fixture/static/deep/.hidden.txt"
+	},
+	{
+		"file": "test/fixture/static/test.txt"
+	},
+	{
+		"file": "test/fixture/svelte.config.js"
+	},
+	{
+		"file": "test/fixture/variants.js"
+	},
+	{
+		"file": "test/fixture/vite.config.js"
+	},
+	{
 		"file": "test/groups-wire-policy.test.js",
 		"adaptations": [
 			{
@@ -951,6 +1083,44 @@
 	},
 	{
 		"file": "test/groups.test.js"
+	},
+	{
+		"file": "test/helpers/fixture-build.js"
+	},
+	{
+		"file": "test/helpers/global-setup.js"
+	},
+	{
+		"file": "test/helpers/handshake-vectors.js"
+	},
+	{
+		"file": "test/helpers/live-runtimes.js"
+	},
+	{
+		"file": "test/helpers/metrics-snapshot-worker.mjs"
+	},
+	{
+		"file": "test/helpers/real-runtime.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = createRequire(import.meta.url)('uWebSockets.js');\n} catch {\n\tuWS = null;\n}",
+				"ours": "let transport;\ntry {\n\ttransport = createRequire(import.meta.url)('ws');\n} catch {\n\ttransport = null;\n}"
+			},
+			{
+				"lead": " * uWS present? Suites gate with `hasUWS ? describe : describe.skip`.\n *\n * uWebSockets.js is an OPTIONAL native dependency, so a contributor without it\n * can still run the pure suites - that is why the gate exists and it stays.\n * What is not acceptable is the shape of the result: a skipped real-runtime\n * suite reports PASSED with zero assertions, which is indistinguishable from a\n * suite that ran and proved something. Every claim these suites make about\n * authorization, revocation and the handshake would be reported as verified by\n * a run that verified nothing.\n *\n * So where the result is a GATE rather than a convenience, absence is a hard\n * failure instead: `REQUIRE_UWS=1` demands it explicitly, and `CI` implies it.\n */\nexport const hasUWS = uWS !== null;",
+				"ours": " * Transport present? Suites gate with `hasUWS ? describe : describe.skip`.\n *\n * The name is the lead's and stays: the suites that read it are carried\n * verbatim from there, and what it means on both sides is \"the transport this\n * runtime needs is installed\". What differs is the answer. There the transport\n * is an optional NATIVE dependency a contributor may not have, so the gate is a\n * real convenience; here it is `ws`, an ordinary dependency of this package,\n * so the answer is always yes and every real-runtime suite RUNS.\n *\n * That matters more than it looks. A skipped suite reports PASSED with zero\n * assertions, which is indistinguishable from one that ran and proved\n * something - so a gate that could never be false here would quietly report\n * every claim about authorization, revocation and the handshake as verified by\n * a run that verified nothing.\n */\nexport const hasUWS = transport !== null;"
+			},
+			{
+				"lead": "\t\t'uWebSockets.js is not installed, so every real-runtime suite would skip and report ' +",
+				"ours": "\t\t'ws is not installed, so every real-runtime suite would skip and report ' +"
+			}
+		]
+	},
+	{
+		"file": "test/helpers/restore-globals.js"
+	},
+	{
+		"file": "test/helpers/stop-leaked-runtimes.js"
 	},
 	{
 		"file": "test/invariants.test.js"

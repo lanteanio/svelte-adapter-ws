@@ -1,0 +1,594 @@
+// Build-time adapter configurations for the fixture app.
+//
+// Options like `authorizeWireSubscribe` are baked into the generated handler at
+// build time, so a suite that needs one cannot reuse a build made without it.
+// Each variant therefore builds the same app with a different adapter config
+// into its OWN output directory, so the variants coexist instead of
+// overwriting each other and switching between them costs no rebuild.
+//
+// Shared by svelte.config.js (which config to build) and the test harness
+// (where the output lands), so the two cannot drift apart.
+
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * Where the posture-export variant listens. Exported so the suite connects to
+ * the same path the build baked in - the option is a build-time constant, so a
+ * second spelling in the test would be a second source of truth.
+ *
+ * A Windows named pipe never touches the filesystem and disappears with its
+ * owner; elsewhere a socket file under the temp directory, which the export
+ * unlinks on close.
+ */
+export const POSTURE_EXPORT_PATH = process.platform === 'win32'
+	? '\\\\.\\pipe\\svelte-adapter-ws-fixture-posture'
+	: join(tmpdir(), 'svelte-adapter-ws-fixture-posture.sock');
+
+export const FIXTURE_VARIANTS = {
+	// The long-standing default. Several suites already boot `build/`, so this
+	// entry must keep both its output directory and its options unchanged.
+	default: {
+		out: 'build',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Presence wired with the heartbeat off, for the two-real-client delivery
+	// suite. Its own build because the handler is a build-time choice and the
+	// default fixture deliberately wires only cursor: joining presence to the
+	// shared handler would put its subscribe hook in front of every suite that
+	// boots `build/`.
+	presence: {
+		out: 'build-presence',
+		handler: './src/hooks.ws.presence.js',
+		websocket: {
+			allowedOrigins: '*',
+			// Raised above the usual 100 because the delivery suite's load arm
+			// opens every connection from one loopback address, where the per-IP
+			// upgrade limit is effectively a global cap. A 429 here would cut a
+			// load ladder short and read as a delivery result rather than the
+			// admission refusal it is.
+			upgradeRateLimit: 2000
+		}
+	},
+
+	// Wire-subscribe authorization ARMED.
+	//
+	// Pointed at a handler whose `subscribe` export wraps a real groups-plugin
+	// side-effect hook and preserves its marker. Unlike an app authorization
+	// hook, that export does not take the topic decision back from the
+	// server-grant model, so the armed gate remains decisive while the fixture
+	// can exercise a plugin-owned namespace.
+	//
+	// The handler is named only through the adapter's `websocket.handler` (see
+	// svelte.config.js), which is what an app would do. That also makes this
+	// variant the regression test for the option surviving the Vite plugin: if
+	// the plugin stops honoring it, auto-discovery builds src/hooks.ws.js, its
+	// authorization hook stands the armed gate down, and the grant suites fail.
+	grant: {
+		out: 'build-grant',
+		handler: './src/hooks.ws.grant.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			authorizeWireSubscribe: true
+		}
+	},
+
+	// The SAME handler as `grant`, with the wire-subscribe gate DISARMED - the
+	// default posture for most applications, and the only one in which the
+	// client-facing subscription-cap sites are reachable at all.
+	//
+	// With the gate armed, a client frame naming an ungranted topic is refused by
+	// the authorization check before the landing cap can apply, so the cap sites
+	// behind it are dead code for the armed suites. Disarmed, a client `subscribe`
+	// and `subscribe-batch` frame reach them with the topic not yet held, which is
+	// what lets a probe prove no private ceiling sits in front of the canonical
+	// one. Its own output directory keeps `grant`'s armed options unchanged.
+	capwire: {
+		out: 'build-cap-wire',
+		handler: './src/hooks.ws.grant.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A configured tracing module with the wrong export shape. The build itself
+	// succeeds, then importing the generated server runtime must fail loudly
+	// instead of silently disabling tracing.
+	badtracing: {
+		out: 'build-bad-tracing',
+		handler: null,
+		tracing: './src/tracing.invalid.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Linux external-respawner drill: a dedicated handler can wedge exactly one
+	// clustered I/O worker on an authenticated test token. Its separate output
+	// keeps the fault-injection hook out of every ordinary fixture build.
+	respawner: {
+		out: 'build-respawner',
+		handler: './src/hooks.ws.respawner.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 0
+		}
+	},
+
+	// A message hook that crashes its own worker thread on an authenticated
+	// test token: the throw is scheduled off the request context, so nothing
+	// contains it and the worker's uncaught exception surfaces as the
+	// primary's worker 'error' event - the condition the cluster
+	// worker-error entry names. Its own output directory keeps the fault
+	// injection out of every ordinary fixture build.
+	workercrash: {
+		out: 'build-worker-crash',
+		handler: './src/hooks.ws.workercrash.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// The posture push-export ARMED, on the worker-crash handler. Both halves
+	// are needed by the same suite: the export's owner under `workers` is what
+	// is under test, and a worker exiting is what used to remove the live
+	// socket out from under a reader. Its own output directory because a bound
+	// export in every ordinary fixture build would have every suite racing for
+	// one path.
+	posture: {
+		out: 'build-posture',
+		handler: './src/hooks.ws.workercrash.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			postureExport: POSTURE_EXPORT_PATH
+		}
+	},
+
+	// Fault-injection hooks for the hook-failure entries: an authenticate
+	// that throws on an env-gated header, a resume that throws when the
+	// gap-fill names a token-keyed topic, and a message lane handing sendTo
+	// an async filter. Its own output directory keeps the fault lanes out
+	// of every ordinary fixture build.
+	hookcrash: {
+		out: 'build-hook-crash',
+		handler: './src/hooks.ws.hookcrash.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// An `attribution` export whose behavior is selected per connection through
+	// upgrade-header-derived userData: healthy ids, an unattributed default, an
+	// invalid id, and a throwing resolver. The refusal (close 1008 before the
+	// open hook) and the frozen accessor read are only observable against the
+	// real runtime's open callback. Its own output directory keeps the export
+	// out of every ordinary fixture build.
+	attribution: {
+		out: 'build-attribution',
+		handler: './src/hooks.ws.attribution.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Publish-egress ceilings ARMED against the real runtime, with the tenant
+	// resolver and per-connection attribution the tenant scope keys on. The
+	// window is long so a suite's refusal assertions cannot rotate out from
+	// under it on a slow runner; the ceilings are small so a handful of real
+	// publishes reach them. Its own output directory keeps the ceilings out of
+	// every ordinary fixture build - an armed budget would refuse unrelated
+	// suites' publish traffic.
+	egress: {
+		out: 'build-egress',
+		handler: './src/hooks.ws.egress.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			egress: {
+				windowMs: 60000,
+				topic: { messages: 3, deliveries: 4 },
+				tenant: { messages: 2 }
+			}
+		}
+	},
+
+	// Strict wire authorization with an ordinary application subscribe hook.
+	// The hook allows every topic, so only the server-grant half can refuse a
+	// cross-tenant raw subscribe - the hybrid permissive-hook bypass.
+	strictgrant: {
+		out: 'build-strict-grant',
+		handler: './src/hooks.ws.strict-grant.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			authorizeWireSubscribe: 'strict'
+		}
+	},
+
+	// Handshake header injection: the handler echoes a client-supplied value
+	// into a response header on the 101, using the duck-typed shape that skips
+	// the helper's construction-time validation, so the runtime's own pre-write
+	// check is what decides.
+	crlf: {
+		out: 'build-crlf',
+		handler: './src/hooks.ws.crlf.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A per-topic `subscribe` hook whose failure modes are selected by topic
+	// name (throw / return-false), and NO `subscribeBatch` export - with one
+	// present the runtime routes every subscribe through it and the per-topic
+	// hook is unreachable from the wire. This is the build that can reach the
+	// failure ADAPTER-ERR-SUBSCRIBE-HOOK documents through a real frame.
+	subhook: {
+		out: 'build-subhook',
+		handler: './src/hooks.ws.subhook.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A `subscribeBatch` hook whose failure modes are selected by a topic name
+	// inside the batch: the hook throwing, the hook RESULT throwing on read,
+	// and the hook returning an array where the contract says a topic-keyed
+	// record. The batch-hook registry entries' claims are only reachable
+	// against a build whose batch hook can actually fail these ways.
+	subbatch: {
+		out: 'build-subbatch',
+		handler: './src/hooks.ws.subbatch.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A `subscribeBatch` hook that PARKS on demand, so a revocation can be landed
+	// inside the batch path's begin/settle window - the window the tombstone
+	// exists for. See src/hooks.ws.park.js for why a real suspension is required.
+	park: {
+		out: 'build-park',
+		handler: './src/hooks.ws.park.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Every `subscribeBatch` invocation parks until released, so a suite can
+	// hold MANY whole batch frames in authorization at once - the shape that
+	// fills the per-connection pending-attempt budget. hooks.ws.park.js
+	// deliberately refuses a second park; this handler deliberately collects
+	// them.
+	parkmany: {
+		out: 'build-parkmany',
+		handler: './src/hooks.ws.parkmany.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A parking `subscribe` hook that releases INTO a group join - so the
+	// revoked attempt's own hook installs tracked membership inside the
+	// begin/settle window, and the landing finds the topic held. The
+	// provenance read (settleHeldSubscribe) is what must still honor the
+	// revocation. See src/hooks.ws.parkjoin.js.
+	parkjoin: {
+		out: 'build-parkjoin',
+		handler: './src/hooks.ws.parkjoin.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A parking `subscribeBatch` PLUS a `resume` hook, so the recover lane is
+	// open and its decision is observable. Separate from `park` because the
+	// mere existence of a `resume` export opens that lane for every suite built
+	// against the variant, which would change what `park` is testing.
+	recover: {
+		out: 'build-recover',
+		handler: './src/hooks.ws.recover.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// A SUSPENDING `resume` hook plus a deliberately tiny `maxBackpressure`, so a
+	// client that stops reading is past the limit within one gap-fill flush and
+	// uWS answers those sends with the DROPPED sentinel. That is the only way to
+	// reach the flush's close-and-report path against the real runtime: the
+	// refusal cannot be scripted here, it has to be earned from a real socket.
+	//
+	// Its own output directory because both options change what every suite
+	// built against them sees - the resume export opens the recover lane, and a
+	// 4 KiB backpressure ceiling would make unrelated wire suites flaky.
+	resumespill: {
+		out: 'build-resume-spill',
+		handler: './src/hooks.ws.resumespill.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			maxBackpressure: 4096
+		}
+	},
+
+	// Wire-subscribe authorization ARMED, with the documented presence wiring on
+	// top. Presence's subscribe hook is marked a side effect, so unlike an app's
+	// own hook it does NOT stand the gate down - which is what makes the batch
+	// path's hook ordering observable: a denied topic must not reach the hook,
+	// because the hook joins a roster and opens an observer tap.
+	batchleak: {
+		out: 'build-batchleak',
+		handler: './src/hooks.ws.batchleak.js',
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			authorizeWireSubscribe: true
+		}
+	},
+
+	// Also byte-identical to `default`, and for the same reason as `tls` below:
+	// its own OUTPUT DIRECTORY, so its own module.
+	//
+	// The suites using this one boot with `ADDRESS_HEADER` set, which the runtime
+	// reads at module eval. Sharing `default` with the suites that need it ABSENT
+	// meant whichever ran first in a worker decided for both - silently, since a
+	// suite testing per-address rate limiting against a server that ignores the
+	// header still produces plausible-looking numbers. Two of them were made to
+	// fail that way, and the reverse order passed while testing the wrong server,
+	// which is the worse outcome.
+	addrhdr: {
+		out: 'build-addrhdr',
+		handler: null,
+		websocket: {
+			allowedOrigins: 'same-origin',
+			upgradeRateLimit: 100,
+			// Keep the wire-level key-bound assertions inside one window even on
+			// slow shared CI runners.
+			upgradeRateLimitWindow: 60
+		}
+	},
+
+	// Byte-identical to `default`, and that is the point: this variant exists for
+	// its OUTPUT DIRECTORY, not for its options.
+	//
+	// TLS is configured through the ENVIRONMENT, which the runtime reads once at
+	// module eval - and Node's ESM cache is keyed by module URL PER PROCESS,
+	// while vitest reuses a worker process across test files. So a suite that
+	// boots TLS in-process by importing `build/handler.js` leaves that module
+	// evaluated as an SSLApp for every later suite in the same worker: they call
+	// `startRealRuntime` with no SSL env, get the cached HTTPS runtime anyway,
+	// and their `ws://` client dies with a bare `socket hang up`. That is a
+	// failure that only reproduces under full parallelism and reads as a real
+	// defect in the code under test.
+	//
+	// Module identity is the only isolation Node's cache respects, so the
+	// in-process TLS suite gets its own. Its sibling `tls-watch` needs no variant
+	// because it spawns a child process with a scrubbed env.
+	tls: {
+		out: 'build-tls',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Byte-identical to `default`, for the same reason as `tls`: its own
+	// OUTPUT DIRECTORY, so its own module. The suite using this one boots
+	// with the TLS environment pointing at a directory it deletes between
+	// module eval and start() - a module state no other TLS suite's cached
+	// import can be allowed to share.
+	tlswatch: {
+		out: 'build-tls-watch',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Byte-identical to `default`, for the same module-identity reason as
+	// `tls` and `tlswatch`: the suite using this one boots in-process with
+	// real TLS certificates and then breaks the on-disk pair to drive the
+	// validation-refusal reload path.
+	tlsskip: {
+		out: 'build-tls-skip',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Metrics registry wired, so counters that are otherwise no-ops become
+	// observable over the /metrics route. Without this, a counter-based
+	// assertion reads zero whether or not the code under test ever fired.
+	metrics: {
+		out: 'build-metrics',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			metrics: './src/metrics.js'
+		}
+	},
+
+	// Dotfile serving OPTED IN, so the exclusion default's opposite branch is a
+	// real build rather than a re-wired unit: the option has to survive the
+	// whole path - fixture config, adapter factory validation, placeholder
+	// substitution, the index-time walk - before a dotfile response proves it.
+	dotfiles: {
+		out: 'build-dotfiles',
+		handler: null,
+		staticDotfiles: true,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Cross-worker state-hash reporting armed on a tight interval, so a real
+	// clustered runtime can prove the aggregate detector, the primary's
+	// bounded detail collection, and the replicated diagnostic store - the
+	// production wiring the pure divergence-diagnostics unit tests cannot
+	// reach.
+	divergence: {
+		out: 'build-divergence',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			stateHashIntervalMs: 50
+		}
+	},
+
+	// A four-entry ceiling on the per-topic sequence registries, so eviction is
+	// reachable against the REAL runtime.
+	//
+	// `maxTopicSeqEntries` is baked into the generated handler at build time and
+	// defaults to a million topics, which no suite can fill. Without its own
+	// build the ceiling could only ever be tested against a hand-written model
+	// of the registries - and the defect this variant exists to catch was
+	// exactly that: the model and the runtime agreed, while a publish lane wrote
+	// one of the two real registries behind the bound's back.
+	seqcap: {
+		out: 'build-seq-cap',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			maxTopicSeqEntries: 4
+		}
+	},
+
+	// Current `sv create` projects pass SvelteKit configuration directly to
+	// `sveltekit(...)` in Vite config. This is deliberately the same runtime
+	// posture as default but has its own output/module identity and exercises
+	// that consolidated configuration path end to end.
+	consolidated: {
+		out: 'build-consolidated',
+		configStyle: 'consolidated',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100
+		}
+	},
+
+	// Two total workers with one compute worker leave exactly one socket-owning
+	// I/O worker. This is the supported clustered topology for the adapter's
+	// single-home game sequencer and provides the positive control for the
+	// multi-I/O rejection test.
+	gamehome: {
+		out: 'build-gamehome',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			workers: { compute: 1 }
+		}
+	},
+
+	// A primary-thread init hook that can hold the primary inside its own boot
+	// window, which is the only way a test can deliver a signal into it: with no
+	// such hook configured the primary's remaining boot awaits are module imports
+	// measured in microseconds. Its own output directory because the hook runs on
+	// every boot of the build that carries it.
+	slowprimary: {
+		out: 'build-slow-primary',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			primaryInit: './src/primary-init.js'
+		}
+	},
+
+	// The DEFAULT waiting room end-to-end in a real browser: a tiny gate the
+	// browser suite saturates over real sockets, the built-in holding page
+	// with its inline poll script, and the admit endpoint - all at their
+	// zero-config defaults, because the default page IS the surface under
+	// test. Its rest, update, and failure states are browser-rendered
+	// behavior no string-level test can observe.
+	waitingdefault: {
+		out: 'build-waiting-default',
+		e2eOnly: true,
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			upgradeAdmission: {
+				// The LIVE-connection ceiling, not the handshake gate: two held
+				// sockets keep the gate genuinely full for the page under test.
+				maxConnections: 2
+			}
+		}
+	},
+
+	// The opted-out fallback: the same tiny gate with waitingRoom: false, so
+	// an HTML navigation at capacity receives the minimal accessible 503
+	// document instead of the polling page.
+	waitingoff: {
+		out: 'build-waiting-off',
+		e2eOnly: true,
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			upgradeAdmission: {
+				maxConnections: 2,
+				waitingRoom: false
+			}
+		}
+	},
+
+	// A configured waitingRoom.renderer module path drives the whole
+	// production pipeline: build-side validation, the isolated esbuild
+	// renderer entry, the pick(default/renderWaitingRoom) selection, and the
+	// bridge the runtime imports. Live-function renderer tests cannot reach
+	// any of that - production refuses functions.
+	waitingrenderer: {
+		out: 'build-waiting-renderer',
+		handler: null,
+		websocket: {
+			allowedOrigins: '*',
+			upgradeRateLimit: 100,
+			upgradeAdmission: {
+				maxConcurrent: 4,
+				waitingRoom: { renderer: './src/waiting-room.renderer.js' }
+			}
+		}
+	}
+};
+
+/**
+ * Output directory for a variant, relative to the fixture root.
+ * @param {string} name
+ * @returns {string}
+ */
+export function variantOut(name) {
+	const variant = FIXTURE_VARIANTS[name];
+	if (!variant) {
+		throw new Error(`unknown fixture variant "${name}" (have: ${Object.keys(FIXTURE_VARIANTS).join(', ')})`);
+	}
+	return variant.out;
+}
