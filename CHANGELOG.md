@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Subscribers hear too. A client whose resume offset has already stepped past
   the hole would gap-fill straight over it, so every gapped topic gets a marker
-  pushed to each subscriber that negotiated  (the bundled client
+  pushed to each subscriber that negotiated `relay.resync:1` (the bundled client
   always does) and a freshly minted topic generation on this worker, so a client
   that was not reachable cold-rehydrates at its next resume instead. A socket
   that cannot take even the marker is closed 1013. Reserved lanes and topics
