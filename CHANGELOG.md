@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `platform.send()` and `platform.sendWire()` take an explicit `seq`. It is the
+  channel a resume hook gap-fills history through, and it rides the JSON
+  envelope and the binary frame's seq slot identically, so a client keys one
+  watermark whichever form its connection negotiated - a capable subscriber and
+  a degraded one no longer disagree about where a replay resumed. Both lanes
+  previously dropped the option: `send()` built its envelope without a seq
+  field, and `sendWire()` wrote a literal `0` into the frame's slot.
+
+  Number and bigint stamp the exact value, under the same validation and
+  safe-integer range the publish lanes apply to an explicit authority.
+  `false`, `null` and absent mean no seq and emit the previous frame
+  byte-identically. `true` throws rather than drawing the in-memory counter,
+  because a single-target send has none to draw.
+
+  A seq'd send stays side-effect-free: no counter advances, no max-seen is
+  recorded, and an open resume capture does not receive the frame. Gap-fill
+  replays history that is already accounted, so a second accounting would move
+  the very watermarks the replay is reconstructing.
+
 - Relay-gap detection rides the same reporter. A per-topic maximum only ever
   reveals a lost TAIL: two workers, one that received [2,3] of a stream and one
   that received [1,2,3], both report 3 and hash identically. The per-origin

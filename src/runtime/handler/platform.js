@@ -26,11 +26,11 @@ import {
 import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
-	resolveEntrySeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
+	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
-import { readAssertionCounts, fatal } from '../utils/assertions.js';
+import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
@@ -385,15 +385,33 @@ function publish(topic, event, data, options) {
 }
 
 /**
+ * Send one envelope to one connection, optionally carrying an explicit
+ * replay `seq`.
+ *
+ * The seq is a REPLAY AUTHORITY'S value - the channel a resume hook gap-fills
+ * history through - so it is stamped and nothing else happens: no counter
+ * advance, no max-seen record, no resume capture. That invariant is
+ * load-bearing rather than incidental, because gap-fill replays history that
+ * is ALREADY accounted, and a second accounting would move the very
+ * watermarks the replay is reconstructing. Number and bigint only; `false`,
+ * `null` and absent mean no seq and emit today's frame byte-identically.
+ * `true` throws instead of drawing the in-memory counter, because this lane
+ * has none to draw.
+ *
  * @param {object} facade
  * @param {string} topic
  * @param {string} event
  * @param {unknown} [data]
- * @param {{ compress?: boolean } | undefined} [options]
+ * @param {{ seq?: number | bigint | false | null, compress?: boolean } | undefined} [options]
  * @returns {number} 0 | 1 | 2
  */
 function send(facade, topic, event, data, options) {
-	const payload = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(data ?? null) + '}';
+	// Resolved BEFORE the try below, so an invalid spelling throws to the
+	// caller regardless of socket state rather than being collapsed into the
+	// DROPPED sentinel by the catch.
+	const seq = resolveSendSeq(options != null ? options.seq : undefined);
+	const payload = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+	assert(payload.length > 0, 'envelope.send-empty', null);
 	const compress = WS_COMPRESSION_ON && (!options || options.compress !== false);
 	try {
 		const result = /** @type {any} */ (facade).send(payload, false, compress);
@@ -893,18 +911,29 @@ export const platform = {
 	},
 
 	/**
+	 * The binary counterpart of {@link send}, carrying the same explicit
+	 * replay `seq` under the same side-effect-free rule.
+	 *
+	 * The seq rides the binary frame's own slot and the JSON fallback's
+	 * envelope field identically, so a client keys ONE watermark whichever
+	 * form its connection negotiated - a capable subscriber and a degraded one
+	 * must not disagree about where the replay resumed.
+	 *
 	 * @param {object} ws
 	 * @param {string} topic
 	 * @param {string} event
 	 * @param {unknown} data
 	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
-	 * @param {{ compress?: boolean } | undefined} [options]
+	 * @param {{ seq?: number | bigint | false | null, compress?: boolean } | undefined} [options]
 	 * @returns {number} 0 | 1 | 2
 	 */
 	sendWire(ws, topic, event, data, wire, options) {
+		const seq = resolveSendSeq(options != null ? options.seq : undefined);
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
-		const payload = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(data ?? null) + '}';
-		const result = deliverWireToOne(ws, topic, event, data, wire, payload, 0, compress);
+		const payload = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+		// The frame slot carries 0 for "no seq", which is the wire's own
+		// spelling for absent - not a stamped zero.
+		const result = deliverWireToOne(ws, topic, event, data, wire, payload, seq == null ? 0 : seq, compress);
 		return result === 3 ? 2 : result;
 	},
 

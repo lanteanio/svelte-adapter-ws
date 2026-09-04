@@ -756,12 +756,12 @@ export interface Platform {
 	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number; compress?: boolean; jitterMs?: number; excludeWs?: object }): boolean;
 	publishBatched(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>, options?: { compress?: boolean }): void;
 	batch(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>): boolean[];
-	send(ws: object, topic: string, event: string, data?: unknown, options?: { compress?: boolean }): number;
+	send(ws: object, topic: string, event: string, data?: unknown, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
 	sendTo(filter: (userData: any) => boolean, topic: string, event: string, data?: unknown, options?: { compress?: boolean }): number;
 	sendCoalesced(ws: object, message: { key?: string; topic: string; event: string; data?: unknown }): void;
 	publishWire(topic: string, event: string, data: unknown, wire: object, options?: object): boolean;
 	publishWireBatch(topic: string, event: string, entries: Array<{ data: unknown; excludeWs?: object; seq?: number }>, wire: object, options?: object): boolean;
-	sendWire(ws: object, topic: string, event: string, data: unknown, wire: object, options?: object): number;
+	sendWire(ws: object, topic: string, event: string, data: unknown, wire: object, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
 	sendWireBatch(ws: object, topic: string, event: string, entries: Array<{ data: unknown; seq?: number }>, wire: object): number;
 	registerWireCodec(wire: object): void;
 	request(ws: object, event: string, data?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
