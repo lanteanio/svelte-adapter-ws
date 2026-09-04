@@ -514,6 +514,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Three failures the runtime already reports are in the error catalog:
+  `ADAPTER-ERR-EGRESS-REFUSED`, `ADAPTER-ERR-EGRESS-TENANT-RESOLVER` and
+  `ADAPTER-ERR-PRESSURE-RATE-LISTENER`. The lines were being printed with no
+  indexed entry behind them, so an operator who pasted one into `docs/errors.md`
+  found nothing - which is the one moment the catalog exists for.
+
 - A handler module can be started again after it has been shut down. The drain
   latch and the lifecycle state belong to one lifecycle, but both were
   module-scope and neither was ever cleared, so a second `start()` ran against a

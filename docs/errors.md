@@ -242,6 +242,60 @@ Log line begins:
 
 **What to do.** Check whether topic names embed unbounded identifiers (per-user, per-request). The line fires once per process, so it will not tell you whether cardinality later fell or kept climbing - the naming scheme is what settles that. Unbounded cardinality is a slow leak rather than a spike, so act at the warning rather than at exhaustion.
 
+## ADAPTER-ERR-PRESSURE-RATE-LISTENER
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.publish-rate-listener-failed severity=error] A publish-rate listener failed.
+```
+
+**Cause.** An application listener registered for publish-rate notifications threw.
+
+**Consequence.** That listener missed the notification. Rate accounting is unaffected.
+
+**Automatic recovery.** Yes. The listener stays registered and is called again.
+
+**What to do.** Fix the listener, and check whether it was the component expected to throttle publishing.
+
+## ADAPTER-ERR-EGRESS-REFUSED
+
+Severity: warn
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.publish-refused severity=warn] A publish crossed a configured egress ceiling and was refused.
+```
+
+**Cause.** A publish-family call would have taken one topic or one tenant past a `websocket.egress` ceiling for the current window, so it was refused before anything was stamped, serialized, or written to a socket. Per (scope, topic) the line is throttled to once a minute through a bounded dedup table, so it reports the condition rather than every refusal; the exact counts are `egress_refused_total{scope}` and the pressure snapshot egress figures.
+
+**Consequence.** The refused publish delivered nothing anywhere: no local subscriber received it, no cross-worker relay fired, and no sequence number was consumed, so subscribers see no gap. The caller received the refusal shape (`false`, a zero count, or `{ seq: null, delivered: 0 }` on the game lane) and owns any retry.
+
+**Automatic recovery.** Yes, by time: the window rotates (default 1000 ms) and publishing under the ceiling resumes on its own. Relayed frames from sibling workers are never refused.
+
+**What to do.** Decide whether the traffic or the ceiling is wrong. The attributes name the scope, the dimension (messages, bytes, or deliveries), and the configured limit; read the topic reference beside your `pressure.topPublishers` deliveries figures to see whether one publisher is spending the budget. Raise the ceiling in `websocket.egress` if the load is intended. On the dev plugin this event is the whole report: dev enforces the ceilings live but registers no metrics and reports its pressure egress figures as zeros, so the counts named above exist only in production and createTestServer.
+
+## ADAPTER-ERR-EGRESS-TENANT-RESOLVER
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.tenant-resolver-invalid severity=error] The egress tenant resolver returned an unusable id; publishes are charged unattributed.
+```
+
+**Cause.** The handler module `egressTenantOf(topic)` export threw, or returned something other than null/undefined or a string of `[a-zA-Z0-9_-]` (1-64 chars) - the same id rule the attribution resolver enforces. The line fires once per worker: the defect repeats on every publish and refusing to attribute is already the fail-closed behavior.
+
+**Consequence.** Publishes on the affected topics are charged as unattributed: the topic-scope ceilings and the worker egress figures still apply, but no tenant window is charged, so a tenant ceiling cannot bound this traffic until the resolver is fixed. Nothing is misattributed - an invalid id is never used as a key.
+
+**Automatic recovery.** None. The resolver stays installed and its valid answers keep working; only invalid results (and thrown calls) stay unattributed.
+
+**What to do.** Fix `egressTenantOf` to return a rule-conforming tenant id or null. The attributes carry the returned value TYPE only; reproduce locally by calling the resolver with the topics your server publishes.
+
 ## ADAPTER-ERR-RELAY-GAP
 
 Severity: error
