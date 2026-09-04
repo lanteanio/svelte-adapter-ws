@@ -1367,6 +1367,16 @@
 		"file": "test/transport-metrics.test.js"
 	},
 	{
+		"file": "test/version-info.test.js",
+		"adaptations": [
+			{
+				"lead": "svelte-adapter-ws-extensions",
+				"ours": "svelte-adapter-uws-extensions",
+				"all": true
+			}
+		]
+	},
+	{
 		"file": "test/vite-grant-conjunct.test.js"
 	},
 	{

@@ -78,7 +78,7 @@ export function resolvedPackageVersion(specifier, expectedName) {
  */
 export function readRuntimeVersionInfo() {
 	const adapterPackage = firstJson([
-		new URL('./meta/svelte-adapter-uws/package.json', import.meta.url),
+		new URL('./meta/svelte-adapter-ws/package.json', import.meta.url),
 		new URL('../../package.json', import.meta.url)
 	]);
 	const schema = firstJson([
@@ -102,7 +102,7 @@ function shown(value) {
 
 export function formatVersionBanner(info) {
 	return (
-		'svelte-adapter-uws ' + shown(info.adapter) +
+		'svelte-adapter-ws ' + shown(info.adapter) +
 		' (protocol rev ' + shown(info.protocolRevision) +
 		', svelte-realtime ' + shown(info.realtime) +
 		', svelte-adapter-uws-extensions ' + shown(info.extensions) + ')'

@@ -495,6 +495,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The boot banner names this adapter, reports its own version, and is printed
+  at all. It read the packaged metadata from `meta/svelte-adapter-uws/` while
+  the build writes `meta/svelte-adapter-ws/`, so a production build found
+  nothing there and fell back to a repository path a build does not contain -
+  announcing itself under the wrong package name and its own version as "not
+  installed". Nothing called the formatter either, so no build printed the line.
+
 - The batch-admitted marker is written with a property definition rather than
   an assignment. A plain assignment walks the prototype chain, and every lane
   marks a fresh object literal, so an accessor installed on `Object.prototype`

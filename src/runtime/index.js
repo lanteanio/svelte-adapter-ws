@@ -22,6 +22,7 @@ import { createRelaySpillQuarantine, attributeRelayIncident, relayEligible, rela
 import { createRestartSupervisor } from './restart-supervisor.js';
 import { createMetricsCollections } from './metrics-collector.js';
 import { createPostureAggregator } from './posture-collector.js';
+import { formatVersionBanner, runtimeVersionInfo } from './version-info.js';
 import { startPostureExport } from './utils/posture-export.js';
 import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
 import { certExpiryAlert, createCertWatcher, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
@@ -137,6 +138,10 @@ const restart_on_state_divergence = env('RESTART_ON_STATE_DIVERGENCE', '') === '
 const state_hash_epoch_ms = parseIntEnv('STATE_HASH_EPOCH_MS', env('STATE_HASH_EPOCH_MS', '0'), 0);
 
 const is_primary = cluster_workers && isMainThread;
+
+// Exactly once per process. Worker threads share the primary's package graph,
+// so only their main thread announces the resolved ecosystem tuple.
+if (isMainThread) console.log(formatVersionBanner(runtimeVersionInfo));
 
 // Descriptor-budget preflight: fires once per process (main thread only -
 // worker threads share the single process fd table, so per-worker repeats
