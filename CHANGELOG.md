@@ -449,13 +449,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The  adapter option is declared. The build validated it, serialized
-  it and listed it among the known keys, but the published 
+- The `tracing` adapter option is declared. The build validated it, serialized
+  it and listed it among the known keys, but the published `AdapterOptions`
   never named it, so configuring the option the documentation describes was a
   type error.
 
--  is read the way every other option
-  is. The SSR lane reached it through a  guard rather than the plain
+- `websocket.compressCredentialedResponses` is read the way every other option
+  is. The SSR lane reached it through a `typeof` guard rather than the plain
   read the rest of the runtime uses; the option worked, but a contract that
   follows option reads from the serialized payload could not see it, which is
   what such a contract exists to do.
