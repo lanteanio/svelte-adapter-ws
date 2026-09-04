@@ -495,6 +495,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The batch-admitted marker is written with a property definition rather than
+  an assignment. A plain assignment walks the prototype chain, and every lane
+  marks a fresh object literal, so an accessor installed on `Object.prototype`
+  intercepted the write: it was handed the private token, and no own property
+  was created at all. The second half needed no attacker - with any such
+  accessor present, every entry of a batch re-took the decision its batch had
+  already made, and the batch delivered a prefix and dropped its tail. The
+  property stays own and enumerable, which is what the per-entry copies carry it
+  by.
+
 - The `tracing` adapter option is declared. The build validated it, serialized
   it and listed it among the known keys, but the published `AdapterOptions`
   never named it, so configuring the option the documentation describes was a
