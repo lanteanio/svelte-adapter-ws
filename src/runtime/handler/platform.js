@@ -40,15 +40,25 @@ import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
 import { capCounts, counters, pressureListeners, pressureSnapshot, publishRateListeners, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
 import { seqBound } from './seq-bound.js';
-import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, EGRESS_ADMITTED } from './egress-budget.js';
+import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, markAdmitted, admittedByBatch } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
 import { deliverStatelessWireFanout, deliverStatefulWireBatch, encodeStatelessWirePayload } from './wire-fanout.js';
 import { registerWireCodec, getWireCodec } from './codec-registry.js';
 import { batchRelay, relayBatched } from './relay.js';
 import {
 	assertClusterSequenceAuthority, assertClusterSequenceAuthorityValues,
-	assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, RELAY_ORIGIN_SEQ
+	assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority
 } from './cluster-sequence-policy.js';
+
+// The relay receive half's token, passed as an argument to publishWire and
+// compared by identity. Module-private on purpose: it is never exported, never
+// placed on any object a caller can reach, and never used as a property key,
+// so there is nothing to name and nothing to answer. What it gates is every
+// origin-side guard at once - the cluster sequence-authority rule, the seq
+// value check, the egress decision, the publish counter, the stamp and the
+// relay decision - because a sibling worker already did all of them for this
+// frame.
+const RELAY_RECEIVE = Symbol('adapter-ws.relay-receive');
 import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload, assertGameLaneClusterSafe } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
 import { captureResumeFrame, resumeCaptureActive } from './resume-capture.js';
@@ -314,11 +324,11 @@ function publish(topic, event, data, options) {
 	let egressTenant = null;
 	if (egressGate.armed) {
 		egressTenant = resolvePublishTenant(topic);
-		// EGRESS_ADMITTED marks an event whose batch already decided for the
-		// whole call (publishBatched's slow path). It still charges below -
+		// The admitted marker names an event whose batch already decided for
+		// the whole call (publishBatched's slow path). It still charges below -
 		// every event is its own logical publish in the ledger - but
 		// re-deciding here would deliver a prefix of an atomic batch.
-		if (!(options != null && /** @type {any} */ (options)[EGRESS_ADMITTED]) &&
+		if (!admittedByBatch(options) &&
 			!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
 	}
 
@@ -572,11 +582,10 @@ export const platform = {
 			// fields the atomic pre-pass above already judged.
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
-				publish(m.topic, m.event, m.data, /** @type {any} */ ({
+				publish(m.topic, m.event, m.data, /** @type {any} */ (markAdmitted({
 					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i],
-					excludeWs: msgExcludes[i], compress: compressOptIn,
-					[EGRESS_ADMITTED]: true
-				}));
+					excludeWs: msgExcludes[i], compress: compressOptIn
+				})));
 			}
 			return;
 		}
@@ -693,22 +702,30 @@ export const platform = {
 	 * @param {unknown} data
 	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
 	 * @param {{ seq?: boolean | number, relay?: boolean, compress?: boolean, excludeWs?: object } | undefined} [options]
+	 * @param {symbol} [relayToken] INTERNAL. The relay receive half's token,
+	 *   held by this module and passed by `relayPublishWire` only. Not part of
+	 *   the declared surface and not obtainable by a caller; a value that is
+	 *   not the token leaves the call on the ordinary origin path.
+	 * @param {number | null} [relaySeq] INTERNAL. The origin worker's stamped
+	 *   seq, carried verbatim. Read only when the token matches.
 	 * @returns {boolean}
 	 */
-	publishWire(topic, event, data, wire, options) {
-		// One read per option field (see publish): the field set here
-		// additionally carries the internal relay-receive markers, which keep
-		// the cross-worker path from re-stamping or re-relaying. Locals, no
-		// capture object.
+	publishWire(topic, event, data, wire, options, relayToken, relaySeq) {
+		// One read per option field (see publish). Locals, no capture object.
 		const seqOption = options != null ? options.seq : undefined;
 		const relayOption = options != null ? options.relay : undefined;
 		const compressOption = options != null ? options.compress : undefined;
 		const excludeOption = options != null ? options.excludeWs : undefined;
-		// Presence IS the relay test, and the value is the origin's seq. A
-		// module Symbol, so an application options object cannot carry it and
-		// buy itself past the sequence-authority check below.
-		const relayOriginSeq = options != null ? /** @type {any} */ (options)[RELAY_ORIGIN_SEQ] : undefined;
-		const isRelay = relayOriginSeq !== undefined;
+		// The relay marker is an ARGUMENT, not a key on the options object, and
+		// it is compared by identity against a token this module never hands
+		// out. A marker read as a property is unspellable but not unforgeable:
+		// a caller does not have to name the key, only to pass an object that
+		// answers for every key - `new Proxy({}, { get: () => null })`, or a
+		// getter on a prototype - and it would then take the arm that skips the
+		// authority check, the value check, the egress decision and the publish
+		// counter. There is no property lookup here for such an object to
+		// answer, and the origin path pays one comparison rather than a read.
+		const isRelay = relayToken === RELAY_RECEIVE;
 		if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);
 		// And the value, before the admission below (see publish()). A relayed
 		// frame carries its origin's seq, not this option, and that origin
@@ -726,20 +743,19 @@ export const platform = {
 			if (excludeOption !== undefined && excludeOption !== null && excludedRecipient(excludeOption, topic)) recipients--;
 			if (egressGate.armed) {
 				egressTenant = resolvePublishTenant(topic);
-				if (!(options && /** @type {any} */ (options)[EGRESS_ADMITTED]) &&
+				if (!admittedByBatch(options) &&
 					!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
 			}
 		}
 		// A relayed frame carries the origin worker's stamp verbatim: the
 		// origin already stamped and counted this publish once, and stamping
 		// again here would fork the topic's sequence per worker.
-		// Coerced HERE as well as normalized at the set site. The two are not
-		// redundant: the set site guarantees the shape this module writes, and
-		// this guarantees the shape that reaches the wire whatever wrote the
-		// marker. Without it a value that is neither number nor null is
-		// stamped into the envelope verbatim.
+		// The coercion stays on the READ side: it is what decides the number
+		// that reaches the wire, whatever the caller of the relay path passed.
+		// Without it a value that is neither number nor null is stamped into
+		// the envelope verbatim.
 		const seq = isRelay
-			? (typeof relayOriginSeq === 'number' ? relayOriginSeq : null)
+			? (typeof relaySeq === 'number' ? relaySeq : null)
 			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) {
@@ -1761,15 +1777,12 @@ export function relayPublishWire(topic, event, data, capability, seq, compress) 
 	const codec = getWireCodec(capability);
 	if (!codec) return false;
 	if (!capCounts.has(capability)) return false;
-	// Normalized HERE, not on the read: a relayed frame legitimately arrives
-	// with no seq, and `undefined` is indistinguishable from an absent marker -
-	// it would read as an origin publish on every worker that received it, draw
-	// their counters and relay onward. `relay: false` is gone because the
-	// marker now forces that decision off on its own.
-	platform.publishWire(topic, event, data, codec, /** @type {any} */ ({
-		[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,
-		compress
-	}));
+	// The token rides beside the options object, not inside it, and the seq
+	// beside the token. `relay: false` is gone because the token forces that
+	// decision off on its own: two settings that must agree are one that can
+	// be forgotten, and forgetting this one sends the frame back around the
+	// workers.
+	platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);
 	return true;
 }
 

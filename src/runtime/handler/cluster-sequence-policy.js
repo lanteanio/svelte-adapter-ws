@@ -1,25 +1,6 @@
 import { workerData } from 'node:worker_threads';
 import { assertStampableSeq } from '../utils/epoch.js';
 
-/**
- * How the relay marks a frame it is handing to a receiving worker, so that
- * worker stamps the origin's seq verbatim instead of allocating its own.
- *
- * A module Symbol rather than a string key, because an application reaches
- * `publishWire` with its own options object: a string key is spellable, and a
- * caller that guessed it could suppress the sequence-authority check and stamp
- * whatever it liked. This is the same shape `EGRESS_ADMITTED` already uses in
- * `handler/platform.js`. `Symbol()`, never `Symbol.for()` - a registry symbol
- * is reachable by name and would be exactly as forgeable as the string was.
- *
- * ONE key, not a flag beside a value: the VALUE is the origin seq, so presence
- * alone answers "is this relayed". The set site must therefore write `null`
- * rather than `undefined` for a frame that carries no seq, since `undefined`
- * is indistinguishable from an absent key and the frame would read as an
- * origin publish on every worker that received it.
- */
-export const RELAY_ORIGIN_SEQ = Symbol('adapter-ws.relay-origin-seq');
-
 export const CLUSTER_SEQUENCE_ERROR =
 	'clustered publish requires { seq: false } (or null) or { seq: <positive integer number or bigint>, relay: false }; per-worker counters and the multi-origin built-in relay cannot preserve one monotonic topic sequence';
 
@@ -112,6 +93,14 @@ export function assertClusterSequenceAuthority(options, data = workerData) {
  * refused on it outright - independent of topology AND of how many entries the
  * caller happens to be publishing, so the contract never changes shape with the
  * data. Callers deliberately pass no count: the refusal must not depend on one.
+ *
+ * The remaining spellings are held to the stamp's own table here, at the call
+ * gate, rather than in the stamping loop the batch reaches later: that loop
+ * runs after the batch has taken its egress decision, so a string seq was
+ * answered with a silent `false` under an armed ceiling and threw only once
+ * load dropped. Numeric first, because a number IS stampable and would pass -
+ * what it must earn is the batch's own refusal, which names the per-entry
+ * spelling that replaces it.
  *
  * @param {{ seq?: boolean | number, relay?: boolean } | null | undefined} options
  * @param {any} [data]

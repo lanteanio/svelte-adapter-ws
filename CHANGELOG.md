@@ -450,19 +450,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A publish can no longer talk its way past the cluster sequence authority by
-  naming the relay's own option keys. The marker the built-in relay uses to say
-  "this frame already carries its origin's sequence" was two ordinary string
-  properties on the options object, and an application reaches `publishWire`
-  with an options object of its own: spelling them suppressed the check that
-  keeps one monotonic sequence per topic, and let the caller stamp whatever it
-  liked. The marker is now a module symbol, which an application cannot name.
-  The forged keys are not refused, they are ignored: the call becomes an
-  ordinary origin publish. Off-cluster that publishes normally with a
-  locally-stamped sequence. In a multi-worker runtime it is then the cluster
-  sequence authority that turns it away, because an ordinary publish carrying
-  no `{ seq, relay }` pair is exactly what that check refuses - so a clustered
-  app that was relying on the old keys sees a throw where it previously saw a
-  publish.
+  claiming to be a relayed frame. `publishWire` has an origin side and a relay
+  receive side, and one boolean picks between them: the relay side skips the
+  clustered sequence-authority rule, skips the seq value check, skips the
+  egress decision, skips the publish counter, stamps the number it was handed
+  instead of drawing the topic counter, and does not relay onward. That boolean
+  was read from two ordinary string properties on the caller's own options
+  object, and an application reaches `publishWire` with an options object of its
+  own: spelling them let the caller put any number on a topic's sequence, off
+  the publish ledger and past an armed egress ceiling. Naming the key with a
+  symbol does not settle it on its own, because a caller never has to name a
+  key - only to pass an object that answers for every key, which a `Proxy` or an
+  inherited getter does. So the marker is not a key at all: it is an argument
+  compared by identity against a token the runtime never hands out, and the
+  relay decision reads that same token rather than a `relay: false` the internal
+  caller had to remember to pass beside it. The forged keys are not refused,
+  they are ignored: the call becomes an ordinary origin publish. Off-cluster
+  that publishes normally with a locally-stamped sequence. In a multi-worker
+  runtime it is then the cluster sequence authority that turns it away, because
+  an ordinary publish carrying no `{ seq, relay }` pair is exactly what that
+  check refuses - so a clustered app that was relying on the old keys sees a
+  throw where it previously saw a publish. `svelte-adapter-ws/testing` and the
+  dev plugin take the same decisions.
+
+- The marker a batch uses to say "this call's egress decision is already taken"
+  is compared by identity too. A batch is admitted whole or not at all, so its
+  per-entry lanes carry a marker that stops an entry re-deciding; an options
+  object that answered for every key satisfied that test and published past a
+  ceiling the batch had never been admitted through. Making the value a symbol
+  is not enough either, because a `get` trap is handed the key it is asked for
+  and can echo it back. The marker's value is now something no caller is ever
+  handed, and writing it and reading it go through one pair of helpers, so no
+  lane can be left holding an older test.
 
 - A handshake that never becomes a connection returns its upgrade permit. The
   permit was marked as transferred to the connection around the accept call,

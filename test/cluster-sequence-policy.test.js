@@ -45,9 +45,9 @@ import {
 	assertBatchEntrySequenceAuthority,
 	clusterSequenceAccepted,
 	clusterSequenceValuesAccepted,
-	hasMultipleWorkers,
-	RELAY_ORIGIN_SEQ
+	hasMultipleWorkers
 } from '../src/runtime/handler/cluster-sequence-policy.js';
+import * as sequencePolicy from '../src/runtime/handler/cluster-sequence-policy.js';
 import { stampSeq, stampSeqValue } from '../src/runtime/utils/epoch.js';
 
 describe('cluster sequence authority policy', () => {
@@ -206,9 +206,16 @@ describe('cluster sequence authority policy', () => {
 			expect(publish.split(field).length, `publish reads ${field} exactly once`).toBe(2);
 		}
 		expect(wire).toContain('if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);');
-		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.excludeWs', '[RELAY_ORIGIN_SEQ]']) {
+		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.excludeWs']) {
 			expect(wire.split(field).length, `publishWire reads ${field} exactly once`).toBe(2);
 		}
+		// The relay marker is not among them: it is an argument compared by
+		// identity, so the lane reads no relay key off the caller object at all.
+		// A marker read as a property is satisfied by anything that answers
+		// every key, without ever naming the key.
+		expect(wire).toContain('const isRelay = relayToken === RELAY_RECEIVE;');
+		expect(wire, 'the relay marker went back to being a key on the options object')
+			.not.toMatch(/options\s*\[\s*RELAY/);
 		// The marker forces the relay decision off by itself. Without the
 		// `!isRelay` term a received frame is relayed onward whenever the
 		// options do not say otherwise, and the set site no longer says so.
@@ -248,16 +255,19 @@ describe('cluster sequence authority policy', () => {
 		// where the throw arrives after earlier entries are already stamped.
 		expect(wireBatch).toContain('resolveEntrySeq(entry.seq, i)');
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
-		// The relay SET site normalizes, and it is pinned here rather than
-		// driven because production's relay needs a worker cluster: the
-		// behavioural pair lives in test/codec-relay.test.js against the
-		// harness copy. A missing seq must reach the marker as null, since
-		// `undefined` is indistinguishable from an absent marker and the frame
-		// would read as an origin publish on every worker that received it.
+		// The relay SET site hands the token and the seq as ARGUMENTS, and it
+		// is pinned here rather than driven because production's relay needs a
+		// worker cluster: the behavioural pair lives in test/codec-relay.test.js
+		// against the harness copy.
 		const relaySet = source.slice(source.indexOf('export function relayPublishWire'));
 		expect(relaySet.indexOf('export function relayPublishWire'), 'relayPublishWire must stay findable by name')
 			.toBe(0);
-		expect(relaySet).toContain("[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,");
+		expect(relaySet).toContain('platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);');
+		// The coercion is on the READ side now, and it is the whole of what
+		// keeps a non-number off the wire: a relayed frame legitimately
+		// arrives with no seq, and the envelope must carry null rather than
+		// whatever the relay path was handed.
+		expect(wire).toContain("? (typeof relaySeq === 'number' ? relaySeq : null)");
 		// And it no longer sets the relay flag beside the marker: two settings
 		// that have to agree are one that can be forgotten. Comment lines are
 		// stripped first, because this pin is about the CODE and the sentence
@@ -342,21 +352,39 @@ describe('the gate carries every spelling the stamp accepts', () => {
 // The marker's unforgeability is a property of HOW it is declared, and neither
 // half of that is visible to a test that only drives publish lanes.
 describe('the relay origin-seq marker is declared unforgeably', () => {
-	it('is a module symbol, never a registry symbol', () => {
+	it('is reachable from nowhere: the policy module exports no marker at all', () => {
+		// The redesign's whole property is that there is nothing left to name.
+		// A rename would keep every other pin green while handing the marker
+		// back to any module that can import this one, so the count has to end
+		// at zero rather than at one differently-spelled export.
+		const exported = Object.keys(sequencePolicy);
+		expect(exported.length, 'the policy module exports nothing at all').toBeGreaterThan(4);
+		expect(exported.filter((name) => /relay/i.test(name)), 'the policy module exports a relay marker again')
+			.toEqual([]);
+		expect(exported.filter((name) => typeof (/** @type {any} */ (sequencePolicy)[name]) === 'symbol'),
+			'the policy module exports a symbol, which is the shape a marker takes')
+			.toEqual([]);
+	});
+
+	it('is a module symbol on both surfaces, never a registry symbol and never exported', () => {
 		// Symbol.for() puts a symbol in the cross-realm registry, where an
-		// application retrieves it by DESCRIPTION without importing anything.
-		// That would leave the marker exactly as spellable as the two string
-		// keys it replaced, and the swap is otherwise invisible: every publish
-		// test still passes with it.
-		expect(typeof RELAY_ORIGIN_SEQ).toBe('symbol');
-		expect(
-			Symbol.keyFor(RELAY_ORIGIN_SEQ),
-			'the marker is in the global symbol registry, so an app can fetch it by description'
-		).toBeUndefined();
-		expect(
-			RELAY_ORIGIN_SEQ,
-			'a registry symbol with this description is the same value as the marker'
-		).not.toBe(Symbol.for(String(RELAY_ORIGIN_SEQ.description)));
+		// application retrieves it by DESCRIPTION without importing anything -
+		// as spellable as the string keys the marker replaced. Pinned as source
+		// text because the token is deliberately not importable: a test that
+		// could read the value would prove the value is reachable.
+		for (const rel of [
+			['../src/runtime/handler/platform.js', 'RELAY_RECEIVE'],
+			['../src/testing.js', 'RELAY_RECEIVE_T']
+		]) {
+			const [file, name] = rel;
+			const text = readSource(file);
+			expect(text, `${file} no longer declares ${name}`)
+				.toContain(`const ${name} = Symbol('adapter-ws.relay-receive');`);
+			expect(text, `${file} put the token in the global symbol registry`)
+				.not.toMatch(new RegExp(`${name}\\s*=\\s*Symbol\\.for\\(`));
+			expect(text, `${file} exports the token, so any importer can forge a relay`)
+				.not.toMatch(new RegExp(`export[^\\n]*\\b${name}\\b`));
+		}
 	});
 
 	it('leaves no string spelling of the relay marker anywhere in src', () => {
@@ -381,7 +409,7 @@ describe('the relay origin-seq marker is declared unforgeably', () => {
 		// Vacuity floor: an empty file list would satisfy the filter below.
 		expect(files.length, 'the src scan found almost no files').toBeGreaterThan(50);
 		const offenders = files
-			.filter((f) => /_isRelay|_relaySeq/.test(readFileSync(f, 'utf8')))
+			.filter((f) => /_isRelay|_relaySeq|RELAY_ORIGIN_SEQ/.test(readFileSync(f, 'utf8')))
 			.map((f) => 'src/' + decodeURIComponent(f.href.split('/src/')[1]));
 		expect(offenders, 'a string spelling of the relay marker is back in src').toEqual([]);
 	});

@@ -1024,6 +1024,16 @@
 		"file": "test/ratelimit.test.js"
 	},
 	{
+		"file": "test/relay-marker-authority.test.js",
+		"adaptations": [
+			{
+				"lead": "adapter-uws.relay-",
+				"ours": "adapter-ws.relay-",
+				"all": true
+			}
+		]
+	},
+	{
 		"file": "test/replay.test.js"
 	},
 	{

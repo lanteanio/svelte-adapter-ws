@@ -15,7 +15,7 @@ import { registerGameIngress, GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encod
 import { createMessageAdmission, messageOverloadedFrame, runAdmittedMessageHook, runAdmittedMessageWork } from './runtime/utils/message-admission.js';
 import { createConnectionPermitCarrier } from './runtime/utils/connection-permit.js';
 import { installAttribution } from './runtime/utils/attribution.js';
-import { normalizeEgressOptions, createEgressAccount, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, EGRESS_ADMITTED } from './runtime/utils/egress-account.js';
+import { normalizeEgressOptions, createEgressAccount, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, markAdmitted, admittedByBatch } from './runtime/utils/egress-account.js';
 import { privateValueMetadata } from './runtime/utils/observability-privacy.js';
 import {
 	assertWireSubscribeAuthorization,
@@ -23,7 +23,11 @@ import {
 	assertSharedOptionValues,
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
-import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues, RELAY_ORIGIN_SEQ } from './runtime/handler/cluster-sequence-policy.js';
+import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues } from './runtime/handler/cluster-sequence-policy.js';
+
+// The relay receive half's token, mirroring handler/platform.js:
+// module-private, never exported, never a property key, compared by identity.
+const RELAY_RECEIVE_T = Symbol('adapter-ws.relay-receive');
 import { createServer as createHttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { CLOSED_MESSAGE } from './runtime/handler/ws-facade.js';
@@ -1494,7 +1498,7 @@ export async function createTestServer(options = {}) {
 				egressTenant = egressTenantForT(topic);
 				// An event whose batch already decided for the whole call
 				// charges but does not re-decide; see production's publish().
-				if (!(options != null && options[EGRESS_ADMITTED]) &&
+				if (!admittedByBatch(options) &&
 					!egressAccountT.admit(topic, egressTenant, 1, recipients)) return false;
 			}
 			const seq = stampSeq(options, topicSeqs, topic, seqBoundT);
@@ -1529,13 +1533,14 @@ export async function createTestServer(options = {}) {
 			const payload = envelope(topic, event, data);
 			return sendOutboundT(ws, payload);
 		},
-		publishWire(topic, event, data, wire, options) {
+		publishWire(topic, event, data, wire, options, relayToken, relaySeq) {
 			// Relay re-encode (mirrors handler.js publishWire): a relayed wire publish
 			// re-encodes binary against THIS server's local connections, stamping the
-			// carried origin seq verbatim (no re-stamp) and never re-relaying
-			// (the marker suppresses the onPublishT relay below on its own).
-			const relayOriginSeq = options != null ? options[RELAY_ORIGIN_SEQ] : undefined;
-			const isRelay = relayOriginSeq !== undefined;
+			// carried origin seq verbatim (no re-stamp) and never re-relaying (the
+			// token suppresses the onPublishT relay below on its own). An ARGUMENT
+			// compared by identity, as production: a marker read off the options
+			// object would be answered by anything that answers every key.
+			const isRelay = relayToken === RELAY_RECEIVE_T;
 			// Egress admission, origin-side only (a relayed frame was charged on
 			// the worker that published it), before the stamp - as production.
 			let recipients = 0;
@@ -1548,15 +1553,15 @@ export async function createTestServer(options = {}) {
 					egressTenant = egressTenantForT(topic);
 					// An entry whose batch already decided for the whole call
 					// charges but does not re-decide; see production.
-					if (!(options && options[EGRESS_ADMITTED]) &&
+					if (!admittedByBatch(options) &&
 						!egressAccountT.admit(topic, egressTenant, 1, recipients)) return false;
 				}
 			}
-			// Coerced here as well as normalized at the set site, as production
-			// does: the set site guarantees what this module writes, this
-			// guarantees what reaches the wire whatever wrote the marker.
+			// The coercion stays on the READ side, as production: it decides the
+			// number that reaches the wire whatever the caller of the relay path
+			// passed.
 			const seq = isRelay
-				? (typeof relayOriginSeq === 'number' ? relayOriginSeq : null)
+				? (typeof relaySeq === 'number' ? relaySeq : null)
 				: stampSeq(options, topicSeqs, topic, seqBoundT);
 			const env = envelope(topic, event, data, seq);
 			// The relay carries the JSON envelope plus, for a registered codec, its
@@ -1809,7 +1814,7 @@ export async function createTestServer(options = {}) {
 						}
 					}
 					if (!egressAccountT.admit(topic, egressTenantForT(topic), count, deliveries)) return false;
-					statelessOpts = { ...(opts || {}), [EGRESS_ADMITTED]: true };
+					statelessOpts = markAdmitted({ ...(opts || {}) });
 				}
 				let ok = false;
 				for (let i = 0; i < count; i++) {
@@ -1980,12 +1985,9 @@ export async function createTestServer(options = {}) {
 			const codec = byCapabilityT.get(capability);
 			if (!codec) return false;
 			if (!capCountsT.has(capability)) return false;
-			// Normalized here, as production does: a relayed frame with no seq
-			// must still read as relayed, and `undefined` cannot say that.
-			platform.publishWire(topic, event, data, codec, {
-				[RELAY_ORIGIN_SEQ]: typeof seq === 'number' ? seq : null,
-				compress
-			});
+			// The token rides beside the options object, as production: nothing
+			// the caller can hand this lane answers for it.
+			platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE_T, seq);
 			return true;
 		},
 		sendWire(ws, topic, event, data, wire, options) {
@@ -2517,7 +2519,7 @@ export async function createTestServer(options = {}) {
 				for (let i = 0; i < messages.length; i++) {
 					const m = messages[i];
 					const per = egressAccountT.enabled
-						? { ...(m.options || {}), [EGRESS_ADMITTED]: true }
+						? markAdmitted({ ...(m.options || {}) })
 						: m.options;
 					platform.publish(m.topic, m.event, m.data, per);
 				}
