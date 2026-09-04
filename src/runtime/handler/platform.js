@@ -733,8 +733,13 @@ export const platform = {
 		// A relayed frame carries the origin worker's stamp verbatim: the
 		// origin already stamped and counted this publish once, and stamping
 		// again here would fork the topic's sequence per worker.
+		// Coerced HERE as well as normalized at the set site. The two are not
+		// redundant: the set site guarantees the shape this module writes, and
+		// this guarantees the shape that reaches the wire whatever wrote the
+		// marker. Without it a value that is neither number nor null is
+		// stamped into the envelope verbatim.
 		const seq = isRelay
-			? relayOriginSeq
+			? (typeof relayOriginSeq === 'number' ? relayOriginSeq : null)
 			: stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) {
@@ -1734,7 +1739,8 @@ export function flushCoalescedFor(facade, userData) {
  * the codec's `capability` and `{ event, data }` alongside the JSON envelope.
  * When this worker has the codec registered AND a local connection advertises
  * the capability, re-encode binary locally by re-entering publishWire with the
- * origin's seq (no re-stamp), `relay: false` (no re-relay loop), and the
+ * origin's seq (no re-stamp), the relay marker that forces the re-relay
+ * decision off by itself, and the
  * origin's compress intent (re-gated by this worker's own compressor).
  *
  * Returns false - the caller (relayPublish) then takes the plain JSON fan-out -
@@ -1810,7 +1816,7 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 	// and only for a codec the origin found in its registry; the gate keys on
 	// `capability` alone, not on `data`, because a codec may legitimately
 	// encode an undefined payload (an event-only or tick frame). The local
-	// re-encode passes relay:false, so it never re-relays and cannot loop.
+	// re-encode carries the relay marker, so it never re-relays and cannot loop.
 	if (capability !== undefined &&
 		relayPublishWire(topic, event, data, capability, seq ?? null, compress)) {
 		return;

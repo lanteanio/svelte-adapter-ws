@@ -382,9 +382,55 @@ describe('upgrade admission', () => {
 		expect(res.status).toBe(426);
 		expect(await res.text()).toContain('WebSocket upgrade required');
 	});
+
+	it('length-frames the 426 rather than answering chunked', async () => {
+		// A browser navigation to the socket URL lands here, and node falls
+		// back to chunked whenever the writer leaves the length off - which
+		// frames this answer differently from every other fixed-shape refusal
+		// the adapter writes. Raw socket, because fetch does not surface the
+		// framing headers and the framing is the subject.
+		const raw = await new Promise((resolve, reject) => {
+			const socket = net.connect(rt.port, '127.0.0.1', () => {
+				socket.write('GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+			});
+			let out = '';
+			socket.on('data', (chunk) => { out += chunk.toString(); });
+			socket.on('end', () => resolve(out));
+			socket.on('error', reject);
+			socket.setTimeout(5000, () => { socket.destroy(); resolve(out); });
+		});
+		const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
+		expect(head, 'the 426 answered chunked').not.toContain('transfer-encoding: chunked');
+		// A whole header line: a substring match would accept a declared length
+		// that is a numeric extension of the true one.
+		expect(head.split('\r\n'), 'the 426 declared no length, or the wrong one')
+			.toContain(`content-length: ${Buffer.byteLength('WebSocket upgrade required')}`);
+	});
 });
 
 describe('authenticate preflight', () => {
+	it('length-frames its own 405, which is a copy of the shared writer', async () => {
+		// This route open-codes the same body the shared send405 produces,
+		// because its Allow value is POST alone. One status with one body must
+		// not be framed two ways by one server, so the copy carries the length
+		// the original does. Raw socket: the framing headers are the subject.
+		const raw = await new Promise((resolve, reject) => {
+			const socket = net.connect(rt.port, '127.0.0.1', () => {
+				socket.write('GET /__ws/auth HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+			});
+			let out = '';
+			socket.on('data', (chunk) => { out += chunk.toString(); });
+			socket.on('end', () => resolve(out));
+			socket.on('error', reject);
+			socket.setTimeout(5000, () => { socket.destroy(); resolve(out); });
+		});
+		expect(raw.startsWith('HTTP/1.1 405')).toBe(true);
+		const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
+		expect(head, 'the authenticate 405 answered chunked').not.toContain('transfer-encoding: chunked');
+		expect(head.split('\r\n'), 'the authenticate 405 declared no length, or the wrong one')
+			.toContain(`content-length: ${Buffer.byteLength('Method Not Allowed')}`);
+	});
+
 	it('runs the hook and serializes its cookies on a 204', async () => {
 		const res = await fetch(rt.origin + '/__ws/auth', {
 			method: 'POST',

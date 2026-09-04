@@ -75,18 +75,32 @@ export function handleRequest(req, res) {
 	// even during drain (the process lives); readiness reports the lifecycle
 	// state so a balancer routes away the moment drain begins.
 	if (method === 'GET') {
+		// The probes are length-framed like every other fixed-shape answer:
+		// uWS derives a length from the body it is handed, and a balancer
+		// probing with HEAD gets no size at all when the header is absent.
 		if (HEALTH_CHECK_PATH !== false && pathname === HEALTH_CHECK_PATH) {
-			res.writeHead(200, { 'content-type': 'text/plain' });
-			res.end('OK');
+			const body = 'OK';
+			res.writeHead(200, {
+				'content-type': 'text/plain',
+				'content-length': String(Buffer.byteLength(body))
+			});
+			res.end(body);
 			return;
 		}
 		if (READINESS_CHECK_PATH !== false && pathname === READINESS_CHECK_PATH) {
 			const lifecycle = lifecycleState();
 			if (lifecycle === 'ready') {
-				res.writeHead(200, { 'content-type': 'text/plain' });
-				res.end('ready');
+				const body = 'ready';
+				res.writeHead(200, {
+					'content-type': 'text/plain',
+					'content-length': String(Buffer.byteLength(body))
+				});
+				res.end(body);
 			} else {
-				res.writeHead(503, { 'content-type': 'text/plain' });
+				res.writeHead(503, {
+					'content-type': 'text/plain',
+					'content-length': String(Buffer.byteLength(lifecycle))
+				});
 				res.end(lifecycle);
 			}
 			return;

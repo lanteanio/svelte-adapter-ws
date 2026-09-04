@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -45,7 +45,8 @@ import {
 	assertBatchEntrySequenceAuthority,
 	clusterSequenceAccepted,
 	clusterSequenceValuesAccepted,
-	hasMultipleWorkers
+	hasMultipleWorkers,
+	RELAY_ORIGIN_SEQ
 } from '../src/runtime/handler/cluster-sequence-policy.js';
 import { stampSeq, stampSeqValue } from '../src/runtime/utils/epoch.js';
 
@@ -335,5 +336,53 @@ describe('the gate carries every spelling the stamp accepts', () => {
 			// Off-cluster the gate takes everything the stamp takes.
 			expect(clusterSequenceValuesAccepted(seq, false, { totalWorkers: 1 }), String(seq)).toBe(stampTook);
 		}
+	});
+});
+
+// The marker's unforgeability is a property of HOW it is declared, and neither
+// half of that is visible to a test that only drives publish lanes.
+describe('the relay origin-seq marker is declared unforgeably', () => {
+	it('is a module symbol, never a registry symbol', () => {
+		// Symbol.for() puts a symbol in the cross-realm registry, where an
+		// application retrieves it by DESCRIPTION without importing anything.
+		// That would leave the marker exactly as spellable as the two string
+		// keys it replaced, and the swap is otherwise invisible: every publish
+		// test still passes with it.
+		expect(typeof RELAY_ORIGIN_SEQ).toBe('symbol');
+		expect(
+			Symbol.keyFor(RELAY_ORIGIN_SEQ),
+			'the marker is in the global symbol registry, so an app can fetch it by description'
+		).toBeUndefined();
+		expect(
+			RELAY_ORIGIN_SEQ,
+			'a registry symbol with this description is the same value as the marker'
+		).not.toBe(Symbol.for(String(RELAY_ORIGIN_SEQ.description)));
+	});
+
+	it('leaves no string spelling of the relay marker anywhere in src', () => {
+		// An ADDITIVE backdoor is what the other pins cannot see: writing
+		// `|| options._isRelay` beside the symbol read leaves the symbol read
+		// count unchanged, and the behavioural cases drive the harness only.
+		// Scanning the whole of src catches it on both surfaces at once, and
+		// catches a third surface nobody has thought of yet.
+		const root = new URL('../src/', import.meta.url);
+		// URL objects throughout, never `.pathname`: on Windows that yields
+		// `/C:/...`, which readFileSync resolves against the cwd into
+		// `C:\C:\...` and the scan dies instead of scanning.
+		/** @param {URL} dir @returns {URL[]} */
+		const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+			e.isDirectory()
+				? walk(new URL(e.name + '/', dir))
+				: e.name.endsWith('.js')
+					? [new URL(e.name, dir)]
+					: []
+		);
+		const files = walk(root);
+		// Vacuity floor: an empty file list would satisfy the filter below.
+		expect(files.length, 'the src scan found almost no files').toBeGreaterThan(50);
+		const offenders = files
+			.filter((f) => /_isRelay|_relaySeq/.test(readFileSync(f, 'utf8')))
+			.map((f) => 'src/' + decodeURIComponent(f.href.split('/src/')[1]));
+		expect(offenders, 'a string spelling of the relay marker is back in src').toEqual([]);
 	});
 });

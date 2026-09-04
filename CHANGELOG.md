@@ -78,9 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport failures alone - `405` for a fetch-forbidden method, `400` for an
   ambiguous header, an unusable Host, or a target that resolves outside the
   mount prefix, `413` for a declared body over `BODY_SIZE_LIMIT`, and `500` for
-  a handler that throws, rejects or returns a non-`Response`. Each of those is
-  length-framed rather than chunked, so a `HEAD` carries the size a `GET` would
-  have returned. A throw or a rejection also emits
+  a handler that throws, rejects or returns a non-`Response`. A throw or a
+  rejection also emits
   `ADAPTER-ERR-ADMIN-HANDLER`, carrying the error; a returned non-`Response`
   is answered `500` without one, because there is no error to carry. Set a
   string to
@@ -397,6 +396,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The adapter's own fixed-shape answers declare a `Content-Length` instead of
+  falling back to chunked transfer encoding. This covers the shared `405`,
+  `400`, `413` and `500` writers, every answer the admin route produces
+  including the empty-bodied ones, the `/healthz` and `/readyz` probes, the
+  WebSocket-path `426` and the waiting-room refusals, and the authenticate
+  route's own copies of `405` and `400`. Only the adapter's own answers are
+  affected; anything your app returns is written back as it always was. A
+  `HEAD` now carries the size a `GET` would have returned rather than no
+  framing at all, which is what a load balancer probing with `HEAD` reads.
+  `createTestServer` frames the same way, so a test written against the harness
+  sees what the built server produces.
+
 - Metric `# HELP` sentences say what a number measures rather than which
   runtime produced it. `ws_publishes_total`, `ws_publish_outcomes_total`,
   `ws_dropped_frames_total` and `ws_dropped_bytes_total` no longer credit C++
@@ -444,9 +455,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   properties on the options object, and an application reaches `publishWire`
   with an options object of its own: spelling them suppressed the check that
   keeps one monotonic sequence per topic, and let the caller stamp whatever it
-  liked. The marker is now a module symbol, which an application cannot name. A
-  call that tries is not refused, only ignored, and publishes as an ordinary
-  origin publish.
+  liked. The marker is now a module symbol, which an application cannot name.
+  The forged keys are not refused, they are ignored: the call becomes an
+  ordinary origin publish. Off-cluster that publishes normally with a
+  locally-stamped sequence. In a multi-worker runtime it is then the cluster
+  sequence authority that turns it away, because an ordinary publish carrying
+  no `{ seq, relay }` pair is exactly what that check refuses - so a clustered
+  app that was relying on the old keys sees a throw where it previously saw a
+  publish.
 
 - A handshake that never becomes a connection returns its upgrade permit. The
   permit was marked as transferred to the connection around the accept call,

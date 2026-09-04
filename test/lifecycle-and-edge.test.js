@@ -48,6 +48,33 @@ describe('probe routes', () => {
 		expect(res.status).toBe(200);
 		expect(await res.text()).toBe('ready');
 	});
+
+	// The probes are what a load balancer polls, and node answers chunked
+	// whenever a writer leaves the length off. uWS derives one from the body
+	// handed to end(), so leaving it off frames the same answer differently
+	// from the rest of the family.
+	//
+	// GET only, deliberately: the probe routes are registered for GET alone,
+	// here and in the family, so a HEAD falls through to the static and SSR
+	// lanes and is not this writer's answer to frame.
+	//
+	// Raw sockets rather than fetch: undici does not surface the framing
+	// headers reliably, and the framing is the whole subject.
+	it('length-frames both probes rather than answering chunked', async () => {
+		for (const [path, body] of [['/healthz', 'OK'], ['/readyz', 'ready']]) {
+			const raw = await rawRequest(
+				rt.port,
+				`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`
+			);
+			const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
+			expect(head, `${path} answered chunked`).not.toContain('transfer-encoding: chunked');
+			// A WHOLE header line: `content-length: 20` contains
+			// `content-length: 2`, so a substring match would accept a declared
+			// length that is a numeric extension of the true one.
+			expect(head.split('\r\n'), `${path} declared no length, or the wrong one`)
+				.toContain(`content-length: ${Buffer.byteLength(body)}`);
+		}
+	});
 });
 
 describe('edge policy', () => {

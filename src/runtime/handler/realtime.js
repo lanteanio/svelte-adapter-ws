@@ -2235,8 +2235,16 @@ export function tryAuthenticateRoute(req, res, pathname) {
  */
 async function runAuthenticateRoute(req, res) {
 	if (req.method !== 'POST') {
-		res.writeHead(405, { allow: 'POST', 'content-type': 'text/plain' });
-		res.end('Method Not Allowed');
+		// Length-framed like the shared writers in http-helpers.js. This route
+		// keeps its own copies because its Allow value is POST alone, but one
+		// status with one body must not be framed two ways by one server.
+		const body = 'Method Not Allowed';
+		res.writeHead(405, {
+			allow: 'POST',
+			'content-type': 'text/plain',
+			'content-length': String(Buffer.byteLength(body))
+		});
+		res.end(body);
 		return;
 	}
 
@@ -2244,8 +2252,12 @@ async function runAuthenticateRoute(req, res) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
-		res.writeHead(400, { 'content-type': 'text/plain' });
-		res.end('Bad Request');
+		const body = 'Bad Request';
+		res.writeHead(400, {
+			'content-type': 'text/plain',
+			'content-length': String(Buffer.byteLength(body))
+		});
+		res.end(body);
 		return;
 	}
 
@@ -2430,8 +2442,18 @@ function httpRefusalResponse(res) {
 		writeHeader(name, value) { headers[String(name).toLowerCase()] = String(value); return facade; },
 		end(body) {
 			try {
+				const text = body == null ? '' : String(body);
+				// uWS derives a length from the body handed to end(), so this
+				// facade fills one in too: without it node answers chunked
+				// where the family answers with a length, and a HEAD carries
+				// no size at all. Never on a status defined to carry no body,
+				// and never over a length the writer set for itself.
+				if (
+					headers['content-length'] === undefined &&
+					status >= 200 && status !== 204 && status !== 304
+				) headers['content-length'] = String(Buffer.byteLength(text));
 				res.writeHead(status, statusText || undefined, headers);
-				res.end(body == null ? '' : String(body));
+				res.end(text);
 			} catch { /* exchange already gone */ }
 			return facade;
 		}
@@ -2465,8 +2487,13 @@ export function serveWsPathGet(req, res, pathname, search) {
 	// mismatch above for a deployment that pins `protection: 'siege'` and
 	// configures no `upgradeAdmission` at all.
 	if (postureLevel() !== 'siege' && (!ADMISSION_ARMED || admission.hasCapacity())) {
-		res.writeHead(426, { 'content-type': 'text/plain', upgrade: 'websocket' });
-		res.end('WebSocket upgrade required');
+		const body = 'WebSocket upgrade required';
+		res.writeHead(426, {
+			'content-type': 'text/plain',
+			upgrade: 'websocket',
+			'content-length': String(Buffer.byteLength(body))
+		});
+		res.end(body);
 		return;
 	}
 	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {

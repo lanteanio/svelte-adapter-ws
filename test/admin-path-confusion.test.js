@@ -289,4 +289,36 @@ describe('the harness refuses the same targets', () => {
 		// each carrying the path it resolved to.
 		expect(seen).toEqual(['/__realtime/introspect', '/__realtime']);
 	});
+
+	it('length-frames an EMPTY-bodied admin answer, which takes the other terminal call', async () => {
+		// An answer with no body does not go through the facade's end(); the
+		// admin lane routes it to endWithoutBody(0) instead. Framing the one
+		// and not the other is how the harness kept answering chunked for a
+		// `new Response(null, { status: 200 })` while the runtime it emulates
+		// declared a length of 0 - and on a HEAD, node strips the body itself,
+		// so the reply carried no framing at all rather than a wrong one.
+		//
+		// 200 rather than 204 deliberately: 204 is defined to carry no body and
+		// must NOT get the header, so it cannot exercise this path.
+		const { createTestServer } = await import('../src/testing.js');
+		const empty = await createTestServer({
+			handler: {
+				message() {},
+				admin() { return new Response(null, { status: 200 }); }
+			}
+		});
+		try {
+			const port = Number(new URL(empty.url).port);
+			for (const method of ['GET', 'HEAD']) {
+				const res = await rawGet(port, '/__realtime/anything', method);
+				expect(res.status, `${method} on an empty-bodied answer`).toBe(200);
+				expect(res.head, `${method} empty-bodied answer went chunked`)
+					.not.toContain('transfer-encoding: chunked');
+				expect(headerLines(res), `${method} empty-bodied answer declared no length`)
+					.toContain('content-length: 0');
+			}
+		} finally {
+			await empty.close();
+		}
+	});
 });

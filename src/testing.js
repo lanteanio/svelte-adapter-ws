@@ -347,10 +347,24 @@ function createNodeApp() {
 				} catch { /* peer gone */ }
 				return res;
 			},
-			endWithoutBody: () => {
+			endWithoutBody: (reportedContentLength) => {
 				if (aborted || ended) return res;
 				ended = true;
 				try {
+					// uWS writes the REPORTED length here, which is the whole
+					// point of the argument the admin lane already passes. An
+					// empty-bodied answer therefore says `content-length: 0`
+					// rather than falling back to chunked, and a HEAD through
+					// this facade carries a size instead of no framing at all.
+					if (
+						!pendingHeaders.has('content-length') &&
+						statusCode >= 200 && statusCode !== 204 && statusCode !== 304
+					) {
+						pendingHeaders.set(
+							'content-length',
+							String(typeof reportedContentLength === 'number' ? reportedContentLength : 0)
+						);
+					}
 					nodeRes.writeHead(statusCode, statusText || undefined, Object.fromEntries(pendingHeaders));
 					nodeRes.end();
 				} catch { /* peer gone */ }
@@ -1519,7 +1533,7 @@ export async function createTestServer(options = {}) {
 			// Relay re-encode (mirrors handler.js publishWire): a relayed wire publish
 			// re-encodes binary against THIS server's local connections, stamping the
 			// carried origin seq verbatim (no re-stamp) and never re-relaying
-			// (relay:false suppresses the onPublishT relay below).
+			// (the marker suppresses the onPublishT relay below on its own).
 			const relayOriginSeq = options != null ? options[RELAY_ORIGIN_SEQ] : undefined;
 			const isRelay = relayOriginSeq !== undefined;
 			// Egress admission, origin-side only (a relayed frame was charged on
@@ -1538,8 +1552,11 @@ export async function createTestServer(options = {}) {
 						!egressAccountT.admit(topic, egressTenant, 1, recipients)) return false;
 				}
 			}
+			// Coerced here as well as normalized at the set site, as production
+			// does: the set site guarantees what this module writes, this
+			// guarantees what reaches the wire whatever wrote the marker.
 			const seq = isRelay
-				? relayOriginSeq
+				? (typeof relayOriginSeq === 'number' ? relayOriginSeq : null)
 				: stampSeq(options, topicSeqs, topic, seqBoundT);
 			const env = envelope(topic, event, data, seq);
 			// The relay carries the JSON envelope plus, for a registered codec, its
