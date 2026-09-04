@@ -934,6 +934,9 @@
 		"file": "test/egress-account.test.js"
 	},
 	{
+		"file": "test/egress-ceilings.test.js"
+	},
+	{
 		"file": "test/groups-wire-policy.test.js",
 		"adaptations": [
 			{

@@ -5,7 +5,9 @@
 // stateless walk rebuilds an entry's options when the entry overrides an
 // exclusion or a seq, and publishBatched's per-event fallback builds a fresh
 // object per message. An entry whose copy lost the marker re-takes a decision
-// its batch has already made.
+// its batch has already made. The first of those is driven by the vendored
+// test/egress-ceilings.test.js; this file carries the second, and the vacuity
+// floor both of them rest on.
 //
 // WHY THE BYTES CEILING IS THE ONE THAT SHOWS IT. Messages and deliveries are
 // compared as `usage + this call`, so N per-entry decisions sum to exactly what
@@ -22,9 +24,6 @@
 import { WebSocket } from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestServer } from '../src/testing.js';
-
-/** A codec no client advertises, so every entry goes out as the JSON envelope. */
-const WIRE = { capability: 'test.egress-batch:1', schemaVersion: 1, encode: () => null };
 
 /** Bytes are the only dimension whose answer depends on when it is asked. */
 const BYTES_CEILING = { windowMs: 60000, topic: { bytes: 1 } };
@@ -78,25 +77,10 @@ describe('the batch decision survives the per-entry copy', () => {
 		expect(c.of('solo').map((f) => f.data.n)).toEqual([1]);
 	});
 
-	it('publishWireBatch: an entry that overrides a seq still rides the batch decision', async () => {
-		// The override on the LAST entry is what makes this case able to fail:
-		// an entry with no override reuses the batch's options object BY
-		// REFERENCE and keeps the marker whatever the copy site does, so a case
-		// whose entries all inherit goes green without exercising the copy.
-		const server = await boot({ egress: BYTES_CEILING });
-		server.platform.registerWireCodec(WIRE);
-		const c = await connect(server.wsUrl, 'feed');
-
-		const entries = [
-			{ data: { n: 1 } },
-			{ data: { n: 2 } },
-			{ data: { n: 3 }, seq: 7 }
-		];
-		expect(server.platform.publishWireBatch('feed', 'e', entries, WIRE, { seq: false })).toBe(true);
-		await sleep(150);
-		expect(c.of('feed').map((f) => f.data.n), 'the batch delivered a prefix').toEqual([1, 2, 3]);
-	});
-
+	// The harness publishWireBatch lane is covered by the vendored
+	// test/egress-ceilings.test.js, which drives the same three-entry shape with
+	// the override on the last entry. What is left here is the lane that file
+	// does not reach.
 	it('publishBatched: every message rides the one decision the batch took', async () => {
 		// The per-event fallback builds a FRESH options object per message
 		// rather than copying the caller's, so the marker is written there or
