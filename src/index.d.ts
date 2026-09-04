@@ -561,6 +561,22 @@ export interface AdapterOptions {
 	staticCacheControl?: StaticCacheControlRule[];
 	/** Serve dot-segment static paths (default false; .well-known stays served). */
 	staticDotfiles?: boolean;
+	/**
+	 * Module path to an optional vendor-neutral tracing provider. The module's
+	 * default or named tracing export implements startSpan(name, options)
+	 * using the types from svelte-adapter-ws/observability. The adapter
+	 * extracts validated W3C traceparent / tracestate headers, keeps the
+	 * resulting context active across async native work, and exposes it through
+	 * platform.trace and platform.traceContext.
+	 *
+	 * The provider may return an OpenTelemetry Span directly: its
+	 * spanContext(), recordException(), and end() methods are recognized. When
+	 * omitted, tracing is a no-op and the native hot path does not allocate
+	 * spans.
+	 *
+	 * @example './src/lib/server/tracing.js'
+	 */
+	tracing?: string;
 	/** Realtime lane: true, options object, or false/omitted for HTTP-only. */
 	websocket?: boolean | WebSocketOptions;
 }

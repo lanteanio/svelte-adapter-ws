@@ -43,7 +43,7 @@ const COMPRESS_MIN_SIZE = 1024;
 // `Cookie` or `Authorization` header; apps that have audited their
 // reflected-input surface opt back in via
 // `websocket.compressCredentialedResponses`.
-const COMPRESS_CREDENTIALED = /** @type {any} */ (typeof WS_OPTIONS === 'object' && WS_OPTIONS)?.compressCredentialedResponses === true;
+const COMPRESS_CREDENTIALED = WS_OPTIONS?.compressCredentialedResponses === true;
 
 const COMPRESSIBLE_TYPES = new Set([
 	'text/html', 'text/css', 'text/plain', 'text/xml', 'text/javascript',
