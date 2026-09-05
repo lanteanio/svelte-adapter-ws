@@ -1439,6 +1439,15 @@ if (is_primary) {
 			if (typeof expiryTimer?.unref === 'function') expiryTimer.unref();
 		}
 		const cleanupSignal = budgetMs > 0 ? hooksExpiry.signal : null;
+		if (budgetMs <= 0) {
+			// Announced, because an unbounded shutdown is a real trade rather
+			// than a default: the operator who typed 0 should be able to see that
+			// nothing will cut a wedged hook off.
+			console.log(
+				'[svelte-adapter-ws] SHUTDOWN_TIMEOUT=0: no shutdown budget - the shutdown hook, the in-flight drain and the ' +
+				'cleanup listeners are awaited for as long as they take, so a wedged one holds this process until it is killed.'
+			);
+		}
 		let cleaned = true;
 		try {
 			cleaned = await runShutdownCleanup(signal, cleanupSignal, deadlineAt);
@@ -1505,8 +1514,17 @@ if (is_primary) {
 		// Single-process mode. Signals are armed before the handler module
 		// ever evaluates, so a signal arriving mid-boot is latched rather than
 		// lost; it dispatches the moment start() resolves.
+		/**
+		 * The handler module as soon as it exists, so a signal arriving while
+		 * start() is still running can flip readiness before start() decides
+		 * whether to announce it. `handlerPromise` cannot serve that: awaiting it
+		 * would land after the boot it is meant to interrupt.
+		 * @type {typeof import('./handler.js') | null}
+		 */
+		let bootHandler = null;
 		const handlerPromise = (async () => {
 			const handler = await import('./handler.js');
+			bootHandler = handler;
 			await handler.start(host, port);
 			phase = 'running';
 			if (latchedSignal !== null) {
@@ -1527,6 +1545,12 @@ if (is_primary) {
 				if (phase === 'boot') {
 					latchedSignal = signal;
 					sd_ready_withheld = true;
+					// Readiness moves off 'starting' NOW, not when the boot
+					// finishes: a boot that has already taken its stop signal must
+					// not announce itself ready on the way out. An instance that
+					// says it is ready one tick before it exits is how a rolling
+					// deploy convinces itself the replacement came up healthy.
+					bootHandler?.beginDrain();
 					return;
 				}
 				// A second signal while already draining is the operator

@@ -554,6 +554,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A single-process server no longer shuts down silently. It announces that it
+  has begun draining, and ends with whether the stop was clean - `Shutdown
+  complete in Xms.`, or a line naming it as not clean when requests were
+  dropped or cleanup did not finish. Previously it flipped readiness, ran the
+  hooks, drained and exited without printing anything, so the only evidence a
+  shutdown had happened was that the process was gone. The clustered paths
+  already reported both.
+
+  `SHUTDOWN_TIMEOUT=0` now says so on the way down. An unbounded shutdown is a
+  real trade rather than a default, and the operator who chose it should be
+  able to see that nothing will cut a wedged hook off.
+
+  A `SIGTERM` that arrives while the server is still booting no longer lets it
+  announce `Ready for traffic` on the way out. Readiness moves off `starting`
+  when the signal is taken, not when the doomed boot finishes - an instance
+  that reports itself ready one tick before it exits is how a rolling deploy
+  convinces itself the replacement came up healthy.
+
+- `sveltekit:shutdown` listeners run concurrently and are bounded as a group,
+  rather than being awaited one after another. One slow listener no longer
+  consumes the budget the rest were meant to share, and a listener that never
+  settles no longer denies every later one its turn. Each listener also
+  receives a context object - `{ reason, signal, deadline }` - alongside the
+  reason it already got.
+
+  A listener that rejects and one that throws synchronously are now reported
+  as two different things, because they fail at different points and usually
+  for different reasons.
+
+- The dropped-requests line names the budget that was actually configured. It
+  was reporting whatever the HTTP drain had left after the WebSocket drain took
+  its share - neither the number anyone set nor a whole one.
+
 - The app's WebSocket `shutdown` hook runs on every close path, not only when
   the adapter's own entry drives the shutdown. It is now invoked from
   `shutdown()` itself, so a consumer that imports the built handler and closes
