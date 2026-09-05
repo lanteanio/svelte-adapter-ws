@@ -49,10 +49,15 @@ function setLifecycleState(next) {
  * Flip readiness to 503 while the listener still accepts. A balancer routes
  * away on the readiness probe; the traffic already in flight keeps being
  * served until `shutdown` closes the door.
+ *
+ * @returns {boolean} whether THIS call began the drain. The signal handler and
+ *   shutdown() both call it, and a caller that announces the drain needs to
+ *   know which of them was first or the line is printed twice.
  */
 export function beginDrain() {
-	if (lifecycle_state === 'closed') return;
+	if (lifecycle_state === 'closed' || lifecycle_state === 'draining') return false;
 	setLifecycleState('draining');
+	return true;
 }
 
 /** @type {Array<() => void>} */

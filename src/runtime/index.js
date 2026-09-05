@@ -1364,6 +1364,22 @@ if (is_primary) {
 	}
 
 	/**
+	 * Flip readiness and say so, exactly once whichever path arrives first.
+	 *
+	 * Two do: a signal taken while the server is still booting, and the shutdown
+	 * sequence itself. Announcing per call would read as two separate shutdowns,
+	 * and announcing only in the sequence would leave the boot-signal case
+	 * silent about a drain that had already begun.
+	 *
+	 * @param {typeof import('./handler.js') | null} h
+	 */
+	function beginDrainAnnounced(h) {
+		if (h?.beginDrain()) {
+			console.log('[svelte-adapter-ws] Readiness now reports NOT ready (draining); still accepting.');
+		}
+	}
+
+	/**
 	 * Exit once stdout has actually taken what was just written.
 	 *
 	 * A pipe accepts writes asynchronously, so exiting in the same turn as the
@@ -1407,8 +1423,7 @@ if (is_primary) {
 		// Announced, because draining is not closing and the two look identical
 		// from outside: without this line the only evidence a shutdown started
 		// is that the process eventually stopped.
-		handler.beginDrain();
-		console.log('[svelte-adapter-ws] Readiness now reports NOT ready (draining); still accepting.');
+		beginDrainAnnounced(handler);
 		const shutdownStartedAt = monotonicNow();
 		if (shutdown_delay > 0 && signal !== 'shutdown') {
 			await new Promise((resolve) => setTimeout(resolve, shutdown_delay)); // determinism-allow: process-level shutdown pacing, outside the replayable runtime
@@ -1448,19 +1463,16 @@ if (is_primary) {
 				'cleanup listeners are awaited for as long as they take, so a wedged one holds this process until it is killed.'
 			);
 		}
+		// Every application-supplied input to the sequence is contained behind
+		// its own entry - a throwing ws hook, a rejecting or wedged cleanup
+		// listener, an overrunning drain. What is left for this catch is the
+		// sequence's OWN machinery throwing, which an app reaches through a
+		// broken global: instrumentation that rewraps EventEmitter internals and
+		// then throws when the cleanup step reads the listener list. Reported and
+		// carried on with rather than rethrown, so the steps that can still run
+		// do, and the ending below still says the shutdown was not clean.
 		let cleaned = true;
-		try {
-			cleaned = await runShutdownCleanup(signal, cleanupSignal, deadlineAt);
-		} catch (err) {
-			cleaned = false;
-			console.error('[svelte-adapter-ws] shutdown cleanup failed:', err);
-		}
-		if (!cleaned) {
-			console.error(adapterConsoleLine(
-				ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
-				`${budgetMs}ms); exiting anyway - their cleanup did NOT finish.`
-			));
-		}
+		let drained = true;
 		// The app's own hook runs inside handler.shutdown(), which is the close
 		// path every caller reaches - not just this entry. It is handed the SAME
 		// expiry this phase raced against, and the timer is deliberately still
@@ -1470,14 +1482,24 @@ if (is_primary) {
 		// The drains get the REMAINDER of the sequence budget, floored at 1ms
 		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
 		// must cut the drains immediately, not unbound them.
-		let drained = true;
 		try {
+			cleaned = await runShutdownCleanup(signal, cleanupSignal, deadlineAt);
+			if (!cleaned) {
+				console.error(adapterConsoleLine(
+					ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
+					`${budgetMs}ms); exiting anyway - their cleanup did NOT finish.`
+				));
+			}
 			drained = (await handler.shutdown({
 				reason: signal,
 				signal: cleanupSignal,
 				deadline: deadlineAt,
 				timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
 			})) !== false;
+		} catch (err) {
+			cleaned = false;
+			drained = false;
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_FAILED), err);
 		} finally {
 			if (expiryTimer) clearTimeout(expiryTimer); // determinism-allow: pairs with the shutdown budget above
 		}
@@ -1550,7 +1572,7 @@ if (is_primary) {
 					// not announce itself ready on the way out. An instance that
 					// says it is ready one tick before it exits is how a rolling
 					// deploy convinces itself the replacement came up healthy.
-					bootHandler?.beginDrain();
+					beginDrainAnnounced(bootHandler);
 					return;
 				}
 				// A second signal while already draining is the operator

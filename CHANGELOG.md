@@ -554,6 +554,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The readiness mirror on the shared counters agrees with the lifecycle state
+  during boot. It began life reporting a server that was taking traffic while
+  the lifecycle said `starting` and `/readyz` correctly refused, so a
+  diagnostics surface reading the mirror and a load balancer reading the probe
+  disagreed for the whole of startup - the one window where the socket is
+  already bound but the instance must not be routed to.
+
+- `beginDrain()` reports whether it was the call that began the drain. The
+  signal handler and `shutdown()` both call it, so a caller that announces the
+  drain had no way to avoid saying it twice.
+
+- A throw from the shutdown sequence's own machinery is reported through
+  `ADAPTER-ERR-SHUTDOWN-FAILED` with the error attached, and the sequence still
+  finishes and exits. It was being caught and printed as an unindexed line, so
+  an operator who searched for the documented id found nothing.
+
 - A single-process server no longer shuts down silently. It announces that it
   has begun draining, and ends with whether the stop was clean - `Shutdown
   complete in Xms.`, or a line naming it as not clean when requests were

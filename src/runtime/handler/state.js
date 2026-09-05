@@ -42,8 +42,17 @@ export const counters = {
 	inFlightCount: 0,
 	/** Operations attempted on an already-closed socket, absorbed. */
 	closedWsAborts: 0,
-	/** Mirrors the lifecycle state for cheap hot-path reads. */
-	draining: false,
+	/**
+	 * Mirrors the lifecycle state for cheap hot-path reads.
+	 *
+	 * Starts TRUE, because the lifecycle starts at 'starting' and this mirrors
+	 * "not ready" rather than "shutting down". Initialising it false left the
+	 * two disagreeing for the whole of boot: the readiness probe correctly
+	 * refused while anything reading this saw a server taking traffic - and boot
+	 * is exactly the window where the socket is already bound (so the kernel
+	 * queues connections) but the instance must not be routed to.
+	 */
+	draining: true,
 	/** Monotonic ref allocator for platform.request frames. */
 	nextRequestRef: 1,
 	/** Frames shed past maxBackpressure since boot. */
