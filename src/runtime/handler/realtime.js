@@ -2568,14 +2568,63 @@ export async function fireInitOnce(workerData = null) {
 }
 
 /** Fire the app's shutdown hook; throws are logged, never propagated. */
-export async function fireShutdownOnce() {
-	if (typeof wsModule.shutdown === 'function') {
-		try {
-			await wsModule.shutdown({ platform });
-		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_THREW), err);
+/**
+ * Run the app's `shutdown` export once, bounded by the shutdown budget.
+ *
+ * The hook is RACED against the budget rather than awaited outright. A bare
+ * await hands an application the ability to hold the close path open for as
+ * long as the process lives, and says nothing while it does.
+ *
+ * @param {{ signal?: AbortSignal | null, deadline?: number | null }} [ctx]
+ */
+export async function fireShutdownOnce(ctx) {
+	if (typeof wsModule.shutdown !== 'function') return;
+	const signal = ctx?.signal ?? null;
+	const started = monotonicNow();
+	try {
+		// The rejection handler is attached BEFORE the race, not after it: once
+		// the race is lost nothing awaits the hook any more, so a late rejection
+		// would surface as an unhandled rejection in the middle of the exit.
+		const hook = Promise.resolve(
+			wsModule.shutdown({ platform, signal, deadline: ctx?.deadline ?? null })
+		).then(
+			() => true,
+			(err) => { console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_THREW), err); return true; }
+		);
+		// The hook keeps running after the budget expires - user code cannot be
+		// interrupted - but it no longer holds the close path. Its `signal` is how
+		// a hook that wants to give up cleanly can.
+		const settled = await Promise.race([hook, whenAborted(signal).then(() => false)]);
+		if (!settled) {
+			console.error(adapterConsoleLine(
+				ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_UNSETTLED,
+				`${(monotonicNow() - started).toFixed(0)}ms and the shutdown budget is spent; ` +
+				'closing anyway - whatever the hook was flushing did NOT finish.'
+			));
 		}
+	} catch (err) {
+		// A hook that threw synchronously, before it ever returned a promise.
+		// Log-and-continue: shutdown is best-effort and cannot be refused.
+		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_THREW), err);
 	}
+}
+
+/**
+ * Resolve when `signal` aborts, and never otherwise.
+ *
+ * The never-settling half is deliberate: this is one side of a `Promise.race`,
+ * so "no budget" has to mean "this side never wins" rather than "this side wins
+ * immediately".
+ *
+ * @param {AbortSignal | null} signal
+ * @returns {Promise<void>}
+ */
+function whenAborted(signal) {
+	if (!signal) return new Promise(() => {});
+	if (signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		signal.addEventListener('abort', () => resolve(), { once: true });
+	});
 }
 
 /** @returns {string} the configured WebSocket path (for the 426 route) */

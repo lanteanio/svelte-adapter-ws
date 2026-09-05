@@ -4239,6 +4239,10 @@ export async function createTestServer(options = {}) {
 					const budgetTimer = budgetMs > 0 ? setTimer(() => expiry.abort(), budgetMs) : null;
 					// Null with no budget: the race's abort side then never wins.
 					const signal = budgetMs > 0 ? expiry.signal : null;
+					// The monotonic instant the budget runs out, handed to the hook so
+					// it can decide how much work to attempt rather than only learning
+					// it is too late when the signal fires.
+					const hookDeadline = budgetMs > 0 ? monotonicNow() + budgetMs : null;
 					if (typeof handler.shutdown === 'function') {
 						const started = monotonicNow();
 						try {
@@ -4247,15 +4251,18 @@ export async function createTestServer(options = {}) {
 							// late rejection would surface as an unhandled rejection in
 							// the middle of teardown.
 							const hook = Promise.resolve(
-								handler.shutdown({ platform })
+								handler.shutdown({ platform, signal, deadline: hookDeadline })
 							).then(() => true, (err) => { console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_THREW), err); return true; });
 							// The hook keeps running after the budget expires - user
 							// code cannot be interrupted - but it no longer holds the
 							// close path.
 							const settled = await Promise.race([hook, whenAbortedT(signal).then(() => false)]);
 							if (!settled) {
+								// The WS-hook-specific id, not the generic listeners one: an
+								// operator reading this needs to know WHICH hook did not
+								// finish, and the two have different next actions.
 								console.error(adapterConsoleLine(
-									ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
+									ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_UNSETTLED,
 									`${(monotonicNow() - started).toFixed(0)}ms and the shutdown budget is spent; ` +
 									'closing anyway - whatever the hook was flushing did NOT finish.'
 								));

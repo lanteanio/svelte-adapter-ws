@@ -230,7 +230,14 @@ export async function start(host, port, opts = {}) {
 	});
 }
 
-/** Run the app's shutdown hook; the entry awaits this inside its budget. */
-export async function runAppShutdownHook() {
-	if (realtime) await realtime.fireShutdownOnce();
+/**
+ * Run the app's shutdown hook; the entry awaits this inside its budget.
+ *
+ * @param {{ signal?: AbortSignal | null, deadline?: number | null }} [ctx] - the
+ *   SAME budget the entry races the whole hooks phase against, so the hook can
+ *   honour it rather than arming a timer of its own. A per-hook timer would make
+ *   the real bound the sum of the phases instead of the budget.
+ */
+export async function runAppShutdownHook(ctx) {
+	if (realtime) await realtime.fireShutdownOnce(ctx);
 }

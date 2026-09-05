@@ -1352,9 +1352,18 @@ if (is_primary) {
 		// stretch or collapse what the drains have left.
 		const budgetMs = shutdown_timeout * 1000;
 		const deadlineAt = budgetMs > 0 ? monotonicNow() + budgetMs : null;
+		// ONE abort for the whole hooks phase, aborted by the same expiry the race
+		// below waits on. The app's WebSocket shutdown hook gets it, so a hook that
+		// wants to give up cleanly can - and so a hook that does not still stops
+		// holding the close path when the budget is spent. Null with no budget: the
+		// hook's own race must then never abort.
+		const hooksExpiry = new AbortController();
 		const hooks = (async () => {
 			await runShutdownCleanup(signal);
-			await handler.runAppShutdownHook?.();
+			await handler.runAppShutdownHook?.({
+				signal: budgetMs > 0 ? hooksExpiry.signal : null,
+				deadline: deadlineAt
+			});
 		})().catch((err) => {
 			console.error('[svelte-adapter-ws] app shutdown hook failed:', err);
 		});
@@ -1363,7 +1372,7 @@ if (is_primary) {
 			/** @type {any} */
 			let timer = null;
 			const deadline = new Promise((resolve) => {
-				timer = setTimeout(() => resolve(EXPIRED), budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
+				timer = setTimeout(() => { hooksExpiry.abort(); resolve(EXPIRED); }, budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
 				if (typeof timer?.unref === 'function') timer.unref();
 			});
 			const outcome = await Promise.race([hooks, deadline]);

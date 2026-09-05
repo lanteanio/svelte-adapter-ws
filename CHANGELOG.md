@@ -514,6 +514,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The app's WebSocket `shutdown` hook runs under the shutdown budget and is
+  handed a `signal` and a `deadline` to honour. It was awaited outright with
+  nothing but `{ platform }`, so a hook that never settled held the close path
+  open for as long as the process lived, and nothing was printed to say why the
+  shutdown had stopped making progress.
+
+  The hook is now raced against the budget. When it loses,
+  `ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED` reports how long it ran and that
+  whatever it was flushing did not finish, and the drain proceeds. The hook is
+  not interrupted - user code cannot be - but it no longer holds the close path,
+  and `signal` is how a hook that wants to give up cleanly can. A hook that
+  finishes inside the budget is silent, as before.
+
 - Three failures the runtime already reports are in the error catalog:
   `ADAPTER-ERR-EGRESS-REFUSED`, `ADAPTER-ERR-EGRESS-TENANT-RESOLVER` and
   `ADAPTER-ERR-PRESSURE-RATE-LISTENER`. The lines were being printed with no

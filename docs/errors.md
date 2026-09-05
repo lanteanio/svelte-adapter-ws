@@ -944,7 +944,25 @@ Log line begins:
 
 **Automatic recovery.** None. Shutdown is best-effort and proceeds without the hook.
 
-**What to do.** Fix the hook, then check whatever it was flushing for state left behind. The hook is awaited with { platform } during the drain and shares the shutdown cleanup budget, so long-running flushes must finish inside it.
+**What to do.** Fix the hook, then check whatever it was flushing for state left behind. The hook is awaited with { platform, signal, deadline } during the drain and shares the shutdown cleanup budget, so long-running flushes must finish inside it.
+
+## ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] the WebSocket shutdown hook has not settled after 
+```
+
+**Cause.** The `shutdown` export of the WebSocket handler was still running when the shutdown budget expired.
+
+**Consequence.** The close path stops waiting and the drain proceeds anyway. The hook keeps running - user code cannot be interrupted - but nothing awaits it any more, so whether it finishes is a race against whatever ends the process next. It may well complete: under `createTestServer` the process often continues afterwards and the flush lands. What is gone is the guarantee, so a hook that prints this is one deploy timing away from losing whatever it was flushing. createTestServer prints the same line for the same hook.
+
+**Automatic recovery.** None by design: the budget exists so a wedged hook cannot hold the process open.
+
+**What to do.** Make the hook finish inside the budget, or raise SHUTDOWN_TIMEOUT. The hook receives a `signal` that aborts when the budget expires - honoring it turns this into a clean early return.
 
 ## ADAPTER-ERR-MESSAGE-HOOK
 
