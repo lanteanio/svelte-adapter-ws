@@ -1358,37 +1358,43 @@ if (is_primary) {
 		// holding the close path when the budget is spent. Null with no budget: the
 		// hook's own race must then never abort.
 		const hooksExpiry = new AbortController();
-		const hooks = (async () => {
-			await runShutdownCleanup(signal);
-			await handler.runAppShutdownHook?.({
-				signal: budgetMs > 0 ? hooksExpiry.signal : null,
-				deadline: deadlineAt
-			});
-		})().catch((err) => {
-			console.error('[svelte-adapter-ws] app shutdown hook failed:', err);
+		const hooks = runShutdownCleanup(signal).catch((err) => {
+			console.error('[svelte-adapter-ws] shutdown cleanup failed:', err);
 		});
+		/** @type {any} */
+		let expiryTimer = null;
 		if (deadlineAt !== null) {
 			const EXPIRED = Symbol('expired');
-			/** @type {any} */
-			let timer = null;
 			const deadline = new Promise((resolve) => {
-				timer = setTimeout(() => { hooksExpiry.abort(); resolve(EXPIRED); }, budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
-				if (typeof timer?.unref === 'function') timer.unref();
+				expiryTimer = setTimeout(() => { hooksExpiry.abort(); resolve(EXPIRED); }, budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
+				if (typeof expiryTimer?.unref === 'function') expiryTimer.unref();
 			});
 			const outcome = await Promise.race([hooks, deadline]);
-			if (timer) clearTimeout(timer); // determinism-allow: pairs with the shutdown budget above
 			if (outcome === EXPIRED) {
 				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED));
 			}
 		} else {
 			await hooks;
 		}
+		// The app's own hook runs inside handler.shutdown(), which is the close
+		// path every caller reaches - not just this entry. It is handed the SAME
+		// expiry this phase raced against, and the timer is deliberately still
+		// armed: clearing it here would leave that hook unbounded whenever the
+		// cleanup listeners happened to finish early.
+		//
 		// The drains get the REMAINDER of the sequence budget, floored at 1ms
 		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
 		// must cut the drains immediately, not unbound them.
-		await handler.shutdown({
-			timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
-		});
+		try {
+			await handler.shutdown({
+				reason: signal,
+				signal: budgetMs > 0 ? hooksExpiry.signal : null,
+				deadline: deadlineAt,
+				timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
+			});
+		} finally {
+			if (expiryTimer) clearTimeout(expiryTimer); // determinism-allow: pairs with the shutdown budget above
+		}
 		process.exit(0);
 	}
 

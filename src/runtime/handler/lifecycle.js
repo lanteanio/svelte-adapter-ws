@@ -13,6 +13,7 @@ import { counters } from './state.js';
 import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
 import { platform } from './platform.js';
+import { runAppShutdownHook } from './app-shutdown-hook.js';
 
 // Re-exported here as well as from handler.js: the reload record is read
 // against a built runtime through whichever of the two a caller reached for.
@@ -180,9 +181,19 @@ export function shutdown(opts = {}) {
 	return shutdownPromise;
 }
 
-/** @param {{ timeoutMs?: number }} opts */
+/** @param {{ timeoutMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
 async function performShutdown(opts) {
 	beginDrain();
+	// The app's shutdown hook belongs to the CLOSE PATH, not to whatever drove
+	// it: an entry with its own budgeted teardown and a consumer calling
+	// handler.shutdown() directly must both run it. The hook is latched on its
+	// own promise, so whichever arrives first runs it and the other awaits that
+	// same run rather than firing it twice.
+	await runAppShutdownHook({
+		reason: opts.reason ?? null,
+		signal: opts.signal ?? null,
+		deadline: opts.deadline ?? null
+	});
 	// Stop the audit timers (both no-ops when never installed). An auditor
 	// left running keeps reading state its server no longer serves, and unlike
 	// the export it reports to nobody outside the process, so nothing is owed

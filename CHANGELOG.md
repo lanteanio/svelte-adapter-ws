@@ -539,6 +539,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `runAppShutdownHook` is no longer exported from the built handler. The lead
+  adapter declares no such name and runs the app's hook inside `shutdown()`,
+  which is now what this adapter does too - so the export named a step that is
+  no longer separable, and an app reaching for it could not move back. Call
+  `shutdown()`; the hook runs as part of it.
+
 - The `PressureThresholds` type is no longer exported. The lead adapter
   declares no such name and inlines the same shape on `WebSocketOptions`, so
   exporting it here made an app annotated with it unable to move back. The
@@ -547,6 +553,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebSocketOptions['pressure']`.
 
 ### Fixed
+
+- The app's WebSocket `shutdown` hook runs on every close path, not only when
+  the adapter's own entry drives the shutdown. It is now invoked from
+  `shutdown()` itself, so a consumer that imports the built handler and closes
+  the server directly gets the hook it was promised; previously that path ran
+  no hook at all, and the budget the hook is bounded by was therefore in force
+  only for a shutdown the entry started.
+
+  The hook's context also carries `reason` again - the signal name that started
+  the shutdown. Without it a hook cannot tell a rolling restart from a
+  crash-loop kill, or decide how much of its flush it still has time for. It
+  was being dropped between the entry and the hook.
 
 - The app's WebSocket `shutdown` hook runs under the shutdown budget and is
   handed a `signal` and a `deadline` to honour. It was awaited outright with

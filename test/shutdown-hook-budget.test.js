@@ -2,10 +2,15 @@
 // the REAL runtime.
 //
 // This lane has two separate implementations - src/testing.js carries its own,
-// and src/runtime/handler/realtime.js is what a deployed server runs - and the
-// carried suite reaches only the harness one. Proved by mutation: neutralizing
-// the production race left the carried suite green, and neutralizing the harness
-// race took it red. So the production half needs its own pin or it has none.
+// and src/runtime/handler/app-shutdown-hook.js is what a deployed server runs -
+// and the carried suite reaches only the harness one. Proved by mutation:
+// neutralizing the production race left the carried suite green, and
+// neutralizing the harness race took it red. So the production half needs its
+// own pin or it has none.
+//
+// Driven through shutdown() rather than a helper export, because the close path
+// is where the hook has to run: anything that shuts the server down without
+// going through the entry must still get it.
 //
 // Driven through a `buildRuntime` payload rather than a fixture variant: the
 // fixture's `variants.js` is vendored byte-identical, and adding an entry to it
@@ -52,13 +57,14 @@ const WS_OPTS = {
 // Behaviour is read from the environment at CALL time, not at module eval: the
 // payload is imported once and both halves have to be reachable from it.
 const WS_HANDLER = `
-globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null };
+globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined };
 
 export async function shutdown(ctx) {
 	const seen = globalThis.__wsShutdownSeen;
 	seen.called += 1;
 	seen.hasSignal = Boolean(ctx && ctx.signal);
 	seen.deadline = ctx ? ctx.deadline : undefined;
+	seen.reason = ctx ? ctx.reason : undefined;
 	if (process.env.WS_SHUTDOWN_HANG !== '1') return;
 	// Never settles on its own. The runtime must stop waiting on its own budget
 	// and say so; if it does not, this hangs the caller, which is the defect.
@@ -76,9 +82,9 @@ let handler;
 let payload = null;
 
 beforeAll(async () => {
-	// WS_ENABLED defaults to false in a payload, and `runAppShutdownHook` reaches
-	// the app hook only through the realtime module - which is not constructed at
-	// all when WebSockets are off, so the hook would silently never run.
+	// WS_ENABLED defaults to false in a payload. A build with WebSockets off
+	// writes a ws-handler stub carrying no exports at all, so the hook has
+	// nothing to reach and would silently never run.
 	payload = buildRuntime({
 		wsHandlerSource: WS_HANDLER,
 		replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) }
@@ -89,17 +95,30 @@ beforeAll(async () => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	delete process.env.WS_SHUTDOWN_HANG;
-	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null };
+	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined };
 });
 
-/** Run the hook under a budget that expires after `ms`, collecting stderr. */
+/**
+ * Run a shutdown under a budget that expires after `ms`, collecting stderr.
+ *
+ * Driven through `shutdown()` - the close path every caller reaches - rather
+ * than through a helper export, because that is where the hook actually has to
+ * run. Each case begins its own lifecycle first: shutdown() latches on its own
+ * promise for the life of ONE lifecycle, which is right in production, and
+ * start() is what clears that latch once the previous lifecycle closed. Without
+ * the restart the second and third cases here would assert against a no-op.
+ *
+ * `listen: false` because none of this needs a socket - the hook runs before
+ * the close path ever looks for a server.
+ */
 async function runUnderBudget(ms) {
 	const errors = [];
 	vi.spyOn(console, 'error').mockImplementation((...args) => { errors.push(args.join(' ')); });
 	const expiry = new AbortController();
 	const timer = setTimeout(() => expiry.abort(), ms);
+	await handler.start('127.0.0.1', 0, { listen: false });
 	try {
-		await handler.runAppShutdownHook({ signal: expiry.signal, deadline: ms });
+		await handler.shutdown({ reason: 'SIGTERM', signal: expiry.signal, deadline: ms, timeoutMs: ms });
 	} finally {
 		clearTimeout(timer);
 	}
@@ -113,6 +132,11 @@ describe('the app shutdown hook runs under the budget', () => {
 		expect(seen.called).toBe(1);
 		expect(seen.hasSignal, 'the hook must receive an AbortSignal').toBe(true);
 		expect(seen.deadline, 'the hook must receive the budget deadline').toBe(50);
+		// Without the reason a hook cannot tell a rolling restart from a
+		// crash-loop kill, and cannot decide how much of its flush it has time
+		// for. It was dropped on the way through for as long as the hook was
+		// driven from the entry.
+		expect(seen.reason, 'the hook must receive the shutdown reason').toBe('SIGTERM');
 	});
 
 	it('stops waiting on a hook that never settles, and says the flush did not finish', async () => {
