@@ -83,8 +83,12 @@ async function runShutdown(opts) {
 	stopPressureSampler();
 	// Floored at 1ms: timeoutMs 0 is the no-budget spelling, and an exhausted
 	// budget must cut the HTTP drain immediately rather than unbind it.
+	// `budgetMs` carries the budget the CALLER set, separately from the
+	// remainder the HTTP drain actually gets. What an operator needs named in a
+	// dropped-requests line is the number they configured, not whatever was left
+	// of it once the WebSocket drain had taken its share.
 	return lifecycleShutdown(deadlineAt !== null
-		? { ...opts, timeoutMs: Math.max(1, deadlineAt - monotonicNow()) }
+		? { ...opts, budgetMs: opts.timeoutMs, timeoutMs: Math.max(1, deadlineAt - monotonicNow()) }
 		: opts);
 }
 

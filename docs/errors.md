@@ -843,16 +843,34 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] a sveltekit:shutdown listener failed
+[svelte-adapter-ws] a sveltekit:shutdown listener threw
 ```
 
-**Cause.** A sveltekit:shutdown listener threw or rejected during shutdown; each listener is awaited, so both land here.
+**Cause.** A sveltekit:shutdown listener threw synchronously during shutdown.
 
 **Consequence.** That listener's cleanup did not complete. The throw is contained: remaining listeners still run, shutdown proceeds, and the exit is not held.
 
 **Automatic recovery.** Not applicable; shutdown proceeds without the failed cleanup.
 
 **What to do.** Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen.
+
+## ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] a sveltekit:shutdown listener rejected
+```
+
+**Cause.** A sveltekit:shutdown listener returned a promise that rejected during shutdown.
+
+**Consequence.** That listener's cleanup did not complete. The rejection is contained: the other listeners still run to their own end, shutdown proceeds, and the exit is not held.
+
+**Automatic recovery.** Not applicable; shutdown proceeds without the failed cleanup.
+
+**What to do.** Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen. A rejection is reported separately from a synchronous throw because the two fail at different points and usually have different causes.
 
 ## ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED
 
@@ -861,7 +879,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget; closing 
+[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget (
 ```
 
 **Cause.** In-flight HTTP requests were still open when the configured shutdown budget expired.
@@ -879,7 +897,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] shutdown cleanup exceeded the budget; draining now
+[svelte-adapter-ws] sveltekit:shutdown listeners did not settle within the shutdown budget (
 ```
 
 **Cause.** sveltekit:shutdown listeners or the ws shutdown hook were still pending when the cleanup budget expired.

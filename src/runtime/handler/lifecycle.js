@@ -181,8 +181,12 @@ export function shutdown(opts = {}) {
 	return shutdownPromise;
 }
 
-/** @param {{ timeoutMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
+/** @param {{ timeoutMs?: number, budgetMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
 async function performShutdown(opts) {
+	// Whether every in-flight request finished before the budget ran out. The
+	// caller needs it to say whether the shutdown was CLEAN, which is the one
+	// thing an operator reading the exit wants to know.
+	let drainedFully = true;
 	beginDrain();
 	// The app's shutdown hook belongs to the CLOSE PATH, not to whatever drove
 	// it: an entry with its own budgeted teardown and a consumer calling
@@ -206,7 +210,7 @@ async function performShutdown(opts) {
 	if (!server) {
 		closePostureExport();
 		setLifecycleState('closed');
-		return;
+		return drainedFully;
 	}
 
 	// Close the listener; already-accepted sockets keep being served. Idle
@@ -235,15 +239,18 @@ async function performShutdown(opts) {
 	// Whatever is still open after the budget is cut off; a truncated exchange
 	// is the documented cost of the deadline expiring.
 	if (counters.inFlightCount > 0) {
+		drainedFully = false;
 		console.error(adapterConsoleLine(
 			ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
-			`${counters.inFlightCount} still open`
+			`${Math.round(opts.budgetMs ?? opts.timeoutMs ?? 0)}ms); closing anyway - the ${counters.inFlightCount} request(s) ` +
+			'still open at this point are dropped.'
 		));
 	}
 	server.closeAllConnections?.();
 	await closed;
 	closePostureExport();
 	setLifecycleState('closed');
+	return drainedFully;
 }
 
 /**

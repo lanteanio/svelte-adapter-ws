@@ -1308,15 +1308,84 @@ if (is_primary) {
 	 *
 	 * @param {string} reason
 	 */
-	async function runShutdownCleanup(reason) {
+	/**
+	 * Run every `sveltekit:shutdown` listener, and report whether they all
+	 * settled inside the budget.
+	 *
+	 * Started CONCURRENTLY rather than awaited one after another: sequential
+	 * awaits make one slow listener eat the budget the rest were meant to share,
+	 * and a listener that never settles then denies every later one its turn
+	 * entirely. A synchronous throw and a rejected promise are reported
+	 * separately because they fail at different points and usually for different
+	 * reasons.
+	 *
+	 * @param {string} reason
+	 * @param {AbortSignal | null} signal
+	 * @param {number | null} deadline
+	 * @returns {Promise<boolean>} false when the budget expired first
+	 */
+	async function runShutdownCleanup(reason, signal, deadline) {
 		const listeners = process.listeners('sveltekit:shutdown');
+		if (listeners.length === 0) return true;
+		/** @type {Promise<void>[]} */
+		const pending = [];
 		for (const listener of listeners) {
 			try {
-				await listener(reason);
+				const result = listener.call(process, reason, { reason, signal, deadline });
+				if (result && typeof (/** @type {any} */ (result).then) === 'function') {
+					pending.push(Promise.resolve(result).catch((err) => {
+						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_REJECTED), err);
+					}));
+				}
 			} catch (err) {
 				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW), err);
 			}
 		}
+		if (pending.length === 0) return true;
+		return await Promise.race([
+			Promise.all(pending).then(() => true),
+			whenShutdownAborted(signal).then(() => false)
+		]);
+	}
+
+	/**
+	 * Resolve when `signal` aborts, and never otherwise. The never-settling half
+	 * is deliberate: this is one side of a race, so "no budget" has to mean this
+	 * side never wins rather than winning at once.
+	 * @param {AbortSignal | null} signal
+	 * @returns {Promise<void>}
+	 */
+	function whenShutdownAborted(signal) {
+		if (!signal) return new Promise(() => {});
+		if (signal.aborted) return Promise.resolve();
+		return new Promise((resolve) => {
+			signal.addEventListener('abort', () => resolve(), { once: true });
+		});
+	}
+
+	/**
+	 * Exit once stdout has actually taken what was just written.
+	 *
+	 * A pipe accepts writes asynchronously, so exiting in the same turn as the
+	 * final console line can drop it - and that line is the one saying whether
+	 * the shutdown was clean, which is exactly what a supervisor's log capture
+	 * is reading. Bounded, because a stdout that never drains (a closed reader)
+	 * must not be able to hold the exit open either.
+	 *
+	 * @param {number} code
+	 */
+	function exitAfterFlush(code) {
+		let done = false;
+		/** @type {any} */
+		let timer = null;
+		const go = () => {
+			if (done) return;
+			done = true;
+			if (timer) clearTimeout(timer); // determinism-allow: process exit, outside the replayable runtime
+			process.exit(code);
+		};
+		timer = setTimeout(go, 250); // determinism-allow: process exit, outside the replayable runtime
+		process.stdout.write('', () => go());
 	}
 
 	/**
@@ -1335,7 +1404,12 @@ if (is_primary) {
 
 		// Readiness flips first so the balancer routes away while the listener
 		// still accepts - a poll-interval race never sees a closed socket.
+		// Announced, because draining is not closing and the two look identical
+		// from outside: without this line the only evidence a shutdown started
+		// is that the process eventually stopped.
 		handler.beginDrain();
+		console.log('[svelte-adapter-ws] Readiness now reports NOT ready (draining); still accepting.');
+		const shutdownStartedAt = monotonicNow();
 		if (shutdown_delay > 0 && signal !== 'shutdown') {
 			await new Promise((resolve) => setTimeout(resolve, shutdown_delay)); // determinism-allow: process-level shutdown pacing, outside the replayable runtime
 		}
@@ -1358,23 +1432,25 @@ if (is_primary) {
 		// holding the close path when the budget is spent. Null with no budget: the
 		// hook's own race must then never abort.
 		const hooksExpiry = new AbortController();
-		const hooks = runShutdownCleanup(signal).catch((err) => {
-			console.error('[svelte-adapter-ws] shutdown cleanup failed:', err);
-		});
 		/** @type {any} */
 		let expiryTimer = null;
 		if (deadlineAt !== null) {
-			const EXPIRED = Symbol('expired');
-			const deadline = new Promise((resolve) => {
-				expiryTimer = setTimeout(() => { hooksExpiry.abort(); resolve(EXPIRED); }, budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
-				if (typeof expiryTimer?.unref === 'function') expiryTimer.unref();
-			});
-			const outcome = await Promise.race([hooks, deadline]);
-			if (outcome === EXPIRED) {
-				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED));
-			}
-		} else {
-			await hooks;
+			expiryTimer = setTimeout(() => hooksExpiry.abort(), budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
+			if (typeof expiryTimer?.unref === 'function') expiryTimer.unref();
+		}
+		const cleanupSignal = budgetMs > 0 ? hooksExpiry.signal : null;
+		let cleaned = true;
+		try {
+			cleaned = await runShutdownCleanup(signal, cleanupSignal, deadlineAt);
+		} catch (err) {
+			cleaned = false;
+			console.error('[svelte-adapter-ws] shutdown cleanup failed:', err);
+		}
+		if (!cleaned) {
+			console.error(adapterConsoleLine(
+				ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
+				`${budgetMs}ms); exiting anyway - their cleanup did NOT finish.`
+			));
 		}
 		// The app's own hook runs inside handler.shutdown(), which is the close
 		// path every caller reaches - not just this entry. It is handed the SAME
@@ -1385,17 +1461,30 @@ if (is_primary) {
 		// The drains get the REMAINDER of the sequence budget, floored at 1ms
 		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
 		// must cut the drains immediately, not unbound them.
+		let drained = true;
 		try {
-			await handler.shutdown({
+			drained = (await handler.shutdown({
 				reason: signal,
-				signal: budgetMs > 0 ? hooksExpiry.signal : null,
+				signal: cleanupSignal,
 				deadline: deadlineAt,
 				timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
-			});
+			})) !== false;
 		} finally {
 			if (expiryTimer) clearTimeout(expiryTimer); // determinism-allow: pairs with the shutdown budget above
 		}
-		process.exit(0);
+		// The last line an operator sees, and the one that says whether anything
+		// was lost. A clean stop and a stop that dropped requests look identical
+		// from the outside otherwise, so the difference is stated rather than
+		// left to be inferred from the absence of a warning above.
+		const spent = (monotonicNow() - shutdownStartedAt).toFixed(0);
+		if (drained && cleaned) {
+			console.log(`[svelte-adapter-ws] Shutdown complete in ${spent}ms.`);
+		} else {
+			console.error(
+				`[svelte-adapter-ws] Shutdown finished in ${spent}ms but was NOT clean (see the lines above).`
+			);
+		}
+		exitAfterFlush(0);
 	}
 
 	/**
