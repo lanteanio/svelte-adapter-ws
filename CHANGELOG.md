@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tlsReloadState()` on the built handler reports the certificate reload path:
+  whether this process is watching the certificate directory, why renewals
+  would not be picked up if they would not, how many in-place swaps it has
+  done, how many reloads failed and when, and the expiry of the certificate
+  being served. Counts and reasons only - no key material and no certificate
+  bytes. A fleet whose workers disagree on `generation` has a worker that
+  missed a renewal. It answers on a plain-HTTP build too, with a zeroed
+  record, and returns a snapshot rather than the live object.
+
+  A degradation caused by a dead certificate-directory watch now survives a
+  later reload that succeeds. Nothing restarts a watch, so a process whose
+  watch died will not see the next renewal however well the current one
+  swapped; reporting healthy there hid the one condition an operator needed.
+  A reload that merely failed to validate is still cleared by the next
+  success.
+
+  The certificate-directory watch is armed once the listen socket is bound
+  rather than while the module is still evaluating, so a certificate
+  directory that disappears during boot is reported as the dead watch it is
+  instead of as a live one.
+
 - `platform.send()` and `platform.sendWire()` take an explicit `seq`. It is the
   channel a resume hook gap-fills history through, and it rides the JSON
   envelope and the binary frame's seq slot identically, so a client keys one

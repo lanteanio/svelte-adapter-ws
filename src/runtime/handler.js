@@ -156,6 +156,8 @@ export function reloadTls() {
 	tlsModule?.reloadTls();
 }
 
+export { tlsReloadState } from './handler/tls-state.js';
+
 // - Realtime lane ------------------------------------------------------------
 
 /** @type {typeof import('./handler/realtime.js') | null} */
@@ -224,9 +226,14 @@ export async function start(host, port, opts = {}) {
 		warmupPaths: WARMUP_PATHS,
 		listen: opts.listen,
 		reusePort: opts.reusePort,
-		beforeReady: realtime
-			? () => /** @type {NonNullable<typeof realtime>} */ (realtime).fireInitOnce(workerData?.app ?? null)
-			: undefined
+		// Unconditional: the certificate watch is armed here whether or not this
+		// build carries a realtime lane, and it must be armed after the bind so
+		// a directory that vanished during boot reads as a dead watch rather
+		// than a healthy one.
+		beforeReady: async () => {
+			tlsModule?.armTlsWatch();
+			if (realtime) await realtime.fireInitOnce(workerData?.app ?? null);
+		}
 	});
 }
 

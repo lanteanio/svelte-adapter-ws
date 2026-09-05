@@ -17,6 +17,10 @@ import {
 } from './config.js';
 import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
 import { applyServerNames } from '../utils/tls-reload.js';
+import {
+	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
+	recordBootCertExpiry, tlsWatchDegraded
+} from './tls-state.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 
 // How long stapling keeps serving the last good OCSP response after the
@@ -25,6 +29,12 @@ import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 // nothing, because a must-staple client hard-fails on an expired staple where
 // it would have fallen back to its own responder query on an absent one.
 const OCSP_FALLBACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Why the reload path is degraded once a directory watch is gone. One reason
+// covers a watch that never armed and one that died afterwards: the operative
+// half - no renewal will be seen - is the same, and the alternative would be a
+// second reason string the lead does not declare.
+const TLS_WATCH_DEAD = 'the certificate directory watch failed to start, so no renewal will be seen';
 
 /**
  * Comma-separated path lists, paired position-wise: the first pair is the
@@ -177,6 +187,12 @@ export function createTlsServer(handleRequest) {
 	}
 
 	if (ssl_watch) {
+		// The expiry of what is being served right now, so a reload failure can
+		// be reported with the number that says how urgent it is. A PKCS#12
+		// bundle carries no PEM identity to read, and simply keeps no record.
+		// Only notAfter is taken from it, so no host list is passed: SSL_SNI_HOSTS
+		// groups belong to the EXTRA certificates here, never to pairs[0].
+		if (!ssl_pfx) recordBootCertExpiry(pairs[0].cert);
 		const reload = buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts);
 		reloadNow = reload;
 		server.once('close', () => {
@@ -186,7 +202,13 @@ export function createTlsServer(handleRequest) {
 		// and broadcasts a reload message the runtime routes into reloadTls();
 		// arming a second watch per worker would fire N debounced reloads for
 		// one renewal. The single-process server watches here.
-		if (isMainThread) armHotReload(server, pairs, reload);
+		//
+		// Held as a thunk rather than armed now: this module is evaluated while
+		// the process is still building, and a watch armed then would report
+		// itself healthy before the listen socket exists. start() arms it after
+		// the bind, so a directory that disappeared in between is seen as the
+		// dead watch it is.
+		if (isMainThread) armWatch = () => armHotReload(server, pairs, reload);
 	}
 
 	return server;
@@ -199,6 +221,29 @@ export function createTlsServer(handleRequest) {
  * @type {(() => void) | null}
  */
 let reloadNow = null;
+
+/**
+ * Arms the certificate-directory watch for the CURRENT TLS server, or null when
+ * there is nothing to watch (no TLS server, SSL_WATCH=0, or a cluster worker
+ * whose primary owns the watch).
+ * @type {(() => void) | null}
+ */
+let armWatch = null;
+
+/** Whether the watch is currently armed, so a restart re-arms and a repeated
+ * start() does not stack a second set of watchers on one directory. */
+let watchArmed = false;
+
+/**
+ * Arm the certificate-directory watch. Called from start() once the listen
+ * socket is bound: arming at module-evaluation time would report a live watch
+ * for a directory the process had not yet committed to serving from.
+ */
+export function armTlsWatch() {
+	if (watchArmed || armWatch === null) return;
+	watchArmed = true;
+	armWatch();
+}
 
 /**
  * Message-driven certificate reload: the worker half of the cluster's
@@ -253,9 +298,15 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	});
 
 	return () => {
+		// Whether this pass genuinely put different bytes in front of a client.
+		// A PKCS#12 bundle has no PEM identity to fingerprint, so every reload of
+		// one counts as a swap; a PEM deployment counts only what actually
+		// changed, which is what makes a fleet's generation numbers comparable.
+		let swapped = false;
 		try {
 			if (ssl_pfx) {
 				server.setSecureContext({ pfx: fs.readFileSync(ssl_pfx), passphrase: ssl_pfx_passphrase || undefined });
+				swapped = true;
 			} else {
 				const certPem = fs.readFileSync(pairs[0].cert);
 				const fingerprint = (() => {
@@ -267,6 +318,7 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				} else {
 					server.setSecureContext({ cert: certPem, key: fs.readFileSync(pairs[0].key) });
 					servedFingerprint = fingerprint;
+					swapped = true;
 				}
 				// SNI names are re-derived from the RELOADED certs, not replayed
 				// from the boot-time lists: a renewal that adds, drops or changes
@@ -320,22 +372,32 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 							'SSL_SNI_HOSTS names no group for it'
 						);
 					}
-					nextState.push(applyServerNames(
+					const applied = applyServerNames(
 						registry,
 						{ certPath: pair.cert, keyPath: pair.key, hosts },
 						sniState[i]
-					));
+					);
+					if (applied.changed) swapped = true;
+					nextState.push(applied);
 				}
 				sniContexts.clear();
 				for (const [host, context] of nextContexts) sniContexts.set(host, context);
 				sniState = nextState;
 			}
-			console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
+			if (swapped) {
+				markTlsSwapped(ssl_pfx ? null : pairs[0].cert);
+				console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
+			}
 		} catch (err) {
 			// A renewal mid-write can present a torn pair; the next watcher
 			// event (or reload broadcast) retries. The served context stays on
-			// the previous cert.
+			// the previous cert - the staging map is discarded unread, so there
+			// is no partial swap to report and no retry to arm.
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_RELOAD_SKIPPED), err);
+			// Degraded rather than benign: the renewal on disk is NOT being
+			// served, and every probe stays green while the certificate that IS
+			// being served runs down. Cleared by the next reload that succeeds.
+			markTlsFailed(err, 'the certificate on disk did not validate, so the previous one is still being served');
 		}
 	};
 }
@@ -379,6 +441,11 @@ function armHotReload(server, pairs, reload) {
 			'); hot reload is off until restart - the served certificate stays on its current bytes.'
 		));
 	};
+	// One unarmed directory means renewals landing THERE are never seen, so any
+	// failure degrades even when the other directories armed - and it degrades
+	// STICKILY, because nothing retries a watch: no later reload, however
+	// successful, can resurrect it.
+	let watchFailed = false;
 	for (const dir of watchedDirs) {
 		try {
 			const watcher = fs.watch(dir, { persistent: false }, () => {
@@ -392,16 +459,24 @@ function armHotReload(server, pairs, reload) {
 			watcher.on('error', (err) => {
 				warnWatcher(err, 'stopped');
 				try { watcher.close(); } catch { /* already closed */ }
+				markTlsWatchStopped();
+				tlsWatchDegraded(TLS_WATCH_DEAD);
 			});
 			watchers.push(watcher);
 		} catch (err) {
+			watchFailed = true;
 			warnWatcher(err, 'could not arm');
 		}
 	}
+	if (watchFailed) tlsWatchDegraded(TLS_WATCH_DEAD);
+	else if (watchers.length > 0) markTlsWatching();
 	server.once('close', () => {
 		if (debounce !== null) clearTimer(debounce);
 		for (const watcher of watchers) {
 			try { watcher.close(); } catch { /* already closed */ }
 		}
+		// The watchers are gone with the server; a restart arms a fresh set.
+		watchArmed = false;
+		markTlsWatchStopped();
 	});
 }

@@ -14,6 +14,10 @@ import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
 import { platform } from './platform.js';
 
+// Re-exported here as well as from handler.js: the reload record is read
+// against a built runtime through whichever of the two a caller reached for.
+export { tlsReloadState } from './tls-state.js';
+
 /** @type {'starting' | 'ready' | 'draining' | 'closed'} */
 let lifecycle_state = 'starting';
 

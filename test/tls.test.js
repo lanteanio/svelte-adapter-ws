@@ -232,6 +232,71 @@ describe('native TLS', () => {
 		expect(after.peerCert.subject.CN).toBe('sni.example');
 	});
 
+	it('reports a zeroed reload record on a plain-HTTP build, as a snapshot', async () => {
+		// Why the record does not live in handler/tls.js: that module is
+		// imported only when the server is TLS, so a plain-HTTP build could not
+		// answer at all. A diagnostics reader that throws on half the
+		// deployments is worse than one reporting a record of zeroes.
+		const payload = buildRuntime({});
+		const rt = await bootRuntime(payload);
+		cleanups.push(async () => {
+			await rt.handler.shutdown({ timeoutMs: 1000 });
+			payload.cleanup();
+		});
+
+		const state = rt.handler.tlsReloadState();
+		expect(state.watching).toBe(false);
+		expect(state.degraded).toBeNull();
+		expect(state.generation).toBe(0);
+		expect(state.failures).toBe(0);
+		expect(state.notAfter).toBeNull();
+
+		// A snapshot, not the live record: a caller that mutates what it was
+		// handed must not be able to rewrite the adapter's own health.
+		state.generation = 99;
+		state.degraded = 'tampered';
+		expect(rt.handler.tlsReloadState().generation).toBe(0);
+		expect(rt.handler.tlsReloadState().degraded).toBeNull();
+	});
+
+	it('degrades on a reload that does not validate, and clears it on the next success', async () => {
+		// The contrast to a dead watch: THIS degradation is one a later success
+		// is allowed to clear. Without it, making every degradation sticky
+		// would leave the watch-failure behaviour looking correct.
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsdegr-'));
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T14_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		expect(rt.handler.tlsReloadState().degraded).toBeNull();
+
+		// A renewal caught mid-write: the certificate is the new one, the key
+		// is still the old one, so the pair does not validate.
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
+		rt.handler.reloadTls();
+
+		const failed = rt.handler.tlsReloadState();
+		expect(failed.failures).toBe(1);
+		expect(failed.generation, 'nothing was swapped').toBe(0);
+		expect(failed.degraded).toBe(
+			'the certificate on disk did not validate, so the previous one is still being served'
+		);
+		// The previous certificate is still the one being served.
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
+
+		// The write completes; the next reload succeeds and clears it.
+		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
+		rt.handler.reloadTls();
+
+		const recovered = rt.handler.tlsReloadState();
+		expect(recovered.generation).toBe(1);
+		expect(recovered.degraded, 'a validation failure is cleared by a success').toBeNull();
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('sni.example');
+	});
+
 	it('selects a wildcard SAN certificate for names under it, one label deep', async () => {
 		const rt = await bootTls('SAW_T8_', {
 			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'wild.crt')}`,
