@@ -8,13 +8,16 @@
 // the broadcast plus an observability record of the disk cert's identity and
 // expiry.
 //
-// Pure/injectable by construction: parseSniHosts, readCertIdentity and
-// certExpiryAlert are pure over their inputs, and createCertWatcher takes its
+// Pure/injectable by construction: parseSniHosts, readCertIdentity,
+// certExpiryAlert and applyServerNames are pure over their inputs, and
+// createTlsDegradedLedger is pure over the callbacks it is handed, so the
+// clear-what-a-success-can-clear policy is executable without a server, a
+// watcher or a certificate. createCertWatcher takes its
 // clock (setTimer/clearTimer) and fs (watchFs) as injected dependencies,
 // defaulting to the runtime seam so the debounce stays deterministic under a
 // seeded harness (check-determinism).
 
-import { X509Certificate } from 'node:crypto';
+import { X509Certificate, createPrivateKey } from 'node:crypto';
 import { readFileSync, watch as fsWatch } from 'node:fs';
 import { dirname } from 'node:path';
 import { setTimer as seamSetTimer, clearTimer as seamClearTimer } from '../runtime.js';
@@ -146,6 +149,139 @@ export function certExpiryAlert(state, now, withinMs = CERT_EXPIRY_ALERT_MS) {
 		`${state.notAfterText || state.notAfter} (${formatRemaining(remaining)}). A failed reload keeps the PREVIOUS ` +
 		'certificate, so a renewal landing on disk will not fix this by itself: check the certificate files and restart this instance.'
 	);
+}
+
+/**
+ * The degraded-state ledger for one process's certificate reload path. One
+ * shared slot reports the CURRENT reason serving is degraded, but reasons
+ * differ in what can clear them: a swap or validation failure is superseded
+ * by the next reload that succeeds, while a dead directory watch cannot be -
+ * no later swap resurrects the watcher, so after any recovery the ledger
+ * falls back to the watch reason instead of clearing. The sentinel follows
+ * the same rule: it stays armed as long as any reason, the sticky watch
+ * reason included, remains. Kept separate from the lifecycle wiring so the
+ * policy is executable without a server, a watcher, or a certificate.
+ *
+ * @param {{
+ *   health: { degraded: string | null },
+ *   onRecovered: (was: string, still: string | null) => void,
+ *   armSentinel: () => void,
+ *   disarmSentinel: () => void
+ * }} options
+ */
+export function createTlsDegradedLedger({ health, onRecovered, armSentinel, disarmSentinel }) {
+	let watchReason = null;
+	return {
+		/** The directory watch is dead for the process lifetime; sticky. */
+		watchFailed(reason) {
+			watchReason = reason;
+			health.degraded = reason;
+			armSentinel();
+		},
+		/** A reload-path failure; superseded by the next reload that succeeds. */
+		failed(reason) {
+			health.degraded = reason;
+			armSentinel();
+		},
+		/** A reload succeeded: clear what a success can clear. */
+		recovered() {
+			if (watchReason !== null) {
+				// The swap worked, the watcher is still dead: this process will
+				// not see the next renewal, so the degradation and its expiry
+				// sentinel stay.
+				if (health.degraded !== watchReason) {
+					onRecovered(health.degraded, watchReason);
+					health.degraded = watchReason;
+				}
+				return;
+			}
+			if (health.degraded !== null) {
+				onRecovered(health.degraded, null);
+				health.degraded = null;
+			}
+			disarmSentinel();
+		}
+	};
+}
+
+/**
+ * Reconcile a server-name registry with the certificate now on disk, gated on
+ * the cert's fingerprint: when the disk cert is byte-identical to the one
+ * already served (`prev.fingerprint`), the registry is not touched and
+ * `changed: false` is returned - watcher double-fires and unchanged-cert
+ * broadcasts cost one file read and swap nothing.
+ *
+ * On a change, the cert + key are read and VALIDATED (parse + pairing) before
+ * the registry is touched, so a half-written file throws here and the caller
+ * keeps `prev` and the old context - TLS is never dropped on a partial write.
+ * Existing hosts are reloaded (remove + add) so the fresh cert is served, new
+ * hosts are added, and gone hosts are removed.
+ *
+ * The registry is INJECTED rather than assumed, so the reconciliation order is
+ * the same everywhere while what a registration means stays the transport's
+ * business: here handler/tls.js hands in a staging view of its SNI context map
+ * and swaps that map in only once this returns, which is why a mutation-phase
+ * throw cannot leave this adapter serving a half-applied certificate set. The
+ * `tlsAppTouched` marker on such a throw still distinguishes it from the
+ * validation throws above, which happen before anything is registered.
+ *
+ * @param {{ addServerName: (host: string, options: object) => void, removeServerName: (host: string) => void }} app
+ * @param {{ certPath: string, keyPath: string, hosts?: string[] }} source
+ *   `hosts` overrides SAN auto-discovery when provided (SSL_SNI_HOSTS).
+ * @param {{ hosts: string[], fingerprint: string | null }} prev
+ *   the hosts currently registered and the fingerprint of the cert they serve
+ *   (boot state: `hosts: []` + the boot cert's fingerprint - nothing
+ *   registered, default context serving).
+ * @returns {{ hosts: string[], fingerprint: string, changed: boolean }}
+ */
+export function applyServerNames(app, source, prev) {
+	const prevHosts = (prev && prev.hosts) || [];
+	const prevFingerprint = (prev && prev.fingerprint) || null;
+	const certPem = readFileSync(source.certPath, 'utf8');
+	const cert = new X509Certificate(certPem);
+	if (prevFingerprint !== null && cert.fingerprint256 === prevFingerprint) {
+		// Same cert as last time - nothing to swap, registry untouched.
+		return { hosts: prevHosts, fingerprint: prevFingerprint, changed: false };
+	}
+	// Validate BEFORE mutating. A partial write makes one of these throw, and
+	// the caller keeps the old registration + context (never drops TLS).
+	const keyPem = readFileSync(source.keyPath, 'utf8');
+	const key = createPrivateKey(keyPem);
+	if (!cert.checkPrivateKey(key)) {
+		throw new Error('tls-reload: certificate and private key do not match');
+	}
+	const hosts = (source.hosts && source.hosts.length > 0) ? source.hosts : parseSniHosts(certPem);
+	if (hosts.length === 0) {
+		throw new Error('tls-reload: certificate has no SAN DNS names or CN, and no SSL_SNI_HOSTS override');
+	}
+	const options = { cert_file_name: source.certPath, key_file_name: source.keyPath };
+	const prevSet = new Set(prevHosts);
+	const next = new Set(hosts);
+	// Everything below mutates the registry. A throw from here on leaves it
+	// PARTIALLY reconciled, which the caller must treat differently from the
+	// validation throws above (nothing registered, previous cert fully intact) -
+	// so mark the error before rethrowing.
+	try {
+		// Remove hosts this cert no longer serves.
+		for (const host of prevSet) {
+			if (!next.has(host)) app.removeServerName(host);
+		}
+		// Add new hosts; reload (remove + add) already-registered hosts so the
+		// swap takes effect for a renewed cert on the same host.
+		for (const host of next) {
+			if (prevSet.has(host)) app.removeServerName(host);
+			app.addServerName(host, options);
+		}
+	} catch (err) {
+		// Normalize before marking: a non-Error throw (or a frozen Error, which
+		// would reject the property write) must not dodge the marker - an
+		// unmarked mutation-phase throw would make the caller claim the previous
+		// cert was kept when the registry is in fact partially reconciled.
+		const e = (err instanceof Error && !Object.isFrozen(err)) ? err : new Error(String(err && err.message ? err.message : err));
+		e.tlsAppTouched = true;
+		throw e;
+	}
+	return { hosts, fingerprint: cert.fingerprint256, changed: true };
 }
 
 /**

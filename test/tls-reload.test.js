@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, copyFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseSniHosts, readCertIdentity, createCertWatcher, reloadClusterTls } from '../src/runtime/utils/tls-reload.js';
+import { parseSniHosts, readCertIdentity, applyServerNames, createTlsDegradedLedger, createCertWatcher, reloadClusterTls } from '../src/runtime/utils/tls-reload.js';
 
 // Cert parsing / server-name reconciliation needs a real X.509 cert with a SAN.
 // We generate a couple at setup with openssl; if none is found, those cases skip
@@ -94,6 +94,156 @@ describeSsl()('readCertIdentity', () => {
 
 	it('throws on an unreadable cert so boot can disable hot-reload loudly', () => {
 		expect(() => readCertIdentity(join(dir, 'nope.crt'))).toThrow();
+	});
+});
+
+function recordingRegistry(throwOn) {
+	const calls = { add: [], remove: [] };
+	return {
+		calls,
+		addServerName(host, options) {
+			calls.add.push({ host, options });
+			if (throwOn === host) throw new Error('registry refused ' + host);
+		},
+		removeServerName(host) { calls.remove.push(host); }
+	};
+}
+
+describeSsl()('applyServerNames', () => {
+	it('leaves the registry untouched when the disk cert still matches prev', () => {
+		const registry = recordingRegistry();
+		const fp = readCertIdentity(certs.A.crt).fingerprint;
+		const result = applyServerNames(
+			registry,
+			{ certPath: certs.A.crt, keyPath: certs.A.key },
+			{ hosts: [], fingerprint: fp }
+		);
+		expect(result).toEqual({ hosts: [], fingerprint: fp, changed: false });
+		expect(registry.calls.add).toEqual([]);
+		expect(registry.calls.remove).toEqual([]);
+	});
+
+	it('reconciles a renewal: drops gone hosts, reloads shared ones, adds new ones', () => {
+		const registry = recordingRegistry();
+		const prev = readCertIdentity(certs.A.crt);
+		const result = applyServerNames(
+			registry,
+			{ certPath: certs.B.crt, keyPath: certs.B.key },
+			{ hosts: prev.hosts, fingerprint: prev.fingerprint }
+		);
+		expect(result.changed).toBe(true);
+		expect(result.hosts).toEqual(['a.example.com', 'c.example.com']);
+		// The wildcard is gone from cert B, so it must be removed; a.example.com
+		// is shared and is reloaded (removed then re-added) so the renewed bytes
+		// actually take effect; c.example.com is new.
+		expect(registry.calls.remove).toContain('*.api.example.com');
+		expect(registry.calls.remove).toContain('a.example.com');
+		expect(registry.calls.add.map((c) => c.host).sort()).toEqual(['a.example.com', 'c.example.com']);
+	});
+
+	it('refuses a cert/key mismatch BEFORE touching the registry', () => {
+		// The validation throw is the one that keeps TLS up: the caller still
+		// holds the previous registration and the previous context. Building a
+		// secure context would also reject this pair, but only DURING the
+		// mutation, which is a partial swap rather than an untouched registry.
+		const registry = recordingRegistry();
+		expect(() => applyServerNames(
+			registry,
+			{ certPath: certs.A.crt, keyPath: certs.B.key },
+			{ hosts: [], fingerprint: null }
+		)).toThrow(/do not match/);
+		expect(registry.calls.add).toEqual([]);
+		expect(registry.calls.remove).toEqual([]);
+	});
+
+	it('marks a throw raised once the registry is being mutated', () => {
+		const registry = recordingRegistry('c.example.com');
+		let caught = null;
+		try {
+			applyServerNames(
+				registry,
+				{ certPath: certs.B.crt, keyPath: certs.B.key },
+				{ hosts: [], fingerprint: null }
+			);
+		} catch (err) { caught = err; }
+		expect(caught, 'the registry refusal must propagate').toBeTruthy();
+		expect(caught.tlsAppTouched, 'a mutation-phase throw must carry the marker').toBe(true);
+	});
+
+	it('hands every host of one certificate the same options reference', () => {
+		// handler/tls.js keys its SecureContext memo on this identity, so one
+		// renewal must mean one read and one context for all of its hosts.
+		const registry = recordingRegistry();
+		applyServerNames(
+			registry,
+			{ certPath: certs.A.crt, keyPath: certs.A.key },
+			{ hosts: [], fingerprint: null }
+		);
+		expect(registry.calls.add.length).toBe(2);
+		expect(registry.calls.add[0].options).toBe(registry.calls.add[1].options);
+		expect(registry.calls.add[0].options).toMatchObject({
+			cert_file_name: certs.A.crt, key_file_name: certs.A.key
+		});
+	});
+});
+
+describe('createTlsDegradedLedger', () => {
+	function ledgerHarness() {
+		const health = { degraded: null };
+		const recovered = [];
+		let armed = 0;
+		let disarmed = 0;
+		const ledger = createTlsDegradedLedger({
+			health,
+			onRecovered: (was, still) => recovered.push([was, still]),
+			armSentinel: () => { armed++; },
+			disarmSentinel: () => { disarmed++; }
+		});
+		return { health, recovered, ledger, counts: () => ({ armed, disarmed }) };
+	}
+
+	it('clears a reload failure on the next success and disarms the sentinel', () => {
+		// The contrast that keeps the sticky case honest: without it, making
+		// EVERY degradation sticky would still pass the dead-watch case.
+		const h = ledgerHarness();
+		h.ledger.failed('the renewed certificate is unreadable');
+		expect(h.health.degraded).toBe('the renewed certificate is unreadable');
+		h.ledger.recovered();
+		expect(h.health.degraded).toBeNull();
+		expect(h.recovered).toEqual([['the renewed certificate is unreadable', null]]);
+		expect(h.counts().disarmed).toBe(1);
+	});
+
+	it('keeps a dead watch degraded through a swap that succeeds after it', () => {
+		const h = ledgerHarness();
+		h.ledger.watchFailed('the watch is dead');
+		h.ledger.recovered();
+		// The swap worked; the watcher is still dead, so this process will not
+		// see the next renewal and must not report healthy.
+		expect(h.health.degraded).toBe('the watch is dead');
+		expect(h.recovered).toEqual([]);
+		expect(h.counts().disarmed, 'the expiry sentinel must stay armed').toBe(0);
+	});
+
+	it('supersedes a dead watch with a later swap failure, then falls back to it', () => {
+		const h = ledgerHarness();
+		h.ledger.watchFailed('the watch is dead');
+		h.ledger.failed('the swap failed');
+		expect(h.health.degraded).toBe('the swap failed');
+		h.ledger.recovered();
+		expect(h.health.degraded).toBe('the watch is dead');
+		expect(h.recovered).toEqual([['the swap failed', 'the watch is dead']]);
+		expect(h.counts().disarmed).toBe(0);
+	});
+
+	it('collapses repeated failures into one recovery', () => {
+		const h = ledgerHarness();
+		h.ledger.failed('first');
+		h.ledger.failed('second');
+		h.ledger.recovered();
+		h.ledger.recovered();
+		expect(h.recovered).toEqual([['second', null]]);
+		expect(h.health.degraded).toBeNull();
 	});
 });
 

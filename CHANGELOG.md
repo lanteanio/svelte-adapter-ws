@@ -461,6 +461,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A certificate hot-reload reconciles each additional SNI certificate against
+  what that certificate was already serving, instead of rebuilding every SNI
+  context from scratch. An extra certificate whose bytes did not change is
+  left alone rather than re-read and re-built on every reload, so a renewal of
+  one certificate in a multi-certificate deployment no longer churns the
+  others. Hosts a renewal dropped are removed, shared hosts are reloaded so
+  the new bytes take effect, and new hosts are added - the served result is
+  what it was before.
+
+  Host discovery is unchanged: names still come from the certificate's DNS
+  subjectAltName or the `SSL_SNI_HOSTS` group for that certificate, and an
+  extra certificate carrying neither is still refused.
+
 - The adapter's own fixed-shape answers declare a `Content-Length` instead of
   falling back to chunked transfer encoding. This covers the shared `405`,
   `400`, `413` and `500` writers, every answer the admin route produces

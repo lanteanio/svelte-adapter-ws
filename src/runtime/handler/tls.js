@@ -16,6 +16,7 @@ import {
 	ssl_reload_debounce_ms, ssl_sni_hosts, ssl_ocsp_file
 } from './config.js';
 import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
+import { applyServerNames } from '../utils/tls-reload.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 
 // How long stapling keeps serving the last good OCSP response after the
@@ -237,6 +238,20 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		}
 	}
 
+	// What each extra pair currently serves, so a reload reconciles against it
+	// rather than rebuilding blind. Baselined from the boot registration, whose
+	// hosts are already in sniContexts; a cert that would not parse at boot
+	// never got here, so a null fingerprint simply means the first reload is
+	// treated as a genuine change.
+	/** @type {Array<{ hosts: string[], fingerprint: string | null }>} */
+	let sniState = sniPairs.map(({ pair, hosts }) => {
+		try {
+			return { hosts, fingerprint: new X509Certificate(fs.readFileSync(pair.cert)).fingerprint256 };
+		} catch {
+			return { hosts, fingerprint: null };
+		}
+	});
+
 	return () => {
 		try {
 			if (ssl_pfx) {
@@ -256,27 +271,64 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				// SNI names are re-derived from the RELOADED certs, not replayed
 				// from the boot-time lists: a renewal that adds, drops or changes
 				// SANs must serve under the new name set, and a name the renewal
-				// dropped must stop matching. The next map is built completely
-				// before the live one is touched, so a torn read never leaves the
-				// callback consulting a half-filled map.
+				// dropped must stop matching. The reconciliation order is
+				// applyServerNames'; what a registration MEANS is this
+				// transport's, so the registry below writes into a staging copy
+				// and the live map is replaced only once every pair has applied.
+				// A throw part-way therefore discards the staging map instead of
+				// leaving the callback on a half-applied certificate set.
 				/** @type {Map<string, import('node:tls').SecureContext>} */
-				const nextContexts = new Map();
+				const nextContexts = new Map(sniContexts);
+				/** @type {object | null} */
+				let memoOptions = null;
+				/** @type {import('node:tls').SecureContext | null} */
+				let memoContext = null;
+				const registry = {
+					/** @param {string} host @param {any} options */
+					addServerName(host, options) {
+						// applyServerNames builds ONE options literal per call and
+						// hands the same reference to every host of that
+						// certificate, so keying the context on its identity gives
+						// one read and one OpenSSL context per pair - and
+						// guarantees every host of a renewal shares the same bytes
+						// even if the file is rewritten mid-loop.
+						if (options !== memoOptions) {
+							memoContext = tls.createSecureContext({
+								cert: fs.readFileSync(options.cert_file_name),
+								key: fs.readFileSync(options.key_file_name)
+							});
+							memoOptions = options;
+						}
+						nextContexts.set(host.toLowerCase(), /** @type {any} */ (memoContext));
+					},
+					/** @param {string} host */
+					removeServerName(host) {
+						nextContexts.delete(host.toLowerCase());
+					}
+				};
+				// Hosts stay this file's discovery (certHosts, SAN-only) rather
+				// than applyServerNames' SAN-or-CN fallback: passing them keeps a
+				// CN-only extra certificate refused the way boot refuses it.
+				const nextState = [];
 				for (let i = 0; i < sniPairs.length; i++) {
 					const { pair } = sniPairs[i];
-					const certPem = fs.readFileSync(pair.cert);
 					const override = overrideGroups[i];
-					const hosts = override && override.length > 0 ? override : certHosts(certPem);
+					const hosts = override && override.length > 0 ? override : certHosts(fs.readFileSync(pair.cert));
 					if (hosts.length === 0) {
 						throw new Error(
 							`certificate ${pair.cert} carries no DNS subjectAltName after reload and ` +
 							'SSL_SNI_HOSTS names no group for it'
 						);
 					}
-					const context = tls.createSecureContext({ cert: certPem, key: fs.readFileSync(pair.key) });
-					for (const host of hosts) nextContexts.set(host, context);
+					nextState.push(applyServerNames(
+						registry,
+						{ certPath: pair.cert, keyPath: pair.key, hosts },
+						sniState[i]
+					));
 				}
 				sniContexts.clear();
 				for (const [host, context] of nextContexts) sniContexts.set(host, context);
+				sniState = nextState;
 			}
 			console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
 		} catch (err) {
