@@ -422,6 +422,24 @@ Log line begins:
 
 **What to do.** Read the attached error and fix the hook. Persistent failure presents to users as a connection that never establishes, while HTTP continues to work.
 
+## ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED
+
+Severity: warn
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.control-egress event=control-egress.exhausted severity=warn] A connection exhausted its control-frame egress budget and was closed.
+```
+
+**Cause.** The control channel answers what a client asks for - an ack per subscribe, a denial per refused topic - so it amplifies: a few inbound bytes buy a whole frame. One connection drove more control-frame bytes than its window allows. Usually a client in a resubscribe loop, or one sending oversized batches whose topics past the cap are each answered with a denial; occasionally a deliberate amplification attempt.
+
+**Consequence.** That one connection was closed with 4429, which the bundled client and its siblings classify as throttling: they reconnect on an accelerated backoff rather than treating it as terminal. No other connection is affected, and nothing the application published was dropped - the budget covers protocol frames the adapter emits, never application publishes or sends.
+
+**Automatic recovery.** The client reconnects on its own throttle curve. A client whose behavior is unchanged will reach the budget again and be closed again, backing off further each time.
+
+**What to do.** Identify the client. A repeating cycle from one page is usually a resubscribe loop - a store that re-subscribes on every render, or a reconnect handler that restores topics it never released - and fixing that removes the condition. The budget is a fixed ceiling with no option to raise it, so a connection that legitimately needs more control traffic than this has to spread it: subscribe in fewer, larger batches, or hold fewer topics on one connection. A single connection restoring more than roughly seventy thousand topics inside the window is the one legitimate shape that reaches it.
+
 ## ADAPTER-ERR-ATTRIBUTION
 
 Severity: error

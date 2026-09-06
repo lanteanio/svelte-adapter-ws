@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The control/ack channel is bounded per connection. Protocol frames the
+  server sends because a client asked for them - subscribe acks and denials,
+  `welcome`, `lease-ok`, window grants, protocol errors - are charged against
+  a budget of 4 MiB per 10-second window on the production handler, the test
+  server and the dev plugin alike, and a connection past it is closed with
+  `4429`, which the bundled client classes as throttling and reconnects on.
+  The channel amplifies: one legal 8 KB `subscribe-batch` is answered with
+  about 97 KB across 1,345 frames, and nothing else bounded the rate because
+  every `messageAdmission` ceiling is disabled until configured. Nothing new
+  goes on the wire but the close; the operator gets
+  `ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED` on the diagnostic channel.
+  Application `publish` and `send` traffic is never charged.
+
 - Every per-connection slot the runtime writes onto a connection's userData is
   declared as an own property at open. A plain assignment walks the prototype
   chain, so an accessor an application installed for one of the `Symbol.for`

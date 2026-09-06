@@ -89,6 +89,7 @@ import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic } from './resume-capture.js';
 import { bumpIn, bumpOut, setStatsEnabled } from './conn-stats.js';
+import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
 
@@ -1658,9 +1659,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	}
 	rawWs.on('pong', () => { lastActivity = monotonicNow(); });
 
-	const welcome = '{"type":"welcome","sessionId":"' + sessionId + '"}';
-	try { rawWs.send(welcome); } catch { /* closing */ }
-	bumpOut(userData, welcome);
+	sendControl(facade, '{"type":"welcome","sessionId":"' + sessionId + '"}');
 
 	rawWs.on('message', (raw, isBinary) => {
 		lastActivity = monotonicNow();
@@ -1714,11 +1713,7 @@ function observeWsMessage(kind, outcome, startedAt) {
 /** @param {object} facade @param {any} rejection */
 function rejectApplicationMessage(facade, rejection) {
 	mMessageAdmissionRejected?.inc({ reason: rejection.reason, scope: rejection.scope });
-	const frame = messageOverloadedFrame(rejection);
-	try {
-		/** @type {any} */ (facade).send(frame, false, false);
-		bumpOut(/** @type {any} */ (facade).getUserData(), frame);
-	} catch { /* closed */ }
+	sendControl(facade, messageOverloadedFrame(rejection));
 }
 
 /**
@@ -1746,9 +1741,13 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 	// Oversized control-shaped frame: reject explicitly instead of a silent
 	// fall-through.
 	if (!isBinary && buf.byteLength >= 8192 && buf[3] === 0x79 /* 'y' in {"type" */) {
-		const rejectFrame = controlFrameTooLargeFrame(buf.byteLength);
-		try { rawWs.send(rejectFrame); } catch { /* closed */ }
-		bumpOut(userData, rejectFrame);
+		// Charged and counted like every other control-demux send
+		// (welcome, lease-ok, resumed, ingress-ok, subscribe-denied). An
+		// error frame is outbound traffic like any other: a close hook's
+		// byte accounting must not silently drop it, and a client that
+		// provokes refusals is spending the same channel as one that
+		// provokes acks.
+		sendControl(facade, controlFrameTooLargeFrame(buf.byteLength));
 		return;
 	}
 
@@ -1796,9 +1795,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				userData[WS_CAPS] = caps;
 				// Opt-in confirm for binary ingress (mirror of lease-ok).
 				if (caps.has(WIRE_INGRESS_CAP)) {
-					const okFrame = ingressOkFrame();
-					try { rawWs.send(okFrame); } catch { /* closed */ }
-					bumpOut(userData, okFrame);
+					sendControl(facade, ingressOkFrame());
 				}
 				// Only the first hello allocates the lease slot and emits the
 				// first window, so a re-sent hello does not reset the gate.
@@ -1810,11 +1807,8 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 					const gate = createLeaseState({ requestCount: grantCount, ttlMs: DEFAULT_GRANT.ttlMs });
 					gate.grant();
 					userData[WS_LEASE] = { gate, saturation: 0 };
-					try { rawWs.send('{"type":"lease-ok"}'); } catch { /* closed */ }
-					bumpOut(userData, '{"type":"lease-ok"}');
-					const frame = leaseGrantFrame(grantCount, DEFAULT_GRANT.ttlMs);
-					try { rawWs.send(frame); } catch { /* closed */ }
-					bumpOut(userData, frame);
+					sendControl(facade, '{"type":"lease-ok"}');
+					sendControl(facade, leaseGrantFrame(grantCount, DEFAULT_GRANT.ttlMs));
 				}
 				return;
 			}
@@ -1838,9 +1832,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				// Client binds a client-allocated ingress id to a decode+route
 				// destination. Unknown kind: no bind, no ack, JSON fallback.
 				if (bindIngress(userData, facade, msg.id, msg.kind, msg.target)) {
-					const boundFrame = ingressBoundFrame(msg.id);
-					try { rawWs.send(boundFrame); } catch { /* closed */ }
-					bumpOut(userData, boundFrame);
+					sendControl(facade, ingressBoundFrame(msg.id));
 				}
 				return;
 			}
@@ -1854,9 +1846,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 						subscriberRatio: wsConnections.size > 0 ? counters.totalSubscriptions / wsConnections.size : 0
 					});
 					slot.gate.requestN(regrant, DEFAULT_GRANT.ttlMs);
-					const frame = leaseGrantFrame(regrant, DEFAULT_GRANT.ttlMs);
-					try { rawWs.send(frame); } catch { /* closed */ }
-					bumpOut(userData, frame);
+					sendControl(facade, leaseGrantFrame(regrant, DEFAULT_GRANT.ttlMs));
 				}
 				return;
 			}
@@ -1890,29 +1880,24 @@ function runGameWork(facade, context) {
 		const denied = msg.id === undefined
 			? JSON.stringify({ type: 'game-denied', reason })
 			: JSON.stringify({ type: 'game-denied', reason, id: msg.id });
-		try { facade.send(denied, false, false); } catch { /* closed */ }
-		bumpOut(gud, denied);
+		sendControl(facade, denied);
 		return;
 	}
 	context.platform.publishGame(facade, grantTopic, msg.event, msg.data, msg.id);
 }
 
-/** @param {import('ws').WebSocket} rawWs @param {string} topic @param {number | string | null} ref @param {any} userData */
-function sendSubscribed(rawWs, topic, ref, userData) {
+/** @param {any} facade @param {string} topic @param {number | string | null} ref */
+function sendSubscribed(facade, topic, ref) {
 	if (ref === null) return;
 	// Carry the topic's current generation on the ack so a later resume can
 	// detect a reset seq space.
-	const payload = JSON.stringify({ type: 'subscribed', topic, ref, epoch: platform.topicEpoch(topic) });
-	try { rawWs.send(payload); } catch { /* closed */ }
-	bumpOut(userData, payload);
+	sendControl(facade, JSON.stringify({ type: 'subscribed', topic, ref, epoch: platform.topicEpoch(topic) }));
 }
 
-/** @param {import('ws').WebSocket} rawWs @param {string} topic @param {number | string | null} ref @param {string} reason @param {any} userData */
-function sendDenied(rawWs, topic, ref, reason, userData) {
+/** @param {any} facade @param {string} topic @param {number | string | null} ref @param {string} reason */
+function sendDenied(facade, topic, ref, reason) {
 	if (ref === null) return;
-	const payload = JSON.stringify({ type: 'subscribe-denied', topic, ref, reason });
-	try { rawWs.send(payload); } catch { /* closed */ }
-	bumpOut(userData, payload);
+	sendControl(facade, JSON.stringify({ type: 'subscribe-denied', topic, ref, reason }));
 }
 
 /** @param {unknown} ref @returns {ref is number | string} */
@@ -1934,32 +1919,30 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// "something refused it", and resumes into a gap. Refused first, before any
 	// check or hook can swallow it, with the uncorrelatable-error shape.
 	if (deniesRefLessRecover({ hasResumeHook: wsModule.resume, recover: msg.recover, ref })) {
-		const payload = recoverRequiresRefFrame(msg.topic);
-		try { rawWs.send(payload); } catch { /* closed */ }
-		bumpOut(userData, payload);
+		sendControl(facade, recoverRequiresRefFrame(msg.topic));
 		return;
 	}
 	if (!isValidWireTopic(msg.topic, ALLOW_NON_ASCII_TOPICS)) {
-		sendDenied(rawWs, msg.topic, ref, 'INVALID_TOPIC', userData);
+		sendDenied(facade, msg.topic, ref, 'INVALID_TOPIC');
 		return;
 	}
 	if (deniesWireSystemTopicSubscribe({ allowSystem: ALLOW_SYSTEM_TOPIC_SUBSCRIBE, topic: msg.topic })) {
-		sendDenied(rawWs, msg.topic, ref, 'INVALID_TOPIC', userData);
+		sendDenied(facade, msg.topic, ref, 'INVALID_TOPIC');
 		return;
 	}
 	const subs = userData[WS_SUBSCRIPTIONS];
 	assert(subs instanceof Set, 'subs.shape', null);
 	const isNew = !subs.has(msg.topic);
 	if (exceedsSubscriptionCap({ held: !isNew, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
-		sendDenied(rawWs, msg.topic, ref, 'RATE_LIMITED', userData);
+		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
 	if (deniesWireSubscribePreHook({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: !isNew, topic: msg.topic })) {
-		sendDenied(rawWs, msg.topic, ref, 'FORBIDDEN', userData);
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	if (exceedsPendingSubscribeCap({ pending: pendingSubscribeTotal(userData), max: MAX_PENDING_SUBSCRIBES_PER_CONNECTION })) {
-		sendDenied(rawWs, msg.topic, ref, 'RATE_LIMITED', userData);
+		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
 	// Enrol before the await so a revocation landing while the hook is parked
@@ -1971,7 +1954,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			unwindRevokedMembership(facade, msg.topic);
 			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 		}
-		sendDenied(rawWs, msg.topic, ref, denial, userData);
+		sendDenied(facade, msg.topic, ref, denial);
 		return;
 	}
 	// Post-await held re-check - except when a gap-fill was requested: live
@@ -1980,14 +1963,14 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	if (subs.has(msg.topic) && !_wantsRecover) {
 		const heldVerdict = settleHeldSubscribe(userData, msg.topic, token);
 		if (heldVerdict === 'ack') {
-			sendSubscribed(rawWs, msg.topic, ref, userData);
+			sendSubscribed(facade, msg.topic, ref);
 			return;
 		}
 		if (heldVerdict === 'deny-unwind') {
 			unwindRevokedMembership(facade, msg.topic);
 			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 		}
-		sendDenied(rawWs, msg.topic, ref, 'FORBIDDEN', userData);
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	// Landing re-check: the pre-gate stands aside for a plugin-owned topic so
@@ -1995,12 +1978,12 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// admitted this socket.
 	if (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic), topic: msg.topic })) {
 		settlePendingSubscribe(userData, msg.topic, token);
-		sendDenied(rawWs, msg.topic, ref, 'FORBIDDEN', userData);
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	if (exceedsSubscriptionCap({ held: subs.has(msg.topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
 		settlePendingSubscribe(userData, msg.topic, token);
-		sendDenied(rawWs, msg.topic, ref, 'RATE_LIMITED', userData);
+		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
 	// Resume-on-subscribe: gap-fill via the resume hook before subscribing to
@@ -2029,7 +2012,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			const heldVerdict = settleHeldSubscribe(userData, msg.topic, token);
 			if (heldVerdict === 'ack') {
 				discardResumeCapture(capture);
-				sendSubscribed(rawWs, msg.topic, ref, userData);
+				sendSubscribed(facade, msg.topic, ref);
 				return;
 			}
 			if (heldVerdict === 'deny-unwind') {
@@ -2037,7 +2020,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 				wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 			}
 			discardResumeCapture(capture);
-			sendDenied(rawWs, msg.topic, ref, 'FORBIDDEN', userData);
+			sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 			return;
 		}
 	}
@@ -2045,7 +2028,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// the hook was parked means the grant is discarded, not installed.
 	if (!settlePendingSubscribe(userData, msg.topic, token, true)) {
 		if (capture) discardResumeCapture(capture);
-		sendDenied(rawWs, msg.topic, ref, 'FORBIDDEN', userData);
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	try {
@@ -2065,7 +2048,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			} catch { return 2; }
 		});
 	}
-	sendSubscribed(rawWs, msg.topic, ref, userData);
+	sendSubscribed(facade, msg.topic, ref);
 }
 
 /**
@@ -2080,26 +2063,24 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	// request the frame's recover map names - refused whole, before any entry
 	// is inspected, like the batch's other contract refusals.
 	if (deniesRefLessRecoverBatch({ hasResumeHook: wsModule.resume, recover: msg.recover, ref })) {
-		const payload = recoverRequiresRefFrame(null);
-		try { rawWs.send(payload); } catch { /* closed */ }
-		bumpOut(userData, payload);
+		sendControl(facade, recoverRequiresRefFrame(null));
 		return;
 	}
 	const topics = msg.topics.slice(0, 256);
 	// Topics past the 256 cap are denied loudly, never silently dropped.
 	for (let i = 256; i < msg.topics.length; i++) {
 		if (typeof msg.topics[i] === 'string') {
-			sendDenied(rawWs, msg.topics[i], ref, 'BATCH_OVERFLOW', userData);
+			sendDenied(facade, msg.topics[i], ref, 'BATCH_OVERFLOW');
 		}
 	}
 	const valid = [];
 	for (const topic of topics) {
 		if (!isValidWireTopic(topic, ALLOW_NON_ASCII_TOPICS)) {
-			sendDenied(rawWs, topic, ref, 'INVALID_TOPIC', userData);
+			sendDenied(facade, topic, ref, 'INVALID_TOPIC');
 			continue;
 		}
 		if (deniesWireSystemTopicSubscribe({ allowSystem: ALLOW_SYSTEM_TOPIC_SUBSCRIBE, topic })) {
-			sendDenied(rawWs, topic, ref, 'INVALID_TOPIC', userData);
+			sendDenied(facade, topic, ref, 'INVALID_TOPIC');
 			continue;
 		}
 		valid.push(topic);
@@ -2213,29 +2194,29 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 				unwindRevokedMembership(facade, topic);
 				wsModule.unsubscribe?.(facade, topic, { platform: userData[WS_PLATFORM] });
 			}
-			sendDenied(rawWs, topic, ref, denial, userData);
+			sendDenied(facade, topic, ref, denial);
 			continue;
 		}
 		if (held) {
 			const heldVerdict = settleHeldSubscribe(userData, topic, batchTokens[i]);
 			if (heldVerdict === 'ack') {
-				sendSubscribed(rawWs, topic, ref, userData);
+				sendSubscribed(facade, topic, ref);
 				continue;
 			}
 			if (heldVerdict === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
 				wsModule.unsubscribe?.(facade, topic, { platform: userData[WS_PLATFORM] });
 			}
-			sendDenied(rawWs, topic, ref, 'FORBIDDEN', userData);
+			sendDenied(facade, topic, ref, 'FORBIDDEN');
 			continue;
 		}
 		if (exceedsSubscriptionCap({ held, size: udSubs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
 			settlePendingSubscribe(userData, topic, batchTokens[i]);
-			sendDenied(rawWs, topic, ref, 'RATE_LIMITED', userData);
+			sendDenied(facade, topic, ref, 'RATE_LIMITED');
 			continue;
 		}
 		if (!settlePendingSubscribe(userData, topic, batchTokens[i], true)) {
-			sendDenied(rawWs, topic, ref, 'FORBIDDEN', userData);
+			sendDenied(facade, topic, ref, 'FORBIDDEN');
 			continue;
 		}
 		try {
@@ -2254,7 +2235,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 				} catch { return 2; }
 				});
 		}
-		sendSubscribed(rawWs, topic, ref, userData);
+		sendSubscribed(facade, topic, ref);
 	}
 	if (batchCapture) discardResumeCapture(batchCapture);
 }
@@ -2299,8 +2280,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RESUME_HOOK), err);
 		}
 	}
-	try { rawWs.send('{"type":"resumed"}'); } catch { /* closed */ }
-	bumpOut(userData, '{"type":"resumed"}');
+	sendControl(facade, '{"type":"resumed"}');
 }
 
 /**

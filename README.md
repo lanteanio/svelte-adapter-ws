@@ -171,6 +171,21 @@ the adapter is configured.
 `platform.pressure.egress`. Tenants resolve through the WebSocket handler's
 `egressTenantOf(topic)` export.
 
+Protocol control frames - `welcome`, subscribe acks and denials, `lease-ok`,
+the flow-control window grants, protocol errors - are charged against no
+egress budget: those budgets meter application-data fan-out, and charging
+control frames to them would let an exhausted tenant budget refuse the very
+grant frames that pace a client down. They carry their own ceiling instead,
+because the channel amplifies: a client names a topic in a few bytes and is
+answered with a whole frame, and one 8 KB `subscribe-batch` comes back as
+roughly 97 KB across 1,345 frames. Each connection may be sent 4 MiB of
+control frames per 10-second window, after which it is closed with `4429`,
+the throttle code the bundled client already reconnects on. The ceiling is
+fixed: a client restoring 256 topics is answered with about 15 KB and a
+5,000-topic restore costs about 300 KB, so a healthy burst sits far under it.
+Application `send` and `publish` traffic is never charged here. See
+[`ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED`](docs/errors.md#adapter-err-control-egress-exhausted).
+
 `websocket.protection` (default `'normal'`) is the graduated protection
 posture over the 1 Hz pressure signal, and it governs only the admission of
 NEW upgrades - an open connection is never touched at any level. `'auto'`
