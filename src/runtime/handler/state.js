@@ -43,16 +43,12 @@ export const counters = {
 	/** Operations attempted on an already-closed socket, absorbed. */
 	closedWsAborts: 0,
 	/**
-	 * Mirrors the lifecycle state for cheap hot-path reads.
-	 *
-	 * Starts TRUE, because the lifecycle starts at 'starting' and this mirrors
-	 * "not ready" rather than "shutting down". Initialising it false left the
-	 * two disagreeing for the whole of boot: the readiness probe correctly
-	 * refused while anything reading this saw a server taking traffic - and boot
-	 * is exactly the window where the socket is already bound (so the kernel
-	 * queues connections) but the instance must not be routed to.
+	 * Mirrors the lifecycle state for cheap hot-path reads. The lifecycle
+	 * module is the single writer: it sets this the moment it loads, from its
+	 * own 'starting' state, so the mirror and the readiness probe agree for
+	 * the whole of boot as well as after it.
 	 */
-	draining: true,
+	draining: false,
 	/** Monotonic ref allocator for platform.request frames. */
 	nextRequestRef: 1,
 	/** Frames shed past maxBackpressure since boot. */

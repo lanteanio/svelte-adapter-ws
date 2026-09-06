@@ -277,7 +277,7 @@ describe('the posture reaches the surfaces that report and tear it down', () => 
 		// Called after the listener is closed and the drain has been awaited,
 		// and on the no-server path too so a boot that never listened still
 		// removes its socket.
-		expect(lifecycleSource).toMatch(/await closed;\s*\r?\n\s*closePostureExport\(\);/);
+		expect(lifecycleSource).toMatch(/await listenerClosed;\s*\r?\n(\s*\/\/[^\n]*\n)*\s*closePostureExport\(\);/);
 	});
 
 	it('assigns the export holders on both branches so a re-run drops a stale hook', () => {

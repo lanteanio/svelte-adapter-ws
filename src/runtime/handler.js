@@ -15,7 +15,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { workerData } from 'node:worker_threads';
 import { env } from './env.js';
-import { monotonicNow } from './runtime.js';
+import { monotonicNow, wallEpoch, setTimer, clearTimer } from './runtime.js';
+import { ADAPTER_ERROR_IDS, adapterConsoleLine } from './error-registry.js';
 import { base } from 'MANIFEST';
 import {
 	ssl_cert, ssl_key, is_tls, origin, xff_depth, body_size_limit,
@@ -25,7 +26,7 @@ import { declareSingleValuedProxyHeaders } from './utils/request-headers.js';
 import { cacheDir, clientDir, prerenderedDir, _t_static } from './handler/static-assets.js';
 import { staticCache } from './handler/state.js';
 import { handleRequest, installRealtimeRoutes } from './handler/request.js';
-import { start as lifecycleStart, shutdown as lifecycleShutdown, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
+import { start as lifecycleStart, shutdown as lifecycleShutdown, drain as drainRequests, closeConnections, whenAborted, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
 import { stopPressureSampler } from './handler/pressure.js';
 import { reconnect_dispersal_ms, ADMIN_PATH } from './handler/config.js';
@@ -47,14 +48,22 @@ export { setRelayRingWriter, setRelayFrameCeiling } from './handler/relay.js';
 // the merged result back to whichever scrape asked for it.
 export { collectLocalMetrics, resolveMetricsSnapshot } from './handler/metrics-snapshot.js';
 
-/**
- * Graceful shutdown, realtime included: readiness flips, live WebSockets are
- * advised and closed within the budget, then the HTTP drain runs.
- * @param {{ timeoutMs?: number }} [opts]
- */
-/** @type {Promise<void> | null} */
+/** @type {Promise<boolean> | null} */
 let shutdownRun = null;
 
+/**
+ * Graceful shutdown, realtime included. ONE budget bounds the whole sequence:
+ * the app's shutdown hook, the listen-socket close, the WebSocket drain and
+ * the HTTP in-flight drain all race the same abort signal, so a phase that
+ * eats the budget leaves the next ones nothing rather than its own allowance
+ * again. The entry hands its signal and deadline in; a consumer that only
+ * names `timeoutMs` gets the same sequence under a budget derived from it.
+ *
+ * @param {{ timeoutMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} [opts]
+ *   `timeoutMs` 0 or undefined with no `signal` is the no-budget spelling.
+ * @returns {Promise<boolean>} whether every in-flight request finished before
+ *   the budget expired - the one thing an operator reading the exit needs
+ */
 export function shutdown(opts = {}) {
 	// Idempotent: concurrent callers (a signal plus a programmatic call) share
 	// one run, so live sockets get one advisory and one close frame, not two.
@@ -62,34 +71,56 @@ export function shutdown(opts = {}) {
 	return shutdownRun;
 }
 
-/** @param {{ timeoutMs?: number }} opts */
+/** @param {{ timeoutMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
 async function runShutdown(opts) {
 	beginDrain();
-	// timeoutMs bounds this WHOLE teardown (WS drain, then the HTTP in-flight
-	// drain): the HTTP drain gets what the WS drain left, so the caller's
-	// budget is a bound on the sequence, not a per-phase allowance.
-	const bounded = !!(opts.timeoutMs && opts.timeoutMs > 0);
-	const deadlineAt = bounded ? monotonicNow() + /** @type {number} */ (opts.timeoutMs) : null;
-	if (realtime) {
-		// A WebSocket never ends on its own, so 'no budget' cannot mean 'wait
-		// forever' here: SHUTDOWN_TIMEOUT=0 disables the HTTP in-flight budget
-		// but the WS drain still closes holdouts after a 30s window.
-		const budget = bounded ? /** @type {number} */ (opts.timeoutMs) : 30_000;
-		await realtime.drainSockets({
-			dispersalMs: reconnect_dispersal_ms,
-			deadlineMs: budget
-		});
+	const budgetMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
+	let signal = opts.signal ?? null;
+	let deadline = opts.deadline ?? null;
+	// A caller that set only timeoutMs gets an expiry of its own, so the hook
+	// and both drains are bounded by the number it configured rather than by
+	// nothing. The entry passes its signal in and this arms nothing.
+	/** @type {any} */
+	let ownTimer = null;
+	if (signal === null && budgetMs > 0) {
+		const expiry = new AbortController();
+		ownTimer = setTimer(() => expiry.abort(), budgetMs);
+		if (typeof ownTimer?.unref === 'function') ownTimer.unref();
+		signal = expiry.signal;
+		if (deadline === null) deadline = wallEpoch() + budgetMs;
 	}
-	stopPressureSampler();
-	// Floored at 1ms: timeoutMs 0 is the no-budget spelling, and an exhausted
-	// budget must cut the HTTP drain immediately rather than unbind it.
-	// `budgetMs` carries the budget the CALLER set, separately from the
-	// remainder the HTTP drain actually gets. What an operator needs named in a
-	// dropped-requests line is the number they configured, not whatever was left
-	// of it once the WebSocket drain had taken its share.
-	return lifecycleShutdown(deadlineAt !== null
-		? { ...opts, budgetMs: opts.timeoutMs, timeoutMs: Math.max(1, deadlineAt - monotonicNow()) }
-		: opts);
+	try {
+		// The hook, then the door: the listen socket closes only once the app
+		// has had its say, and WebSocket clients are told to go only after
+		// that - the order the hook is documented against.
+		await lifecycleShutdown({ reason: opts.reason ?? null, signal, deadline });
+		stopPressureSampler();
+		if (realtime) {
+			// A WebSocket never ends on its own, so 'no budget' cannot mean 'wait
+			// forever' here: SHUTDOWN_TIMEOUT=0 disables the HTTP in-flight budget
+			// but the WS drain still closes holdouts after a 30s window. With a
+			// budget the drain stops when the shared signal does.
+			await realtime.drainSockets({
+				dispersalMs: reconnect_dispersal_ms,
+				deadlineMs: signal ? Infinity : 30_000,
+				signal
+			});
+		}
+		const drained = await Promise.race([
+			drainRequests().then(() => true),
+			whenAborted(signal).then(() => false)
+		]);
+		if (!drained) {
+			console.error(adapterConsoleLine(
+				ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
+				`${Math.round(budgetMs)}ms); closing anyway - the requests still open at this point are dropped.`
+			));
+		}
+		await closeConnections();
+		return drained;
+	} finally {
+		if (ownTimer !== null) clearTimer(ownTimer);
+	}
 }
 
 // - Configuration validation -------------------------------------------------

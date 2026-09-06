@@ -26,6 +26,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
 import { buildRuntime } from './helpers/build-runtime.js';
 import { ADAPTER_ERROR_IDS } from '../src/runtime/error-registry.js';
 
@@ -57,7 +58,7 @@ const WS_OPTS = {
 // Behaviour is read from the environment at CALL time, not at module eval: the
 // payload is imported once and both halves have to be reachable from it.
 const WS_HANDLER = `
-globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined };
+globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null };
 
 export async function shutdown(ctx) {
 	const seen = globalThis.__wsShutdownSeen;
@@ -65,6 +66,12 @@ export async function shutdown(ctx) {
 	seen.hasSignal = Boolean(ctx && ctx.signal);
 	seen.deadline = ctx ? ctx.deadline : undefined;
 	seen.reason = ctx ? ctx.reason : undefined;
+	// A last frame to whoever is still connected: the hook is documented to
+	// run ahead of the socket close, and this is what that order is for.
+	seen.published = ctx && ctx.platform ? ctx.platform.publish('bye', 'last', { n: 1 }) : null;
+	if (process.env.WS_SHUTDOWN_DELAY_MS) {
+		await new Promise((r) => setTimeout(r, Number(process.env.WS_SHUTDOWN_DELAY_MS)));
+	}
 	if (process.env.WS_SHUTDOWN_HANG !== '1') return;
 	// Never settles on its own. The runtime must stop waiting on its own budget
 	// and say so; if it does not, this hangs the caller, which is the defect.
@@ -95,7 +102,8 @@ beforeAll(async () => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	delete process.env.WS_SHUTDOWN_HANG;
-	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined };
+	delete process.env.WS_SHUTDOWN_DELAY_MS;
+	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null };
 });
 
 /**
@@ -160,3 +168,73 @@ describe('the app shutdown hook runs under the budget', () => {
 		).toEqual([]);
 	});
 });
+
+describe('the app shutdown hook runs ahead of the close, and the drains get what it leaves', () => {
+	/**
+	 * A listening lifecycle with one live WebSocket client, so the order of
+	 * the close path is observable: the hook either finds the socket still
+	 * open or it does not.
+	 */
+	async function withOneClient(fn) {
+		await handler.start('127.0.0.1', 0);
+		const port = handler.server.address().port;
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+		await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+		try {
+			return await fn(ws, port);
+		} finally {
+			try { ws.terminate(); } catch { /* already gone */ }
+		}
+	}
+
+	it('runs the hook while every WebSocket is still open, so a last frame still reaches the client', async () => {
+		// The documented order: the hook runs BEFORE the listen socket closes
+		// and BEFORE existing connections are kicked, so a hook flushing a last
+		// frame has somewhere to flush it. Run after the WebSocket drain, the
+		// hook publishes to nobody and nothing else in the suite notices - so
+		// the client's inbox is the oracle, not the hook's call count.
+		await withOneClient(async (ws) => {
+			const frames = [];
+			const closedCodes = [];
+			ws.on('message', (data) => { try { frames.push(JSON.parse(String(data))); } catch { /* binary */ } });
+			ws.on('close', (code) => closedCodes.push(code));
+			ws.send(JSON.stringify({ type: 'subscribe', topic: 'bye', ref: 1 }));
+			await new Promise((resolve) => {
+				const tick = () => (frames.some((f) => f.type === 'subscribed') ? resolve(undefined) : setTimeout(tick, 10));
+				tick();
+			});
+			await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 2000 });
+			await new Promise((r) => setTimeout(r, 100));
+			const seen = globalThis.__wsShutdownSeen;
+			expect(seen.called).toBe(1);
+			expect(seen.published, 'the hook found no subscriber to publish to').toBe(true);
+			expect(frames.some((f) => f.topic === 'bye' && f.event === 'last'), 'the last frame never reached the client').toBe(true);
+			// And the client is still told to go, after the hook: the order is a
+			// reordering, not a skipped step.
+			expect(closedCodes).toEqual([1001]);
+		});
+	}, 20000);
+
+	it('hands the drains only what the hook left of the budget, not the budget again', async () => {
+		// A hook that spends most of a budget must not be followed by a drain
+		// that waits a whole budget of its own: the number the operator set is a
+		// bound on the sequence. With a client that never acknowledges the close
+		// frame the WebSocket drain runs to its bound, so the elapsed time says
+		// whether that bound was the remainder or a fresh allowance.
+		process.env.WS_SHUTDOWN_DELAY_MS = '600';
+		await withOneClient(async (ws) => {
+			// Stop reading: the server's close frame is never acked, so the drain
+			// holds until the budget cuts it.
+			ws._socket.pause();
+			const t0 = Date.now();
+			await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 1000 });
+			const elapsed = Date.now() - t0;
+			expect(globalThis.__wsShutdownSeen.called).toBe(1);
+			// The hook took ~600 of the 1000; the drain got the ~400 left. A drain
+			// handed 1000 again lands near 1600.
+			expect(elapsed).toBeGreaterThanOrEqual(900);
+			expect(elapsed).toBeLessThan(1400);
+		});
+	}, 20000);
+});
+

@@ -577,6 +577,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The graceful shutdown sequence runs in the documented order on every path.
+  The app's `shutdown` hook runs first, while the listen socket is still bound
+  and every WebSocket is still open, so a hook flushing a last frame has
+  clients to flush it to; then the listener closes, WebSocket clients get their
+  1001, in-flight requests drain, and the `sveltekit:shutdown` listeners run
+  LAST, after the drain, so a listener closing a pool sees no request still
+  using it. The hook previously ran after the WebSocket drain had already
+  kicked every client, and the cleanup listeners ran before the drain.
+
+- One budget bounds the whole sequence. The hook, the WebSocket drain and the
+  HTTP drain race the same abort signal, so a hook that spends most of the
+  budget leaves the drains only the remainder rather than a fresh allowance;
+  a consumer calling the built handler's `shutdown({ timeoutMs })` directly
+  gets the same bound derived from its number. The `deadline` handed to the
+  hook and the cleanup listeners is a wall-clock epoch, as documented. A
+  throw inside the sequence's own machinery no longer skips the close path,
+  because the cleanup step it can come from is now the last one.
+
+- The dropped-requests line names the budget the operator configured, on the
+  signal path as well as the direct one, and reads as the lead spells it. The
+  `sveltekit:shutdown` listener entries in the catalog carry the lead's
+  wording and order.
+
+- A signal taken while the server module is still evaluating leaves the
+  rotation before boot can announce readiness. The readiness flip previously
+  reached only a signal that arrived after the module had loaded, so a
+  `Ready for traffic` line could still follow a stop signal on the longer
+  half of the boot window. The single-process path also announces the
+  signal it received and the load-balancer delay it is waiting out, as the
+  cluster paths already did, and the exit waits for stderr as well as stdout
+  to take the final line.
+
 - A resume frame's `lastSeenEpochs` map takes the same grant filter as its
   `lastSeenSeqs` map. The two arrive on one frame keyed the same way and the
   hook reads them together, so a topic dropped from the seqs and left in the

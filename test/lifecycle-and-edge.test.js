@@ -152,10 +152,7 @@ describe('graceful shutdown', () => {
 			// The dropped request is counted and reported through the catalog.
 			const dropped = errorLines.filter((line) => line.includes('ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED'));
 			expect(dropped.length).toBe(1);
-			// The count is matched with its surrounding words rather than on its
-			// own: `toContain('1 request')` would also be satisfied by 11 or 21,
-			// because a decimal number is a prefix of other decimal numbers.
-			expect(dropped[0]).toContain('the 1 request(s) still open at this point are dropped.');
+			expect(dropped[0]).toContain('the requests still open at this point are dropped.');
 			// The budget that expired is named, so an operator can tell a
 			// too-tight SHUTDOWN_TIMEOUT from a wedged handler.
 			expect(dropped[0]).toContain('within the shutdown budget (50ms)');

@@ -8,7 +8,7 @@
 
 import { emitOperationalDiagnostic, listenFailureDiagnostic } from '../utils/operational-diagnostic.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
-import { monotonicNow, setTimer, clearTimer } from '../runtime.js';
+import { monotonicNow } from '../runtime.js';
 import { counters } from './state.js';
 import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
@@ -44,6 +44,10 @@ function setLifecycleState(next) {
 	lifecycle_state = next;
 	counters.draining = next !== 'ready';
 }
+// The mirror is written from the state at load, not initialised beside it:
+// two literals that have to agree are two literals that can disagree, and boot
+// is the window where they did.
+setLifecycleState(lifecycle_state);
 
 /**
  * Flip readiness to 503 while the listener still accepts. A balancer routes
@@ -62,6 +66,34 @@ export function beginDrain() {
 
 /** @type {Array<() => void>} */
 const drainResolvers = [];
+
+/**
+ * Resolve once no HTTP exchange is in flight. Immediate when none is; the
+ * caller races it against the shutdown budget, so a request that never
+ * finishes cannot hold the close path.
+ * @returns {Promise<void>}
+ */
+export function drain() {
+	if (counters.inFlightCount === 0) return Promise.resolve();
+	return new Promise((resolve) => { drainResolvers.push(resolve); });
+}
+
+/**
+ * Resolve when `signal` aborts, never otherwise. The shutdown budget is one
+ * AbortSignal shared by every phase, and a phase bounds itself by racing this
+ * against its own work rather than arming a timer of its own: per-phase timers
+ * would make the real bound the SUM of the phases, not the budget.
+ * A missing signal means the caller set no budget, so nothing ever aborts.
+ * @param {AbortSignal | null | undefined} signal
+ * @returns {Promise<void>}
+ */
+export function whenAborted(signal) {
+	if (!signal) return new Promise(() => {});
+	if (signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		signal.addEventListener('abort', () => resolve(), { once: true });
+	});
+}
 
 /**
  * Called by the request handler on every completed exchange. Resolves every
@@ -172,32 +204,41 @@ export async function start(server, host, port, opts = {}) {
 /** @type {Promise<void> | null} */
 let shutdownPromise = null;
 
+/** The listener's own close, settled once every accepted socket has ended. */
+/** @type {Promise<void> | null} */
+let listenerClosed = null;
+
 /**
- * Graceful shutdown: stop accepting, drain in-flight exchanges within the
- * budget, then close whatever remains. Live WebSocket drain layers on top of
- * this in the realtime lane. Idempotent: concurrent and repeated calls share
- * one teardown, and the first caller's budget governs it.
+ * Close the door: run the app's shutdown hook, then stop accepting. Already
+ * accepted exchanges keep being served - the caller drains them against the
+ * same budget with `drain()` and cuts what is left with `closeConnections()`.
+ * Idempotent: concurrent and repeated calls share one teardown.
  *
- * @param {{ timeoutMs?: number }} [opts] - 0 or undefined = no budget
+ * @param {{ reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} [ctx]
+ *   The shutdown budget, forwarded to the app's hook: `reason` is the signal or
+ *   message that started it, `signal` aborts when the budget is spent, and
+ *   `deadline` is the wall-clock epoch ms it expires at. Both are null when the
+ *   caller set no budget - SHUTDOWN_TIMEOUT=0, or a test harness closing a
+ *   server - and then the hook is awaited for as long as it takes.
  * @returns {Promise<void>}
  */
-export function shutdown(opts = {}) {
-	if (shutdownPromise === null) shutdownPromise = performShutdown(opts);
+export function shutdown(ctx = {}) {
+	if (shutdownPromise === null) shutdownPromise = performShutdown(ctx);
 	return shutdownPromise;
 }
 
-/** @param {{ timeoutMs?: number, budgetMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
+/** @param {{ reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
 async function performShutdown(opts) {
-	// Whether every in-flight request finished before the budget ran out. The
-	// caller needs it to say whether the shutdown was CLEAN, which is the one
-	// thing an operator reading the exit wants to know.
-	let drainedFully = true;
+	// Readiness first, and idempotent: the signal handler normally flips it
+	// before its load-balancer delay, so this only fires for callers that close
+	// the server directly.
 	beginDrain();
 	// The app's shutdown hook belongs to the CLOSE PATH, not to whatever drove
 	// it: an entry with its own budgeted teardown and a consumer calling
-	// handler.shutdown() directly must both run it. The hook is latched on its
-	// own promise, so whichever arrives first runs it and the other awaits that
-	// same run rather than firing it twice.
+	// handler.shutdown() directly must both run it. It runs BEFORE the listen
+	// socket closes and before any WebSocket is told to go, which is the order
+	// the hook is documented against: a hook flushing a last frame to its
+	// clients has clients to flush to.
 	await runAppShutdownHook({
 		reason: opts.reason ?? null,
 		signal: opts.signal ?? null,
@@ -213,49 +254,36 @@ async function performShutdown(opts) {
 	counters.resourceGrowthAuditor = null;
 	const server = httpServer;
 	if (!server) {
+		// A boot that never listened still removes its socket file.
 		closePostureExport();
 		setLifecycleState('closed');
-		return drainedFully;
+		return;
 	}
-
 	// Close the listener; already-accepted sockets keep being served. Idle
 	// keep-alive connections hold no exchange and are closed at once so the
 	// drain waits only on real work.
-	const closed = new Promise((resolve) => server.close(() => resolve(undefined)));
+	listenerClosed = new Promise((resolve) => server.close(() => resolve(undefined)));
 	server.closeIdleConnections?.();
-
-	if (counters.inFlightCount > 0) {
-		/** @type {Promise<void>} */
-		const drained = new Promise((resolve) => { drainResolvers.push(resolve); });
-		const timeoutMs = opts.timeoutMs ?? 0;
-		if (timeoutMs > 0) {
-			let timer;
-			const budget = new Promise((resolve) => {
-				timer = setTimer(resolve, timeoutMs);
-				if (typeof timer?.unref === 'function') timer.unref();
-			});
-			await Promise.race([drained, budget]);
-			clearTimer(timer);
-		} else {
-			await drained;
-		}
-	}
-
-	// Whatever is still open after the budget is cut off; a truncated exchange
-	// is the documented cost of the deadline expiring.
-	if (counters.inFlightCount > 0) {
-		drainedFully = false;
-		console.error(adapterConsoleLine(
-			ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
-			`${Math.round(opts.budgetMs ?? opts.timeoutMs ?? 0)}ms); closing anyway - the ${counters.inFlightCount} request(s) ` +
-			'still open at this point are dropped.'
-		));
-	}
-	server.closeAllConnections?.();
-	await closed;
-	closePostureExport();
+	// Accepting stops here, not when readiness flipped - the two are separate
+	// states and the window between them is the whole point of the drain delay.
 	setLifecycleState('closed');
-	return drainedFully;
+}
+
+/**
+ * Cut whatever is still open once the drain has finished or the budget has
+ * expired, and wait for the listener's own close to settle. A truncated
+ * exchange is the documented cost of the deadline expiring.
+ * @returns {Promise<void>}
+ */
+export async function closeConnections() {
+	const server = httpServer;
+	if (!server) return;
+	server.closeAllConnections?.();
+	if (listenerClosed) await listenerClosed;
+	// The export's steady cadence is documented as a liveness signal, so it is
+	// dropped only now, once nothing is being served any more - closing it at
+	// the door would report this worker gone while it still drained.
+	closePostureExport();
 }
 
 /**

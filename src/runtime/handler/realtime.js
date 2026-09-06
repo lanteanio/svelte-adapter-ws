@@ -2746,10 +2746,13 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
  * directly. Sockets that ignore the close frame past the deadline are
  * terminated.
  *
- * @param {{ dispersalMs: number, deadlineMs: number, pollMs?: number }} opts
+ * @param {{ dispersalMs: number, deadlineMs: number, pollMs?: number, signal?: AbortSignal | null }} opts
+ *   `signal` is the shutdown budget shared with every other phase: once it
+ *   aborts the wait ends at once and the holdouts are terminated, so this drain
+ *   spends what the budget has left rather than a window of its own.
  * @returns {Promise<void>}
  */
-export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50 }) {
+export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50, signal = null }) {
 	if (wsConnections.size === 0) return;
 	if (dispersalMs > 0) {
 		platform.adviseReconnect({ windowMs: dispersalMs, close: true });
@@ -2761,7 +2764,7 @@ export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50 }) {
 	// Wait for the close handshakes to land, bounded by the deadline; then
 	// terminate whatever is still holding a socket open.
 	const start = monotonicNow();
-	while (wsConnections.size > 0 && monotonicNow() - start < deadlineMs) {
+	while (wsConnections.size > 0 && !(signal && signal.aborted) && monotonicNow() - start < deadlineMs) {
 		await new Promise((resolve) => {
 			const timer = setTimer(resolve, pollMs);
 			if (typeof timer?.unref === 'function') timer.unref();

@@ -854,6 +854,24 @@ Log line begins:
 
 **What to do.** Verify the served certificate against the renewal on disk first (see ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ). If the fleet is genuinely stale, fix the certificate files now and restart the instance if the reload cannot be repaired before the printed expiry.
 
+## ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED
+
+Severity: error
+
+Log line begins:
+
+```
+[svelte-adapter-ws] a sveltekit:shutdown listener rejected
+```
+
+**Cause.** An async sveltekit:shutdown listener's promise rejected during shutdown.
+
+**Consequence.** That listener's cleanup did not complete. The rejection is contained: remaining listeners still run, shutdown proceeds, and the exit is not held.
+
+**Automatic recovery.** Not applicable; shutdown proceeds without the failed cleanup.
+
+**What to do.** Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen.
+
 ## ADAPTER-ERR-SHUTDOWN-LISTENER-THREW
 
 Severity: error
@@ -871,24 +889,6 @@ Log line begins:
 **Automatic recovery.** Not applicable; shutdown proceeds without the failed cleanup.
 
 **What to do.** Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen.
-
-## ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED
-
-Severity: error
-
-Log line begins:
-
-```
-[svelte-adapter-ws] a sveltekit:shutdown listener rejected
-```
-
-**Cause.** A sveltekit:shutdown listener returned a promise that rejected during shutdown.
-
-**Consequence.** That listener's cleanup did not complete. The rejection is contained: the other listeners still run to their own end, shutdown proceeds, and the exit is not held.
-
-**Automatic recovery.** Not applicable; shutdown proceeds without the failed cleanup.
-
-**What to do.** Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen. A rejection is reported separately from a synchronous throw because the two fail at different points and usually have different causes.
 
 ## ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED
 
@@ -918,9 +918,9 @@ Log line begins:
 [svelte-adapter-ws] sveltekit:shutdown listeners did not settle within the shutdown budget (
 ```
 
-**Cause.** sveltekit:shutdown listeners or the ws shutdown hook were still pending when the cleanup budget expired.
+**Cause.** One or more sveltekit:shutdown listeners were still pending when the shutdown budget expired.
 
-**Consequence.** The drain proceeds with that cleanup unfinished: final writes and teardowns still pending did not complete before the exit.
+**Consequence.** The process exits with that cleanup unfinished: final writes and teardowns those listeners were performing did not complete.
 
 **Automatic recovery.** Not applicable; the budget exists so a wedged listener cannot hold the exit.
 

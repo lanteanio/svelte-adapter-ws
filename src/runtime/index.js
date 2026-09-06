@@ -1322,9 +1322,10 @@ if (is_primary) {
 	 * @param {string} reason
 	 * @param {AbortSignal | null} signal
 	 * @param {number | null} deadline
+	 * @param {string} prefix
 	 * @returns {Promise<boolean>} false when the budget expired first
 	 */
-	async function runShutdownCleanup(reason, signal, deadline) {
+	async function runShutdownCleanup(reason, signal, deadline, prefix) {
 		const listeners = process.listeners('sveltekit:shutdown');
 		if (listeners.length === 0) return true;
 		/** @type {Promise<void>[]} */
@@ -1334,11 +1335,15 @@ if (is_primary) {
 				const result = listener.call(process, reason, { reason, signal, deadline });
 				if (result && typeof (/** @type {any} */ (result).then) === 'function') {
 					pending.push(Promise.resolve(result).catch((err) => {
-						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_REJECTED), err);
+						// The worker tag trails the invariant text so the line stays
+						// findable by its documented prefix on every thread.
+						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_REJECTED,
+							prefix ? ' ' + prefix.trim() : ''), err);
 					}));
 				}
 			} catch (err) {
-				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW), err);
+				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW,
+					prefix ? ' ' + prefix.trim() : ''), err);
 			}
 		}
 		if (pending.length === 0) return true;
@@ -1363,6 +1368,10 @@ if (is_primary) {
 		});
 	}
 
+	// Node stores a timer delay in a signed 32-bit int and silently rearms
+	// anything larger to 1ms, so this is the longest "never" a timer can express.
+	const MAX_TIMER_MS = 2147483647;
+
 	/**
 	 * Flip readiness and say so, exactly once whichever path arrives first.
 	 *
@@ -1372,25 +1381,28 @@ if (is_primary) {
 	 * silent about a drain that had already begun.
 	 *
 	 * @param {typeof import('./handler.js') | null} h
+	 * @param {string} [prefix]
 	 */
-	function beginDrainAnnounced(h) {
+	function beginDrainAnnounced(h, prefix = '') {
 		if (h?.beginDrain()) {
-			console.log('[svelte-adapter-ws] Readiness now reports NOT ready (draining); still accepting.');
+			console.log(`[svelte-adapter-ws] ${prefix}Readiness now reports NOT ready (draining); still accepting.`);
 		}
 	}
 
 	/**
-	 * Exit once stdout has actually taken what was just written.
+	 * Exit once stdout and stderr have both taken what was just written.
 	 *
 	 * A pipe accepts writes asynchronously, so exiting in the same turn as the
 	 * final console line can drop it - and that line is the one saying whether
 	 * the shutdown was clean, which is exactly what a supervisor's log capture
-	 * is reading. Bounded, because a stdout that never drains (a closed reader)
-	 * must not be able to hold the exit open either.
+	 * is reading. Both streams, because the NOT-clean line and every indexed
+	 * error go to stderr. Bounded, because a stream that never drains (a closed
+	 * reader) must not be able to hold the exit open either.
 	 *
 	 * @param {number} code
 	 */
 	function exitAfterFlush(code) {
+		let pending = 2;
 		let done = false;
 		/** @type {any} */
 		let timer = null;
@@ -1400,122 +1412,132 @@ if (is_primary) {
 			if (timer) clearTimeout(timer); // determinism-allow: process exit, outside the replayable runtime
 			process.exit(code);
 		};
+		const one = () => { if (--pending === 0) go(); };
 		timer = setTimeout(go, 250); // determinism-allow: process exit, outside the replayable runtime
-		process.stdout.write('', () => go());
+		process.stdout.write('', one);
+		process.stderr.write('', one);
 	}
 
 	/**
-	 * @param {string} signal - an OS signal name, or 'shutdown' when the
+	 * @param {string} reason - an OS signal name, or 'shutdown' when the
 	 *   cluster primary asked this worker to go down (the primary already
 	 *   spent the load-balancer delay, so it is not spent again here)
 	 * @param {typeof import('./handler.js')} handler
 	 */
-	async function performShutdown(signal, handler) {
+	async function performShutdown(reason, handler) {
 		if (phase === 'shutting-down') return;
 		phase = 'shutting-down';
 		if (isMainThread) {
 			sdNotify.stopping();
 			sdNotify.disarmWatchdog();
 		}
+		const prefix = isMainThread ? '' : `[worker ${threadId}] `;
+		console.log(`[svelte-adapter-ws] ${prefix}Received ${reason}, shutting down gracefully...`);
 
-		// Readiness flips first so the balancer routes away while the listener
-		// still accepts - a poll-interval race never sees a closed socket.
-		// Announced, because draining is not closing and the two look identical
-		// from outside: without this line the only evidence a shutdown started
-		// is that the process eventually stopped.
-		beginDrainAnnounced(handler);
-		const shutdownStartedAt = monotonicNow();
-		if (shutdown_delay > 0 && signal !== 'shutdown') {
+		// Step 1: readiness OFF, BEFORE the delay below. The delay exists so a load
+		// balancer can deregister this instance before its sockets close, and the
+		// balancer polls readiness to decide - so flipping readiness together with
+		// the socket close (which is what a single shutdown step does) means new
+		// requests keep being routed here for the whole propagation window and then
+		// meet a closed socket. Draining is not closing: the listen socket stays
+		// open and in-flight and newly arriving requests are still served.
+		beginDrainAnnounced(handler, prefix);
+
+		// Step 2: Load balancer drain delay (only for OS signals, not when the
+		// primary tells us to shutdown - the primary already waited its own delay).
+		if (shutdown_delay > 0 && (reason === 'SIGTERM' || reason === 'SIGINT')) {
+			console.log(`[svelte-adapter-ws] ${prefix}Waiting ${shutdown_delay}ms for load balancer drain...`);
 			await new Promise((resolve) => setTimeout(resolve, shutdown_delay)); // determinism-allow: process-level shutdown pacing, outside the replayable runtime
 		}
 
-		// ONE budget for everything that follows: SHUTDOWN_TIMEOUT bounds the
-		// whole teardown sequence (app cleanup hooks, then the WS and HTTP
-		// drains), not each phase separately - a hook that eats the budget
-		// leaves the drains only what remains, so the process is down when the
-		// operator's number says it is. The readiness delay above is outside
-		// the budget: it is a wait the operator asked for, not work that can
-		// overrun. Under SHUTDOWN_TIMEOUT=0 every phase runs unbounded; the
-		// second-signal force-exit is the escape hatch.
-		// Monotonic anchor: a wall-clock step during the hooks phase must not
-		// stretch or collapse what the drains have left.
-		const budgetMs = shutdown_timeout * 1000;
-		const deadlineAt = budgetMs > 0 ? monotonicNow() + budgetMs : null;
-		// ONE abort for the whole hooks phase, aborted by the same expiry the race
-		// below waits on. The app's WebSocket shutdown hook gets it, so a hook that
-		// wants to give up cleanly can - and so a hook that does not still stops
-		// holding the close path when the budget is spent. Null with no budget: the
-		// hook's own race must then never abort.
-		const hooksExpiry = new AbortController();
-		/** @type {any} */
-		let expiryTimer = null;
-		if (deadlineAt !== null) {
-			expiryTimer = setTimeout(() => hooksExpiry.abort(), budgetMs); // determinism-allow: process-level shutdown budget, outside the replayable runtime
-			if (typeof expiryTimer?.unref === 'function') expiryTimer.unref();
-		}
-		const cleanupSignal = budgetMs > 0 ? hooksExpiry.signal : null;
-		if (budgetMs <= 0) {
-			// Announced, because an unbounded shutdown is a real trade rather
-			// than a default: the operator who typed 0 should be able to see that
-			// nothing will cut a wedged hook off.
+		// ONE budget for everything that follows. Application code runs in two of
+		// the three phases below, and an app hook that never settles used to hold
+		// the process indefinitely: the timeout only ever bounded the drain, which
+		// is the one phase the adapter controls. Now every phase races the same
+		// AbortSignal, so SHUTDOWN_TIMEOUT is what it claims to be - a bound on the
+		// whole sequence - and the phase that ran out of it is named in the log.
+		// The delay above is deliberately outside the budget: it is a wait the
+		// operator asked for, not work that can overrun.
+		//
+		// SHUTDOWN_TIMEOUT=0 means NO budget: nothing aborts, and every phase is
+		// awaited to completion the way an unbounded await always did. It is the
+		// only way to say "never cut my cleanup off", so it has to exist - and it
+		// must not be spelled by accident, which is why the line below says so.
+		//
+		// The timer is deliberately NOT unref'd, and is cleared the moment the
+		// sequence finishes. It is what keeps the process alive across the awaited
+		// teardown: a pending promise does not hold Node's event loop open, so an
+		// unref'd budget would let the process exit out from under an app's cleanup
+		// the instant the loop went idle - abandoning exactly the work these phases
+		// exist to wait for, and doing it silently. With no budget the timer still
+		// exists for exactly that reason, and only for it: it is armed as far out
+		// as Node will take (a longer delay silently becomes 1ms), so it never
+		// fires - it only holds the loop open while the awaits run.
+		const budget_ms = shutdown_timeout * 1000;
+		const bounded = budget_ms > 0;
+		const expiry = new AbortController();
+		const budget_timer = bounded
+			? setTimeout(() => expiry.abort(), budget_ms) // determinism-allow: process-level shutdown budget, outside the replayable runtime
+			: setTimeout(() => {}, MAX_TIMER_MS); // determinism-allow: holds the loop open across the awaited teardown
+		// Wall-clock, so an app hook can compare it against its own Date.now();
+		// null with no budget, which is how a hook reads "nothing will cut me off"
+		// rather than having to guess from a far-future number.
+		const deadline = bounded ? wallEpoch() + budget_ms : null;
+		// Handed to app code and raced by the phases below only when it can
+		// actually fire. With no budget every phase simply awaits.
+		const signal = bounded ? expiry.signal : null;
+		if (!bounded) {
 			console.log(
-				'[svelte-adapter-ws] SHUTDOWN_TIMEOUT=0: no shutdown budget - the shutdown hook, the in-flight drain and the ' +
+				`[svelte-adapter-ws] ${prefix}SHUTDOWN_TIMEOUT=0: no shutdown budget - the shutdown hook, the in-flight drain and the ` +
 				'cleanup listeners are awaited for as long as they take, so a wedged one holds this process until it is killed.'
 			);
 		}
-		// Every application-supplied input to the sequence is contained behind
-		// its own entry - a throwing ws hook, a rejecting or wedged cleanup
-		// listener, an overrunning drain. What is left for this catch is the
-		// sequence's OWN machinery throwing, which an app reaches through a
-		// broken global: instrumentation that rewraps EventEmitter internals and
-		// then throws when the cleanup step reads the listener list. Reported and
-		// carried on with rather than rethrown, so the steps that can still run
-		// do, and the ending below still says the shutdown was not clean.
-		let cleaned = true;
-		let drained = true;
-		// The app's own hook runs inside handler.shutdown(), which is the close
-		// path every caller reaches - not just this entry. It is handed the SAME
-		// expiry this phase raced against, and the timer is deliberately still
-		// armed: clearing it here would leave that hook unbounded whenever the
-		// cleanup listeners happened to finish early.
-		//
-		// The drains get the REMAINDER of the sequence budget, floored at 1ms
-		// because timeoutMs 0 is the no-budget spelling: an exhausted budget
-		// must cut the drains immediately, not unbound them.
+		const t_close = monotonicNow();
+
+		// Steps 3 to 5 run under try/catch/finally. The budget timer is REF'D and
+		// this path is invoked unawaited from the signal handler, so a throw that
+		// escaped would both skip the clear and surface as an unhandled rejection:
+		// the process would either die on that rejection with the clean teardown
+		// never reached, or - if the app installs an unhandledRejection handler, as
+		// plenty do - keep running on the ref'd timer with no exit path left at all.
+		// Neither of those is an exit, which is what this function owes its caller.
+		let drained = false;
+		let cleaned = false;
 		try {
-			cleaned = await runShutdownCleanup(signal, cleanupSignal, deadlineAt);
+			// Steps 3 and 4: the hooks.ws `shutdown` hook flushes app state (last
+			// metrics, cron drain, external bridge teardown), then the listen socket
+			// closes, WebSocket clients get their 1001, and in-flight requests
+			// finish. All of it is the built handler's close path, so a consumer
+			// closing the server directly walks the same sequence this entry does;
+			// the hook is bounded inside it by the signal, so a wedged hook no
+			// longer keeps the socket open, and an overrun in the drain is reported
+			// there with the budget that expired.
+			drained = await handler.shutdown({ reason, signal, deadline, timeoutMs: budget_ms });
+
+			// Step 5: process-level cleanup, after the drain so a listener closing a
+			// pool or writing a final record sees no request still using it.
+			cleaned = await runShutdownCleanup(reason, signal, deadline, prefix);
 			if (!cleaned) {
-				console.error(adapterConsoleLine(
-					ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
-					`${budgetMs}ms); exiting anyway - their cleanup did NOT finish.`
-				));
+				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_LISTENERS_UNSETTLED,
+					`${budget_ms}ms)${prefix ? ' ' + prefix.trim() : ''}; exiting anyway - their cleanup did NOT finish.`));
 			}
-			drained = (await handler.shutdown({
-				reason: signal,
-				signal: cleanupSignal,
-				deadline: deadlineAt,
-				timeoutMs: deadlineAt !== null ? Math.max(1, deadlineAt - monotonicNow()) : 0
-			})) !== false;
 		} catch (err) {
-			cleaned = false;
-			drained = false;
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_FAILED), err);
+			// Nothing above is allowed to refuse the shutdown, and this path is
+			// invoked unawaited from the signal handler - an escaping rejection would
+			// surface as an unhandled rejection instead of an exit.
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SHUTDOWN_FAILED,
+				prefix ? ' ' + prefix.trim() : ''), err);
 		} finally {
-			if (expiryTimer) clearTimeout(expiryTimer); // determinism-allow: pairs with the shutdown budget above
+			clearTimeout(budget_timer); // determinism-allow: pairs with the shutdown budget above
+			// The last line an operator sees, and the one that says whether anything
+			// was lost. A clean stop and a stop that dropped requests look identical
+			// from the outside otherwise, so the difference is stated rather than
+			// left to be inferred from the absence of a warning above.
+			const spent = (monotonicNow() - t_close).toFixed(0);
+			if (drained && cleaned) console.log(`[svelte-adapter-ws] ${prefix}Shutdown complete in ${spent}ms.`);
+			else console.error(`[svelte-adapter-ws] ${prefix}Shutdown finished in ${spent}ms but was NOT clean (see the lines above).`);
+			exitAfterFlush(0);
 		}
-		// The last line an operator sees, and the one that says whether anything
-		// was lost. A clean stop and a stop that dropped requests look identical
-		// from the outside otherwise, so the difference is stated rather than
-		// left to be inferred from the absence of a warning above.
-		const spent = (monotonicNow() - shutdownStartedAt).toFixed(0);
-		if (drained && cleaned) {
-			console.log(`[svelte-adapter-ws] Shutdown complete in ${spent}ms.`);
-		} else {
-			console.error(
-				`[svelte-adapter-ws] Shutdown finished in ${spent}ms but was NOT clean (see the lines above).`
-			);
-		}
-		exitAfterFlush(0);
 	}
 
 	/**
@@ -1547,6 +1569,11 @@ if (is_primary) {
 		const handlerPromise = (async () => {
 			const handler = await import('./handler.js');
 			bootHandler = handler;
+			// A signal that arrived while the module was still evaluating found
+			// no handler to flip; the state exists now, and start() has not yet
+			// decided whether to announce readiness, so this is the last moment
+			// the drain can still win that race.
+			if (latchedSignal !== null) beginDrainAnnounced(handler);
 			await handler.start(host, port);
 			phase = 'running';
 			if (latchedSignal !== null) {
@@ -1612,8 +1639,7 @@ if (is_primary) {
 		 * relay.
 		 */
 		function applyDrain() {
-			handler.beginDrain();
-			console.log(`[worker ${threadId}] Readiness now reports NOT ready (draining); still accepting.`);
+			beginDrainAnnounced(handler, `[worker ${threadId}] `);
 		}
 
 		// Control messages that need the live handler graph. `drain` is
@@ -1621,7 +1647,6 @@ if (is_primary) {
 		// the message router.
 		function dispatchControl(msg) {
 			if (msg.type === 'shutdown') {
-				console.log(`[svelte-adapter-ws] [worker ${threadId}] Received shutdown, shutting down gracefully...`);
 				dispatchShutdown('shutdown', handler);
 			} else if (msg.type === 'publish') {
 				handler.relayPublish(msg.topic, msg.envelope, msg.compress, msg.seq, msg.capability, msg.event, msg.data, msg.origin, msg.ord, msg.birth);

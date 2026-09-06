@@ -1477,5 +1477,27 @@
 	},
 	{
 		"file": "test/resume-grant-gate-real.test.js"
+	},
+	{
+		"file": "test/lifecycle-readiness.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
+				"ours": "\t\treturn true;"
+			},
+			{
+				"lead": "describeUWS('a cluster worker drained while it is still booting'",
+				"ours": "describeSignal('a cluster worker drained while it is still booting'"
+			}
+		]
+	},
+	{
+		"file": "test/error-registry-shutdown-failed.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
+				"ours": "\t\treturn true;"
+			}
+		]
 	}
 ]

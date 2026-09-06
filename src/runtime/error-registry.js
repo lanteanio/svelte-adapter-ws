@@ -909,6 +909,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		help: 'docs/errors.md#adapter-err-tls-degraded-expiry'
 	}),
 	Object.freeze({
+		id: ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_REJECTED,
+		code: null,
+		event: 'shutdown.listener-rejected',
+		component: null,
+		severity: 'error',
+		emission: 'console',
+		problemPrefix: null,
+		messagePrefix: '[svelte-adapter-ws] a sveltekit:shutdown listener rejected',
+		cause: "An async sveltekit:shutdown listener's promise rejected during shutdown.",
+		consequence: "That listener's cleanup did not complete. The rejection is contained: remaining listeners still run, shutdown proceeds, and the exit is not held.",
+		automaticRecovery: 'Not applicable; shutdown proceeds without the failed cleanup.',
+		nextAction: 'Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen.',
+		sources: Object.freeze(['src/runtime/index.js']),
+		anchor: 'adapter-err-shutdown-listener-rejected',
+		help: 'docs/errors.md#adapter-err-shutdown-listener-rejected'
+	}),
+	Object.freeze({
 		id: ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_THREW,
 		code: null,
 		event: 'shutdown.listener-threw',
@@ -926,23 +943,6 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		help: 'docs/errors.md#adapter-err-shutdown-listener-threw'
 	}),
 	Object.freeze({
-		id: ADAPTER_ERROR_IDS.SHUTDOWN_LISTENER_REJECTED,
-		code: null,
-		event: 'shutdown.listener-rejected',
-		component: null,
-		severity: 'error',
-		emission: 'console',
-		problemPrefix: null,
-		messagePrefix: '[svelte-adapter-ws] a sveltekit:shutdown listener rejected',
-		cause: 'A sveltekit:shutdown listener returned a promise that rejected during shutdown.',
-		consequence: "That listener's cleanup did not complete. The rejection is contained: the other listeners still run to their own end, shutdown proceeds, and the exit is not held.",
-		automaticRecovery: 'Not applicable; shutdown proceeds without the failed cleanup.',
-		nextAction: 'Fix the listener, and check whatever it was tearing down (pools, final writes) for leaked state, because that teardown did not happen. A rejection is reported separately from a synchronous throw because the two fail at different points and usually have different causes.',
-		sources: Object.freeze(['src/runtime/index.js']),
-		anchor: 'adapter-err-shutdown-listener-rejected',
-		help: 'docs/errors.md#adapter-err-shutdown-listener-rejected'
-	}),
-	Object.freeze({
 		id: ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
 		code: null,
 		event: 'shutdown.requests-dropped',
@@ -955,7 +955,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		consequence: 'The remaining open requests are dropped as the sockets close; their clients see resets. The drop is bounded and deliberate: the budget exists so a wedged request cannot hold the process open.',
 		automaticRecovery: 'Not applicable; shutdown proceeds by design.',
 		nextAction: 'Raise SHUTDOWN_TIMEOUT if legitimate requests need longer to drain, or find the handler that never finished. SHUTDOWN_TIMEOUT=0 removes the budget entirely and waits forever.',
-		sources: Object.freeze(['src/runtime/handler/lifecycle.js']),
+		sources: Object.freeze(['src/runtime/handler.js']),
 		anchor: 'adapter-err-shutdown-requests-dropped',
 		help: 'docs/errors.md#adapter-err-shutdown-requests-dropped'
 	}),
@@ -968,8 +968,8 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		emission: 'console',
 		problemPrefix: null,
 		messagePrefix: '[svelte-adapter-ws] sveltekit:shutdown listeners did not settle within the shutdown budget (',
-		cause: 'sveltekit:shutdown listeners or the ws shutdown hook were still pending when the cleanup budget expired.',
-		consequence: 'The drain proceeds with that cleanup unfinished: final writes and teardowns still pending did not complete before the exit.',
+		cause: 'One or more sveltekit:shutdown listeners were still pending when the shutdown budget expired.',
+		consequence: 'The process exits with that cleanup unfinished: final writes and teardowns those listeners were performing did not complete.',
 		automaticRecovery: 'Not applicable; the budget exists so a wedged listener cannot hold the exit.',
 		nextAction: 'Make the listener finish within the budget or raise SHUTDOWN_TIMEOUT; SHUTDOWN_TIMEOUT=0 removes the budget entirely and waits forever.',
 		sources: Object.freeze(['src/runtime/index.js']),
