@@ -2255,16 +2255,31 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 	// Grant filter: under the pure-grant model, ungranted topics are dropped
 	// before the hook sees them.
 	let resumeSeqs = msg.lastSeenSeqs;
+	let resumeEpochs = lastSeenEpochs;
 	if (subscribeAuth.enabled && (subscribeAuth.strict || !hasUserSubscribeHook()) && resumeSeqs && typeof resumeSeqs === 'object') {
 		const grants = userData[WS_SUBSCRIPTIONS];
-		/** @type {Record<string, unknown>} */
-		const allowed = Object.create(null);
-		let droppedCount = 0;
-		for (const t of Object.keys(resumeSeqs)) {
-			if (deniesUngrantedObserve(true, false, grants, t)) { droppedCount++; continue; }
-			allowed[t] = resumeSeqs[t];
-		}
-		if (droppedCount > 0) resumeSeqs = allowed;
+		/**
+		 * Both client-named maps on this frame take the same filter.
+		 * They arrive keyed the same way, by the same client, in the
+		 * same frame, and the hook reads them together - an app
+		 * checking for an epoch mismatch iterates the epoch map, so a
+		 * topic dropped from the seqs and left in the epochs is a
+		 * topic the gate refused arriving by the other hand.
+		 * @param {Record<string, unknown>} map
+		 * @returns {Record<string, unknown>}
+		 */
+		const filterGranted = (map) => {
+			/** @type {Record<string, unknown>} */
+			const allowed = Object.create(null);
+			let droppedCount = 0;
+			for (const t of Object.keys(map)) {
+				if (deniesUngrantedObserve(true, false, grants, t)) { droppedCount++; continue; }
+				allowed[t] = map[t];
+			}
+			return droppedCount > 0 ? allowed : map;
+		};
+		resumeSeqs = filterGranted(resumeSeqs);
+		if (resumeEpochs) resumeEpochs = filterGranted(resumeEpochs);
 	}
 	if (wsModule.resume) {
 		try {
@@ -2273,7 +2288,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 			await wsModule.resume(facade, {
 				sessionId: msg.sessionId,
 				lastSeenSeqs: resumeSeqs,
-				lastSeenEpochs,
+				lastSeenEpochs: resumeEpochs,
 				platform: userData[WS_PLATFORM]
 			});
 		} catch (err) {

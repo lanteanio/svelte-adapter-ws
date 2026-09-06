@@ -577,6 +577,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A resume frame's `lastSeenEpochs` map takes the same grant filter as its
+  `lastSeenSeqs` map. The two arrive on one frame keyed the same way and the
+  hook reads them together, so a topic dropped from the seqs and left in the
+  epochs reached the hook by the other hand, carrying its generation as well as
+  its name.
+
+- The boot banner renders an adapter version or protocol revision it could not
+  read as `unreadable` rather than `not installed`. Neither is an optional
+  sibling: the adapter is what prints the line and the schema ships beside it,
+  so a null there means its own packaged metadata was unreadable, and the old
+  wording pointed an operator the opposite way.
+
 - The readiness mirror on the shared counters agrees with the lifecycle state
   during boot. It began life reporting a server that was taking traffic while
   the lifecycle said `starting` and `/readyz` correctly refused, so a

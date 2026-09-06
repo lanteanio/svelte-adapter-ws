@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { parseCookies, createCookies } from './runtime/cookies.js';
-import { parse_origin, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, nextTopicSeq, stampSeq, resolveEntrySeq, resolveSendSeq, throwInvalidSeq, createHlc, processEpoch, topicEpochValue, mintTopicEpoch, isAuthOriginAccepted, isOriginAllowed, assert, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CAPS, WS_ATTRIBUTION, WS_LEASE, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
+import { parse_origin, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, nextTopicSeq, stampSeq, resolveEntrySeq, resolveSendSeq, throwInvalidSeq, createHlc, processEpoch, topicEpochValue, mintTopicEpoch, isAuthOriginAccepted, isOriginAllowed, assert, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CAPS, WS_ATTRIBUTION, WS_LEASE, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createLeaseState, leaseGrantFrame, leaseReportedSaturation, controlFrameTooLargeFrame, DEFAULT_GRANT } from './runtime/wire.js';
 import { isAuthorizationHook, releaseDerivedSubscriptions, beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, WS_REVOKED_UNSUBSCRIBE } from './runtime/utils/ws-symbols.js';
 import { deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';
@@ -16,12 +16,13 @@ import {
 } from './config-guards.js';
 import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues } from './runtime/handler/cluster-sequence-policy.js';
 import { createMessageAdmission, messageOverloadedFrame, runAdmittedMessageHook, runAdmittedMessageWork } from './runtime/utils/message-admission.js';
+import { createByteBudget, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { normalizeEgressOptions, createEgressAccount, envelopeWireBytes, markAdmitted, admittedByBatch } from './runtime/utils/egress-account.js';
 import { readMetricMirror } from './runtime/utils/metrics.js';
 import { mergeSamples } from './runtime/utils/metrics-merge.js';
 import { privateValueMetadata } from './runtime/utils/observability-privacy.js';
 import { installAttribution } from './runtime/utils/attribution.js';
-import { snapshotUpgradeHeaders } from './runtime/utils/upgrade-headers.js';
+import { snapshotUpgradeHeaders, warnSetCookieOnUpgradeOnce } from './runtime/utils/upgrade-headers.js';
 import { emitOperationalDiagnostic, viteHandlerFailureDiagnostic, viteHandlerRecoveredDiagnostic } from './runtime/utils/operational-diagnostic.js';
 import { trace } from './runtime/tracing.js';
 import { emitOperationalEvent, diagnosticError } from './runtime/diagnostic.js';
@@ -354,6 +355,18 @@ export default function uws(options = {}) {
 
 	/** @type {import('ws').WebSocketServer | undefined} */
 	let wss;
+
+	/**
+	 * Validated 101 response headers waiting for their handshake, keyed on the
+	 * upgrade request. The `upgrade` hook runs well before `ws` assembles the
+	 * response, so the snapshot has to be parked somewhere the `headers` listener
+	 * can find it; the request is the only object both halves hold. Weak, because
+	 * an upgrade refused after the hook never reaches the handshake and its entry
+	 * should go with the request rather than accumulate.
+	 *
+	 * @type {WeakMap<import('node:http').IncomingMessage, Record<string, string | string[]>>}
+	 */
+	const pendingUpgradeHeaders = new WeakMap();
 
 	/** @type {Map<import('ws').WebSocket, Set<string>>} */
 	const subscriptions = new Map();
@@ -1562,9 +1575,7 @@ export default function uws(options = {}) {
 		// the one process-generation value across every topic via the dev
 		// platform's topicEpoch.
 		const epoch = typeof platform.topicEpoch === 'function' ? platform.topicEpoch(topic) : processEpoch();
-		const payload = JSON.stringify({ type: 'subscribed', topic, ref, epoch });
-		ws.send(payload);
-		bumpOutV(/** @type {any} */ (ws).__userData, payload);
+		sendControlV(ws, JSON.stringify({ type: 'subscribed', topic, ref, epoch }));
 	}
 
 	/**
@@ -1575,9 +1586,43 @@ export default function uws(options = {}) {
 	 */
 	function sendDenied(ws, topic, ref, reason) {
 		if (ref === null) return;
-		const payload = JSON.stringify({ type: 'subscribe-denied', topic, ref, reason });
+		sendControlV(ws, JSON.stringify({ type: 'subscribe-denied', topic, ref, reason }));
+	}
+
+	/**
+	 * Send a control frame against this connection's egress budget, mirroring
+	 * handler/control-egress.js.
+	 *
+	 * The control channel amplifies - a client names a topic in a few bytes and
+	 * is answered with a whole frame - so it is bounded per connection here too,
+	 * and a connection over the bound is cut with the same 4429. The ceiling and
+	 * the code come from the shared module rather than being spelled again,
+	 * because two spellings of one ceiling is how these surfaces drift.
+	 *
+	 * Only frames the server sends BECAUSE the client asked reach this. The dev
+	 * plugin's application publishes and sends call `ws.send` directly and are
+	 * never charged here, exactly as in production.
+	 *
+	 * @param {import('ws').WebSocket} ws
+	 * @param {string} payload
+	 */
+	function sendControlV(ws, payload) {
+		const ud = /** @type {any} */ (ws).__userData;
+		if (ud) {
+			let budget = ud[WS_CONTROL_BUDGET];
+			if (budget === null) return;
+			if (budget === undefined) {
+				budget = createByteBudget(MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, monotonicNow);
+				ud[WS_CONTROL_BUDGET] = budget;
+			}
+			if (!budget(payload.length)) {
+				ud[WS_CONTROL_BUDGET] = null;
+				try { ws.close(CONTROL_FLOOD_CLOSE_CODE, 'control frame budget exhausted'); } catch {}
+				return;
+			}
+		}
 		ws.send(payload);
-		bumpOutV(/** @type {any} */ (ws).__userData, payload);
+		bumpOutV(ud, payload);
 	}
 
 	function applyHandlers(mod) {
@@ -2014,23 +2059,26 @@ export default function uws(options = {}) {
 					return first === undefined ? false : first;
 				}
 			});
-			// Custom 101 headers (the upgradeResponse contract), applied the same
-			// way the production handler applies them: ws emits a 'headers' event
-			// before writing the handshake; a per-request map carries the app's
-			// validated headers into it.
-			/** @type {WeakMap<import('node:http').IncomingMessage, Record<string, string>>} */
-			const upgradeExtraHeaders = new WeakMap();
-			wss.on('headers', (headers, req) => {
-				const extra = upgradeExtraHeaders.get(req);
-				if (!extra) return;
-				for (const [name, value] of Object.entries(extra)) {
-					// An array value (several Set-Cookie lines) writes one header LINE
-					// per element - joining them would corrupt every cookie after the
-					// first.
+
+			// Custom 101 response headers, the same ones production writes through
+			// `res.writeHeader`. `ws` builds the handshake response itself and emits
+			// the assembled header lines for inspection before writing them, which
+			// is the seam: the upgrade path parks the validated snapshot against the
+			// request, and this listener appends it to the response about to go out.
+			// Keyed on the request object so a concurrent upgrade cannot take another
+			// connection's headers, and weak so an upgrade refused before
+			// `handleUpgrade` leaves nothing behind.
+			wss.on('headers', (headers, request) => {
+				const pending = pendingUpgradeHeaders.get(request);
+				if (!pending) return;
+				pendingUpgradeHeaders.delete(request);
+				for (const [name, value] of Object.entries(pending)) {
+					// The array form is several headers of the same name, which is how
+					// multiple Set-Cookie is expressed - not one comma-joined value.
 					if (Array.isArray(value)) {
-						for (const item of value) headers.push(`${name}: ${item}`);
+						for (let i = 0; i < value.length; i++) headers.push(name + ': ' + value[i]);
 					} else {
-						headers.push(`${name}: ${value}`);
+						headers.push(name + ': ' + value);
 					}
 				}
 			});
@@ -2455,24 +2503,18 @@ export default function uws(options = {}) {
 						}
 						if (result && result.__upgradeResponse === true) {
 							userData = result.userData || {};
-							// Validated with the same snapshot production applies, then
-							// handed to the wss 'headers' listener above, which writes every
-							// validated header onto the 101 exactly as production does.
+							// Validated exactly as production validates it, so a malformed
+							// header name or value throws here rather than reaching the
+							// handshake - an app cannot verify a broken upgrade in dev and
+							// fail only in production. The snapshot is what gets written, so
+							// what was checked is what goes out.
 							const responseHeaders = snapshotUpgradeHeaders(result.headers);
 							if (responseHeaders && Object.keys(responseHeaders).length > 0) {
-								upgradeExtraHeaders.set(req, responseHeaders);
-								const hasSetCookie = Object.keys(responseHeaders).some(
-									(k) => k.toLowerCase() === 'set-cookie'
-								);
-								if (hasSetCookie) {
-									console.warn(
-										'[adapter-ws] upgradeResponse() attaches Set-Cookie to the 101 response. ' +
-										'This fails silently behind Cloudflare Tunnel and some other strict edge proxies ' +
-										'(WebSocket opens, then closes with 1006). Use the `authenticate` hook to ' +
-										'refresh session cookies over a normal HTTP response.\n' +
-										'  See: https://svti.me/cf-cookies'
-									);
-								}
+								// The same advisory production gives, from the same shared
+								// helper and once per process, so the dev warning cannot
+								// drift from the production one.
+								warnSetCookieOnUpgradeOnce(responseHeaders);
+								pendingUpgradeHeaders.set(req, responseHeaders);
 							}
 						} else {
 							userData = result || {};
@@ -2524,6 +2566,10 @@ export default function uws(options = {}) {
 				});
 
 				const userData = /** @type {any} */ (ws).__userData || {};
+				// Same decision as the production handler and the test harness:
+				// claim the slots as own properties before anything writes one,
+				// so an accessor on the prototype chain cannot swallow the write.
+				declareConnectionSlots(userData);
 				userData[WS_SUBSCRIPTIONS] = new Set();
 				// Promote the upgrade-time requestId into a per-connection
 				// platform clone (parity with the production handler).
@@ -2567,8 +2613,7 @@ export default function uws(options = {}) {
 				wsWrappers.set(ws, wrapped);
 
 				const welcome = '{"type":"welcome","sessionId":"' + sessionId + '"}';
-				ws.send(welcome);
-				bumpOutV(userData, welcome);
+				sendControlV(ws, welcome);
 
 				// Call user open handler
 				userHandlers.open?.(wrapped, { platform: userData[WS_PLATFORM] });
@@ -2598,8 +2643,7 @@ export default function uws(options = {}) {
 						// handler.js so the dev server and the real handler agree on a close
 						// hook's byte accounting.
 						const rejectFrame = controlFrameTooLargeFrame(buf.byteLength);
-						ws.send(rejectFrame);
-						bumpOutV(userData, rejectFrame);
+						sendControlV(ws, rejectFrame);
 						return;
 					}
 
@@ -2633,9 +2677,7 @@ export default function uws(options = {}) {
 								// path, the topic checks included, is silent without a
 								// ref, and a history request must not die silently.
 								if (deniesRefLessRecover({ hasResumeHook: userHandlers.resume, recover: msg.recover, ref })) {
-									const payload = recoverRequiresRefFrame(msg.topic);
-									ws.send(payload);
-									bumpOutV(/** @type {any} */ (ws).__userData, payload);
+									sendControlV(ws, recoverRequiresRefFrame(msg.topic));
 									return;
 								}
 								if (!isValidWireTopic(msg.topic, ALLOW_NON_ASCII_TOPICS_V)) {
@@ -2831,17 +2873,12 @@ export default function uws(options = {}) {
 										const gate = createLeaseState({ requestCount: DEFAULT_GRANT.requestCount, ttlMs: DEFAULT_GRANT.ttlMs });
 										gate.grant();
 										ud[WS_LEASE] = { gate, saturation: 0 };
-										ws.send('{"type":"lease-ok"}');
-										bumpOutV(ud, '{"type":"lease-ok"}');
-										const frame = leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
-										ws.send(frame);
-										bumpOutV(ud, frame);
+										sendControlV(ws, '{"type":"lease-ok"}');
+										sendControlV(ws, leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs));
 									}
 									// Opt-in confirm for binary ingress (mirror of lease-ok).
 									if (caps.has(WIRE_INGRESS_CAP)) {
-										const okFrame = ingressOkFrame();
-										ws.send(okFrame);
-										bumpOutV(ud, okFrame);
+										sendControlV(ws, ingressOkFrame());
 									}
 								}
 								return;
@@ -3120,7 +3157,7 @@ export default function uws(options = {}) {
 										console.error('[adapter-ws] resume hook threw:', err);
 									}
 								}
-								ws.send('{"type":"resumed"}');
+								sendControlV(ws, '{"type":"resumed"}');
 								bumpOutV(userData, '{"type":"resumed"}');
 								return;
 							}
@@ -3134,9 +3171,7 @@ export default function uws(options = {}) {
 									// always say 0.
 									slot.saturation = leaseReportedSaturation(msg.queued);
 									slot.gate.requestN(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
-									const frame = leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs);
-									ws.send(frame);
-									bumpOutV(ud, frame);
+									sendControlV(ws, leaseGrantFrame(DEFAULT_GRANT.requestCount, DEFAULT_GRANT.ttlMs));
 								}
 								return;
 							}
@@ -3146,9 +3181,7 @@ export default function uws(options = {}) {
 								// handler). Unknown kind -> no bind, no ack, JSON fallback.
 								const bindUd = /** @type {any} */ (ws).__userData;
 								if (bindUd && bindIngress(bindUd, wrapped, msg.id, msg.kind, msg.target)) {
-									const boundFrame = ingressBoundFrame(msg.id);
-									ws.send(boundFrame);
-									bumpOutV(bindUd, boundFrame);
+									sendControlV(ws, ingressBoundFrame(msg.id));
 								}
 								return;
 							}

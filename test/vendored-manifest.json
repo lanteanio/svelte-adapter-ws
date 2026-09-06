@@ -671,14 +671,6 @@
 				"ours": "\t\t\t// Dev writes on bare `ws` sockets, which do not throw when\n\t\t\t// written to after close, so the closed-WS abort path doesn't\n\t\t\t// exist here. Mirror the prod surface as a constant zero."
 			},
 			{
-				"lead": "\t\t\t});\n\t\t\tviteServer = server;",
-				"ours": "\t\t\t});\n\t\t\t// Custom 101 headers (the upgradeResponse contract), applied the same\n\t\t\t// way the production handler applies them: ws emits a 'headers' event\n\t\t\t// before writing the handshake; a per-request map carries the app's\n\t\t\t// validated headers into it.\n\t\t\t/** @type {WeakMap<import('node:http').IncomingMessage, Record<string, string>>} */\n\t\t\tconst upgradeExtraHeaders = new WeakMap();\n\t\t\twss.on('headers', (headers, req) => {\n\t\t\t\tconst extra = upgradeExtraHeaders.get(req);\n\t\t\t\tif (!extra) return;\n\t\t\t\tfor (const [name, value] of Object.entries(extra)) {\n\t\t\t\t\t// An array value (several Set-Cookie lines) writes one header LINE\n\t\t\t\t\t// per element - joining them would corrupt every cookie after the\n\t\t\t\t\t// first.\n\t\t\t\t\tif (Array.isArray(value)) {\n\t\t\t\t\t\tfor (const item of value) headers.push(`${name}: ${item}`);\n\t\t\t\t\t} else {\n\t\t\t\t\t\theaders.push(`${name}: ${value}`);\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t});\n\t\t\tviteServer = server;"
-			},
-			{
-				"lead": "\t\t\t\t\t\t\t// Dev cannot emit custom 101 headers, but it must still reject\n\t\t\t\t\t\t\t// the same malformed result production rejects. Otherwise an app\n\t\t\t\t\t\t\t// verifies a broken upgrade in dev and only production fails.\n\t\t\t\t\t\t\tconst responseHeaders = snapshotUpgradeHeaders(result.headers);\n\t\t\t\t\t\t\tif (responseHeaders && Object.keys(responseHeaders).length > 0) {\n\t\t\t\t\t\t\t\tconst hasSetCookie = Object.keys(responseHeaders).some(\n\t\t\t\t\t\t\t\t\t(k) => k.toLowerCase() === 'set-cookie'\n\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\tif (hasSetCookie) {\n\t\t\t\t\t\t\t\t\tconsole.warn(\n\t\t\t\t\t\t\t\t\t\t'[adapter-uws] upgradeResponse() attaches Set-Cookie to the 101 response. ' +\n\t\t\t\t\t\t\t\t\t\t'This fails silently behind Cloudflare Tunnel and some other strict edge proxies ' +\n\t\t\t\t\t\t\t\t\t\t'(WebSocket opens, then closes with 1006). Use the `authenticate` hook to ' +\n\t\t\t\t\t\t\t\t\t\t'refresh session cookies over a normal HTTP response.\\n' +\n\t\t\t\t\t\t\t\t\t\t'  See: https://svti.me/cf-cookies'\n\t\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\t\tconsole.warn('[adapter-uws] upgrade() returned response headers. These are only applied in production (uWS); the ws library used in dev does not support custom 101 headers.\\n  See: https://svti.me/dev-101-headers');\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}",
-				"ours": "\t\t\t\t\t\t\t// Validated with the same snapshot production applies, then\n\t\t\t\t\t\t\t// handed to the wss 'headers' listener above, which writes every\n\t\t\t\t\t\t\t// validated header onto the 101 exactly as production does.\n\t\t\t\t\t\t\tconst responseHeaders = snapshotUpgradeHeaders(result.headers);\n\t\t\t\t\t\t\tif (responseHeaders && Object.keys(responseHeaders).length > 0) {\n\t\t\t\t\t\t\t\tupgradeExtraHeaders.set(req, responseHeaders);\n\t\t\t\t\t\t\t\tconst hasSetCookie = Object.keys(responseHeaders).some(\n\t\t\t\t\t\t\t\t\t(k) => k.toLowerCase() === 'set-cookie'\n\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\tif (hasSetCookie) {\n\t\t\t\t\t\t\t\t\tconsole.warn(\n\t\t\t\t\t\t\t\t\t\t'[adapter-ws] upgradeResponse() attaches Set-Cookie to the 101 response. ' +\n\t\t\t\t\t\t\t\t\t\t'This fails silently behind Cloudflare Tunnel and some other strict edge proxies ' +\n\t\t\t\t\t\t\t\t\t\t'(WebSocket opens, then closes with 1006). Use the `authenticate` hook to ' +\n\t\t\t\t\t\t\t\t\t\t'refresh session cookies over a normal HTTP response.\\n' +\n\t\t\t\t\t\t\t\t\t\t'  See: https://svti.me/cf-cookies'\n\t\t\t\t\t\t\t\t\t);\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}"
-			},
-			{
 				"lead": "adapter?.name !== 'adapter-uws'",
 				"ours": "adapter?.name !== 'adapter-ws'",
 				"all": true
@@ -1473,5 +1465,17 @@
 				"ours": ""
 			}
 		]
+	},
+	{
+		"file": "test/control-egress.test.js"
+	},
+	{
+		"file": "test/connection-slot-declaration.test.js"
+	},
+	{
+		"file": "test/vite-upgrade-headers.test.js"
+	},
+	{
+		"file": "test/resume-grant-gate-real.test.js"
 	}
 ]
