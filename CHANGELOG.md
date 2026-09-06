@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every per-connection slot the runtime writes onto a connection's userData is
+  declared as an own property at open. A plain assignment walks the prototype
+  chain, so an accessor an application installed for one of the `Symbol.for`
+  keys took the write and left no property behind - and because every slot
+  site is a lazy init behind a falsy guard, the lane then redid its work on
+  every pass instead of failing once. The declaration makes each later write
+  an own-property write that never consults the chain. The same rule covers
+  the process-global registries and the hook markers, which are published
+  with `defineProperty` for the same reason.
+
 - `tlsReloadState()` on the built handler reports the certificate reload path:
   whether this process is watching the certificate directory, why renewals
   would not be picked up if they would not, how many in-place swaps it has

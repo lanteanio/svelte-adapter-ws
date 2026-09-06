@@ -14,7 +14,7 @@ import {
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
 	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
 	tombstonePendingSubscribe, isPendingSubscribeCancelled,
-	releaseDerivedSubscriptions
+	releaseDerivedSubscriptions, declareConnectionSlots
 } from '../utils/ws-symbols.js';
 import { MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION } from '../utils/caps.js';
 import {
@@ -1564,6 +1564,13 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		}
 	}
 	registerSocket(rawWs);
+	// Claim the adapter's slots as own properties before anything writes
+	// one. userData is whatever the app's upgrade hook returned, and a plain
+	// assignment onto it is a [[Set]] that an accessor on the key can swallow
+	// whole - leaving the slot unwritten while every falsy guard downstream
+	// keeps re-running its initialization. Declared once here, the later
+	// assignments find an own property and never look at the chain again.
+	declareConnectionSlots(userData);
 	userData[WS_SUBSCRIPTIONS] = new Set();
 
 	const wsPlatform = Object.create(platform);
