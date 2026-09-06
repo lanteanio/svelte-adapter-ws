@@ -332,7 +332,11 @@ export function createCertWatcher(config) {
 				// this handler exists to prevent.
 				const self = watcher;
 				self.on('error', (/** @type {unknown} */ err) => {
-					if (watcher === self) watcher = null;
+					if (watcher !== self) return;
+					watcher = null;
+					// A pending debounce would fire a reload into a directory the
+					// watch just lost; it is dropped rather than fired into that.
+					if (timer) { clearTimer(timer); timer = null; }
 					try { self.close(); } catch { /* already closed */ }
 					if (config.onError) {
 						try { config.onError(err); } catch { /* reporting must not kill the watch owner */ }

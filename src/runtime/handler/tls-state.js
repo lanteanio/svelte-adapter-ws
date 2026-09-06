@@ -117,6 +117,17 @@ export function markTlsWatchStopped() {
 }
 
 /**
+ * The server is closing: nothing watches any more, and the expiry sentinel
+ * has nobody left to warn. A degraded process that kept its hourly line going
+ * after its server was gone would be reporting on a certificate it no longer
+ * serves.
+ */
+export function stopTlsReload() {
+	tlsHealth.watching = false;
+	disarmTlsExpirySentinel();
+}
+
+/**
  * Record a genuine in-place swap. `certPath` is re-read for the served leaf's
  * expiry: one extra read of a file the process already opens, taken only after
  * a real swap, and it is the expiry that makes a broken renewal path

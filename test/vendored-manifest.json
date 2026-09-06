@@ -1499,5 +1499,8 @@
 				"ours": "\t\treturn true;"
 			}
 		]
+	},
+	{
+		"file": "test/error-registry-tls.test.js"
 	}
 ]

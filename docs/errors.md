@@ -537,16 +537,34 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] [tls] certificate watch 
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.watch-failed severity=error] The certificate directory watch failed to start; hot reload is disabled and no renewal will be seen.
 ```
 
-**Cause.** The filesystem watch on a certificate directory could not be established, or errored after arming (directory removed, permissions).
+**Cause.** The filesystem watch on the certificate directory could not be established.
 
-**Consequence.** Certificate hot reload is off until restart; the served certificate stays on its current bytes. A renewal landing later is never picked up, and the failure surfaces much later as an expired certificate.
+**Consequence.** Certificate hot reload is off for the process lifetime and the TLS degraded state is set - and stays set, because no later reload can resurrect the watcher. One arm-time catch-up read runs right after this failure, so a renewal already on disk at that moment is still served; nothing that lands afterwards is ever picked up, and the failure surfaces much later as an expired certificate.
 
-**Automatic recovery.** None: the watch is not retried, so this does not resolve without a restart.
+**Automatic recovery.** None for the watch itself: it is not retried, so this does not resolve without a restart. The arm-time catch-up may still swap in a renewal that was already on disk when the watch failed; the degraded state and its expiry sentinel survive even that success.
 
-**What to do.** Fix the path or permissions and restart the process. Until then, treat certificate renewal as requiring a restart, and alert on certificate expiry independently.
+**What to do.** Fix the path or permissions and restart the process. Until then, treat certificate renewal as requiring a restart, and alert on certificate expiry independently. In a clustered deployment the primary reports its own watch failure separately as ADAPTER-ERR-TLS-PRIMARY-WATCH.
+
+## ADAPTER-ERR-TLS-WATCH-LOST
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.watch-lost severity=error] The certificate directory watch stopped after running; hot reload is disabled and no further renewal will be seen.
+```
+
+**Cause.** A watch that started successfully reported a failure later - the certificate directory was removed or replaced, its permissions changed, or the platform's watch resources ran out. This arrives as an event rather than a throw, so it happens while the process is serving rather than at boot.
+
+**Consequence.** Certificate hot reload is off from that moment for the process lifetime, and the TLS degraded state is set and stays set. Unlike a watch that never started, no catch-up read follows this one: whatever was on disk at the moment the watch died is what this instance keeps serving, and the failure surfaces much later as an expired certificate.
+
+**Automatic recovery.** None. The watch is not re-armed, so this does not resolve without a restart.
+
+**What to do.** Find what happened to the certificate directory - a redeployed secret volume that replaced the directory rather than the files in it is the usual cause - and restart the process. Until then, treat certificate renewal as requiring a restart and alert on certificate expiry independently.
 
 ## ADAPTER-ERR-CLUSTER-CONFIG-WORKERS
 
@@ -835,6 +853,24 @@ Log line begins:
 **Automatic recovery.** None. The watch is not retried, so this does not resolve without a restart.
 
 **What to do.** Fix the path or permissions and restart the primary. Until then, treat certificate renewal as requiring a restart and alert on certificate expiry independently.
+
+## ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST
+
+Severity: error
+
+Log line begins:
+
+```
+[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)
+```
+
+**Cause.** A watch that started successfully on the cluster primary reported a failure later - the certificate directory was removed or replaced, its permissions changed, or the platform's watch resources ran out. A redeployed secret volume that replaces the directory rather than the files in it is the usual cause.
+
+**Consequence.** Cluster-wide certificate hot reload is off from that moment: with no watcher on the primary, no worker is ever told to reload, so the whole fleet serves its current certificate until it expires. The primary enters the degraded TLS state and stays there; readiness probes stay green throughout.
+
+**Automatic recovery.** None. The watch is not re-armed, so this does not resolve without a restart.
+
+**What to do.** Find what happened to the certificate directory and restart the primary. Until then, treat certificate renewal as requiring a restart and alert on certificate expiry independently. A watch that never started at all is reported separately as ADAPTER-ERR-TLS-PRIMARY-WATCH.
 
 ## ADAPTER-ERR-TLS-DEGRADED-EXPIRY
 

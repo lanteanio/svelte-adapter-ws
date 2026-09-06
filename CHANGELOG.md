@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ADAPTER-ERR-TLS-WATCH-LOST` and `ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST` report
+  a certificate-directory watch that died after it had started, which arrives
+  as an event rather than a throw. Their own ids rather than the existing
+  watch ids, because that text promises a failure at start plus an arm-time
+  catch-up read, and a post-arm loss gets neither: whatever was on disk when
+  the watch died is what the instance keeps serving. The state is sticky on
+  both the single-process server and the cluster primary, which now reads its
+  degraded-state policy from the same ledger the worker half uses instead of
+  clearing the state by hand on any successful read. Reachable here because
+  the certificate and key directories are watched separately, so a renewal
+  seen in the live one could clear a degradation the dead one caused.
+
 - The control/ack channel is bounded per connection. Protocol frames the
   server sends because a client asked for them - subscribe acks and denials,
   `welcome`, `lease-ok`, window grants, protocol errors - are charged against
@@ -576,6 +588,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebSocketOptions['pressure']`.
 
 ### Fixed
+
+- A certificate reload validates every pair before it swaps any. The default
+  context was taken the moment its own pair read cleanly, so a renewal that
+  rewrote the default fully and left an extra pair's key half-written put the
+  new default in front of clients while the failure line said the previous
+  certificate was still being served. Nothing is swapped now until the
+  default and every extra pair have built, and the failure line is true of
+  the whole set.
+
+- The SNI map is rebuilt from every extra certificate's final host list after
+  a reload, in pair order, the same rule boot applies. Reconciling pair by
+  pair over one shared map deleted a host an earlier pair still carried
+  whenever a later pair dropped it, and clients of that host fell through to
+  the default certificate with a valid one still loaded.
+
+- The certificate-directory watch runs one catch-up read as soon as it is
+  armed, so a renewal that landed between the boot read and the listen bind
+  is served instead of waiting for the next event in its directory. The
+  expiry sentinel is disarmed with the watchers when the server closes.
 
 - The graceful shutdown sequence runs in the documented order on every path.
   The app's `shutdown` hook runs first, while the listen socket is still bound

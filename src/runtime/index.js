@@ -25,7 +25,7 @@ import { createPostureAggregator } from './posture-collector.js';
 import { formatVersionBanner, runtimeVersionInfo } from './version-info.js';
 import { startPostureExport } from './utils/posture-export.js';
 import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
-import { certExpiryAlert, createCertWatcher, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
+import { certExpiryAlert, createCertWatcher, createTlsDegradedLedger, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
 import { readFdLimits, fdPreflightWarning } from './utils/fd-limit.js';
 import { createSdNotify } from './utils/sd-notify.js';
 import { emitOperationalEvent, diagnosticError } from './diagnostic.js';
@@ -1111,11 +1111,12 @@ if (is_primary) {
 	const TLS_DEGRADED_CHECK_MS = 3600000;
 	const primaryTlsHealth = { degraded: null, notAfter: null, notAfterText: null };
 	let primaryTlsSentinel = null;
-	/** @param {string} reason */
-	function primaryTlsDegraded(reason) {
-		primaryTlsHealth.degraded = reason;
+	/** Print the expiry alert immediately if the served cert is inside the window. */
+	function primaryTlsExpiryAlert() {
 		const alert = certExpiryAlert(primaryTlsHealth, wallEpoch());
 		if (alert !== null) console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_DEGRADED_EXPIRY, alert));
+	}
+	function primaryTlsArmSentinel() {
 		if (primaryTlsSentinel !== null) return;
 		primaryTlsSentinel = setIntervalTimer(() => {
 			const line = certExpiryAlert(primaryTlsHealth, wallEpoch());
@@ -1123,15 +1124,42 @@ if (is_primary) {
 		}, TLS_DEGRADED_CHECK_MS);
 		if (primaryTlsSentinel && primaryTlsSentinel.unref) primaryTlsSentinel.unref();
 	}
-	function primaryTlsRecovered() {
-		if (primaryTlsHealth.degraded !== null) {
-			console.log(`[tls] primary certificate read recovered (was: ${primaryTlsHealth.degraded})`);
-			primaryTlsHealth.degraded = null;
-		}
+	/** A read failure: superseded by the next read that works. */
+	function primaryTlsDegraded(reason) {
+		primaryTlsLedger.failed(reason);
+		primaryTlsExpiryAlert();
+	}
+	function primaryTlsDisarm() {
 		if (primaryTlsSentinel !== null) {
 			clearIntervalTimer(primaryTlsSentinel);
 			primaryTlsSentinel = null;
 		}
+	}
+	// Which degradations a successful read can clear is policy, and the worker
+	// half already owns that policy (handler/tls-state.js). The primary reads
+	// it from the same ledger rather than keeping a second copy inline: a dead
+	// watch is sticky and survives any later success, because the success
+	// proves a certificate was readable and proves nothing about the watcher,
+	// while a read failure is superseded by the next read that works. Here it
+	// is reachable in practice: the cert and key directories are watched
+	// separately, so a renewal seen in the live one can succeed while the
+	// other watch is dead.
+	const primaryTlsLedger = createTlsDegradedLedger({
+		health: primaryTlsHealth,
+		onRecovered: (was, still) => {
+			if (still === null) console.log(`[tls] primary certificate read recovered (was: ${was})`);
+			else console.log(`[tls] primary certificate read recovered (was: ${was}); still degraded: ${still}`);
+		},
+		armSentinel: () => primaryTlsArmSentinel(),
+		disarmSentinel: primaryTlsDisarm
+	});
+	function primaryTlsRecovered() {
+		primaryTlsLedger.recovered();
+	}
+	/** The watch-death variant: sticky, surviving every later success. */
+	function primaryTlsWatchDegraded(reason) {
+		primaryTlsLedger.watchFailed(reason);
+		primaryTlsExpiryAlert();
 	}
 	function onCertChange() {
 		let failure = null;
@@ -1185,13 +1213,14 @@ if (is_primary) {
 					dir,
 					debounceMs: ssl_reload_debounce_ms,
 					onChange: onCertChange,
-					// Post-arm watcher death (directory removed, EPERM): the
-					// watcher closes itself; renewals landing in this directory
-					// are no longer seen, which is the same degraded state as a
-					// watcher that never armed.
+					// A watch that dies AFTER starting arrives as an event, not a
+					// throw, so the catch below never sees it. Reported under its
+					// own id because no catch-up read follows this one and the
+					// operator's next move differs; sticky, because nothing
+					// re-arms it.
 					onError: (err) => {
-						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), /** @type {any} */ (err)?.message || err);
-						primaryTlsDegraded(`the certificate watch on ${dir} stopped`);
+						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH_LOST), /** @type {any} */ (err)?.message || err);
+						primaryTlsWatchDegraded('the primary certificate directory watch stopped, so no worker will be told to reload');
 					}
 				});
 				watcher.start();
@@ -1205,8 +1234,10 @@ if (is_primary) {
 		if (watchFailed) {
 			// Nothing retries this: a renewal in an unwatched directory never
 			// broadcasts, so those workers serve their current certificate
-			// until it expires.
-			primaryTlsDegraded('a primary certificate directory watch failed to start, so renewals there will not be broadcast');
+			// until it expires. Sticky, because no later success can resurrect
+			// a watcher - a read that works proves a certificate was readable
+			// and proves nothing about the watch.
+			primaryTlsWatchDegraded('the primary certificate directory watch failed to start, so no worker will be told to reload');
 		}
 	}
 

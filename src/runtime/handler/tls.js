@@ -19,9 +19,10 @@ import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
 import { applyServerNames } from '../utils/tls-reload.js';
 import {
 	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
-	recordBootCertExpiry, tlsWatchDegraded
+	recordBootCertExpiry, stopTlsReload, tlsWatchDegraded
 } from './tls-state.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
+import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 
 // How long stapling keeps serving the last good OCSP response after the
 // response file stops being readable. OCSP responses carry a validity window
@@ -30,11 +31,12 @@ import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 // it would have fallen back to its own responder query on an absent one.
 const OCSP_FALLBACK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Why the reload path is degraded once a directory watch is gone. One reason
-// covers a watch that never armed and one that died afterwards: the operative
-// half - no renewal will be seen - is the same, and the alternative would be a
-// second reason string the lead does not declare.
+// Why the reload path is degraded once a directory watch is gone. Two reasons,
+// because the two deaths differ in what the operator can still expect: a watch
+// that never armed gets one arm-time catch-up read, a watch that died after
+// arming gets nothing further at all.
 const TLS_WATCH_DEAD = 'the certificate directory watch failed to start, so no renewal will be seen';
+const TLS_WATCH_LOST = 'the certificate directory watch stopped, so no further renewal will be seen';
 
 /**
  * Comma-separated path lists, paired position-wise: the first pair is the
@@ -139,7 +141,7 @@ export function createTlsServer(handleRequest) {
 	const overrideGroups = ssl_sni_hosts.length > 0
 		? ssl_sni_hosts.join(',').split(';').map((group) => group.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
 		: [];
-	/** @type {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} */
+	/** @type {Array<{ pair: { cert: string, key: string }, hosts: string[], context: import('node:tls').SecureContext }>} */
 	const sniPairs = [];
 	for (let i = 1; i < pairs.length; i++) {
 		const certPem = fs.readFileSync(pairs[i].cert);
@@ -151,8 +153,10 @@ export function createTlsServer(handleRequest) {
 				'SSL_SNI_HOSTS names no group for it, so no SNI name would ever select it.'
 			);
 		}
-		sniPairs.push({ pair: pairs[i], hosts });
 		const context = tls.createSecureContext({ cert: certPem, key: fs.readFileSync(pairs[i].key) });
+		sniPairs.push({ pair: pairs[i], hosts, context });
+		// A host two certificates both carry is served by the LATER one: the
+		// map is written in pair order, and the reloader below keeps that rule.
 		for (const host of hosts) sniContexts.set(host, context);
 	}
 
@@ -265,9 +269,22 @@ export function reloadTls() {
  * boot: an event that did not actually change the served cert (an atomic
  * rename storm, a touch, an unchanged-cert broadcast) swaps nothing.
  *
+ * EVERYTHING IS VALIDATED BEFORE ANYTHING IS SWAPPED. The default pair and
+ * every extra pair are read and built into secure contexts first; only once
+ * all of them held does the server take the new default and the live SNI map
+ * get replaced. A renewal caught mid-write - a rewritten certificate whose key
+ * is still being written, an extra pair that no longer parses - therefore
+ * leaves the served set exactly as it was, default included, and the failure
+ * line can say so truthfully.
+ *
+ * The SNI map is DERIVED, not edited: after every pair has reconciled, it is
+ * rebuilt from each pair's final host list in pair order, the same rule boot
+ * applied. Reconciling pair by pair over one shared map is what deleted a host
+ * an earlier pair still carried when a later pair dropped it.
+ *
  * @param {import('node:https').Server} server
  * @param {{ cert: string, key: string }[]} pairs
- * @param {Array<{ pair: { cert: string, key: string }, hosts: string[] }>} sniPairs
+ * @param {Array<{ pair: { cert: string, key: string }, hosts: string[], context: import('node:tls').SecureContext }>} sniPairs
  * @param {string[][]} overrideGroups - SSL_SNI_HOSTS groups, indexed like sniPairs
  * @param {Map<string, import('node:tls').SecureContext>} sniContexts
  * @returns {() => void}
@@ -284,10 +301,9 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	}
 
 	// What each extra pair currently serves, so a reload reconciles against it
-	// rather than rebuilding blind. Baselined from the boot registration, whose
-	// hosts are already in sniContexts; a cert that would not parse at boot
-	// never got here, so a null fingerprint simply means the first reload is
-	// treated as a genuine change.
+	// rather than rebuilding blind. Baselined from the boot registration; a
+	// cert that would not parse at boot never got here, so a null fingerprint
+	// simply means the first reload is treated as a genuine change.
 	/** @type {Array<{ hosts: string[], fingerprint: string | null }>} */
 	let sniState = sniPairs.map(({ pair, hosts }) => {
 		try {
@@ -296,6 +312,10 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 			return { hosts, fingerprint: null };
 		}
 	});
+	// The secure context each extra pair currently serves with. A pair the
+	// reload finds unchanged keeps its context; a renewed one gets a fresh one.
+	/** @type {import('node:tls').SecureContext[]} */
+	let pairContexts = sniPairs.map(({ context }) => context);
 
 	return () => {
 		// Whether this pass genuinely put different bytes in front of a client.
@@ -308,36 +328,37 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				server.setSecureContext({ pfx: fs.readFileSync(ssl_pfx), passphrase: ssl_pfx_passphrase || undefined });
 				swapped = true;
 			} else {
+				// The default pair: read, fingerprint-gated, and BUILT before it
+				// is taken, so a torn key throws here with nothing swapped yet.
 				const certPem = fs.readFileSync(pairs[0].cert);
 				const fingerprint = (() => {
 					try { return new X509Certificate(certPem).fingerprint256; } catch { return null; }
 				})();
-				if (fingerprint !== null && fingerprint === servedFingerprint) {
-					// The default cert did not change; SNI pairs and the OCSP
-					// response may still have.
-				} else {
-					server.setSecureContext({ cert: certPem, key: fs.readFileSync(pairs[0].key) });
-					servedFingerprint = fingerprint;
-					swapped = true;
+				/** @type {{ cert: Buffer, key: Buffer } | null} */
+				let nextDefault = null;
+				if (!(fingerprint !== null && fingerprint === servedFingerprint)) {
+					nextDefault = { cert: certPem, key: fs.readFileSync(pairs[0].key) };
+					tls.createSecureContext(nextDefault);
 				}
 				// SNI names are re-derived from the RELOADED certs, not replayed
 				// from the boot-time lists: a renewal that adds, drops or changes
 				// SANs must serve under the new name set, and a name the renewal
 				// dropped must stop matching. The reconciliation order is
 				// applyServerNames'; what a registration MEANS is this
-				// transport's, so the registry below writes into a staging copy
-				// and the live map is replaced only once every pair has applied.
-				// A throw part-way therefore discards the staging map instead of
-				// leaving the callback on a half-applied certificate set.
-				/** @type {Map<string, import('node:tls').SecureContext>} */
-				const nextContexts = new Map(sniContexts);
+				// transport's: the registry below only collects the context a
+				// renewed pair now serves with, and the live map is rebuilt from
+				// every pair's final host list once all of them applied. A throw
+				// part-way therefore discards the staging instead of leaving the
+				// callback on a half-applied certificate set.
+				const nextPairContexts = pairContexts.slice();
 				/** @type {object | null} */
 				let memoOptions = null;
 				/** @type {import('node:tls').SecureContext | null} */
 				let memoContext = null;
+				let current = 0;
 				const registry = {
-					/** @param {string} host @param {any} options */
-					addServerName(host, options) {
+					/** @param {string} _host @param {any} options */
+					addServerName(_host, options) {
 						// applyServerNames builds ONE options literal per call and
 						// hands the same reference to every host of that
 						// certificate, so keying the context on its identity gives
@@ -351,18 +372,20 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 							});
 							memoOptions = options;
 						}
-						nextContexts.set(host.toLowerCase(), /** @type {any} */ (memoContext));
+						nextPairContexts[current] = /** @type {any} */ (memoContext);
 					},
-					/** @param {string} host */
-					removeServerName(host) {
-						nextContexts.delete(host.toLowerCase());
-					}
+					// Removal is a property of the rebuilt map, not an edit: a host
+					// this pair dropped is absent from its final list, and whether
+					// another pair still serves it is decided when the map is
+					// derived below.
+					removeServerName() {}
 				};
 				// Hosts stay this file's discovery (certHosts, SAN-only) rather
 				// than applyServerNames' SAN-or-CN fallback: passing them keeps a
 				// CN-only extra certificate refused the way boot refuses it.
 				const nextState = [];
 				for (let i = 0; i < sniPairs.length; i++) {
+					current = i;
 					const { pair } = sniPairs[i];
 					const override = overrideGroups[i];
 					const hosts = override && override.length > 0 ? override : certHosts(fs.readFileSync(pair.cert));
@@ -380,9 +403,20 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 					if (applied.changed) swapped = true;
 					nextState.push(applied);
 				}
+				// Everything validated. Commit: the default first, then the map,
+				// in pair order so a host two certificates carry keeps going to
+				// the later one exactly as it did at boot.
+				if (nextDefault !== null) {
+					server.setSecureContext(nextDefault);
+					servedFingerprint = fingerprint;
+					swapped = true;
+				}
 				sniContexts.clear();
-				for (const [host, context] of nextContexts) sniContexts.set(host, context);
+				for (let i = 0; i < nextState.length; i++) {
+					for (const host of nextState[i].hosts) sniContexts.set(host.toLowerCase(), nextPairContexts[i]);
+				}
 				sniState = nextState;
+				pairContexts = nextPairContexts;
 			}
 			if (swapped) {
 				markTlsSwapped(ssl_pfx ? null : pairs[0].cert);
@@ -391,8 +425,9 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		} catch (err) {
 			// A renewal mid-write can present a torn pair; the next watcher
 			// event (or reload broadcast) retries. The served context stays on
-			// the previous cert - the staging map is discarded unread, so there
-			// is no partial swap to report and no retry to arm.
+			// the previous certificate set, default included - nothing was
+			// swapped before every pair validated - so there is no partial swap
+			// to report and no retry to arm.
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_RELOAD_SKIPPED), err);
 			// Degraded rather than benign: the renewal on disk is NOT being
 			// served, and every probe stays green while the certificate that IS
@@ -430,17 +465,6 @@ function armHotReload(server, pairs, reload) {
 
 	/** @type {import('node:fs').FSWatcher[]} */
 	const watchers = [];
-	let warnedWatcherError = false;
-	/** @param {unknown} err @param {string} what */
-	const warnWatcher = (err, what) => {
-		if (warnedWatcherError) return;
-		warnedWatcherError = true;
-		console.warn(adapterConsoleLine(
-			ADAPTER_ERROR_IDS.TLS_WATCH,
-			`${what} (` + (/** @type {any} */ (err)?.code || err) +
-			'); hot reload is off until restart - the served certificate stays on its current bytes.'
-		));
-	};
 	// One unarmed directory means renewals landing THERE are never seen, so any
 	// failure degrades even when the other directories armed - and it degrades
 	// STICKILY, because nothing retries a watch: no later reload, however
@@ -453,30 +477,58 @@ function armHotReload(server, pairs, reload) {
 				debounce = setTimer(fire, ssl_reload_debounce_ms);
 				if (typeof debounce?.unref === 'function') debounce.unref();
 			});
-			// A watcher can error after arming (directory removed, EPERM on
-			// teardown); an unhandled watcher error would take the process
-			// down over a lost WATCH, not a lost cert.
+			// A watch that dies AFTER starting arrives as an event, not a throw,
+			// so the catch below never sees it - and an `error` event with no
+			// listener is rethrown, which would take the process down over a
+			// lost WATCH, not a lost cert. Its own id, because no catch-up read
+			// follows this one and the operator's next move differs.
 			watcher.on('error', (err) => {
-				warnWatcher(err, 'stopped');
 				try { watcher.close(); } catch { /* already closed */ }
+				// A pending debounce would fire a reload into a directory the
+				// watch just lost; it is dropped rather than fired into that.
+				if (debounce !== null) { clearTimer(debounce); debounce = null; }
 				markTlsWatchStopped();
-				tlsWatchDegraded(TLS_WATCH_DEAD);
+				emitOperationalEvent({
+					source: 'svelte-adapter-ws',
+					component: 'runtime.tls',
+					event: 'tls.watch-lost',
+					severity: 'error',
+					dataClass: 'pseudonymous',
+					message: 'The certificate directory watch stopped after running; hot reload is disabled and no further renewal will be seen.',
+					attributes: { error: diagnosticError(err) }
+				});
+				tlsWatchDegraded(TLS_WATCH_LOST);
 			});
 			watchers.push(watcher);
 		} catch (err) {
 			watchFailed = true;
-			warnWatcher(err, 'could not arm');
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.tls',
+				event: 'tls.watch-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'The certificate directory watch failed to start; hot reload is disabled and no renewal will be seen.',
+				attributes: { error: diagnosticError(err) }
+			});
 		}
 	}
 	if (watchFailed) tlsWatchDegraded(TLS_WATCH_DEAD);
 	else if (watchers.length > 0) markTlsWatching();
+	// The catch-up read: a renewal that landed between the boot read and this
+	// arm would otherwise sit on disk until the NEXT event in its directory.
+	// Fingerprint-gated, so on the ordinary boot it is one read and no swap.
+	// Run even when a watch failed - that is the one read the failure's entry
+	// promises - and never able to clear a dead watch, which the ledger keeps.
+	reload();
 	server.once('close', () => {
 		if (debounce !== null) clearTimer(debounce);
 		for (const watcher of watchers) {
 			try { watcher.close(); } catch { /* already closed */ }
 		}
 		// The watchers are gone with the server; a restart arms a fresh set.
+		// The expiry sentinel goes with them: it has nobody left to warn.
 		watchArmed = false;
-		markTlsWatchStopped();
+		stopTlsReload();
 	});
 }
