@@ -637,10 +637,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whenever a later pair dropped it, and clients of that host fell through to
   the default certificate with a valid one still loaded.
 
-- The certificate-directory watch runs one catch-up read as soon as it is
-  armed, so a renewal that landed between the boot read and the listen bind
-  is served instead of waiting for the next event in its directory. The
-  expiry sentinel is disarmed with the watchers when the server closes.
+- Every thread that serves TLS runs one catch-up read once its listen socket
+  is bound, so a renewal that landed between the boot read and the bind is
+  served instead of waiting for the next event in its directory or, on a
+  cluster worker, for the primary's next broadcast. A PKCS#12 bundle is gated
+  on a digest of its bytes, so an unchanged bundle is no swap and records no
+  generation. A certificate that does not parse is reported as the torn read
+  it is rather than as one missing its subjectAltName. The expiry sentinel is
+  disarmed with the watchers when the server closes.
 
 - The graceful shutdown sequence runs in the documented order on every path.
   The app's `shutdown` hook runs first, while the listen socket is still bound

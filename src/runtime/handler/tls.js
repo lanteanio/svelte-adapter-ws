@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
 import { isMainThread } from 'node:worker_threads';
-import { X509Certificate } from 'node:crypto';
+import { X509Certificate, createHash } from 'node:crypto';
 import {
 	ssl_cert, ssl_key, ssl_pfx, ssl_pfx_passphrase, ssl_watch,
 	ssl_reload_debounce_ms, ssl_sni_hosts, ssl_ocsp_file
@@ -69,15 +69,15 @@ function certPairs() {
  * @returns {string[]}
  */
 function certHosts(certPem) {
-	try {
-		const san = new X509Certificate(certPem).subjectAltName || '';
-		return san.split(',')
-			.map((part) => part.trim())
-			.filter((part) => part.startsWith('DNS:'))
-			.map((part) => part.slice(4).toLowerCase());
-	} catch {
-		return [];
-	}
+	// A certificate that does not parse throws here rather than reading as one
+	// with no names: at boot that is the refusal it deserves, and on a reload a
+	// half-written file is then reported as the torn read it is instead of as a
+	// certificate missing its subjectAltName.
+	const san = new X509Certificate(certPem).subjectAltName || '';
+	return san.split(',')
+		.map((part) => part.trim())
+		.filter((part) => part.startsWith('DNS:'))
+		.map((part) => part.slice(4).toLowerCase());
 }
 
 /** @param {string} file @returns {Buffer | null} */
@@ -244,9 +244,18 @@ let watchArmed = false;
  * for a directory the process had not yet committed to serving from.
  */
 export function armTlsWatch() {
-	if (watchArmed || armWatch === null) return;
-	watchArmed = true;
-	armWatch();
+	if (!watchArmed && armWatch !== null) {
+		watchArmed = true;
+		armWatch();
+	}
+	// The catch-up read, on EVERY thread that serves TLS: a renewal that landed
+	// between the boot read and the listen bind would otherwise sit on disk
+	// until the next event in its directory - or, on a cluster worker, until
+	// the primary's next broadcast. Fingerprint-gated, so on the ordinary boot
+	// it is one read and no swap. Run even when the watch failed to arm - that
+	// is the one read the failure's entry promises - and never able to clear a
+	// dead watch, which the ledger keeps.
+	if (reloadNow !== null) reloadNow();
 }
 
 /**
@@ -290,14 +299,17 @@ export function reloadTls() {
  * @returns {() => void}
  */
 function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
+	// A PKCS#12 bundle has no PEM identity to fingerprint, so its gate is a
+	// digest of the bundle's bytes: a reload of an unchanged file is then no
+	// swap for it either, and the arm-time catch-up read counts nothing.
 	/** @type {string | null} */
 	let servedFingerprint = null;
-	if (!ssl_pfx) {
-		try {
-			servedFingerprint = new X509Certificate(fs.readFileSync(pairs[0].cert)).fingerprint256;
-		} catch {
-			servedFingerprint = null;
-		}
+	try {
+		servedFingerprint = ssl_pfx
+			? createHash('sha256').update(fs.readFileSync(ssl_pfx)).digest('hex')
+			: new X509Certificate(fs.readFileSync(pairs[0].cert)).fingerprint256;
+	} catch {
+		servedFingerprint = null;
 	}
 
 	// What each extra pair currently serves, so a reload reconciles against it
@@ -319,14 +331,18 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 
 	return () => {
 		// Whether this pass genuinely put different bytes in front of a client.
-		// A PKCS#12 bundle has no PEM identity to fingerprint, so every reload of
-		// one counts as a swap; a PEM deployment counts only what actually
-		// changed, which is what makes a fleet's generation numbers comparable.
+		// Only what actually changed counts, which is what makes a fleet's
+		// generation numbers comparable.
 		let swapped = false;
 		try {
 			if (ssl_pfx) {
-				server.setSecureContext({ pfx: fs.readFileSync(ssl_pfx), passphrase: ssl_pfx_passphrase || undefined });
-				swapped = true;
+				const bundle = fs.readFileSync(ssl_pfx);
+				const digest = createHash('sha256').update(bundle).digest('hex');
+				if (digest !== servedFingerprint) {
+					server.setSecureContext({ pfx: bundle, passphrase: ssl_pfx_passphrase || undefined });
+					servedFingerprint = digest;
+					swapped = true;
+				}
 			} else {
 				// The default pair: read, fingerprint-gated, and BUILT before it
 				// is taken, so a torn key throws here with nothing swapped yet.
@@ -515,12 +531,6 @@ function armHotReload(server, pairs, reload) {
 	}
 	if (watchFailed) tlsWatchDegraded(TLS_WATCH_DEAD);
 	else if (watchers.length > 0) markTlsWatching();
-	// The catch-up read: a renewal that landed between the boot read and this
-	// arm would otherwise sit on disk until the NEXT event in its directory.
-	// Fingerprint-gated, so on the ordinary boot it is one read and no swap.
-	// Run even when a watch failed - that is the one read the failure's entry
-	// promises - and never able to clear a dead watch, which the ledger keeps.
-	reload();
 	server.once('close', () => {
 		if (debounce !== null) clearTimer(debounce);
 		for (const watcher of watchers) {

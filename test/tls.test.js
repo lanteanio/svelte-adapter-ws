@@ -548,10 +548,29 @@ describe('native TLS', () => {
 		// A degraded process that kept its hourly expiry line going after its
 		// server was gone would be reporting on a certificate it no longer
 		// serves. Pinned at the source: the sentinel is module state with no
-		// readable surface, and what is being held is that the close path
-		// reaches the one call that drops it.
-		expect(tlsSource).toMatch(/server\.once\('close', \(\) => \{[\s\S]*?stopTlsReload\(\);/);
-		expect(tlsSource).not.toMatch(/server\.once\('close', \(\) => \{[\s\S]*?markTlsWatchStopped\(\);\s*\n\s*\}\);/);
+		// readable surface, and what is being held is that the watcher's close
+		// handler reaches the one call that drops it, and that the call drops it.
+		const arm = tlsSource.slice(tlsSource.indexOf('function armHotReload('));
+		const closeHandler = arm.slice(arm.indexOf("server.once('close'"), arm.indexOf('\n\t});', arm.indexOf("server.once('close'")));
+		expect(closeHandler, 'the close handler no longer stops the reload path').toContain('stopTlsReload();');
+		const stateSource = readFileSync(new URL('../src/runtime/handler/tls-state.js', import.meta.url), 'utf8');
+		const stop = stateSource.slice(stateSource.indexOf('export function stopTlsReload()'));
+		expect(stop.slice(0, stop.indexOf('\n}')), 'stopTlsReload no longer disarms the sentinel').toContain('disarmTlsExpirySentinel();');
+	});
+
+	it('counts no swap for a PKCS#12 bundle that did not change', async () => {
+		// The bundle has no PEM identity, so its change gate is a digest of its
+		// bytes. Without one the arm-time catch-up read swapped the same bundle
+		// back in on every boot and recorded a generation for it.
+		const rt = await bootTls('SAW_T16_', {
+			SSL_PFX: path.join(fixtures, 'bundle.pfx'),
+			SSL_PFX_PASSPHRASE: 'testpass',
+			SSL_WATCH: '1'
+		});
+		expect((await tlsGet(rt.port, '/healthz')).status).toBe(200);
+		expect(rt.handler.tlsReloadState().generation, 'an unchanged bundle was counted as a swap').toBe(0);
+		rt.handler.reloadTls();
+		expect(rt.handler.tlsReloadState().generation).toBe(0);
 	});
 
 	it('refuses an ambiguous PFX plus PEM configuration', async () => {

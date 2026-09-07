@@ -1215,6 +1215,8 @@ if (is_primary) {
 					// operator's next move differs; sticky, because nothing
 					// re-arms it.
 					onError: (err) => {
+						// The dead watcher leaves the set; nothing re-arms it.
+						primaryCertWatchers = primaryCertWatchers.filter((w) => w !== watcher);
 						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH_LOST), /** @type {any} */ (err)?.message || err);
 						primaryTlsWatchDegraded('the primary certificate directory watch stopped, so no worker will be told to reload');
 					}
