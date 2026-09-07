@@ -1569,5 +1569,17 @@
 				"all": true
 			}
 		]
+	},
+	{
+		"file": "src/build-rollup-lifecycle.js"
+	},
+	{
+		"file": "test/rollup-lifecycle.test.js",
+		"adaptations": [
+			{
+				"lead": "'adapter-uws-rollup-close-'",
+				"ours": "'adapter-ws-rollup-close-'"
+			}
+		]
 	}
 ]

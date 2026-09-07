@@ -6,6 +6,7 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
 import { normalizeStaticCacheControl, normalizeStaticHeaders } from './build-config.js';
+import { writeAndCloseRollupBundle } from './build-rollup-lifecycle.js';
 import { listExcludedDotPaths } from './static-scan.js';
 import {
 	assertWireSubscribeAuthorization,
@@ -937,18 +938,12 @@ export default function (opts = {}) {
 				}
 			});
 
-			try {
-				await bundle.write({
-					dir: `${out}/server`,
-					format: 'esm',
-					sourcemap: true,
-					chunkFileNames: 'chunks/[name]-[hash].js'
-				});
-			} finally {
-				// Rollup does not implicitly close after a successful write, and
-				// close() is what runs closeBundle hooks and releases handles.
-				await bundle.close();
-			}
+			await writeAndCloseRollupBundle(bundle, {
+				dir: `${out}/server`,
+				format: 'esm',
+				sourcemap: true,
+				chunkFileNames: 'chunks/[name]-[hash].js'
+			});
 
 			// Loud on unknown top-level keys: a key the factory does not read is
 			// dropped silently otherwise. Warned, never refused: an app pinning
