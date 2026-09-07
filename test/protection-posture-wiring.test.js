@@ -279,8 +279,10 @@ describe('the posture reaches the surfaces that report and tear it down', () => 
 		// removes its socket.
 		const cut = block(lifecycleSource, 'export async function closeConnections(', '\n}');
 		expect(cut).toContain('closePostureExport();');
+		const awaited = cut.indexOf('await Promise.race([listenerClosed');
+		expect(awaited, 'the listener close is no longer awaited in the cut').toBeGreaterThan(-1);
 		expect(cut.indexOf('closePostureExport();'), 'the export must be dropped only after the listener close was awaited')
-			.toBeGreaterThan(cut.indexOf('listenerClosed'));
+			.toBeGreaterThan(awaited);
 	});
 
 	it('assigns the export holders on both branches so a re-run drops a stale hook', () => {

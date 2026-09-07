@@ -111,11 +111,20 @@ async function runShutdown(opts) {
 				signal
 			});
 		}
-		const drained = await Promise.race([
+		let drained = await Promise.race([
 			drainRequests().then(() => true),
 			whenAborted(signal).then(() => false)
 		]);
-		if (!drained) {
+		// The listener's own close does not fire while any accepted socket is
+		// open, and closeAllConnections leaves a socket that took the upgrade
+		// event alone - so the wait on it is bounded by the same signal, and a
+		// connection still held past it is an exchange dropped at the budget
+		// like any other. One line covers both: whichever ran out, the
+		// operator reads the budget that expired and an ending that is not
+		// clean.
+		const closed = await closeConnections(signal);
+		if (!drained || !closed) {
+			drained = false;
 			// The worker tag trails the invariant text so the line stays
 			// findable by its documented prefix on every thread.
 			console.error(adapterConsoleLine(
@@ -123,12 +132,6 @@ async function runShutdown(opts) {
 				`${Math.round(budgetMs)}ms)${isMainThread ? '' : ` [worker ${threadId}]`}; closing anyway - the requests still open at this point are dropped.`
 			));
 		}
-		// A socket whose upgrade was still in its hook when the drain swept
-		// the live set is a connection nothing sweeps again, and the listener's
-		// close never fires while it is open. Swept once more, immediately,
-		// before the close is awaited - and that wait is bounded regardless.
-		if (realtime) await realtime.drainSockets({ dispersalMs: 0, deadlineMs: 0, signal });
-		await closeConnections(signal);
 		return drained;
 	} finally {
 		if (ownTimer !== null) clearTimer(ownTimer);

@@ -1488,9 +1488,7 @@ export async function handleUpgrade(req, socket, head) {
 		// saw, holding the listener's close for as long as the client stays.
 		// Refused the way an upgrade during the drain is refused.
 		if (isDraining()) {
-			releaseConnectionPermit();
 			refuseUpgrade(socket, 503, 'Service Unavailable');
-			observeUpgradeOutcome(socket, 'rejected');
 			releaseInFlight();
 			return;
 		}

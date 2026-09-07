@@ -296,5 +296,37 @@ describe('the close path is bounded by the budget whatever a handshake is doing'
 		expect(outcome.some((o) => o === 'open'), `the handshake was accepted under a closing server: ${outcome.join(', ')}`).toBe(false);
 		expect(outcome.some((o) => o.startsWith('refused:503') || o.startsWith('error:')), outcome.join(', ')).toBe(true);
 	}, 20000);
+
+	it('bounds the wait on the listener close when a handshake outlives the whole budget', async () => {
+		// The listener's close does not fire while the pending upgrade holds its
+		// socket, and nothing sweeps a socket that never opened. With the hook
+		// outliving the budget, only the bound on that wait ends the shutdown;
+		// an unbounded await returns when the hook does, at 3000ms. The overrun
+		// is reported as dropped, and the shutdown is not clean.
+		process.env.WS_UPGRADE_DELAY_MS = '3000';
+		await handler.start('127.0.0.1', 0);
+		const port = handler.server.address().port;
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+		/** @type {string[]} */
+		const outcome = [];
+		ws.on('open', () => outcome.push('open'));
+		ws.on('unexpected-response', (_req, res) => outcome.push('refused:' + res.statusCode));
+		ws.on('error', (err) => outcome.push('error:' + err.message));
+		await new Promise((r) => setTimeout(r, 100));
+		const errors = [];
+		vi.spyOn(console, 'error').mockImplementation((...args) => { errors.push(args.join(' ')); });
+
+		const t0 = Date.now();
+		const drained = await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 1000 });
+		const elapsed = Date.now() - t0;
+		try { ws.terminate(); } catch { /* already gone */ }
+		await new Promise((r) => setTimeout(r, 3100));
+
+		expect(elapsed).toBeGreaterThanOrEqual(900);
+		expect(elapsed, 'the listener close held the exit until the hook resolved').toBeLessThan(1600);
+		expect(drained, 'a connection held past the budget must not read as a clean drain').toBe(false);
+		expect(errors.some((e) => e.includes(ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED)), 'the overrun must be reported').toBe(true);
+		expect(outcome.some((o) => o === 'open'), outcome.join(', ')).toBe(false);
+	}, 20000);
 });
 

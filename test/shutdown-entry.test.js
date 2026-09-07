@@ -101,7 +101,7 @@ function writeWrapper(dir, opts = {}) {
 		opts.cleanupMs
 			? `process.on('sveltekit:shutdown', () => new Promise((r) => setTimeout(r, ${opts.cleanupMs})));`
 			: '',
-		"process.stdin.on('data', (d) => { if (String(d).includes('shutdown')) process.emit('SIGTERM'); });",
+		"process.stdin.on('data', (d) => { const s = String(d); if (s.includes('shutdown')) process.emit('SIGTERM'); if (s.includes('interrupt')) process.emit('SIGINT'); });",
 		'process.stdin.unref();',
 		`await import(${JSON.stringify(pathToFileURL(path.join(dir, 'index.js')).href)});`,
 		''
@@ -177,6 +177,10 @@ export class Server {
 		await sleep(300);
 		expect(output.text, 'the signal must land before the server module evaluated').not.toContain('SERVER MODULE EVALUATED');
 		requestShutdown(proc);
+		// A second signal during boot changes nothing: the first is the one
+		// reported, and the boot is not dispatched twice.
+		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
+		else proc.kill('SIGINT');
 
 		const code = await whenExited(proc, 20000);
 		expect(code, `the entry did not exit cleanly.\n--- server output ---\n${output.text}`).toBe(0);
@@ -185,26 +189,28 @@ export class Server {
 		// completed underneath the signal never announced the instance ready.
 		expect(output.text).toContain('Readiness now reports NOT ready (draining)');
 		expect(output.text, 'a condemned boot announced itself ready').not.toContain('Ready for traffic');
+		expect(output.text).toContain('Received SIGTERM, shutting down gracefully');
+		expect(output.text, 'the second boot signal replaced the first').not.toContain('Received SIGINT');
 		expect(output.text).toContain('Shutdown complete');
 	}, 60000);
 
 	it('bounds the hook and the cleanup listeners by ONE budget', async () => {
-		// The ws shutdown hook spends 1500ms of a 2000ms budget; the cleanup
-		// listener needs 1000ms more. Under one budget the listener is cut at
+		// The ws shutdown hook spends 1000ms of a 2000ms budget; the cleanup
+		// listener needs 1800ms more. Under one budget the listener is cut at
 		// the 2000ms mark and reported; under a fresh allowance it would finish
-		// at 2500ms with nothing reported.
+		// at 2800ms with nothing reported.
 		const payload = buildRuntime({
 			replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) },
 			wsHandlerSource: [
 				'export async function shutdown() {',
-				'	await new Promise((r) => setTimeout(r, 1500));',
+				'	await new Promise((r) => setTimeout(r, 1000));',
 				"	console.log('WS HOOK DONE');",
 				'}',
 				''
 			].join('\n')
 		});
 		linkPackages(payload);
-		const entry = writeWrapper(payload.dir, { cleanupMs: 1000 });
+		const entry = writeWrapper(payload.dir, { cleanupMs: 1800 });
 		const port = await freePort();
 		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '2' }, (t) => t.includes('Ready for traffic'));
 		expect(await ready, `server never became ready.\n--- server output ---\n${output.text}`).toBe(true);

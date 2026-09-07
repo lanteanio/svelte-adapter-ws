@@ -283,12 +283,14 @@ const LISTENER_CLOSE_CAP_MS = 30_000;
  * same signal as every other phase, and by a cap when there is none. A
  * truncated exchange is the documented cost of the deadline expiring.
  * @param {AbortSignal | null} [signal]
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} whether the listener's close settled inside the
+ *   bound - false means a connection is still held open past it
  */
 export async function closeConnections(signal = null) {
 	const server = httpServer;
-	if (!server) return;
+	if (!server) return true;
 	server.closeAllConnections?.();
+	let settled = true;
 	if (listenerClosed) {
 		/** @type {any} */
 		let cap = null;
@@ -296,7 +298,7 @@ export async function closeConnections(signal = null) {
 			? whenAborted(signal)
 			: new Promise((resolve) => { cap = setTimer(resolve, LISTENER_CLOSE_CAP_MS); if (typeof cap?.unref === 'function') cap.unref(); });
 		try {
-			await Promise.race([listenerClosed, bound]);
+			settled = await Promise.race([listenerClosed.then(() => true), bound.then(() => false)]);
 		} finally {
 			if (cap !== null) clearTimer(cap);
 		}
@@ -305,6 +307,7 @@ export async function closeConnections(signal = null) {
 	// dropped only now, once nothing is being served any more - closing it at
 	// the door would report this worker gone while it still drained.
 	closePostureExport();
+	return settled;
 }
 
 /**
