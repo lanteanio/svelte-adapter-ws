@@ -982,10 +982,96 @@ export const platform = {
 			: { seq: options.seq, relay: options.relay, compress: options.compress, excludeWs: options.excludeWs };
 		assertBatchSequenceAuthority(opts);
 		if (!Array.isArray(entries) || entries.length === 0) return false;
+		const count = entries.length;
+		// A stateless codec gains nothing from a batched walk (encode-once
+		// already amortizes it) - route through the per-entry path unchanged.
+		if (!wire || !wire.state) {
+			// Read every entry before publishing any of them: the first publish
+			// runs application toJSON, and the reads for entry i+1 come after it.
+			// Per-entry seqs are validated here too - a refusal must land before
+			// the first publish fans out, or a mid-loop throw leaves earlier
+			// entries already delivered for a batch that never went out whole.
+			const datas = new Array(count);
+			const excludes = new Array(count);
+			let entrySeqs = null;
+			let sawExplicitEntrySeq = false;
+			for (let i = 0; i < count; i++) {
+				const entry = entries[i];
+				datas[i] = entry.data;
+				excludes[i] = entry.excludeWs;
+				// The entry lane speaks the same table as the options lane -
+				// resolveEntrySeq is the ONE spelling of it for every surface:
+				// number and bigint are the explicit authority, true is the
+				// counter, false and null are no-seq - each an OVERRIDE of the
+				// shared options for this entry - undefined inherits, and
+				// anything else refuses the whole batch here, before the first
+				// publish fans out.
+				const resolved = resolveEntrySeq(entry.seq, i);
+				if (resolved !== undefined) {
+					if (typeof resolved === 'number') {
+						if (!sawExplicitEntrySeq) {
+							assertBatchEntrySequenceAuthority(opts);
+							sawExplicitEntrySeq = true;
+						}
+					} else if (resolved === true) {
+						// An entry drawing the per-worker counter takes the cluster's
+						// counter refusal up front, whole-batch-or-nothing - the same
+						// rule the shared options' counter form takes at the call gate.
+						assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);
+					}
+					if (entrySeqs === null) entrySeqs = new Array(count);
+					entrySeqs[i] = resolved;
+				}
+			}
+			// One admission for the whole batch, before the first entry goes
+			// out. Delegating per entry would let each admit on its own and
+			// deliver a prefix of the batch under a ceiling, which is both the
+			// mid-batch shedding this budget forbids and a partial delivery
+			// reported to the caller as success. Recipients are read once here
+			// for the decision; each delegated entry still CHARGES itself, so
+			// the ledger sees one logical publish per entry either way.
+			let admitOpts = opts;
+			if (egressGate.armed) {
+				const batchRecipients = numSubscribers(topic);
+				// Deliveries counted per RESOLVED entry - the same own-or-default
+				// resolution delivery performs. A one-shot estimate discounting
+				// the call-level exclusion for every entry would UNDER-estimate
+				// where an entry overrides it to a socket without the topic,
+				// which is the direction that admits past the ceiling.
+				let deliveries = count * batchRecipients;
+				if (batchRecipients > 0) {
+					const shared = opts != null && opts.excludeWs !== undefined && opts.excludeWs !== null
+						? opts.excludeWs : null;
+					const sharedHolds = shared !== null && excludedRecipient(shared, topic);
+					for (let i = 0; i < count; i++) {
+						const own = excludes[i];
+						if (own != null) { if (excludedRecipient(own, topic)) deliveries--; }
+						else if (sharedHolds) deliveries--;
+					}
+				}
+				if (!admitPublishEgress(topic, resolvePublishTenant(topic), count, deliveries)) return false;
+				// The entries inherit the decision rather than re-taking it.
+				admitOpts = markAdmitted({ ...(opts || {}) });
+			}
+			let ok = false;
+			for (let i = 0; i < count; i++) {
+				const entrySeq = entrySeqs === null ? undefined : entrySeqs[i];
+				let per = admitOpts;
+				// An entry's own exclusion overrides the call-level one the
+				// delegated options already carry; a null entry exclusion is
+				// ABSENT (it inherits), matching the stateful lane.
+				if (excludes[i] != null || entrySeq !== undefined) {
+					per = { ...(admitOpts || {}) };
+					if (excludes[i] != null) per.excludeWs = excludes[i];
+					if (entrySeq !== undefined) per.seq = entrySeq;
+				}
+				ok = this.publishWire(topic, event, datas[i], wire, per) || ok;
+			}
+			return ok;
+		}
 		const compressIntent = Boolean(opts && opts.compress === true);
 		const compress = WS_COMPRESSION_ON && compressIntent;
 		const sharedExclude = (opts && opts.excludeWs) || null;
-		const count = entries.length;
 		// Read and validate EVERY entry before anything is stamped: a numeric
 		// per-entry seq must pass the value check and the clustered authority
 		// rule while the batch is still whole, or a mid-loop refusal would
@@ -1069,7 +1155,22 @@ export const platform = {
 			// spelling a clustered batch may carry - really stamps nothing
 			// instead of quietly advancing the per-worker counter it renounced
 			// and relaying the forked number cluster-wide.
-			seqs[i] = stampSeqValue(entrySeqs[i] !== undefined ? entrySeqs[i] : (opts != null ? opts.seq : undefined), topicSeqs, topic, seqBound) ?? 0;
+			// A resolved entry seq overrides the shared options for this entry:
+			// an explicit value (already validated in the pre-pass) is stamped
+			// verbatim and does NOT advance the counter - the explicit
+			// authority and the local counter are two tracks, exactly as they
+			// are through publishWire - `true` draws this entry its own counter
+			// value, and `false` (the resolution of both false and null) leaves
+			// the entry seq-less under a batch that opts in.
+			const resolvedEntry = entrySeqs[i];
+			const seq = resolvedEntry === undefined
+				? stampSeqValue(opts != null ? opts.seq : undefined, topicSeqs, topic, seqBound)
+				: resolvedEntry === false
+					? null
+					: resolvedEntry === true
+						? stampSeqValue(true, topicSeqs, topic, seqBound)
+						: resolvedEntry;
+			seqs[i] = seq == null ? 0 : seq;
 			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
 			if (seqs[i] !== 0 && (highestSeq === null || seqs[i] > highestSeq)) highestSeq = seqs[i];
 			batchBytes += envelopes[i].length;

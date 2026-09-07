@@ -70,6 +70,15 @@ export async function message(ws, { data, msg, platform }) {
 		platform.grantPublish(ws, cmd.topic);
 	} else if (cmd.cmd === 'publishWireBatch') {
 		platform.publishWireBatch(cmd.topic, cmd.event, cmd.entries, statelessCodec, cmd.options);
+	} else if (cmd.cmd === 'publishWireBatchExcluding') {
+		// 'me' is this socket, 'peer' the topic's other subscriber: the
+		// entries and options name real server-side sockets.
+		let peer = null;
+		platform.forEachSubscriber(cmd.topic, (sub) => { if (sub !== ws) peer = sub; });
+		const resolve = (v) => (v === 'me' ? ws : v === 'peer' ? peer : v);
+		const entries = cmd.entries.map((e) => ('excludeWs' in e ? { ...e, excludeWs: resolve(e.excludeWs) } : e));
+		const options = cmd.options && 'excludeWs' in cmd.options ? { ...cmd.options, excludeWs: resolve(cmd.options.excludeWs) } : cmd.options;
+		platform.publishWireBatch(cmd.topic, cmd.event, entries, statelessCodec, options);
 	} else if (cmd.cmd === 'batch') {
 		platform.batch([{ topic: cmd.topic, event: cmd.event, data: cmd.data,
 			options: cmd.excludeSelf ? { excludeWs: ws } : undefined }]);
@@ -275,6 +284,80 @@ describe('publish option contracts', () => {
 		const stamped = await sub.next((f) => f.json?.event === 'stamped');
 		expect(stamped.json.seq).toBe(1);
 		sub.close();
+	});
+
+	it('publishWireBatch through a stateless codec reaches a capable subscriber as one 0x03 frame per entry', async () => {
+		// A stateless codec gains nothing from a batched walk, so the batch
+		// is rerouted through publishWire entry by entry: a capable
+		// subscriber receives N per-entry binary frames (never one
+		// `<event>-batch` frame), a JSON subscriber the N envelopes, each
+		// entry stamped with its own seq, in entry order.
+		const capable = connect();
+		const plain = connect();
+		await capable.open();
+		await plain.open();
+		capable.send({ type: 'hello', caps: ['test.codec:1'] });
+		capable.send({ type: 'subscribe', topic: 'statelessbatch', ref: 1 });
+		plain.send({ type: 'subscribe', topic: 'statelessbatch', ref: 1 });
+		await capable.next((f) => f.json?.type === 'subscribed');
+		await plain.next((f) => f.json?.type === 'subscribed');
+
+		plain.send(JSON.stringify({
+			cmd: 'publishWireBatch', topic: 'statelessbatch', event: 'tick',
+			entries: [{ data: { n: 1 } }, { data: { n: 2 } }, { data: { n: 3 } }]
+		}));
+
+		const third = await plain.next((f) => f.json?.event === 'tick' && f.json?.data?.n === 3);
+		const envelopes = plain.frames.filter((f) => f.json?.topic === 'statelessbatch' && f.json?.event === 'tick').map((f) => f.json);
+		expect(envelopes.map((e) => e.data.n)).toEqual([1, 2, 3]);
+		expect(envelopes.map((e) => e.seq)).toEqual([1, 2, 3]);
+		expect(third.json.seq).toBe(3);
+
+		await capable.next((f) => f.binary !== undefined && parseBinaryFrame(f.binary)?.seq === 3);
+		const frames = capable.frames.filter((f) => f.binary !== undefined).map((f) => parseBinaryFrame(f.binary));
+		expect(frames.length, 'one binary frame per entry, not one batch frame').toBe(3);
+		const announce = capable.frames.find((f) => f.json?.type === 'wire-id' && f.json?.topic === 'statelessbatch');
+		expect(announce).toBeDefined();
+		for (const frame of frames) expect(frame?.topicId).toBe(announce.json.id);
+		expect(frames.map((f) => f?.seq)).toEqual([1, 2, 3]);
+		// Each frame carries ONE entry through the codec's per-event encode,
+		// the shape a batch frame (`tick-batch` over an array) never has.
+		expect(frames.map((f) => JSON.parse(new TextDecoder().decode(f.payload)))).toEqual([
+			['tick', { n: 1 }], ['tick', { n: 2 }], ['tick', { n: 3 }]
+		]);
+		expect(capable.frames.some((f) => f.json?.event === 'tick-batch'), 'no batch envelope on the stateless lane').toBe(false);
+		capable.close();
+		plain.close();
+	});
+
+	it('publishWireBatch through a stateless codec honours a call-level exclusion with a per-entry override', async () => {
+		const author = connect();
+		const audience = connect();
+		await author.open();
+		await audience.open();
+		author.send({ type: 'hello', caps: ['test.codec:1'] });
+		audience.send({ type: 'hello', caps: ['test.codec:1'] });
+		author.send({ type: 'subscribe', topic: 'statelessexclude', ref: 1 });
+		audience.send({ type: 'subscribe', topic: 'statelessexclude', ref: 1 });
+		await author.next((f) => f.json?.type === 'subscribed');
+		await audience.next((f) => f.json?.type === 'subscribed');
+
+		// The handler resolves 'me' to the sending socket and 'peer' to the
+		// other subscriber, so the entries can name real server-side sockets.
+		author.send(JSON.stringify({
+			cmd: 'publishWireBatchExcluding', topic: 'statelessexclude', event: 'tick',
+			entries: [{ data: { n: 0 } }, { data: { n: 1 }, excludeWs: 'peer' }, { data: { n: 2 } }, { data: { n: 3 }, excludeWs: null }],
+			options: { seq: false, excludeWs: 'me' }
+		}));
+		const received = (c) => c.frames.filter((f) => f.binary !== undefined)
+			.map((f) => JSON.parse(new TextDecoder().decode(parseBinaryFrame(f.binary).payload))[1].n);
+		await audience.next((f) => f.binary !== undefined && JSON.parse(new TextDecoder().decode(parseBinaryFrame(f.binary).payload))[1].n === 3);
+		expect(received(audience), 'the audience receives all but its own override entry').toEqual([0, 2, 3]);
+		await author.next((f) => f.binary !== undefined);
+		await new Promise((r) => setTimeout(r, 60));
+		expect(received(author), 'the author hears only the entry that overrode the default').toEqual([1]);
+		author.close();
+		audience.close();
 	});
 
 	it('batch() honors per-message excludeWs (sender echo suppression)', async () => {

@@ -247,26 +247,34 @@ describe('cluster sequence authority policy', () => {
 		expect(beforeAssert).toContain(': { seq: options.seq, relay: options.relay, compress: options.compress, excludeWs: options.excludeWs };');
 		expect(beforeAssert, 'the batch inspects entries or fans out before its authority check')
 			.not.toMatch(/stampSeq|fanOut\(|captureResumeFrame|entries\.length|Array\.isArray/);
-		// The per-entry authority check runs inside the batch too: the entry
-		// pre-read pass vets an explicit numeric entry seq BEFORE the separate
-		// stamping pass mutates any counter, so a mid-batch refusal cannot
-		// leave earlier entries already stamped.
-		expectStatementCount(wireBatch, 'assertBatchEntrySequenceAuthority(opts);', 1, 'the entry pre-read pass vets per-entry authority');
+		// The per-entry authority check runs inside the batch too - in BOTH
+		// branches (the stateless reroute pre-reads and the stateful snapshot
+		// pass), before anything is stamped or fanned out: the last call site
+		// precedes the first counter stamp and the first per-entry publish.
+		expect(wireBatch.split('assertBatchEntrySequenceAuthority(opts)').length, 'both batch branches vet per-entry authority')
+			.toBe(3);
+		// Source order: the stateless branch's check (first occurrence) sits in
+		// its pre-read loop, before the first per-entry publish; the stateful
+		// branch's (last occurrence) sits in the snapshot pass, before the
+		// first counter stamp.
 		expect(wireBatch.indexOf('assertBatchEntrySequenceAuthority(opts)'),
-			'the entry pre-read pass must vet per-entry authority before the stamping pass')
-			.toBeLessThan(wireBatch.indexOf('stampSeqValue(entrySeqs'));
-		// The stamp draws from the batch options when an entry carries no
-		// explicit seq: `{ seq: false }` - the one spelling a clustered batch
-		// may carry - must stamp nothing, not quietly advance the per-worker
-		// counter it renounced and relay the forked number cluster-wide.
-		expect(wireBatch).toContain(': (opts != null ? opts.seq : undefined)');
-		// The entry lane resolves through the SHARED resolver, not a
-		// hand-rolled number check: restating the table here is what let an
-		// over-range value past the pre-pass and into the stamping loop,
-		// where the throw arrives after earlier entries are already stamped.
-		// One pre-read walk here, so one call: the count is what fails when a
-		// second walk appears with the call neutralized on either.
-		expectStatementCount(wireBatch, 'const resolved = resolveEntrySeq(entry.seq, i);', 1, 'the publishWireBatch pre-pass consults the entry refusal table');
+			'the stateless reroute must vet per-entry authority before it publishes')
+			.toBeLessThan(wireBatch.indexOf('this.publishWire('));
+		expect(wireBatch.lastIndexOf('assertBatchEntrySequenceAuthority(opts)'),
+			'the stateful branch must vet per-entry authority before it stamps')
+			.toBeLessThan(wireBatch.indexOf('stampSeqValue(opts'));
+		// The per-entry refusal lives in the shared resolveEntrySeq table (one
+		// spelling of the entry lane for production, the harness, and dev), so
+		// the batch body proves it consults that table - removing the call is
+		// removing the refusal.
+		expectStatementCount(wireBatch, 'const resolved = resolveEntrySeq(entry.seq, i);', 2, 'both publishWireBatch branches consult the entry refusal table');
+		// And an entry-level counter draw takes the cluster refusal in BOTH
+		// pre-passes, before anything fans out: a clustered batch must refuse
+		// { seq: true } on an entry up front, not diverge silently on the
+		// stateful lane or half-deliver on the stateless one. The values form
+		// with  is refused for every relay shape in the table above.
+		expect(wireBatch.split('assertClusterSequenceAuthorityValues(true,').length,
+			'both batch branches vet an entry-level counter draw').toBe(3);
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
 		// The relay SET site hands the token and the seq as ARGUMENTS, and it
 		// is pinned here rather than driven because production's relay needs a
