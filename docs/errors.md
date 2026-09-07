@@ -422,6 +422,24 @@ Log line begins:
 
 **What to do.** Read the attached error and fix the hook. Persistent failure presents to users as a connection that never establishes, while HTTP continues to work.
 
+## ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED
+
+Severity: warn
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscription-accounting event=runtime.subscription-accounting.sink-displaced severity=warn] A second adapter runtime in this worker took over the subscription accounting sink. One subscription total is now frozen and the other is charged releases it never matched.
+```
+
+**Cause.** Two copies of the adapter runtime are loaded in one worker - typically a build that bundles the runtime while a package alongside it resolves its own copy from node_modules. The logical-subscription accounting sink is a single slot shared by every copy, so the second one to evaluate replaces the first one's counter.
+
+**Consequence.** Subscription accounting splits across two counters that each describe only part of the worker. The displaced counter stops moving and drifts below the memberships it is supposed to describe, which the consistency auditor reports as `subs.total-mismatch`; the surviving counter receives releases for memberships it never charged and is driven below zero, which reports as `subs.total-negative` and is clamped back to zero each time. Publish and delivery are unaffected - the counters are accounting, not routing - but every subscription figure the worker reports is describing a fraction of it.
+
+**Automatic recovery.** None. The takeover happens once at module evaluation and holds for the life of the worker.
+
+**What to do.** Make the worker load ONE runtime. Check whether the application bundles the adapter while a plugin or companion package imports it from node_modules, and deduplicate that - a single resolved copy removes the condition. Until then, treat this worker's subscription totals and any alert built on them as unreliable, and read the auditor's mismatch and negative reports as consequences of this line rather than as separate defects.
+
 ## ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED
 
 Severity: warn
@@ -619,6 +637,26 @@ Log line begins:
 **Automatic recovery.** None. Startup configuration is validated once, at boot.
 
 **What to do.** Use 'reuseport' (Linux), or unset CLUSTER_MODE - reuseport is also the default and the only mode this runtime has.
+
+## ADAPTER-ERR-CLUSTER-CONFIG-PORT
+
+Severity: fatal
+
+Log line begins:
+
+```
+[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS (each worker would bind its own kernel-assigned port, so the workers do not share one: 
+```
+
+**Cause.** PORT=0 asks the kernel for an ephemeral port, and clustering has every I/O worker call listen() for itself. Each worker is then assigned a DIFFERENT port, so the one thing the shared port exists to provide - many workers behind a single port - does not happen.
+
+**Consequence.** The fleet boots green and serves on ports nobody knows. Nothing routes to it: a load balancer, a health check and the startup log all name the configured port, which is 0, while each worker answers somewhere else.
+
+**Automatic recovery.** None. The primary exits with status 1 before spawning any worker, the way every other capacity misconfiguration in this block does.
+
+**What to do.** Set PORT to a real port when clustering. If an ephemeral port is what you want - a test harness, a sandbox - drop CLUSTER_WORKERS to run single-process, where one bind makes an ephemeral port meaningful again.
+
+Further reading: https://svti.me/cluster-mode
 
 ## ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT
 

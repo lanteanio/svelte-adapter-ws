@@ -165,7 +165,28 @@ registerGameIngress();
 // reads. The hook fires from the shared add/remove primitives, so every
 // lane - platform, wire, plugin trackedSubscribe - lands on one counter.
 startPressureSampler(wsOptions.pressure);
-setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta; });
+// A second handler copy in one worker takes the shared sink from the first.
+// Both keep their own counter and their own auditor, so the displaced one stops
+// receiving deltas while the new one receives releases for memberships it never
+// charged - the reported shapes being a total stuck under its summed
+// bookkeeping, and a total driven negative by unmatched releases. Neither says
+// why on its own, and the topology that causes it is invisible from either side.
+//
+// Reported, not asserted. A soft assertion throws under NODE_ENV=test, and
+// loading two independently built runtimes into one test process is an ordinary
+// thing for this suite to do - the condition is about a deployment carrying two
+// copies, not about a harness that deliberately holds two.
+if (setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta; })) {
+	emitOperationalEvent({
+		source: 'svelte-adapter-ws',
+		component: 'runtime.subscription-accounting',
+		event: 'runtime.subscription-accounting.sink-displaced',
+		severity: 'warn',
+		dataClass: 'operational',
+		message: 'A second adapter runtime in this worker took over the subscription accounting sink. One subscription total is now frozen and the other is charged releases it never matched.',
+		attributes: {}
+	});
+}
 
 // - Per-worker consistency auditor -------------------------------------------
 // A background check that runs the shared invariant predicates against a
@@ -2364,6 +2385,16 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 			console.error('[adapter-ws] close hook threw:', err);
 		}
 	}
+	// Leave the live set FIRST, before any other release. Everything below is
+	// teardown that reads userData and touches no connection set, but it is
+	// unguarded: one throw anywhere in it used to skip the removal and stand
+	// the connection in `wsConnections` forever. A stranded entry is not a
+	// leak that stays still - every publish walk keeps visiting a dead socket,
+	// and its topics keep counting toward the auditor's summed bookkeeping
+	// while the accountant has already released them, which reports as a
+	// subscription-ledger mismatch that no membership explains. Removal owes
+	// nothing to the steps below, so it goes where nothing can skip it.
+	wsConnections.delete(facade);
 	releaseConnectionPermitFor(userData);
 	accountClosedLogicalSubscriptions(subs);
 	if (userData[WS_LEASE]) userData[WS_LEASE] = undefined;
@@ -2371,7 +2402,6 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	userData[WS_CAPS] = undefined;
 	detachWireStates(facade, userData);
 	unregisterSocket(rawWs);
-	wsConnections.delete(facade);
 	wsWrappers.delete(rawWs);
 }
 

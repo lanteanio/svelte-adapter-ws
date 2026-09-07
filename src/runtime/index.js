@@ -285,12 +285,8 @@ if (is_primary) {
 	// rest of the capacity misconfigurations rather than discovered in
 	// production, because nothing downstream can notice it.
 	if (port === 0) {
-		console.error(
-			'[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS: every io worker ' +
-			'binds the shared port itself, so an ephemeral port would give each worker a different ' +
-			'one and no worker would be reachable at a known address. Set PORT to a fixed port, or ' +
-			'unset CLUSTER_WORKERS to run a single process on an ephemeral port.'
-		);
+		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.CLUSTER_CONFIG_PORT,
+			`${num} worker(s) would each bind a different one). Set PORT to a real port, or unset CLUSTER_WORKERS.`));
 		process.exit(1);
 	}
 	if (process.platform !== 'linux') {

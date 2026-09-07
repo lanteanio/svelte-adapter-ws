@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED` names a second adapter runtime in
+  one worker taking over the subscription accounting sink, the topology
+  behind a subscription total frozen under its summed bookkeeping on one side
+  and driven negative by unmatched releases on the other. The install reports
+  whether it displaced a different sink; clearing the slot and reinstalling
+  the same function are not displacements.
+
+- `ADAPTER-ERR-CLUSTER-CONFIG-PORT` indexes the refusal of `PORT=0` under
+  `CLUSTER_WORKERS`, which already exited before any worker spawned but did
+  so on an unindexed line.
+
 - `ADAPTER-ERR-TLS-WATCH-LOST` and `ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST` report
   a certificate-directory watch that died after it had started, which arrives
   as an event rather than a throw. Their own ids rather than the existing
@@ -588,6 +599,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebSocketOptions['pressure']`.
 
 ### Fixed
+
+- The main request edge answers 400 for a target that ARRIVES inside the
+  reserved admin prefix while its raw spelling was outside it, whether by
+  resolution (`/foo/../__realtime/introspect`) or by percent-encoding
+  (`/%5f%5frealtime/introspect`). The admin route matches the target as sent
+  while the prerendered lookup and SvelteKit's router resolve and decode it,
+  so both spellings skipped the admin lane and reached the app's own routing
+  inside the namespace the adapter reserves. Refused rather than rerouted,
+  because routing on the resolved path would let a caller reach the admin
+  lane through a spelling a fronting proxy's ACL does not read as admin. The
+  check runs ahead of the prerendered lookup, which decodes too, and only
+  while the admin route is mounted: with no `admin()` export both spellings
+  reach the app anyway.
+
+- `If-Range` is evaluated with the strong comparison RFC 9110 requires. Every
+  validator the static lane issues is weak by construction, so an `If-Range`
+  carrying one now falls through to the full representation instead of
+  authorising a splice onto bytes it does not vouch for. A plain `Range` is
+  unaffected.
+
+- A closing connection leaves the live set before any other release runs, so
+  a throw in the unguarded teardown after it can no longer strand the entry
+  in every publish walk and in the auditor's bookkeeping.
 
 - A certificate reload validates every pair before it swaps any. The default
   context was taken the moment its own pair read cleanly, so a renewal that

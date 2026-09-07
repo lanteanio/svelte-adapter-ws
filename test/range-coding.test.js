@@ -106,10 +106,29 @@ describe('ranges over coded representations', () => {
 		expect(res.body.equals(BR)).toBe(true);
 	});
 
-	it('honors a FRESH If-Range naming the negotiated validator', async () => {
+	it('refuses a range whose If-Range carries a weak validator, even the matching one', async () => {
+		// RFC 9110 s13.1.5 evaluates If-Range with the STRONG comparison, and a
+		// weak validator never strong-matches. This lane issues nothing BUT weak
+		// validators (mtime and size), so an If-Range here can never authorise a
+		// splice - and authorising one anyway is how a client joins a slice onto
+		// a prefix of different octets that happened to share a tag, ending up
+		// with a corrupt body under a 206 that says it is fine. Selecting the
+		// right representation and being allowed to splice it are different
+		// questions, and this case pins both answers.
 		const first = await raw('/logo.svg', { 'accept-encoding': 'br' });
 		const brEtag = /** @type {string} */ (first.headers.etag);
+		expect(brEtag.startsWith('W/'), 'this lane is supposed to issue weak validators').toBe(true);
 		const res = await raw('/logo.svg', { 'accept-encoding': 'br', range: 'bytes=0-4', 'if-range': brEtag });
+		expect(res.status).toBe(200);
+		expect(res.headers['content-encoding']).toBe('br');
+		expect(res.headers['content-range']).toBeUndefined();
+		expect(res.body.equals(BR)).toBe(true);
+	});
+
+	it('still resumes on a plain Range, which is what a download manager sends', async () => {
+		// The other half, and the reason the refusal above costs little: a Range
+		// with no If-Range makes no consistency claim, so it is honoured.
+		const res = await raw('/logo.svg', { 'accept-encoding': 'br', range: 'bytes=0-4' });
 		expect(res.status).toBe(206);
 		expect(res.body.equals(BR.subarray(0, 5))).toBe(true);
 	});

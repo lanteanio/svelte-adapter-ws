@@ -1502,5 +1502,38 @@
 	},
 	{
 		"file": "test/error-registry-tls.test.js"
+	},
+	{
+		"file": "test/fixture/src/routes/__realtime/[...rest]/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/__realtime/pinned/+page.js"
+	},
+	{
+		"file": "test/fixture/src/routes/__realtime/pinned/+page.svelte"
+	},
+	{
+		"file": "test/admin-prefix-entry-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
+				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
+			}
+		]
+	},
+	{
+		"file": "test/admin-prefix-unmounted-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
+				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
+			}
+		]
+	},
+	{
+		"file": "test/helpers/source-pins.js"
+	},
+	{
+		"file": "test/subscription-accounting.test.js"
 	}
 ]

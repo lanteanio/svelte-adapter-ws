@@ -509,8 +509,18 @@ export function setCohortHooks(onJoin, onLeave) {
  * @param {((delta: number, topic: string) => void) | null} onChange
  */
 export function setSubscriptionAccountingHook(onChange) {
-	/** @type {any} */ (globalThis)[SUBSCRIPTION_ACCOUNTING_HOOK] =
-		typeof onChange === 'function' ? onChange : null;
+	// The slot is one `Symbol.for` on globalThis, so every copy of this module
+	// in the worker addresses the same sink - which is the point, and also the
+	// hazard: an install REPLACES whatever was there, and nothing about that is
+	// visible. So the install says whether it displaced a DIFFERENT sink, and
+	// the caller decides what that is worth reporting. Only a function
+	// displacing a different function is a takeover: clearing to null is how a
+	// test releases the slot, and re-installing the same function is idempotent.
+	const next = typeof onChange === 'function' ? onChange : null;
+	const previous = /** @type {any} */ (globalThis)[SUBSCRIPTION_ACCOUNTING_HOOK];
+	const displaced = typeof previous === 'function' && next !== null && previous !== next;
+	defineSlot(globalThis, SUBSCRIPTION_ACCOUNTING_HOOK, next);
+	return displaced;
 }
 
 /** @param {number} delta @param {string} topic */
