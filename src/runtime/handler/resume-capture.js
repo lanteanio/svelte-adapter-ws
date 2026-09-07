@@ -86,10 +86,12 @@ export function discardResumeCapture(handle) {
  * @param {ReturnType<typeof beginResumeCapture>} handle
  * @param {string} topic
  * @param {(payload: string) => number} deliver - tri-state send (2 = dropped)
+ * @returns {boolean} true when the flush could not be told to the client and
+ *   the connection was closed for it; the caller stops touching the socket
  */
 export function flushResumeTopic(handle, topic, deliver) {
 	const index = handle.entries.findIndex((e) => e.topic === topic);
-	if (index === -1) return;
+	if (index === -1) return false;
 	const entry = handle.entries[index];
 	const truncatedMarker = () =>
 		deliver('{"topic":' + JSON.stringify('__replay:' + topic) + ',"event":"truncated","data":null}');
@@ -115,4 +117,5 @@ export function flushResumeTopic(handle, topic, deliver) {
 	if (failed && typeof handle.facade?.end === 'function') {
 		handle.facade.end(1013, 'resume flush overflow');
 	}
+	return failed;
 }

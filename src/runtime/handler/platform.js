@@ -174,8 +174,10 @@ function fanOutCohort(cohort, frame, binary, compress) {
 		const facade = wsWrappers.get(rawWs);
 		if (!facade) continue;
 		try {
-			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) sent = true;
-			bumpOut(/** @type {any} */ (facade).getUserData(), frame);
+			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) {
+				sent = true;
+				bumpOut(/** @type {any} */ (facade).getUserData(), frame);
+			}
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -940,13 +942,13 @@ export const platform = {
 				// The binary cohort exists only if a capable client joined it (its
 				// announce succeeded); otherwise this shared topic currently has
 				// only JSON subscribers and skips the binary fan-out entirely.
+				// The outcome of this logical publish was reported once above,
+				// like every other publishWire exit; the cohort walks do not
+				// report again, so the outcome family keeps summing to the
+				// publish family.
 				const id = getSharedWireId(topic);
-				if (id !== undefined) {
-					const binaryResult = fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
-					counters.publishOutcomeHook?.(binaryResult);
-				}
-				const jsonResult = fanOutCohort(json, envelope, false, compress);
-				counters.publishOutcomeHook?.(jsonResult);
+				if (id !== undefined) fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
+				fanOutCohort(json, envelope, false, compress);
 				// Cross-worker subscribers: each receiving worker re-derives the
 				// shared codec from its registry (relayPublishWire) and runs ITS
 				// OWN cohort split with its own server-wide id, so the

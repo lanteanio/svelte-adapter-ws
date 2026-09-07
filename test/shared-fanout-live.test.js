@@ -12,6 +12,8 @@
 // a production regression cannot hide behind a green harness.
 
 import WebSocket from 'ws';
+import { join as joinPath } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 import { parseBinaryFrame } from '../src/runtime/wire.js';
@@ -72,6 +74,12 @@ export async function message(ws, { data, msg, platform }) {
 		platform.registerWireCodec(sharedCodec);
 		ws.send(JSON.stringify({ type: 'test-registered' }));
 	}
+}
+
+// The wire unsubscribe sends no ack of its own; the app hook runs after the
+// cohort leave, so this frame is the anchor a test waits for.
+export function unsubscribe(ws, topic) {
+	try { ws.send(JSON.stringify({ type: 'test-wire-unsubscribed', topic })); } catch { /* gone */ }
 }
 `;
 
@@ -187,18 +195,29 @@ describe('shared binary fan-out via cohorts on the production runtime', () => {
 		json.close();
 	});
 
-	it('two binary subscribers receive byte-identical frames under one shared id', async () => {
+	it('two binary subscribers receive byte-identical frames under one server-wide id', async () => {
+		// `a` holds two shared topics, `b` only the second: a per-connection
+		// allocator would hand `b` its FIRST id for the second topic and the
+		// two clients would disagree; the server-wide table hands both the
+		// same id for the second topic, distinct from the first topic's.
+		const first = 'shared.identical.first';
 		const topic = 'shared.identical';
-		const a = await join(topic, true);
+		const a = await join(first, true);
+		a.send({ type: 'subscribe', topic, ref: 2 });
+		await a.next((f) => f.json?.type === 'subscribed' && f.json?.topic === topic);
 		const b = await join(topic, true);
+		a.send({ cmd: 'publishShared', topic: first, event: 'snapshot', data: { tick: 1 } });
+		await a.next((f) => f.binary !== undefined);
 		a.send({ cmd: 'publishShared', topic, event: 'snapshot', data: { tick: 7 } });
-		const fa = await a.next((f) => f.binary !== undefined);
+		const fa = await a.next((f) => f.binary !== undefined && decodePayload(parseBinaryFrame(f.binary).payload).data.tick === 7);
 		const fb = await b.next((f) => f.binary !== undefined);
 		expect(Buffer.from(fa.binary).equals(Buffer.from(fb.binary))).toBe(true);
-		// The same id on both because it is the SERVER-WIDE one, not because
-		// two fresh per-connection allocators happened to agree.
-		expect(a.announces()[0].id).toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
-		expect(a.announces()[0].id).toBe(b.announces()[0].id);
+		const idOf = (c, t) => c.announces().find((x) => x.topic === t)?.id;
+		expect(idOf(a, first)).toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
+		expect(idOf(a, topic)).toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
+		expect(idOf(a, topic), 'two shared topics take two ids').not.toBe(idOf(a, first));
+		expect(idOf(b, topic), 'the second topic carries one id for every client').toBe(idOf(a, topic));
+		expect(parseBinaryFrame(fb.binary).topicId).toBe(idOf(b, topic));
 		a.close();
 		b.close();
 	});
@@ -265,7 +284,9 @@ describe('shared binary fan-out via cohorts on the production runtime', () => {
 		expect(b.announces()[0].id, 'b was cohorted under the shared id').toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
 
 		b.send({ type: 'unsubscribe', topic });
-		await sleep(80);
+		// The app's unsubscribe hook runs after the cohort leave, so its ack
+		// proves the landing completed before the next publish is sent.
+		await b.next((f) => f.json?.type === 'test-wire-unsubscribed' && f.json?.topic === topic);
 		a.send({ cmd: 'publishShared', topic, event: 'snapshot', data: { tick: 2 } });
 		await a.next((f) => f.binary !== undefined && decodePayload(parseBinaryFrame(f.binary).payload).data.tick === 2);
 		await sleep(80);
@@ -282,8 +303,14 @@ describe('shared binary fan-out via cohorts on the production runtime', () => {
 		await json.next((f) => f.json?.topic === topic && f.json?.data?.tick === 1);
 		await bin.next((f) => f.binary !== undefined);
 		expect(bin.announces()[0].id, 'the binary peer was cohorted under the shared id').toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
+		// The booted runtime's own id table: the close path must release the
+		// peer's reference, or the topic keeps a binary cohort nobody is in.
+		const ids = await import(pathToFileURL(joinPath(payload.dir, 'handler', 'shared-wire-id.js')).href);
+		expect(ids.sharedWireIdRefs(topic)).toBe(1);
 		bin.close();
-		await sleep(80);
+		for (let i = 0; i < 100 && ids.sharedWireIdRefs(topic) !== 0; i++) await sleep(10);
+		expect(ids.sharedWireIdRefs(topic), 'the closed peer still holds a shared wire-id reference').toBe(0);
+		expect(ids.getSharedWireId(topic), 'the last leave retires the topic\'s id').toBeUndefined();
 		json.send({ cmd: 'publishShared', topic, event: 'snapshot', data: { tick: 2 } });
 		const second = await json.next((f) => f.json?.topic === topic && f.json?.data?.tick === 2);
 		expect(second.json.data).toEqual({ tick: 2 });
@@ -301,6 +328,18 @@ describe('shared binary fan-out via cohorts on the production runtime', () => {
 		await sleep(80);
 		expect(author.binaries().length, 'the excluded author hears nothing').toBe(0);
 		expect(author.envelopes(topic, 'snapshot').length).toBe(0);
+
+		// The same on a topic ALREADY promoted to shared: an excluding publish
+		// still takes the walk, which reaches the audience under a
+		// per-connection id (announced on the way) and skips the author.
+		audience.send({ cmd: 'publishShared', topic, event: 'snapshot', data: { tick: 2 } });
+		await author.next((f) => f.binary !== undefined && decodePayload(parseBinaryFrame(f.binary).payload).data.tick === 2);
+		expect(author.announces().find((x) => x.topic === topic)?.id).toBeGreaterThanOrEqual(SHARED_WIRE_ID_BASE);
+		author.send({ cmd: 'publishSharedExcludingMe', topic, event: 'snapshot', data: { tick: 3 } });
+		const third = await audience.next((f) => f.binary !== undefined && decodePayload(parseBinaryFrame(f.binary).payload).data.tick === 3);
+		expect(parseBinaryFrame(third.binary).topicId, 'the walk announces and uses a per-connection id').toBeLessThan(SHARED_WIRE_ID_BASE);
+		await sleep(80);
+		expect(author.binaries().map((f) => decodePayload(f.payload).data.tick), 'the author hears the shared tick, never its own excluding one').toEqual([2]);
 		author.close();
 		audience.close();
 	});

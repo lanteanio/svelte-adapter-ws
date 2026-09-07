@@ -272,9 +272,22 @@ describe('cluster sequence authority policy', () => {
 		// pre-passes, before anything fans out: a clustered batch must refuse
 		// { seq: true } on an entry up front, not diverge silently on the
 		// stateful lane or half-deliver on the stateless one. The values form
-		// with  is refused for every relay shape in the table above.
+		// with `true` is refused for every relay shape in the table above.
 		expect(wireBatch.split('assertClusterSequenceAuthorityValues(true,').length,
 			'both batch branches vet an entry-level counter draw').toBe(3);
+		// The occurrence counts above are satisfiable with both calls in ONE
+		// branch, and a substring count still sees a call parked behind
+		// `false &&`. So: the LAST per-entry authority check sits past the
+		// stateless branch's per-entry publish (it is the stateful one), and
+		// each site is a bare statement.
+		expect(wireBatch.lastIndexOf('assertBatchEntrySequenceAuthority(opts)'),
+			'the stateful branch must carry its own per-entry authority check')
+			.toBeGreaterThan(wireBatch.indexOf('this.publishWire('));
+		expect(wireBatch.lastIndexOf('assertClusterSequenceAuthorityValues(true,'),
+			'the stateful branch must carry its own entry-level counter refusal')
+			.toBeGreaterThan(wireBatch.indexOf('this.publishWire('));
+		expectStatementCount(wireBatch, 'assertBatchEntrySequenceAuthority(opts);', 2, 'both per-entry authority checks are live statements');
+		expectStatementCount(wireBatch, 'assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);', 2, 'both entry-level counter refusals are live statements');
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
 		// The relay SET site hands the token and the seq as ARGUMENTS, and it
 		// is pinned here rather than driven because production's relay needs a

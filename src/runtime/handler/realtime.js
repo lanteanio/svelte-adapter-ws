@@ -2116,15 +2116,16 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		return;
 	}
 	addLogicalSubscription(subs, msg.topic);
-	if (capture) {
-		flushResumeTopic(capture, msg.topic, (payload) => {
-			try {
-				const result = facade.send(payload, false, false);
-				if (result !== 2) bumpOut(userData, payload);
-				return result;
-			} catch { return 2; }
-		});
-	}
+	// A flush that closed the connection leaves nobody to cohort or to ack:
+	// every send below would charge a closed-socket abort for a close this
+	// runtime performed itself, so the landing stops here.
+	if (capture && flushResumeTopic(capture, msg.topic, (payload) => {
+		try {
+			const result = facade.send(payload, false, false);
+			if (result !== 2) bumpOut(userData, payload);
+			return result;
+		} catch { return 2; }
+	})) return;
 	// A topic already promoted to shared fan-out cohorts this new joiner
 	// into the right cohort (announcing the server-wide id now) so the
 	// next cohort-split publish reaches it. No-op for an ordinary topic.
@@ -2323,15 +2324,16 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			continue;
 		}
 		addLogicalSubscription(udSubs, topic);
-		if (batchCapture) {
-			flushResumeTopic(batchCapture, topic, (payload) => {
-				try {
-					const result = facade.send(payload, false, false);
-					if (result !== 2) bumpOut(userData, payload);
-					return result;
-				} catch { return 2; }
-				});
-		}
+		// A close here ends the connection, so the topics after this one
+		// have nobody to ack and nothing to flush to. Stop the loop; the
+		// discard below still closes their buffers, and it reads no socket.
+		if (batchCapture && flushResumeTopic(batchCapture, topic, (payload) => {
+			try {
+				const result = facade.send(payload, false, false);
+				if (result !== 2) bumpOut(userData, payload);
+				return result;
+			} catch { return 2; }
+		})) break;
 		if (sharedTopics.has(topic)) joinSharedCohort(facade, userData, topic, sharedTopics.get(topic));
 		sendSubscribed(facade, topic, ref);
 	}
