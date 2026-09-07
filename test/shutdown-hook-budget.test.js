@@ -58,7 +58,16 @@ const WS_OPTS = {
 // Behaviour is read from the environment at CALL time, not at module eval: the
 // payload is imported once and both halves have to be reachable from it.
 const WS_HANDLER = `
-globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null };
+globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null, probeStatus: null };
+
+// An upgrade hook that can be made slow, so a shutdown can begin while a
+// handshake is still inside it.
+export async function upgrade() {
+	if (process.env.WS_UPGRADE_DELAY_MS) {
+		await new Promise((r) => setTimeout(r, Number(process.env.WS_UPGRADE_DELAY_MS)));
+	}
+	return {};
+}
 
 export async function shutdown(ctx) {
 	const seen = globalThis.__wsShutdownSeen;
@@ -69,6 +78,17 @@ export async function shutdown(ctx) {
 	// A last frame to whoever is still connected: the hook is documented to
 	// run ahead of the socket close, and this is what that order is for.
 	seen.published = ctx && ctx.platform ? ctx.platform.publish('bye', 'last', { n: 1 }) : null;
+	// And the listen socket is documented to still be bound: a fresh request
+	// made from inside the hook must be accepted, not refused by a closed
+	// listener.
+	if (process.env.WS_SHUTDOWN_PROBE_PORT) {
+		try {
+			const res = await fetch('http://127.0.0.1:' + process.env.WS_SHUTDOWN_PROBE_PORT + '/healthz');
+			seen.probeStatus = res.status;
+		} catch (err) {
+			seen.probeStatus = 'refused:' + (err && err.cause && err.cause.code ? err.cause.code : String(err));
+		}
+	}
 	if (process.env.WS_SHUTDOWN_DELAY_MS) {
 		await new Promise((r) => setTimeout(r, Number(process.env.WS_SHUTDOWN_DELAY_MS)));
 	}
@@ -103,7 +123,9 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	delete process.env.WS_SHUTDOWN_HANG;
 	delete process.env.WS_SHUTDOWN_DELAY_MS;
-	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null };
+	delete process.env.WS_SHUTDOWN_PROBE_PORT;
+	delete process.env.WS_UPGRADE_DELAY_MS;
+	globalThis.__wsShutdownSeen = { called: 0, hasSignal: null, deadline: undefined, aborted: null, reason: undefined, published: null, probeStatus: null };
 });
 
 /**
@@ -193,7 +215,8 @@ describe('the app shutdown hook runs ahead of the close, and the drains get what
 		// frame has somewhere to flush it. Run after the WebSocket drain, the
 		// hook publishes to nobody and nothing else in the suite notices - so
 		// the client's inbox is the oracle, not the hook's call count.
-		await withOneClient(async (ws) => {
+		await withOneClient(async (ws, port) => {
+			process.env.WS_SHUTDOWN_PROBE_PORT = String(port);
 			const frames = [];
 			const closedCodes = [];
 			ws.on('message', (data) => { try { frames.push(JSON.parse(String(data))); } catch { /* binary */ } });
@@ -208,6 +231,9 @@ describe('the app shutdown hook runs ahead of the close, and the drains get what
 			const seen = globalThis.__wsShutdownSeen;
 			expect(seen.called).toBe(1);
 			expect(seen.published, 'the hook found no subscriber to publish to').toBe(true);
+			// The listener was still bound while the hook ran: its own request
+			// was answered rather than refused.
+			expect(seen.probeStatus, 'the listen socket was already closed under the hook').toBe(200);
 			expect(frames.some((f) => f.topic === 'bye' && f.event === 'last'), 'the last frame never reached the client').toBe(true);
 			// And the client is still told to go, after the hook: the order is a
 			// reordering, not a skipped step.
@@ -235,6 +261,40 @@ describe('the app shutdown hook runs ahead of the close, and the drains get what
 			expect(elapsed).toBeGreaterThanOrEqual(900);
 			expect(elapsed).toBeLessThan(1400);
 		});
+	}, 20000);
+});
+
+describe('the close path is bounded by the budget whatever a handshake is doing', () => {
+	it('does not let an upgrade caught inside its hook hold the exit past the budget', async () => {
+		// The upgrade hook is checked for draining BEFORE it runs. A shutdown
+		// that begins while the hook is pending has swept the live sockets by
+		// the time the hook resolves, so a connection opened then would be one
+		// nothing sweeps again - and the listener's close never fires while it
+		// is open. The accept re-checks and refuses, and the wait on the close
+		// is bounded by the same budget either way.
+		process.env.WS_UPGRADE_DELAY_MS = '800';
+		await handler.start('127.0.0.1', 0);
+		const port = handler.server.address().port;
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+		/** @type {string[]} */
+		const outcome = [];
+		ws.on('open', () => outcome.push('open'));
+		ws.on('unexpected-response', (_req, res) => outcome.push('refused:' + res.statusCode));
+		ws.on('error', (err) => outcome.push('error:' + err.message));
+		ws.on('close', (code) => outcome.push('close:' + code));
+		await new Promise((r) => setTimeout(r, 100));
+
+		const t0 = Date.now();
+		await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 1500 });
+		const elapsed = Date.now() - t0;
+		await new Promise((r) => setTimeout(r, 100));
+		try { ws.terminate(); } catch { /* already gone */ }
+
+		// Down once the pending handshake settled (~700ms), well inside the
+		// budget - not at the budget, and not never.
+		expect(elapsed).toBeLessThan(1300);
+		expect(outcome.some((o) => o === 'open'), `the handshake was accepted under a closing server: ${outcome.join(', ')}`).toBe(false);
+		expect(outcome.some((o) => o.startsWith('refused:503') || o.startsWith('error:')), outcome.join(', ')).toBe(true);
 	}, 20000);
 });
 

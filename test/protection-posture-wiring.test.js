@@ -277,7 +277,10 @@ describe('the posture reaches the surfaces that report and tear it down', () => 
 		// Called after the listener is closed and the drain has been awaited,
 		// and on the no-server path too so a boot that never listened still
 		// removes its socket.
-		expect(lifecycleSource).toMatch(/await listenerClosed;\s*\r?\n(\s*\/\/[^\n]*\n)*\s*closePostureExport\(\);/);
+		const cut = block(lifecycleSource, 'export async function closeConnections(', '\n}');
+		expect(cut).toContain('closePostureExport();');
+		expect(cut.indexOf('closePostureExport();'), 'the export must be dropped only after the listener close was awaited')
+			.toBeGreaterThan(cut.indexOf('listenerClosed'));
 	});
 
 	it('assigns the export holders on both branches so a re-run drops a stale hook', () => {

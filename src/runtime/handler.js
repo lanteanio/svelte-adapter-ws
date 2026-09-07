@@ -13,7 +13,7 @@
 import './_init.js';
 import http from 'node:http';
 import path from 'node:path';
-import { workerData } from 'node:worker_threads';
+import { isMainThread, threadId, workerData } from 'node:worker_threads';
 import { env } from './env.js';
 import { monotonicNow, wallEpoch, setTimer, clearTimer } from './runtime.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from './error-registry.js';
@@ -74,9 +74,14 @@ export function shutdown(opts = {}) {
 /** @param {{ timeoutMs?: number, reason?: string | null, signal?: AbortSignal | null, deadline?: number | null }} opts */
 async function runShutdown(opts) {
 	beginDrain();
-	const budgetMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
 	let signal = opts.signal ?? null;
 	let deadline = opts.deadline ?? null;
+	// The number an operator reads in the dropped-requests line: what the
+	// caller configured, or what its deadline says is left when it handed in a
+	// signal without one.
+	const budgetMs = opts.timeoutMs && opts.timeoutMs > 0
+		? opts.timeoutMs
+		: (deadline !== null ? Math.max(0, deadline - wallEpoch()) : 0);
 	// A caller that set only timeoutMs gets an expiry of its own, so the hook
 	// and both drains are bounded by the number it configured rather than by
 	// nothing. The entry passes its signal in and this arms nothing.
@@ -111,12 +116,19 @@ async function runShutdown(opts) {
 			whenAborted(signal).then(() => false)
 		]);
 		if (!drained) {
+			// The worker tag trails the invariant text so the line stays
+			// findable by its documented prefix on every thread.
 			console.error(adapterConsoleLine(
 				ADAPTER_ERROR_IDS.SHUTDOWN_REQUESTS_DROPPED,
-				`${Math.round(budgetMs)}ms); closing anyway - the requests still open at this point are dropped.`
+				`${Math.round(budgetMs)}ms)${isMainThread ? '' : ` [worker ${threadId}]`}; closing anyway - the requests still open at this point are dropped.`
 			));
 		}
-		await closeConnections();
+		// A socket whose upgrade was still in its hook when the drain swept
+		// the live set is a connection nothing sweeps again, and the listener's
+		// close never fires while it is open. Swept once more, immediately,
+		// before the close is awaited - and that wait is bounded regardless.
+		if (realtime) await realtime.drainSockets({ dispersalMs: 0, deadlineMs: 0, signal });
+		await closeConnections(signal);
 		return drained;
 	} finally {
 		if (ownTimer !== null) clearTimer(ownTimer);

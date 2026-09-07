@@ -8,7 +8,7 @@
 
 import { emitOperationalDiagnostic, listenFailureDiagnostic } from '../utils/operational-diagnostic.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
-import { monotonicNow } from '../runtime.js';
+import { monotonicNow, setTimer, clearTimer } from '../runtime.js';
 import { counters } from './state.js';
 import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
@@ -270,16 +270,37 @@ async function performShutdown(opts) {
 }
 
 /**
+ * How long the listener's own close is waited for when no budget bounds it.
+ * `closeAllConnections` leaves a socket that took the `upgrade` event alone,
+ * and the close callback does not fire until every socket is gone - so this
+ * wait cannot be open-ended, or one straggler holds the exit for good.
+ */
+const LISTENER_CLOSE_CAP_MS = 30_000;
+
+/**
  * Cut whatever is still open once the drain has finished or the budget has
- * expired, and wait for the listener's own close to settle. A truncated
- * exchange is the documented cost of the deadline expiring.
+ * expired, and wait for the listener's own close to settle - bounded by the
+ * same signal as every other phase, and by a cap when there is none. A
+ * truncated exchange is the documented cost of the deadline expiring.
+ * @param {AbortSignal | null} [signal]
  * @returns {Promise<void>}
  */
-export async function closeConnections() {
+export async function closeConnections(signal = null) {
 	const server = httpServer;
 	if (!server) return;
 	server.closeAllConnections?.();
-	if (listenerClosed) await listenerClosed;
+	if (listenerClosed) {
+		/** @type {any} */
+		let cap = null;
+		const bound = signal
+			? whenAborted(signal)
+			: new Promise((resolve) => { cap = setTimer(resolve, LISTENER_CLOSE_CAP_MS); if (typeof cap?.unref === 'function') cap.unref(); });
+		try {
+			await Promise.race([listenerClosed, bound]);
+		} finally {
+			if (cap !== null) clearTimer(cap);
+		}
+	}
 	// The export's steady cadence is documented as a liveness signal, so it is
 	// dropped only now, once nothing is being served any more - closing it at
 	// the door would report this worker gone while it still drained.

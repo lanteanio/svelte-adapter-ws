@@ -1461,6 +1461,18 @@ export async function handleUpgrade(req, socket, head) {
 	const acceptUpgrade = () => {
 		// Between admission and a paced execution the client may have hung up.
 		if (socket.destroyed) { observeUpgradeOutcome(socket, 'aborted'); releaseInFlight(); return; }
+		// The drain check above ran before the app's upgrade hook. A shutdown
+		// that began while the hook was pending has since told every live
+		// socket to go; a connection opened now would be one the sweep never
+		// saw, holding the listener's close for as long as the client stays.
+		// Refused the way an upgrade during the drain is refused.
+		if (isDraining()) {
+			releaseConnectionPermit();
+			refuseUpgrade(socket, 503, 'Service Unavailable');
+			observeUpgradeOutcome(socket, 'rejected');
+			releaseInFlight();
+			return;
+		}
 		try {
 			const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 			const merged = { remoteAddress, .../** @type {any} */ (userData) };

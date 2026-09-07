@@ -624,7 +624,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets the same bound derived from its number. The `deadline` handed to the
   hook and the cleanup listeners is a wall-clock epoch, as documented. A
   throw inside the sequence's own machinery no longer skips the close path,
-  because the cleanup step it can come from is now the last one.
+  because the cleanup step it can come from is now the last one. The wait on
+  the listener's own close is bounded by the same signal, with a cap when
+  there is none: a socket whose upgrade was still inside the app's hook when
+  the drain swept the live set is swept once more and, if its hook resolves
+  under a closing server, refused rather than opened, so no straggler can
+  hold the exit past the budget.
 
 - The dropped-requests line names the budget the operator configured, on the
   signal path as well as the direct one, and reads as the lead spells it. The

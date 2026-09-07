@@ -1623,6 +1623,9 @@ if (is_primary) {
 		for (const signal of ['SIGINT', 'SIGTERM']) {
 			process.on(signal, () => {
 				if (phase === 'boot') {
+					// The first signal is the one reported; a second during boot
+					// changes nothing about what happens next.
+					if (latchedSignal !== null) return;
 					latchedSignal = signal;
 					sd_ready_withheld = true;
 					// Readiness moves off 'starting' NOW, not when the boot
@@ -1670,7 +1673,7 @@ if (is_primary) {
 		 * relay.
 		 */
 		function applyDrain() {
-			beginDrainAnnounced(handler, `[worker ${threadId}] `);
+			if (handler.beginDrain()) console.log(`[worker ${threadId}] Readiness now reports NOT ready (draining); still accepting.`);
 		}
 
 		// Control messages that need the live handler graph. `drain` is

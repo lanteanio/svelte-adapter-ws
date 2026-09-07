@@ -58,7 +58,7 @@ export async function runAppShutdownHook(ctx) {
 			console.error(adapterConsoleLine(
 				ADAPTER_ERROR_IDS.WS_SHUTDOWN_HOOK_UNSETTLED,
 				`${(monotonicNow() - started).toFixed(0)}ms and the shutdown budget is spent; ` +
-				'closing anyway - whatever the hook was flushing did NOT finish.'
+				'closing the listen socket anyway - whatever the hook was flushing did NOT finish.'
 			));
 		}
 	} catch (err) {
