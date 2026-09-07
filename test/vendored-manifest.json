@@ -1769,5 +1769,14 @@
 	},
 	{
 		"file": "test/relay-frame-ceiling.test.js"
+	},
+	{
+		"file": "test/topic-epoch-bump.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS = null;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
+				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
+			}
+		]
 	}
 ]
