@@ -1778,5 +1778,14 @@
 				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
 			}
 		]
+	},
+	{
+		"file": "test/harness-metrics-surface.test.js",
+		"adaptations": [
+			{
+				"lead": "api: { options: { kit: { adapter: { name: 'adapter-uws', websocketMetrics: metricsPath } } } }",
+				"ours": "api: { options: { kit: { adapter: { name: 'adapter-ws', websocketMetrics: metricsPath } } } }"
+			}
+		]
 	}
 ]
