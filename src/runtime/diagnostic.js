@@ -236,12 +236,12 @@ export function emitOperationalEvent(input) {
 
 const LEGACY_PREFIXES = new Map([
 	['svelte-adapter-ws', ['svelte-adapter-ws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
-	['adapter-uws', ['svelte-adapter-ws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
-	['adapter-uws/assert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'warn']],
-	['adapter-uws/fatal', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'fatal']],
-	['adapter-uws/devAssert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'error']],
-	['adapter-uws/testing', ['svelte-adapter-ws', 'runtime.testing', 'diagnostic.legacy', 'warn']],
-	['adapter-uws/relay-gap', ['svelte-adapter-ws', 'runtime.relay-gap', 'diagnostic.legacy', 'error']],
+	['adapter-ws', ['svelte-adapter-ws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
+	['adapter-ws/assert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'warn']],
+	['adapter-ws/fatal', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'fatal']],
+	['adapter-ws/devAssert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'error']],
+	['adapter-ws/testing', ['svelte-adapter-ws', 'runtime.testing', 'diagnostic.legacy', 'warn']],
+	['adapter-ws/relay-gap', ['svelte-adapter-ws', 'runtime.relay-gap', 'diagnostic.legacy', 'error']],
 	['ws', ['svelte-adapter-ws', 'runtime.websocket', 'diagnostic.legacy', 'warn']],
 	['tls', ['svelte-adapter-ws', 'runtime.tls', 'diagnostic.legacy', 'warn']],
 	['primary', ['svelte-adapter-ws', 'runtime.primary', 'diagnostic.legacy', 'warn']],

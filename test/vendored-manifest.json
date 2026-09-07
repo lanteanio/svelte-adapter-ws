@@ -409,6 +409,11 @@
 			{
 				"lead": "\t\tfields = ['svelte-adapter-ws-extensions', `runtime.${match[1].replace('/', '.')}`, 'diagnostic.legacy', defaultSeverity];",
 				"ours": "\t\tfields = ['svelte-adapter-uws-extensions', `runtime.${match[1].replace('/', '.')}`, 'diagnostic.legacy', defaultSeverity];"
+			},
+			{
+				"lead": "\t['adapter-uws",
+				"ours": "\t['adapter-ws",
+				"all": true
 			}
 		]
 	},
@@ -1640,6 +1645,21 @@
 			{
 				"lead": "new RegExp('adapter-uws fatal: '",
 				"ours": "new RegExp('adapter-ws fatal: '"
+			}
+		]
+	},
+	{
+		"file": "test/diagnostic-format.test.js",
+		"adaptations": [
+			{
+				"lead": "['[adapter-uws",
+				"ours": "['[adapter-ws",
+				"all": true
+			},
+			{
+				"lead": "'svelte-adapter-ws-extensions'",
+				"ours": "'svelte-adapter-uws-extensions'",
+				"all": true
 			}
 		]
 	}
