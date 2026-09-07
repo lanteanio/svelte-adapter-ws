@@ -1535,5 +1535,8 @@
 	},
 	{
 		"file": "test/subscription-accounting.test.js"
+	},
+	{
+		"file": "test/worker-attach-watchdog.test.js"
 	}
 ]

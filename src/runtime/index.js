@@ -693,7 +693,11 @@ if (is_primary) {
 			ringWriter: null,
 			ringReader: null,
 			relayQuarantined: false,
-			relayAttached: false
+			relayAttached: false,
+			// When this worker reported ready. The gap from here to relayAttached
+			// is one tick in a healthy worker, so a stale readyAt with no attach
+			// is a worker serving traffic while invisible to the relay.
+			readyAt: 0
 		};
 		if (relay_ring !== null) {
 			const quarantineRelaySpill = createRelaySpillQuarantine({
@@ -785,7 +789,7 @@ if (is_primary) {
 				// worker once its init hook has resolved. Both mark the worker
 				// confirmed-alive and stamp its uptime clock; the crash-restart
 				// budget resets on a later exit only if it stayed up.
-				if (meta) meta.ready = true;
+				if (meta) { meta.ready = true; meta.readyAt = monotonicNow(); }
 				if (msg.role === 'compute') console.log(`[svelte-adapter-ws] Compute worker ${worker.threadId} ready`);
 				else {
 					console.log(`[svelte-adapter-ws] Worker thread ${worker.threadId} listening on :${port}`);

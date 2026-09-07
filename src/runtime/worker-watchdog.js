@@ -26,8 +26,8 @@
 //     boot then stays stranded, the pre-fix behavior).
 
 /**
- * @typedef {{ ready: boolean, lastHeartbeat: number, spawnedAt: number }} HealthMeta
- * @typedef {{ escalate: false } | { escalate: true, regime: 'steady' | 'boot', reason: string }} HealthVerdict
+ * @typedef {{ ready: boolean, lastHeartbeat: number, spawnedAt: number, readyAt?: number, relayAttached?: boolean }} HealthMeta
+ * @typedef {{ escalate: false } | { escalate: true, regime: 'steady' | 'boot' | 'attach', reason: string }} HealthVerdict
  */
 
 /**
@@ -40,6 +40,26 @@ export function classifyWorkerHealth(meta, now, { steadyTimeoutMs, bootTimeoutMs
 	if (meta.ready) {
 		if (now - meta.lastHeartbeat > steadyTimeoutMs) {
 			return { escalate: true, regime: 'steady', reason: `unresponsive (no heartbeat ack in ${steadyTimeoutMs}ms)` };
+		}
+		// ATTACH: a worker that reported ready and never reported its relay
+		// reader live. The primary hands an unattached worker no relay frames at
+		// all, so no spill accumulates and it keeps acking heartbeats while
+		// silently missing every cross-worker publish its subscribers are owed.
+		// A healthy worker posts ready and relay-attached in the same tick, so
+		// the steady timeout is a generous bound and needs no knob of its own -
+		// and it is deliberately NOT tied to the boot deadline: an operator who
+		// disables that is saying an init may take arbitrarily long, not that a
+		// serving worker may miss relay traffic forever.
+		// `=== false` rather than `!meta.relayAttached`, and an explicit `readyAt`
+		// reading: a caller whose meta does not carry these fields is not making
+		// a claim about attachment and must not be judged on one.
+		const readyAt = meta.readyAt ?? 0;
+		if (meta.relayAttached === false && readyAt > 0 && now - readyAt > steadyTimeoutMs) {
+			return {
+				escalate: true,
+				regime: 'attach',
+				reason: `ready but its relay reader never attached (no relay-attached in the ${steadyTimeoutMs}ms after it reported ready), so it has been serving while missing every cross-worker publish`
+			};
 		}
 	} else if (bootTimeoutMs > 0) {
 		const reference = meta.lastHeartbeat > 0 ? meta.lastHeartbeat : meta.spawnedAt;

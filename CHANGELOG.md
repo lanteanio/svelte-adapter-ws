@@ -600,6 +600,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The cluster primary escalates a worker that reported ready and never
+  reported its relay reader live, down the same request-exit and respawn
+  path as an unresponsive one. The primary hands an unattached worker no
+  relay frames, so no spill accumulates and it keeps acking heartbeats while
+  missing every cross-worker publish its subscribers are owed. Judged
+  against the steady timeout, since a healthy worker attaches in the tick it
+  goes ready, and deliberately not tied to the boot deadline.
+
 - The main request edge answers 400 for a target that ARRIVES inside the
   reserved admin prefix while its raw spelling was outside it, whether by
   resolution (`/foo/../__realtime/introspect`) or by percent-encoding
@@ -665,9 +673,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the cleanup step it can come from is now the last one. The wait on
   the listener's own close is bounded by the same signal, with a cap when
   there is none: a socket whose upgrade was still inside the app's hook when
-  the drain swept the live set is swept once more and, if its hook resolves
-  under a closing server, refused rather than opened, so no straggler can
-  hold the exit past the budget.
+  the drain swept the live set is refused rather than opened if its hook
+  resolves under a closing server, and a connection still held when that
+  bound expires is reported as dropped and ends the shutdown as not clean.
 
 - The dropped-requests line names the budget the operator configured, on the
   signal path as well as the direct one, and reads as the lead spells it. The
