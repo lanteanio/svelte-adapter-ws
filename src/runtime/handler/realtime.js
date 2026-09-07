@@ -2152,7 +2152,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	const headroom = MAX_PENDING_SUBSCRIBES_PER_CONNECTION - pendingSubscribeTotal(userData);
 	if (headroom < valid.length) {
 		for (let i = Math.max(headroom, 0); i < valid.length; i++) {
-			sendDenied(rawWs, valid[i], ref, authzDenied?.[i] ? 'FORBIDDEN' : 'RATE_LIMITED', userData);
+			sendDenied(facade, valid[i], ref, authzDenied?.[i] ? 'FORBIDDEN' : 'RATE_LIMITED');
 		}
 		valid.length = Math.max(headroom, 0);
 	}
@@ -2178,13 +2178,29 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 						else if (typeof val === 'string') batchDenials[topic] = val;
 					}
 				} catch (err) {
-					console.error('[adapter-ws] subscribeBatch result read threw:', err);
+					emitOperationalEvent({
+						source: 'svelte-adapter-ws',
+						component: 'runtime.subscribe',
+						event: 'subscribe.batch-result-read-failed',
+						severity: 'error',
+						dataClass: 'pseudonymous',
+						message: 'Reading the subscribeBatch result threw; every topic in the batch was denied INTERNAL_ERROR.',
+						attributes: { error: diagnosticError(err) }
+					});
 					batchDenials = Object.create(null);
 					for (const t of hookTopics) batchDenials[t] = 'INTERNAL_ERROR';
 				}
 			}
 		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_HOOK), err);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.subscribe',
+				event: 'subscribe.batch-hook-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'The subscribeBatch hook threw; every topic in the batch was denied INTERNAL_ERROR.',
+				attributes: { error: diagnosticError(err) }
+			});
 			batchDenials = Object.create(null);
 			for (const t of hookTopics) batchDenials[t] = 'INTERNAL_ERROR';
 		}

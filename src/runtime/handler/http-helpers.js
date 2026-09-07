@@ -9,6 +9,10 @@
 // one-line way to fill an operator's error log). They can never reach an
 // application route, so they are refused at the edge with the status the RFC
 // requires.
+export class PayloadTooLargeError extends Error {
+	constructor() { super('Payload too large'); }
+}
+
 export const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 
 export const FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK']);

@@ -179,13 +179,16 @@ export function collectRequestHeaders(source, headers) {
 			// Name the FIRST offender and keep walking. Stopping the merge here
 			// would make every later repeated header first-wins, which is neither
 			// the documented contract nor a policy anything asked for.
-			const refused = takeHeaderLine(headers, source[i], source[i + 1]);
+			// node keeps the sender's spelling in rawHeaders; the visitor shape
+			// below already speaks lowercase, as the family's request objects do,
+			// and its names are stored exactly as given.
+			const refused = takeHeaderLine(headers, source[i].toLowerCase(), source[i + 1]);
 			if (refused !== null && ambiguous === null) ambiguous = refused;
 		}
 		return ambiguous;
 	}
-	source.forEach((name, value) => {
-		const refused = takeHeaderLine(headers, name, value);
+	source.forEach((key, value) => {
+		const refused = takeHeaderLine(headers, key, value);
 		if (refused !== null && ambiguous === null) ambiguous = refused;
 	});
 	return ambiguous;
@@ -196,12 +199,11 @@ export function collectRequestHeaders(source, headers) {
  * is a refused duplicate, null otherwise.
  *
  * @param {Record<string, string>} headers - filled in place, lowercase keys
- * @param {string} rawKey
+ * @param {string} key - lowercase header name
  * @param {string} value
  * @returns {string | null}
  */
-function takeHeaderLine(headers, rawKey, value) {
-	const key = rawKey.toLowerCase();
+function takeHeaderLine(headers, key, value) {
 	const previous = headers[key];
 	if (previous === undefined || !hasOwn.call(headers, key)) {
 		headers[key] = value;

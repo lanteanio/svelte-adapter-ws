@@ -60,7 +60,11 @@ export function installRealtimeRoutes(routes) {
  */
 export function handleRequest(req, res) {
 	counters.inFlightCount++;
-	const state = { aborted: false };
+	// `responseStarted` flips once any byte of the real response has reached
+	// the wire, after which no error response can be sent; `closedByServer`
+	// marks an abort this runtime caused (a source that failed mid-body), so
+	// the failure is still reported where a client-initiated abort stays silent.
+	const state = { aborted: false, responseStarted: false, closedByServer: false };
 	// The RED observation rides the SAME terminal hook as the in-flight
 	// accounting, so probes, realtime routes, static assets and SSR are all
 	// counted through one funnel with the aborted/finished distinction already

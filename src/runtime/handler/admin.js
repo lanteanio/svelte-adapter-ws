@@ -13,7 +13,7 @@
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
 import { FORBIDDEN_METHODS, send405 } from './http-helpers.js';
-import { getRequest } from '../kit-node-bridge.js';
+import { buildRequest } from './ssr.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -153,25 +153,24 @@ function runAdminHandler(request, res, state, span) {
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {string} baseOrigin
+ * @param {Record<string, string>} headers - the collected lowercase headers
  * @param {{ aborted: boolean }} state
  * @param {any} span
  */
-async function bridgeAdminRequest(req, res, baseOrigin, state, span) {
-	/** @type {Request} */
+async function bridgeAdminRequest(req, res, baseOrigin, headers, state, span) {
+	/** @type {Request | null} */
 	let request;
 	try {
 		// GET/HEAD carry no body; other methods stream through the same
-		// primitive the SSR lane uses, under the global body-size cap.
-		request = await getRequest({
-			base: baseOrigin,
-			request: req,
-			bodySizeLimit: body_size_limit === Infinity ? undefined : body_size_limit
-		});
-	} catch (err) {
+		// reader the SSR lane uses, under the global body-size cap.
+		request = buildRequest(req, baseOrigin, headers, state);
+	} catch {
 		if (state.aborted) return;
-		const status = /** @type {{ status?: number }} */ (err)?.status;
-		if (status === 413) sendAdminError(res, 413, 'payload too large');
-		else sendAdminError(res, 400, 'bad request');
+		sendAdminError(res, 400, 'bad request');
+		return;
+	}
+	if (request === null) {
+		sendAdminError(res, 413, 'payload too large');
 		return;
 	}
 	await runAdminHandler(request, res, state, span);
@@ -259,20 +258,14 @@ export function tryAdminRoute(req, res, pathname, state) {
 		}
 	}
 
-	// The bridge reads headers off the node request object, whose own merge is
-	// not the family duplicate policy; install the policy bag so the admin
-	// handler sees exactly the values resolved above (an own property shadows
-	// the IncomingMessage prototype getter).
-	Object.defineProperty(req, 'headers', { value: headers, configurable: true });
-
 	if (!tracingEnabled) {
-		void bridgeAdminRequest(req, res, baseOrigin, state, null);
+		void bridgeAdminRequest(req, res, baseOrigin, headers, state, null);
 		return true;
 	}
 	void traceOperation('adapter.http.admin', {
 		kind: 'server',
 		parent: extractTraceContext(headers),
 		attributes: { 'http.request.method': method, 'http.route.type': 'admin' }
-	}, (span) => bridgeAdminRequest(req, res, baseOrigin, state, span));
+	}, (span) => bridgeAdminRequest(req, res, baseOrigin, headers, state, span));
 	return true;
 }

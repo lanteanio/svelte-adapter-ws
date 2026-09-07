@@ -483,7 +483,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] the subscribeBatch hook threw
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.batch-hook-failed severity=error] The subscribeBatch hook threw; every topic in the batch was denied INTERNAL_ERROR.
 ```
 
 **Cause.** The application subscribeBatch authorization hook threw.
@@ -501,7 +501,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] reading the subscribeBatch result threw
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.batch-result-read-failed severity=error] Reading the subscribeBatch result threw; every topic in the batch was denied INTERNAL_ERROR.
 ```
 
 **Cause.** The subscribeBatch hook returned a value whose properties threw while being read, typically a getter or a proxy.
@@ -519,7 +519,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] the subscribe hook threw
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.hook-failed severity=error] The subscribe hook threw; the subscribe was denied INTERNAL_ERROR.
 ```
 
 **Cause.** The application subscribe authorization hook threw for a single topic.

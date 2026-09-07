@@ -1,10 +1,9 @@
 import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib';
-import { getRequest, setResponse } from '../kit-node-bridge.js';
 import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
-import { randomUuid } from '../runtime.js';
-import { send400, send413, send500 } from './http-helpers.js';
+import { randomUuid, setTimer, clearTimer } from '../runtime.js';
+import { PayloadTooLargeError, send400, send413, send500 } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { isDedupBufferable } from './ssr-dedup.js';
@@ -72,6 +71,95 @@ const COMPRESSIBLE_TYPES = new Set([
  * @param {Response} response
  * @returns {Response}
  */
+/**
+ * The request body as a ReadableStream over node's incoming message, read for
+ * ANY method that is not GET or HEAD: a body needs no content-type to be a
+ * body, and a client that omits the header still sent the bytes. The limit is
+ * enforced as the chunks arrive and trips as PayloadTooLargeError inside the
+ * stream, so a route that pipes the body into its response sees the failure
+ * mid-stream, where the exchange is then aborted rather than ended cleanly.
+ * Backpressure pauses the socket while the consumer is behind.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {number} limit - bytes, or Infinity
+ * @param {{ aborted: boolean }} state
+ * @returns {ReadableStream<Uint8Array>}
+ */
+export function readBody(req, limit, state) {
+	let initialized = false;
+	return new ReadableStream({
+		start(controller) {
+			if (state.aborted) controller.error(new Error('Request aborted'));
+		},
+		pull(controller) {
+			if (state.aborted) {
+				try { controller.error(new Error('Request aborted')); } catch { /* already closed */ }
+				return;
+			}
+			if (initialized) {
+				req.resume();
+				return;
+			}
+			initialized = true;
+			let size = 0;
+			let done = false;
+			req.on('data', (/** @type {Buffer} */ chunk) => {
+				if (done || state.aborted) return;
+				size += chunk.byteLength;
+				if (limit !== Infinity && size > limit) {
+					done = true;
+					controller.error(new PayloadTooLargeError());
+					req.pause();
+					return;
+				}
+				controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+				if (controller.desiredSize !== null && controller.desiredSize <= 0) req.pause();
+			});
+			req.on('end', () => {
+				if (done) return;
+				done = true;
+				controller.close();
+			});
+			req.on('error', (err) => {
+				if (done) return;
+				done = true;
+				try { controller.error(err); } catch { /* already closed */ }
+			});
+		},
+		cancel() {
+			req.resume();
+		}
+	});
+}
+
+/**
+ * Build the Web Request for a node exchange the lead's way: the declared
+ * content-length is refused up front when it exceeds the limit, and every
+ * non-GET/HEAD request carries its body stream whatever headers it sent.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} baseOrigin
+ * @param {Record<string, string>} headers - the collected lowercase headers
+ * @param {{ aborted: boolean }} state
+ * @returns {Request | null} null when the declared length already exceeds the limit
+ */
+export function buildRequest(req, baseOrigin, headers, state) {
+	const method = req.method || 'GET';
+	let body;
+	if (method !== 'GET' && method !== 'HEAD') {
+		const cl = parseInt(headers['content-length'], 10);
+		if (!isNaN(cl) && body_size_limit !== Infinity && cl > body_size_limit) return null;
+		body = readBody(req, body_size_limit, state);
+	}
+	return new Request(baseOrigin + req.url, {
+		method,
+		headers,
+		body,
+		// @ts-expect-error
+		duplex: 'half'
+	});
+}
+
 function ensureNosniff(response) {
 	if (response.headers.has('x-content-type-options')) return response;
 	try {
@@ -181,12 +269,13 @@ async function maybeCompress(response, acceptEncoding) {
 }
 
 /**
- * Write a Response through the public setResponse primitive, with the
- * default-nosniff fill and the single-chunk compression pass applied first.
+ * Write a Response onto the node response, with the default-nosniff fill and
+ * the single-chunk compression pass applied first. The whole write is
+ * awaited, so a body that fails mid-stream surfaces here as a throw.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
- * @param {{ aborted: boolean }} state
+ * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean }} state
  * @param {string} [acceptEncoding]
  */
 async function writeResponse(res, response, state, acceptEncoding) {
@@ -202,7 +291,123 @@ async function writeResponse(res, response, state, acceptEncoding) {
 		await finalResponse.body?.cancel().catch(() => {});
 		return;
 	}
-	await setResponse(res, finalResponse);
+	await streamResponse(res, finalResponse, state);
+}
+
+/**
+ * Write the response headers. A header the transport refuses (a name or
+ * value with characters node will not put on the wire) turns the whole
+ * response into a 500 before any byte starts, the same answer Kit's own node
+ * writer gives.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {Response} response
+ * @returns {boolean} false when a header was refused and the 500 was written
+ */
+function writeHeaders(res, response) {
+	for (const [key, value] of response.headers) {
+		if (key === 'set-cookie') continue;
+		try {
+			res.setHeader(key, value);
+		} catch (error) {
+			for (const name of res.getHeaderNames()) res.removeHeader(name);
+			res.writeHead(500);
+			res.end(String(error));
+			return false;
+		}
+	}
+	const cookies = response.headers.getSetCookie();
+	if (cookies.length > 0) res.setHeader('set-cookie', cookies);
+	res.writeHead(response.status);
+	return true;
+}
+
+/**
+ * Wait for the socket to drain, bounded: a reader that never drains would
+ * otherwise hold the render forever.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} timeoutMs
+ * @returns {Promise<boolean>} true when drained, false on the deadline
+ */
+function waitForDrain(res, timeoutMs) {
+	return new Promise((resolve) => {
+		/** @type {any} */
+		let timer = null;
+		const done = (ok) => {
+			if (timer !== null) clearTimer(timer);
+			res.off('drain', onDrain);
+			res.off('close', onClose);
+			resolve(ok);
+		};
+		const onDrain = () => done(true);
+		const onClose = () => done(false);
+		timer = setTimer(() => done(false), timeoutMs);
+		res.once('drain', onDrain);
+		res.once('close', onClose);
+	});
+}
+
+/**
+ * Stream a Response body onto the node response, awaiting the whole write.
+ *
+ * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
+ * without `streamDone`, and the exchange is then closed abruptly rather than
+ * ended: a clean EOF on a partial body would read as a successful but
+ * truncated response. The failure is rethrown so the caller reports it; the
+ * close it caused is marked as the server's, so that report is not mistaken
+ * for a client abort.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {Response} response
+ * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean }} state
+ */
+async function streamResponse(res, response, state) {
+	if (!response.body) {
+		if (state.aborted) return;
+		state.responseStarted = true;
+		if (writeHeaders(res, response)) res.end();
+		return;
+	}
+	if (response.body.locked) {
+		if (state.aborted) return;
+		state.responseStarted = true;
+		res.writeHead(500, { 'content-type': 'text/plain' });
+		res.end(
+			'Fatal error: Response body is locked. ' +
+				"This can happen when the response was already read (for example through 'response.json()' or 'response.text()')."
+		);
+		return;
+	}
+	const reader = response.body.getReader();
+	let streaming = false;
+	let streamDone = false;
+	try {
+		if (state.aborted) return;
+		state.responseStarted = true;
+		if (!writeHeaders(res, response)) return;
+		streaming = true;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) { streamDone = true; break; }
+			if (state.aborted) break;
+			if (!res.write(value)) {
+				const drained = await waitForDrain(res, 30000);
+				if (!drained) break;
+				if (state.aborted) break;
+			}
+		}
+	} finally {
+		if (streaming && !state.aborted) {
+			if (streamDone) {
+				res.end();
+			} else {
+				state.closedByServer = true;
+				res.destroy();
+			}
+		}
+		reader.cancel().catch(() => {});
+	}
 }
 
 /**
@@ -234,18 +439,16 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 	try {
 		const base_origin = origin || get_origin(headers);
 
-		/** @type {Request} */
+		/** @type {Request | null} */
 		let request;
 		try {
-			request = await getRequest({
-				base: base_origin,
-				request: req,
-				bodySizeLimit: body_size_limit === Infinity ? undefined : body_size_limit
-			});
-		} catch (err) {
-			const status = /** @type {{ status?: number }} */ (err)?.status;
-			if (status === 413) send413(res);
-			else send400(res);
+			request = buildRequest(req, base_origin, headers, state);
+		} catch {
+			send400(res);
+			return;
+		}
+		if (request === null) {
+			send413(res);
 			return;
 		}
 
@@ -495,7 +698,15 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 		await writeResponse(res, response, state, respAcceptEncoding);
 	} catch (err) {
 		try { span?.recordException?.(err); } catch {}
-		if (state.aborted) return;
+		if (state.aborted && !state.closedByServer) return;
+		if (err instanceof PayloadTooLargeError) {
+			// The limit can also trip mid-stream, through a route that pipes the
+			// request body into its response: the reader rejection aborts the
+			// exchange in the stream teardown, and a 413 written there would be
+			// a second response into a closed exchange - same rule as the 500.
+			if (!state.aborted && !state.responseStarted) send413(res);
+			return;
+		}
 		emitOperationalEvent({
 			source: 'svelte-adapter-ws',
 			component: 'runtime.ssr',
@@ -506,9 +717,9 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 			attributes: { requestId, error: diagnosticError(err) }
 		});
 		// Once any byte of the real response has reached the wire, no error
-		// response can be delivered - writing a 500 into it would be a second
-		// response. The event above is the failure's record; send500 guards on
-		// headersSent itself.
-		send500(res, requestId);
+		// response can be delivered: the streaming path has either ended or
+		// abruptly closed the exchange, and writing a 500 into it would be a
+		// second response. The event above is the failure's record.
+		if (!state.aborted && !state.responseStarted) send500(res, requestId);
 	}
 }

@@ -1662,5 +1662,20 @@
 				"all": true
 			}
 		]
+	},
+	{
+		"file": "test/request-headers.test.js"
+	},
+	{
+		"file": "test/subscribe-pending-cap.test.js"
+	},
+	{
+		"file": "test/error-registry-subscribe-hook.test.js"
+	},
+	{
+		"file": "test/error-registry-subscribe-batch.test.js"
+	},
+	{
+		"file": "test/error-registry-ssr.test.js"
 	}
 ]

@@ -34,6 +34,7 @@ import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
+import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
@@ -99,7 +100,15 @@ async function runUserSubscribeGate(facade, topic) {
 		try {
 			result = await wsModule.subscribeBatch(facade, [topic], { platform: facade.getUserData()[WS_PLATFORM] });
 		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_HOOK), err);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.subscribe',
+				event: 'subscribe.batch-hook-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'The subscribeBatch hook threw; every topic in the batch was denied INTERNAL_ERROR.',
+				attributes: { error: diagnosticError(err) }
+			});
 			return 'INTERNAL_ERROR';
 		}
 		try {
@@ -110,7 +119,15 @@ async function runUserSubscribeGate(facade, topic) {
 			}
 			return null;
 		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_BATCH_RESULT), err);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.subscribe',
+				event: 'subscribe.batch-result-read-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'Reading the subscribeBatch result threw; every topic in the batch was denied INTERNAL_ERROR.',
+				attributes: { error: diagnosticError(err) }
+			});
 			return 'INTERNAL_ERROR';
 		}
 	}
@@ -121,7 +138,19 @@ async function runUserSubscribeGate(facade, topic) {
 		if (typeof result === 'string') return result;
 		return null;
 	} catch (err) {
-		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.SUBSCRIBE_HOOK), err);
+		// Fail closed: a hook that throws (or rejects) denies access rather
+		// than falling through to allow. Surfaces as a canonical
+		// 'INTERNAL_ERROR' reason on the wire so the client can distinguish it
+		// from 'FORBIDDEN' / 'UNAUTHENTICATED' / etc.
+		emitOperationalEvent({
+			source: 'svelte-adapter-ws',
+			component: 'runtime.subscribe',
+			event: 'subscribe.hook-failed',
+			severity: 'error',
+			dataClass: 'pseudonymous',
+			message: 'The subscribe hook threw; the subscribe was denied INTERNAL_ERROR.',
+			attributes: { error: diagnosticError(err) }
+		});
 		return 'INTERNAL_ERROR';
 	}
 }
