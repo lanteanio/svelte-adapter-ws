@@ -1538,5 +1538,36 @@
 	},
 	{
 		"file": "test/worker-attach-watchdog.test.js"
+	},
+	{
+		"file": "test/game-cluster-policy.test.js",
+		"adaptations": [
+			{
+				"lead": "const handlerSource = read('../src/runtime/handler.js');",
+				"ours": "const handlerSource = read('../src/runtime/handler/realtime.js');"
+			},
+			{
+				"lead": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/**\\n\\t * Unsubscribe');",
+				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/** @param {string} topic */\\n\\tsubscribers(');"
+			}
+		]
+	},
+	{
+		"file": "test/grant-model.test.js",
+		"adaptations": [
+			{
+				"lead": "// The production dispatch (src/runtime/handler.js, handler/platform.js) is",
+				"ours": "// The production dispatch (src/runtime/handler/realtime.js, handler/platform.js) is"
+			},
+			{
+				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
+				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
+			},
+			{
+				"lead": "pendingUd",
+				"ours": "userData",
+				"all": true
+			}
+		]
 	}
 ]

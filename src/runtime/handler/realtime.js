@@ -1905,7 +1905,7 @@ function runGameWork(facade, context) {
 	// sockets can land on more than one I/O worker denies the frame rather
 	// than forking a room's sequence across workers - the same rule
 	// grantPublish enforces at authorization time.
-	const clusterSafe = gameLaneClusterSafe();
+	const clusterSafe = gameLaneClusterSafe(workerData);
 	if (!clusterSafe || !grantTopic || typeof msg.event !== 'string') {
 		const reason = clusterSafe && grantTopic ? 'INVALID' : 'FORBIDDEN';
 		const denied = msg.id === undefined
@@ -1978,10 +1978,10 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	}
 	// Enrol before the await so a revocation landing while the hook is parked
 	// can see this subscribe and cancel it.
-	const token = beginPendingSubscribe(userData, msg.topic, subs.has(msg.topic));
+	const pendingToken = beginPendingSubscribe(userData, msg.topic, subs.has(msg.topic));
 	const denial = await runUserSubscribeGate(facade, msg.topic);
 	if (denial !== null) {
-		if (settleDeniedSubscribe(userData, msg.topic, token, subs.has(msg.topic)) === 'deny-unwind') {
+		if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
 			unwindRevokedMembership(facade, msg.topic);
 			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 		}
@@ -1992,7 +1992,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// membership arriving during the await carries no history.
 	const _wantsRecover = wantsRecover({ hasResumeHook: wsModule.resume, recover: msg.recover });
 	if (subs.has(msg.topic) && !_wantsRecover) {
-		const heldVerdict = settleHeldSubscribe(userData, msg.topic, token);
+		const heldVerdict = settleHeldSubscribe(userData, msg.topic, pendingToken);
 		if (heldVerdict === 'ack') {
 			sendSubscribed(facade, msg.topic, ref);
 			return;
@@ -2008,12 +2008,12 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// the plugin's hook can run; the landing confirms the hook actually
 	// admitted this socket.
 	if (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic), topic: msg.topic })) {
-		settlePendingSubscribe(userData, msg.topic, token);
+		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	if (exceedsSubscriptionCap({ held: subs.has(msg.topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
-		settlePendingSubscribe(userData, msg.topic, token);
+		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
@@ -2023,7 +2023,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	const _recoverRevoked = recoverIsRevoked({
 		held: subs instanceof Set && subs.has(msg.topic),
 		wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !hasUserSubscribeHook()),
-		cancelled: isPendingSubscribeCancelled(userData, msg.topic, token),
+		cancelled: isPendingSubscribeCancelled(userData, msg.topic, pendingToken),
 		topic: msg.topic
 	});
 	if (!_recoverRevoked && _wantsRecover) {
@@ -2040,13 +2040,13 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RECOVER_HOOK), err);
 		}
 		if (subs.has(msg.topic)) {
-			const heldVerdict = settleHeldSubscribe(userData, msg.topic, token);
-			if (heldVerdict === 'ack') {
+			const heldVerdictR = settleHeldSubscribe(userData, msg.topic, pendingToken);
+			if (heldVerdictR === 'ack') {
 				discardResumeCapture(capture);
 				sendSubscribed(facade, msg.topic, ref);
 				return;
 			}
-			if (heldVerdict === 'deny-unwind') {
+			if (heldVerdictR === 'deny-unwind') {
 				unwindRevokedMembership(facade, msg.topic);
 				wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 			}
@@ -2057,7 +2057,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	}
 	// Landing settle: a revocation that bumped this subscribe's epoch while
 	// the hook was parked means the grant is discarded, not installed.
-	if (!settlePendingSubscribe(userData, msg.topic, token, true)) {
+	if (!settlePendingSubscribe(userData, msg.topic, pendingToken, true)) {
 		if (capture) discardResumeCapture(capture);
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;

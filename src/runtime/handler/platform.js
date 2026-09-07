@@ -715,7 +715,7 @@ export const platform = {
 			// clusterSequenceValuesAccepted returns accepted without reading
 			// the value whenever the runtime is not multi-worker, so on the
 			// default deployment the pre-pass vetted nothing the caller wrote.
-			assertStampableSeq(snap != null ? snap.seq : undefined);
+			assertStampableSeq(snap?.seq);
 			snapshots[i] = snap;
 		}
 		const results = [];
@@ -1459,23 +1459,32 @@ export const platform = {
 			counters.closedWsAborts++;
 			return null;
 		}
-		const subs = ud?.[WS_SUBSCRIPTIONS];
+		const subs = ud[WS_SUBSCRIPTIONS];
 		fatal(subs instanceof Set, 'subs.shape', null);
 		if (!(subs instanceof Set)) return 'INVALID_TOPIC';
-		if (subs.has(topic)) return null;
-		if (exceedsSubscriptionCap({ held: false, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';
+		const held = subs.has(topic);
+		if (held) return null;
+		if (exceedsSubscriptionCap({ held, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';
 		if (exceedsPendingSubscribeCap({ pending: pendingSubscribeTotal(ud), max: MAX_PENDING_SUBSCRIBES_PER_CONNECTION })) return 'RATE_LIMITED';
-		const token = beginPendingSubscribe(ud, topic, subs.has(topic));
+		// Track the in-flight subscribe so a revocation landing during the
+		// hook await can cancel it: platform.unsubscribe tombstones the topic
+		// in the pending set and the landing below discards the grant instead
+		// of subscribing.
+		const pendingToken = beginPendingSubscribe(ud, topic, held);
 		const denial = await runUserSubscribeGate(facade, topic);
 		if (denial !== null) {
-			if (settleDeniedSubscribe(ud, topic, token, subs.has(topic)) === 'deny-unwind') {
+			if (settleDeniedSubscribe(ud, topic, pendingToken, subs.has(topic)) === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
 				wsModule.unsubscribe?.(facade, topic, { platform: ud[WS_PLATFORM] });
 			}
 			return denial;
 		}
-		if (subs.has(topic)) {
-			const heldVerdict = settleHeldSubscribe(ud, topic, token);
+		// Re-check after the await: a concurrent subscribe may have raced
+		// through while the hook ran. The membership's provenance decides
+		// whether this attempt acks it or unwinds it.
+		const heldAfter = subs.has(topic);
+		if (heldAfter) {
+			const heldVerdict = settleHeldSubscribe(ud, topic, pendingToken);
 			if (heldVerdict === 'ack') return null;
 			if (heldVerdict === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
@@ -1483,11 +1492,11 @@ export const platform = {
 			}
 			return 'FORBIDDEN';
 		}
-		if (exceedsSubscriptionCap({ held: subs.has(topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
-			settlePendingSubscribe(ud, topic, token);
+		if (exceedsSubscriptionCap({ held: heldAfter, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
+			settlePendingSubscribe(ud, topic, pendingToken);
 			return 'RATE_LIMITED';
 		}
-		if (!settlePendingSubscribe(ud, topic, token, true)) return 'FORBIDDEN';
+		if (!settlePendingSubscribe(ud, topic, pendingToken, true)) return 'FORBIDDEN';
 		try {
 			/** @type {any} */ (facade).subscribe(topic);
 		} catch {
@@ -1502,14 +1511,14 @@ export const platform = {
 	 * Pure gate: consult the hook chain without subscribing.
 	 * @param {object} facade
 	 * @param {string} topic
-	 * @param {{ requireGrant?: boolean } | undefined} [opts]
+	 * @param {{ requireGrant?: boolean } | undefined} [options]
 	 * @returns {Promise<string | null>}
 	 */
-	async checkSubscribe(facade, topic, opts) {
-		if (!isValidWireTopic(topic, opts && opts.requireGrant ? ALLOW_NON_ASCII_TOPICS : true)) {
+	async checkSubscribe(facade, topic, options) {
+		if (!isValidWireTopic(topic, options && options.requireGrant ? ALLOW_NON_ASCII_TOPICS : true)) {
 			return 'INVALID_TOPIC';
 		}
-		const requireGrant = Boolean(opts && opts.requireGrant);
+		const requireGrant = Boolean(options && options.requireGrant);
 		let observerHasUserHook = false;
 		if (requireGrant) {
 			observerHasUserHook = hasUserSubscribeHook();
@@ -1560,15 +1569,16 @@ export const platform = {
 			counters.closedWsAborts++;
 			return false;
 		}
-		const subs = ud?.[WS_SUBSCRIPTIONS];
+		const subs = ud[WS_SUBSCRIPTIONS];
+		assert(subs instanceof Set, 'subs.shape-unsubscribe', null);
 		// Cancel any subscribe still parked in its authorization hook - a
 		// revoke must not be re-installed by a parked attempt landing later.
-		const cancelledPending = ud ? tombstonePendingSubscribe(ud, topic) : false;
+		const cancelledPending = tombstonePendingSubscribe(ud, topic);
 		// Revoking read access revokes WRITE access with it.
-		if (ud && ud[WS_PUBLISH_GRANT] === topic) ud[WS_PUBLISH_GRANT] = undefined;
+		if (ud[WS_PUBLISH_GRANT] === topic) ud[WS_PUBLISH_GRANT] = undefined;
 		// And the observer taps a plugin registered on this topic.
 		releaseDerivedSubscriptions(facade, topic);
-		if (!(subs instanceof Set) || !subs.has(topic)) return cancelledPending;
+		if (!subs.has(topic)) return cancelledPending;
 		try {
 			/** @type {any} */ (facade).unsubscribe(topic);
 		} catch {

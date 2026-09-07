@@ -1040,20 +1040,18 @@ export default function (opts = {}) {
 					);
 				}
 			}
-			const wsOpts = websocket ? serializeWsOptions(websocket, adminPath) : null;
+			const wsOpts = serializeWsOptions(websocket, adminPath);
 
 			// Loud on unknown websocket.* keys: options are serialized into the
 			// build, so a key the adapter does not recognize would be dropped
 			// silently - warn so a typo surfaces instead of no-op'ing.
-			if (websocket) {
-				const unknownWsKeys = unknownWebsocketOptionKeys(websocket);
-				if (unknownWsKeys.length) {
-					builder.log.warn(
-						`[adapter-ws] unknown websocket option(s): ${unknownWsKeys.join(', ')} - ` +
-						'not recognized by the adapter and ignored. Check the spelling against the ' +
-						'documented websocket options.'
-					);
-				}
+			const unknownWsKeys = unknownWebsocketOptionKeys(websocket);
+			if (unknownWsKeys.length) {
+				builder.log.warn(
+					`[adapter-ws] unknown websocket option(s): ${unknownWsKeys.join(', ')} - ` +
+					'not recognized by the adapter and ignored. Check the spelling against the ' +
+					'documented websocket options.'
+				);
 			}
 
 			// A function waiting-room template cannot be serialized into the

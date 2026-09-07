@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { expectStatement, expectStatementCount } from './helpers/source-pins.js';
 
 /**
  * Read a source with its line endings normalized, so an anchor spanning a line
@@ -199,13 +200,19 @@ describe('cluster sequence authority policy', () => {
 		// refusal with one value and hand the stamp another. The pins below
 		// require the values-form assert AND exactly one read site per field
 		// (the capture line itself) in each lane body.
-		expect(publish).toContain('assertClusterSequenceAuthorityValues(seqOption, relayOption);');
+		expectStatement(publish, 'assertClusterSequenceAuthorityValues(seqOption, relayOption);', 'publish vets cluster sequence authority');
 		expect(publish.indexOf('options.seq'), 'publish must capture before judging')
 			.toBeLessThan(publish.indexOf('assertClusterSequenceAuthorityValues('));
 		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.jitterMs']) {
 			expect(publish.split(field).length, `publish reads ${field} exactly once`).toBe(2);
 		}
-		expect(wire).toContain('if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);');
+		// The VALUE is refused ahead of the egress ceiling, on every lane. A seq
+		// the wire cannot carry used to be answered with the shed's own `false`
+		// while a budget was armed and threw only after load dropped.
+		expectStatement(publish, 'assertStampableSeq(seqOption);', 'publish vets the seq value');
+		expect(publish.indexOf('assertStampableSeq('), 'publish must refuse the value before it admits')
+			.toBeLessThan(publish.indexOf('admitPublishEgress('));
+		expectStatement(wire, 'if (!isRelay) assertClusterSequenceAuthorityValues(seqOption, relayOption);', 'publishWire vets cluster sequence authority origin-side');
 		for (const field of ['options.seq', 'options.relay', 'options.compress', 'options.excludeWs']) {
 			expect(wire.split(field).length, `publishWire reads ${field} exactly once`).toBe(2);
 		}
@@ -213,20 +220,25 @@ describe('cluster sequence authority policy', () => {
 		// identity, so the lane reads no relay key off the caller object at all.
 		// A marker read as a property is satisfied by anything that answers
 		// every key, without ever naming the key.
-		expect(wire).toContain('const isRelay = relayToken === RELAY_RECEIVE;');
+		expectStatement(wire, 'const isRelay = relayToken === RELAY_RECEIVE;', 'publishWire decides relay by identity');
 		expect(wire, 'the relay marker went back to being a key on the options object')
 			.not.toMatch(/options\s*\[\s*RELAY/);
+		// Same ordering on the wire lane, and origin-side only: a relayed frame
+		// carries its number beside the token instead, already validated where
+		// it was published.
+		expectStatement(wire, 'if (!isRelay) assertStampableSeq(seqOption);', 'publishWire vets the seq value origin-side');
+		expect(wire.indexOf('assertStampableSeq('), 'publishWire must refuse the value before it admits')
+			.toBeLessThan(wire.indexOf('admitPublishEgress('));
 		// The marker forces the relay decision off by itself. Without the
 		// `!isRelay` term a received frame is relayed onward whenever the
 		// options do not say otherwise, and the set site no longer says so.
-		expect(wire, 'the relay decision must be forced off by the marker')
-			.toContain('const relayed = !isRelay && !!(parentPort && relayOption !== false);');
+		expectStatement(wire, 'const relayed = !isRelay && !!(parentPort && relayOption !== false);', 'the relay decision must be forced off by the marker');
 		// The batch asserts on its OWN copy of the options, not on the caller's
 		// live object - a caller that mutated it after the check would otherwise
 		// stamp under an authority nobody validated. The guard runs before ANY
 		// mutation and before the entries are even inspected, so an empty batch
 		// cannot accept options a full one refuses.
-		expect(wireBatch).toContain('assertBatchSequenceAuthority(opts);');
+		expectStatement(wireBatch, 'assertBatchSequenceAuthority(opts);', 'publishWireBatch vets its own options copy');
 		const beforeAssert = wireBatch.slice(0, wireBatch.indexOf('assertBatchSequenceAuthority('));
 		// Field reads, not a spread: the copy the assert vets and the copy the
 		// stamping reads must be the same one read of the caller's object, and
@@ -239,8 +251,7 @@ describe('cluster sequence authority policy', () => {
 		// pre-read pass vets an explicit numeric entry seq BEFORE the separate
 		// stamping pass mutates any counter, so a mid-batch refusal cannot
 		// leave earlier entries already stamped.
-		expect(wireBatch.split('assertBatchEntrySequenceAuthority(opts)').length, 'the entry pre-read pass vets per-entry authority')
-			.toBe(2);
+		expectStatementCount(wireBatch, 'assertBatchEntrySequenceAuthority(opts);', 1, 'the entry pre-read pass vets per-entry authority');
 		expect(wireBatch.indexOf('assertBatchEntrySequenceAuthority(opts)'),
 			'the entry pre-read pass must vet per-entry authority before the stamping pass')
 			.toBeLessThan(wireBatch.indexOf('stampSeqValue(entrySeqs'));
@@ -253,7 +264,9 @@ describe('cluster sequence authority policy', () => {
 		// hand-rolled number check: restating the table here is what let an
 		// over-range value past the pre-pass and into the stamping loop,
 		// where the throw arrives after earlier entries are already stamped.
-		expect(wireBatch).toContain('resolveEntrySeq(entry.seq, i)');
+		// One pre-read walk here, so one call: the count is what fails when a
+		// second walk appears with the call neutralized on either.
+		expectStatementCount(wireBatch, 'const resolved = resolveEntrySeq(entry.seq, i);', 1, 'the publishWireBatch pre-pass consults the entry refusal table');
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
 		// The relay SET site hands the token and the seq as ARGUMENTS, and it
 		// is pinned here rather than driven because production's relay needs a
@@ -262,7 +275,7 @@ describe('cluster sequence authority policy', () => {
 		const relaySet = source.slice(source.indexOf('export function relayPublishWire'));
 		expect(relaySet.indexOf('export function relayPublishWire'), 'relayPublishWire must stay findable by name')
 			.toBe(0);
-		expect(relaySet).toContain('platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);');
+		expectStatement(relaySet, 'platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);', 'the relay set site hands the marker and the seq as arguments');
 		// The coercion is on the READ side now, and it is the whole of what
 		// keeps a non-number off the wire: a relayed frame legitimately
 		// arrives with no seq, and the envelope must carry null rather than
@@ -282,16 +295,28 @@ describe('cluster sequence authority policy', () => {
 		// snapshot, then hands publish() the SAME snapshot - so the atomic
 		// pre-pass and the per-message stamp cannot disagree.
 		expect(loopBatch).toContain(': { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };');
-		expect(loopBatch).toContain('assertClusterSequenceAuthority(snap);');
+		expectStatement(loopBatch, 'assertClusterSequenceAuthority(snap);', 'batch vets every snapshot');
 		expect(loopBatch.indexOf('assertClusterSequenceAuthority(snap);'),
 			'batch must vet every snapshot before the first publish')
 			.toBeLessThan(loopBatch.indexOf('results.push(publish('));
-		expect(loopBatch).toContain('publish(topic, event, data, /** @type {any} */ (snapshots[i]))');
+		// The topology check above short-circuits on a single worker without
+		// reading the value, so the pre-pass has to ask the value question
+		// itself or the all-or-nothing promise holds only in a cluster.
+		expectStatement(loopBatch, 'assertStampableSeq(snap?.seq);', 'batch asks the value question itself');
+		expect(loopBatch.indexOf('assertStampableSeq('), 'batch must vet every value before the first publish')
+			.toBeLessThan(loopBatch.indexOf('results.push(publish('));
+		expectStatement(loopBatch, 'results.push(publish(topic, event, data, /** @type {any} */ (snapshots[i])));', 'batch hands publish the snapshot it judged');
 		// publishBatched captures per-message seq/relay/jitter into arrays in
 		// its atomic pre-pass; the stamp and the relay filter both consume the
 		// captured values.
-		expect(batch).toContain('assertClusterSequenceAuthorityValues(seqOption, relayOption);');
-		expect(batch).toContain('stampSeqValue(msgSeqs[i]');
+		expectStatement(batch, 'assertClusterSequenceAuthorityValues(seqOption, relayOption);', 'publishBatched vets cluster sequence authority');
+		expectStatement(batch, 'const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);', 'publishBatched stamps from the captured value');
+		// Same reason as batch(), and here the stamping loop is what would
+		// otherwise surface a bad value - after earlier entries have advanced
+		// the topic counter for a frame the call never sends.
+		expectStatement(batch, 'assertStampableSeq(seqOption);', 'publishBatched vets every value before it stamps');
+		expect(batch.indexOf('assertStampableSeq('), 'publishBatched must vet every value before it stamps')
+			.toBeLessThan(batch.indexOf('stampSeqValue(msgSeqs[i]'));
 		expect(batch).toContain('msgRelays[i] !== false');
 		expect(batch.split('messages[i].options').length, 'publishBatched reads each message options object in the pre-pass only')
 			.toBe(2);
