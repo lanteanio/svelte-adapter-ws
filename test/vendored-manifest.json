@@ -1728,5 +1728,22 @@
 				"ours": "describe('shared binary fan-out via cohort topics', () => {\n"
 			}
 		]
+	},
+	{
+		"file": "test/http-error-request-id.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { calls.push(['cork']); fn(); },\n\t\t\twriteStatus(value) { calls.push(['status', value]); },\n\t\t\twriteHeader(name, value) { calls.push(['header', name, value]); },\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n",
+				"ours": "\t\t// node:http's response: one writeHead carries the status and the headers.\n\t\tconst res = {\n\t\t\twriteHead(status, headers) {\n\t\t\t\tcalls.push(['status', status]);\n\t\t\t\tfor (const [name, value] of Object.entries(headers)) calls.push(['header', name, value]);\n\t\t\t},\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n"
+			},
+			{
+				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { fn(); },\n\t\t\twriteStatus() {},\n\t\t\twriteHeader(name, value) { headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n",
+				"ours": "\t\tconst res = {\n\t\t\twriteHead(status, h) { for (const [name, value] of Object.entries(h)) headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n"
+			},
+			{
+				"lead": "\t\texpect(headers).toEqual([['content-type', 'text/plain']]);\n",
+				"ours": "\t\t// content-length is node:http framing for the fixed body, not an invented header.\n\t\texpect(headers).toEqual([['content-type', 'text/plain'], ['content-length', '21']]);\n"
+			}
+		]
 	}
 ]
