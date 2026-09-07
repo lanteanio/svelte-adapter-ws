@@ -268,8 +268,10 @@ if (is_primary) {
 	const cluster_mode = env('CLUSTER_MODE', 'reuseport');
 
 	if (cluster_mode === 'acceptor') {
-		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.CLUSTER_CONFIG_ACCEPTOR,
-			'Remove CLUSTER_MODE to use reuseport, the only mode this runtime has.'));
+		// A plain line, not a registry id: the family declares no id for a
+		// refusal only this transport can hit, so the lead's catalog stays
+		// the one an operator's runbook keys on.
+		console.error('[svelte-adapter-ws] CLUSTER_MODE=acceptor is not available on this runtime: moving an accepted socket between threads needs a native transport. Remove CLUSTER_MODE to use reuseport, the only mode this runtime has.');
 		process.exit(1);
 	}
 	if (cluster_mode !== 'reuseport') {
@@ -305,8 +307,7 @@ if (is_primary) {
 		(node_major === 23 && node_minor >= 1) ||
 		(node_major === 22 && node_minor >= 12);
 	if (!reuse_port_supported) {
-		console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.CLUSTER_CONFIG_NODE,
-			`${process.versions.node}, which ignores the listen reusePort option). Upgrade Node, or unset CLUSTER_WORKERS.`));
+		console.error(`[svelte-adapter-ws] CLUSTER_WORKERS requires Node 22.12 or newer (this process runs Node ${process.versions.node}, which ignores the listen reusePort option). Upgrade Node, or unset CLUSTER_WORKERS.`);
 		process.exit(1);
 	}
 

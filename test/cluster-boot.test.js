@@ -114,7 +114,8 @@ describe('cluster configuration refusals', () => {
 		const run = spawnPayload({ CLUSTER_WORKERS: '2', CLUSTER_MODE: 'acceptor' });
 		expect(await run.exited).toBe(1);
 		expect(run.err()).toContain('CLUSTER_MODE=acceptor is not available on this runtime');
-		expect(run.err()).toContain('ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR');
+		// A plain refusal: the family declares no id for it (the lead's catalog is the one that ships).
+		expect(run.err()).not.toContain('ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR');
 	});
 
 	it('refuses an unknown CLUSTER_MODE', async () => {
