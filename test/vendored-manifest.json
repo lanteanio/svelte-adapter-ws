@@ -1745,5 +1745,29 @@
 				"ours": "\t\t// content-length is node:http framing for the fixed body, not an invented header.\n\t\texpect(headers).toEqual([['content-type', 'text/plain'], ['content-length', '21']]);\n"
 			}
 		]
+	},
+	{
+		"file": "test/seq-registry-ceiling-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\tlet state;\n",
+				"ours": "\tlet state;\n\tlet registry;\n"
+			},
+			{
+				"lead": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n",
+				"ours": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n\t\tregistry = await import(`./fixture/${OUT}/handler/topic-registry.js`);\n"
+			},
+			{
+				"lead": "\t\treturn {\n\t\t\tsent,\n\t\t\tgetUserData() { return ud; },\n",
+				"ours": "\t\treturn {\n\t\t\tsent,\n\t\t\treadyState: 1,\n\t\t\tgetUserData() { return ud; },\n"
+			},
+			{
+				"lead": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t}\n",
+				"ours": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\t// The delivery walk here reads the topic registry and the facade map,\n\t\t\t// not the live set, so a scripted socket enters both as its own facade.\n\t\t\tregistry.registerSocket(ws);\n\t\t\tregistry.subscribeSocket(ws, topic);\n\t\t\tstate.wsWrappers.set(ws, ws);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t\tstate.wsWrappers.delete(ws);\n\t\t\t\tregistry.unregisterSocket(ws);\n\t\t\t}\n"
+			}
+		]
+	},
+	{
+		"file": "test/relay-frame-ceiling.test.js"
 	}
 ]
