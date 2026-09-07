@@ -1460,8 +1460,11 @@ export const platform = {
 			return null;
 		}
 		const subs = ud[WS_SUBSCRIPTIONS];
+		// The subscription slot is assigned a Set once at open and never reassigned;
+		// a non-Set here is unrecoverable heap/dispatch corruption. One instanceof
+		// guard, identical in cost to the assert it replaces. A freed handle is
+		// caught above and returns early, so this only runs on a live connection.
 		fatal(subs instanceof Set, 'subs.shape', null);
-		if (!(subs instanceof Set)) return 'INVALID_TOPIC';
 		const held = subs.has(topic);
 		if (held) return null;
 		if (exceedsSubscriptionCap({ held, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';
@@ -1524,7 +1527,7 @@ export const platform = {
 			observerHasUserHook = hasUserSubscribeHook();
 			let granted;
 			try { granted = /** @type {any} */ (facade).getUserData()[WS_SUBSCRIPTIONS]; }
-			catch { return 'FORBIDDEN'; }
+			catch { counters.closedWsAborts++; return 'FORBIDDEN'; }
 			if (deniesUngrantedObserve(subscribeAuth.enabled, observerHasUserHook && !subscribeAuth.strict, granted, topic)) {
 				return 'FORBIDDEN';
 			}
@@ -1536,7 +1539,7 @@ export const platform = {
 			// must not produce an allow answer after it is gone.
 			let granted;
 			try { granted = /** @type {any} */ (facade).getUserData()[WS_SUBSCRIPTIONS]; }
-			catch { return 'FORBIDDEN'; }
+			catch { counters.closedWsAborts++; return 'FORBIDDEN'; }
 			if (deniesUngrantedObserve(subscribeAuth.enabled, observerHasUserHook && !subscribeAuth.strict, granted, topic)) {
 				return 'FORBIDDEN';
 			}

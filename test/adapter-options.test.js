@@ -88,6 +88,16 @@ describe('adapter factory options', () => {
 		expect(typeof a.adapt).toBe('function');
 	});
 
+	it('serializes the option defaults for a build with the websocket lane off', async () => {
+		// The runtime never reads WS_OPTIONS when WS_ENABLED is false, and the
+		// build still carries the defaults object rather than null, so the two
+		// enable states differ in one flag and not in the shape of the payload.
+		const off = await adaptWebsocket(/** @type {any} */ (false));
+		const on = await adaptWebsocket({});
+		expect(off).toEqual(on);
+		expect(off.adminPath).toBe('/__realtime');
+	});
+
 	it('validates warmup shapes', () => {
 		expect(() => adapter({ warmup: true })).not.toThrow();
 		expect(() => adapter({ warmup: false })).not.toThrow();

@@ -70,7 +70,7 @@ describe('game lane cluster topology guard', () => {
 			return platformSource.slice(start, end);
 		};
 		const grant = carve('grantPublish', '\tgrantPublish(', '\n\trevokePublish(');
-		const publish = carve('publishGame', '\tpublishGame(', '\n\t/** @param {string} topic */\n\tsubscribers(');
+		const publish = carve('publishGame', '\tpublishGame(', '\n\tget assertions()');
 		expectStatement(grant, 'assertGameLaneClusterSafe();', 'grantPublish refuses a forked game lane');
 		expectStatement(publish, 'assertGameLaneClusterSafe();', 'publishGame refuses a forked game lane');
 		expectStatement(handlerSource, 'const clusterSafe = gameLaneClusterSafe(workerData);', 'the handler resolves game-lane cluster safety once');

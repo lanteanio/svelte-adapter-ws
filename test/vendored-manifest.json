@@ -1548,7 +1548,7 @@
 			},
 			{
 				"lead": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/**\\n\\t * Unsubscribe');",
-				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/** @param {string} topic */\\n\\tsubscribers(');"
+				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\tget assertions()');"
 			}
 		]
 	},
@@ -1587,5 +1587,60 @@
 	},
 	{
 		"file": "scripts/check-tracked-imports.js"
+	},
+	{
+		"file": "test/wire-batch-aliasing.test.js",
+		"adaptations": [
+			{
+				"lead": "\tlet state;\n",
+				"ours": "\tlet state;\n\tlet registry;\n"
+			},
+			{
+				"lead": "\t\tstate = await import('./fixture/build/handler/state.js');\n",
+				"ours": "\t\tstate = await import('./fixture/build/handler/state.js');\n\t\tregistry = await import('./fixture/build/handler/topic-registry.js');\n"
+			},
+			{
+				"lead": "\t\treturn {\n\t\t\tsent,\n",
+				"ours": "\t\treturn {\n\t\t\tsent,\n\t\t\treadyState: 1,\n"
+			},
+			{
+				"lead": "\tfunction withSockets(topic, run) {\n\t\tconst capable = scriptedWs(topic, [CAP]);\n\t\tconst plain = scriptedWs(topic, []);\n\t\tstate.wsConnections.add(capable);\n\t\tstate.wsConnections.add(plain);\n\t\ttry {\n\t\t\treturn run(capable, plain);\n\t\t} finally {\n\t\t\tstate.wsConnections.delete(capable);\n\t\t\tstate.wsConnections.delete(plain);\n\t\t}\n\t}\n",
+				"ours": "\tfunction withSockets(topic, run) {\n\t\tconst capable = scriptedWs(topic, [CAP]);\n\t\tconst plain = scriptedWs(topic, []);\n\t\t// The delivery walk here reads the topic registry and the facade map,\n\t\t// not the live set, so a scripted socket enters both as its own facade.\n\t\tfor (const ws of [capable, plain]) {\n\t\t\tregistry.registerSocket(ws);\n\t\t\tregistry.subscribeSocket(ws, topic);\n\t\t\tstate.wsWrappers.set(ws, ws);\n\t\t\tstate.wsConnections.add(ws);\n\t\t}\n\t\ttry {\n\t\t\treturn run(capable, plain);\n\t\t} finally {\n\t\t\tfor (const ws of [capable, plain]) {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t\tstate.wsWrappers.delete(ws);\n\t\t\t\tregistry.unregisterSocket(ws);\n\t\t\t}\n\t\t}\n\t}\n"
+			}
+		]
+	},
+	{
+		"file": "test/wire-batch-entry-seq.test.js",
+		"adaptations": [
+			{
+				"lead": "\tlet state;\n",
+				"ours": "\tlet state;\n\tlet registry;\n"
+			},
+			{
+				"lead": "\t\tstate = await import('./fixture/build/handler/state.js');\n",
+				"ours": "\t\tstate = await import('./fixture/build/handler/state.js');\n\t\tregistry = await import('./fixture/build/handler/topic-registry.js');\n"
+			},
+			{
+				"lead": "\t\treturn {\n\t\t\tsent,\n",
+				"ours": "\t\treturn {\n\t\t\tsent,\n\t\t\treadyState: 1,\n"
+			},
+			{
+				"lead": "\tfunction withSockets(topic, run) {\n\t\tconst capable = scriptedWs(topic, [CAP]);\n\t\tconst plain = scriptedWs(topic, []);\n\t\tstate.wsConnections.add(capable);\n\t\tstate.wsConnections.add(plain);\n\t\ttry {\n\t\t\treturn run(capable, plain);\n\t\t} finally {\n\t\t\tstate.wsConnections.delete(capable);\n\t\t\tstate.wsConnections.delete(plain);\n\t\t}\n\t}\n",
+				"ours": "\tfunction withSockets(topic, run) {\n\t\tconst capable = scriptedWs(topic, [CAP]);\n\t\tconst plain = scriptedWs(topic, []);\n\t\t// The delivery walk here reads the topic registry and the facade map,\n\t\t// not the live set, so a scripted socket enters both as its own facade.\n\t\tfor (const ws of [capable, plain]) {\n\t\t\tregistry.registerSocket(ws);\n\t\t\tregistry.subscribeSocket(ws, topic);\n\t\t\tstate.wsWrappers.set(ws, ws);\n\t\t\tstate.wsConnections.add(ws);\n\t\t}\n\t\ttry {\n\t\t\treturn run(capable, plain);\n\t\t} finally {\n\t\t\tfor (const ws of [capable, plain]) {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t\tstate.wsWrappers.delete(ws);\n\t\t\t\tregistry.unregisterSocket(ws);\n\t\t\t}\n\t\t}\n\t}\n"
+			}
+		]
+	},
+	{
+		"file": "test/fatal-sites.test.js",
+		"adaptations": [
+			{
+				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
+				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
+			},
+			{
+				"lead": "new RegExp('adapter-uws fatal: '",
+				"ours": "new RegExp('adapter-ws fatal: '"
+			}
+		]
 	}
 ]

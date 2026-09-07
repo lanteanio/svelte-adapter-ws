@@ -176,7 +176,21 @@ startPressureSampler(wsOptions.pressure);
 // loading two independently built runtimes into one test process is an ordinary
 // thing for this suite to do - the condition is about a deployment carrying two
 // copies, not about a harness that deliberately holds two.
-if (setSubscriptionAccountingHook((delta) => { counters.totalSubscriptions += delta; })) {
+// Every logical membership mutation (wire, platform, or tracked plugin lane)
+// routes through add/removeLogicalSubscription. Keep the counter non-negative
+// even if a pre-existing mismatch is encountered; the assertion makes that
+// corruption visible while the clamp prevents it from poisoning pressure and
+// every subsequent close.
+function adjustTotalSubscriptions(delta) {
+	const next = counters.totalSubscriptions + delta;
+	if (next < 0) {
+		assert(false, 'subs.total-negative', { totalSubscriptions: next });
+		counters.totalSubscriptions = 0;
+	} else {
+		counters.totalSubscriptions = next;
+	}
+}
+if (setSubscriptionAccountingHook(adjustTotalSubscriptions)) {
 	emitOperationalEvent({
 		source: 'svelte-adapter-ws',
 		component: 'runtime.subscription-accounting',
@@ -1586,14 +1600,12 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	});
 	// Promote the handshake carrier to the symbol slot close reads. A carrier
 	// that cannot be found is unrecoverable: the permit would be held with
-	// nothing left to hand it back, so the connection is refused instead.
+	// nothing left to hand it back. fatal() ends the worker; the return keeps
+	// the rest of this frame from running the app's open hook first.
 	if (admission.maxConnections > 0) {
 		const permitRestored = connectionPermitCarrier.restore(userData);
 		fatal(permitRestored, 'ws.connection-permit-carrier', null);
-		if (!permitRestored) {
-			try { rawWs.terminate(); } catch { /* already gone */ }
-			return;
-		}
+		if (!permitRestored) return;
 	}
 	registerSocket(rawWs);
 	// Claim the adapter's slots as own properties before anything writes
@@ -1605,6 +1617,10 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	declareConnectionSlots(userData);
 	userData[WS_SUBSCRIPTIONS] = new Set();
 
+	// A platform slot already set on a fresh open is unrecoverable structural
+	// corruption: a re-entrant or duplicate open on the same handle. Continuing
+	// would overwrite live per-connection state, so escalate to the hard tier.
+	fatal(!userData[WS_PLATFORM], 'ws.platform-double-init', null);
 	const wsPlatform = Object.create(platform);
 	wsPlatform.requestId = requestId;
 	// The platform's traceContext getter falls back to this when no operation
@@ -1755,6 +1771,10 @@ function rejectApplicationMessage(facade, rejection) {
  * @param {boolean} isBinary
  */
 async function handleMessage(rawWs, facade, userData, raw, isBinary) {
+	// A message on a connection with no platform slot means open never ran or
+	// the slot was clobbered - unrecoverable. One truthiness check (the property
+	// read happens regardless), so the hot path is unchanged.
+	fatal(userData[WS_PLATFORM], 'ws.platform-missing-in-message', null);
 	const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(/** @type {any} */ (raw));
 	bumpIn(userData, buf);
 
@@ -1962,7 +1982,10 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		return;
 	}
 	const subs = userData[WS_SUBSCRIPTIONS];
-	assert(subs instanceof Set, 'subs.shape', null);
+	// The subscription slot is assigned a Set once at open and never
+	// reassigned; a non-Set here is unrecoverable heap/dispatch corruption.
+	// One instanceof guard, identical in cost to the assert it replaces.
+	fatal(subs instanceof Set, 'subs.shape', null);
 	const isNew = !subs.has(msg.topic);
 	if (exceedsSubscriptionCap({ held: !isNew, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
