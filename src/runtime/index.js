@@ -1216,9 +1216,10 @@ if (is_primary) {
 					onChange: onCertChange,
 					// A watch that dies AFTER starting arrives as an event, not a
 					// throw, so the catch below never sees it. Reported under its
-					// own id because no catch-up read follows this one and the
-					// operator's next move differs; sticky, because nothing
-					// re-arms it.
+					// own id because the causes and the operator's next move
+					// differ; sticky, because nothing re-arms it. A replaced
+					// directory is read once more after this report; the watcher
+					// owns that timer and `stop()` clears it.
 					onError: (err) => {
 						// The dead watcher leaves the set; nothing re-arms it.
 						primaryCertWatchers = primaryCertWatchers.filter((w) => w !== watcher);
