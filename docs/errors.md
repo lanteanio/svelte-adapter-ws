@@ -231,16 +231,16 @@ Severity: warn
 Log line begins:
 
 ```
-[svelte-adapter-ws] the per-topic seq registry reached 
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.topic-registry-high severity=warn] The topic registry crossed its cardinality warning threshold.
 ```
 
-**Cause.** The number of distinct topics holding a live seq counter passed the warning threshold.
+**Cause.** The number of distinct live topics passed the configured warning threshold.
 
 **Consequence.** Nothing is refused at this threshold. Topic bookkeeping grows with cardinality, so this is the memory-growth signal.
 
 **Automatic recovery.** None. Cardinality is not reduced in response to the threshold.
 
-**What to do.** Check whether topic names embed unbounded identifiers (per-user, per-request). The line fires once per process, so it will not tell you whether cardinality later fell or kept climbing - the naming scheme is what settles that. Unbounded cardinality is a slow leak rather than a spike, so act at the warning rather than at exhaustion.
+**What to do.** Check whether topic names embed unbounded identifiers - the `topPublishers` attribute names the busiest topics at the crossing and `topicCount` carries the count that tripped it. The line fires ONCE per process: it is latched after the first crossing and never repeats, and the runtime publishes no continuous topic-cardinality metric, so neither this line nor the metrics will tell you whether cardinality later fell or kept climbing. The naming scheme is what settles that. Unbounded cardinality is a slow leak rather than a spike, so act at the warning rather than at exhaustion.
 
 ## ADAPTER-ERR-PRESSURE-RATE-LISTENER
 

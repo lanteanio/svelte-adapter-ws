@@ -1946,13 +1946,18 @@ export async function createTestServer(options = {}) {
 			const hasEntrySeqs = entrySeqs !== null;
 			for (let i = 0; i < count; i++) {
 				const data = datas[i];
-				// An explicit entry seq overrides the shared options and is
-				// stamped verbatim without advancing the counter - exactly as
-				// through publishWire and as production.
+				// A resolved entry seq overrides the shared options: an explicit
+				// value is stamped verbatim without advancing the counter, true
+				// draws this entry its own counter value, false leaves it
+				// seq-less - exactly as through publishWire and as production.
 				const resolvedEntry = hasEntrySeqs ? entrySeqs[i] : undefined;
 				const seq = resolvedEntry === undefined
 					? stampSeq(opts, topicSeqs, topic)
-					: resolvedEntry;
+					: resolvedEntry === false
+						? null
+						: resolvedEntry === true
+							? stampSeq({ seq: true }, topicSeqs, topic)
+							: resolvedEntry;
 				seqs[i] = seq == null ? 0 : seq;
 				envs[i] = envelope(topic, event, data, seq);
 				batchWireBytes += chargeableBytes(envs[i], recipients - (exDeduct === null ? 0 : exDeduct[i]));

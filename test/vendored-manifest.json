@@ -1677,5 +1677,43 @@
 	},
 	{
 		"file": "test/error-registry-ssr.test.js"
+	},
+	{
+		"file": "test/message-admission-lanes.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('established-message application lanes', () => {\n",
+				"ours": "describe('established-message application lanes', () => {\n"
+			},
+			{
+				"lead": "\t\tfile: new URL('../src/runtime/handler.js', import.meta.url),\n",
+				"ours": "\t\tfile: new URL('../src/runtime/handler/realtime.js', import.meta.url),\n"
+			}
+		]
+	},
+	{
+		"file": "test/waiting-renderer-build-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst handler = readFileSync(join(out, 'handler.js'), 'utf8');\n",
+				"ours": "\t\tconst handler = readFileSync(join(out, 'handler', 'realtime.js'), 'utf8');\n"
+			}
+		]
+	},
+	{
+		"file": "test/batch-sequence-mirror-parity.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
+				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
+			}
+		]
+	},
+	{
+		"file": "test/error-registry-claims.test.js"
 	}
 ]

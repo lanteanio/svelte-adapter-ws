@@ -1784,7 +1784,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 	if (isBinary && buf[0] === 0x03) {
 		const icaps = userData[WS_CAPS];
 		if (icaps !== undefined && icaps.has(WIRE_INGRESS_CAP)) {
-			await runAdmittedMessageWork(messageAdmission, facade, { data: buf, platform: userData[WS_PLATFORM] }, runIngressWork, rejectApplicationMessage);
+			await runAdmittedMessageWork(messageAdmission, facade, { data: buf, platform: userData[WS_PLATFORM] }, runIngressApplicationWork, rejectApplicationMessage);
 			return;
 		}
 	}
@@ -1805,12 +1805,20 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 	/** @type {any} */
 	let msg;
 	if (!isBinary && buf.byteLength < 8192 && buf[3] === 0x79) {
+		/** @type {any} */
+		let parsed;
 		try {
-			msg = JSON.parse(buf.toString());
-			if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) msg = undefined;
+			parsed = JSON.parse(buf.toString());
 		} catch {
-			msg = undefined;
+			parsed = undefined;
 		}
+		if (parsed === null || typeof parsed !== 'object') {
+			// Not a JSON object envelope (parse failed, or parsed to
+			// null / primitive / array). Forward raw bytes only.
+			await runAdmittedMessageHook(messageAdmission, wsModule.message, facade, { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), isBinary, msg, platform: userData[WS_PLATFORM] }, rejectApplicationMessage);
+			return;
+		}
+		msg = parsed;
 	}
 
 	// Control dispatch runs OUTSIDE the parse guard: a throw inside a control
@@ -1902,7 +1910,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				return;
 			}
 			if (msg.type === 'game') {
-				await runAdmittedMessageWork(messageAdmission, facade, { msg, platform: userData[WS_PLATFORM], data: raw }, runGameWork, rejectApplicationMessage);
+				await runAdmittedMessageWork(messageAdmission, facade, { msg, platform: userData[WS_PLATFORM], data: raw }, runGameApplicationWork, rejectApplicationMessage);
 				return;
 			}
 	}
@@ -1912,15 +1920,13 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 }
 
 /** @param {any} facade @param {any} context */
-function runIngressWork(facade, context) {
-	return dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform);
-}
-
+const runIngressApplicationWork = (facade, context) =>
+	dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform);
 /** @param {any} facade @param {any} context */
-function runGameWork(facade, context) {
+const runGameApplicationWork = (facade, context) => {
 	const msg = context.msg;
 	const gud = facade.getUserData();
-	const grantTopic = gud?.[WS_PUBLISH_GRANT];
+	const grantTopic = gud[WS_PUBLISH_GRANT];
 	// The game lane's room sequencer is worker-local, so a topology where
 	// sockets can land on more than one I/O worker denies the frame rather
 	// than forking a room's sequence across workers - the same rule
@@ -1935,7 +1941,7 @@ function runGameWork(facade, context) {
 		return;
 	}
 	context.platform.publishGame(facade, grantTopic, msg.event, msg.data, msg.id);
-}
+};
 
 /** @param {any} facade @param {string} topic @param {number | string | null} ref */
 function sendSubscribed(facade, topic, ref) {

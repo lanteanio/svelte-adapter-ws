@@ -149,33 +149,23 @@ describe('established-message application lanes', () => {
 	});
 });
 
-// One entry per surface that dispatches application messages. `declares` and
-// `gameEnd` name how each file spells its two named sinks: the production
-// realtime path uses module-level function declarations, the harness and the
-// dev plugin use const arrows one level in.
 const surfaces = [
 	{
 		file: new URL('../src/runtime/handler/realtime.js', import.meta.url),
-		ingressWork: 'runIngressWork',
-		gameWork: 'runGameWork',
-		declares: (name) => `function ${name}(`,
-		gameEnd: '\n}',
-		hookBoundaries: 1
+		ingressWork: 'runIngressApplicationWork',
+		gameWork: 'runGameApplicationWork',
+		hookBoundaries: 2
 	},
 	{
 		file: new URL('../src/testing.js', import.meta.url),
 		ingressWork: 'runIngressApplicationWorkT',
 		gameWork: 'runGameApplicationWorkT',
-		declares: (name) => `const ${name}`,
-		gameEnd: '\n\t};',
 		hookBoundaries: 1
 	},
 	{
 		file: new URL('../src/vite.js', import.meta.url),
 		ingressWork: 'runIngressApplicationWorkV',
 		gameWork: 'runGameApplicationWorkV',
-		declares: (name) => `const ${name}`,
-		gameEnd: '\n\t};',
 		hookBoundaries: 1
 	}
 ];
@@ -185,12 +175,12 @@ function occurrences(source, pattern) {
 }
 
 describe('application-message admission containment', () => {
-	it.each(surfaces)('enumerates every application dispatch sink in $file', ({ file, ingressWork, gameWork, declares, gameEnd, hookBoundaries }) => {
+	it.each(surfaces)('enumerates every application dispatch sink in $file', ({ file, ingressWork, gameWork, hookBoundaries }) => {
 		const source = readFileSync(file, 'utf8');
-		const ingressStart = source.indexOf(declares(ingressWork));
+		const ingressStart = source.indexOf(`const ${ingressWork}`);
 		const ingressDefinition = source.slice(ingressStart, source.indexOf(';', ingressStart) + 1);
-		const gameStart = source.indexOf(declares(gameWork));
-		const gameDefinition = source.slice(gameStart, source.indexOf(gameEnd, gameStart) + gameEnd.length);
+		const gameStart = source.indexOf(`const ${gameWork}`);
+		const gameDefinition = source.slice(gameStart, source.indexOf('\n\t};', gameStart) + 4);
 
 		// Sink inventory: binary ingress, typed game fan-out, and the generic app
 		// hook. Exactly one ingress/game sink per surface prevents a new bypass

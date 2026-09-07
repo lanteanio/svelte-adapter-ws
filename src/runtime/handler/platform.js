@@ -17,8 +17,7 @@ import {
 } from '../utils/ws-symbols.js';
 import {
 	MAX_COALESCED_KEYS_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION,
-	MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
-	TOPIC_SEQS_WARN_THRESHOLD
+	MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION
 } from '../utils/caps.js';
 import {
 	deniesUngrantedObserve, exceedsPendingSubscribeCap, exceedsSubscriptionCap
@@ -77,7 +76,6 @@ const ALLOW_NON_ASCII_TOPICS = Boolean(WS_OPTIONS && WS_OPTIONS.allowNonAsciiTop
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 
 let sendToAsyncWarned = false;
-let _warnedTopicSeqCardinality = false;
 
 /**
  * Whether the app ships its own subscribe authorization (a side-effect-only
@@ -372,15 +370,10 @@ function publish(topic, event, data, options) {
 		if (typeof seqOption === 'number' || typeof seqOption === 'bigint') recordSeen(maxSeenSeq, topic, seq, seqBound);
 		else recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 	}
-	if (topicSeqs.size === TOPIC_SEQS_WARN_THRESHOLD && !_warnedTopicSeqCardinality) {
-		_warnedTopicSeqCardinality = true;
-		console.warn(adapterConsoleLine(
-			ADAPTER_ERROR_IDS.PRESSURE_TOPIC_REGISTRY,
-			TOPIC_SEQS_WARN_THRESHOLD +
-			' topics. High-cardinality topic names (per-user, per-request) grow this registry ' +
-			'without bound; prefer bounded topic names or publish with { seq: false }.'
-		));
-	}
+	// `{ jitterMs }` de-herd window: stamp it on the frame so each client rolls its
+	// own delay before dispatching (spreads N receivers' follow-up actions across
+	// the window). The window is carried verbatim - NOT a server-rolled offset,
+	// which would defer every subscriber of this one frame identically.
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
 	const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, jitterMs);
 	fatal(envelope.length > 0, 'envelope.empty', null);
