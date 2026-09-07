@@ -1,3 +1,9 @@
+# Checkouts materialize LF on every platform. Every generator and gate in this
+# repository emits and compares LF, and a source pin that spans a line break
+# cannot match a CRLF working tree. The eol attribute overrides core.autocrlf,
+# so a clean clone behaves the same with or without that global setting.
+* text=auto eol=lf
+
 # Byte-identical vendored copy of the uws protocol schema: the parity test
 # hashes the working-tree file against the hash recorded from the uws commit,
 # so line-ending normalization on checkout would fail the gate on every fresh
@@ -9,3 +15,7 @@ protocol.schema.json -text
 # on bytes git invented.
 test-vectors/*.json -text
 test/dst-goldens/*.json -text
+
+# A PKCS#12 bundle is binary by nature; declaring it keeps check-source-bytes
+# from reading its DER bytes as control characters in a text file.
+*.pfx binary

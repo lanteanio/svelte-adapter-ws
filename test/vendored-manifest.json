@@ -1581,5 +1581,11 @@
 				"ours": "'adapter-ws-rollup-close-'"
 			}
 		]
+	},
+	{
+		"file": "scripts/check-source-bytes.js"
+	},
+	{
+		"file": "scripts/check-tracked-imports.js"
 	}
 ]
