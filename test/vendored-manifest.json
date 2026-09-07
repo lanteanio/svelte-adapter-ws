@@ -1715,5 +1715,18 @@
 	},
 	{
 		"file": "test/error-registry-claims.test.js"
+	},
+	{
+		"file": "test/shared-fanout.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "const { createTestServer } = await import('../src/testing.js');\n"
+			},
+			{
+				"lead": "describeUWS('shared binary fan-out via cohort topics', () => {\n",
+				"ours": "describe('shared binary fan-out via cohort topics', () => {\n"
+			}
+		]
 	}
 ]

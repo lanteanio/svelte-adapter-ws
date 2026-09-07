@@ -10,7 +10,7 @@
 import { WebSocketServer } from 'ws';
 import {
 	WS_ATTRIBUTION, WS_CAPS, WS_CONNECTION_PERMIT, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
-	WS_PUBLISH_GRANT, WS_SESSION_ID, WS_STATS, WS_SUBSCRIPTIONS,
+	WS_PUBLISH_GRANT, WS_SESSION_ID, WS_SHARED_COHORTS, WS_STATS, WS_SUBSCRIPTIONS,
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
 	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
 	tombstonePendingSubscribe, isPendingSubscribeCancelled,
@@ -69,9 +69,11 @@ import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterEr
 import { wsModule } from '../ws-handler-bridge.js';
 import {
 	capCounts, counters, decodeCache, divergenceDiagnostics, envelopePrefixCache, GAP_CONFIRM_MS,
-	lastPublishWarnAt, maxSeenSeq, originStreams, pressureSnapshot, staticCache, streamTracking,
+	lastPublishWarnAt, maxSeenSeq, originStreams, pressureSnapshot, sharedTopics, staticCache, streamTracking,
 	subscribeAuth, takeConfirmedGaps, topicPublishStats, wsConnections, wsWrappers
 } from './state.js';
+import { joinSharedCohort, leaveSharedCohort } from './cohort.js';
+import { releaseSharedWireId } from './shared-wire-id.js';
 import { signalRelayGaps } from './platform.js';
 import { seqBound } from './seq-bound.js';
 import { computeStateHash, partitionActiveTopics } from '../invariants.js';
@@ -81,7 +83,7 @@ import { normalizePressureThresholds, startPressureSampler } from './pressure.js
 import { configureEgress } from './egress-budget.js';
 import { leaseGrantSize } from '../wire.js';
 import { recordBackpressureDrop } from '../utils/backpressure.js';
-import { accountClosedLogicalSubscriptions, addLogicalSubscription, isSettledSubscriptionRegistry, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
+import { accountClosedLogicalSubscriptions, addLogicalSubscription, isSettledSubscriptionRegistry, removeLogicalSubscription, setCohortHooks, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
 import { registerGameIngress, gameLaneClusterSafe } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
@@ -190,6 +192,17 @@ function adjustTotalSubscriptions(delta) {
 		counters.totalSubscriptions = next;
 	}
 }
+// Make the low-level membership primitive (trackedSubscribe / trackedUnsubscribe,
+// used by plugins to establish server-side membership) cohort-aware: a tracked
+// subscribe to an already-shared topic joins its cohort + announces the server-wide
+// id; a tracked unsubscribe leaves the cohort + releases the wire-id ref. Without
+// this, a plugin that server-side-subscribes a socket to a shared topic AFTER it was
+// promoted would be in no cohort and miss every cohort-split publish.
+setCohortHooks(
+	(ws, ud, topic) => { if (sharedTopics.has(topic)) joinSharedCohort(ws, ud, topic, sharedTopics.get(topic)); },
+	(ws, ud, topic) => { if (sharedTopics.has(topic)) leaveSharedCohort(ws, ud, topic); }
+);
+
 if (setSubscriptionAccountingHook(adjustTotalSubscriptions)) {
 	emitOperationalEvent({
 		source: 'svelte-adapter-ws',
@@ -1835,6 +1848,10 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				{ const subsSet = userData[WS_SUBSCRIPTIONS]; if (subsSet instanceof Set) removeLogicalSubscription(subsSet, msg.topic); }
 				try { facade.unsubscribe(msg.topic); } catch { /* closed */ }
 				if (userData[WS_PUBLISH_GRANT] === msg.topic) userData[WS_PUBLISH_GRANT] = undefined;
+				// Drop the cohort memberships + release the shared wire-id ref for a
+				// shared topic, so an unsubscribed client stops receiving its
+				// cohort-split publishes. No-op for an ordinary topic.
+				if (sharedTopics.has(msg.topic)) leaveSharedCohort(facade, userData, msg.topic);
 				releaseDerivedSubscriptions(facade, msg.topic);
 				wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
 				return;
@@ -2108,6 +2125,10 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			} catch { return 2; }
 		});
 	}
+	// A topic already promoted to shared fan-out cohorts this new joiner
+	// into the right cohort (announcing the server-wide id now) so the
+	// next cohort-split publish reaches it. No-op for an ordinary topic.
+	if (sharedTopics.has(msg.topic)) joinSharedCohort(facade, userData, msg.topic, sharedTopics.get(msg.topic));
 	sendSubscribed(facade, msg.topic, ref);
 }
 
@@ -2311,6 +2332,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 				} catch { return 2; }
 				});
 		}
+		if (sharedTopics.has(topic)) joinSharedCohort(facade, userData, topic, sharedTopics.get(topic));
 		sendSubscribed(facade, topic, ref);
 	}
 	if (batchCapture) discardResumeCapture(batchCapture);
@@ -2444,6 +2466,11 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	capCounts.adjust(userData[WS_CAPS], null);
 	userData[WS_CAPS] = undefined;
 	detachWireStates(facade, userData);
+	// Release each shared-topic wire-id reference this connection held so
+	// the server-wide id table reclaims a topic on its last cohort leave.
+	// The topic registry drops the cohort subscriptions themselves below.
+	const sharedCohorts = userData[WS_SHARED_COHORTS];
+	if (sharedCohorts) { for (const t of sharedCohorts) releaseSharedWireId(t); }
 	unregisterSocket(rawWs);
 	wsWrappers.delete(rawWs);
 }

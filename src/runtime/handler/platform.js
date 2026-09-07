@@ -38,7 +38,9 @@ import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
-import { capCounts, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { capCounts, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, sharedTopics, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { cohortTopics, joinSharedCohort, leaveSharedCohort } from './cohort.js';
+import { getSharedWireId, sharedWireIdRefs } from './shared-wire-id.js';
 import { seqBound } from './seq-bound.js';
 import { egressGate, resolvePublishTenant, admitPublishEgress, admitTopicEgress, admitTenantEgress, chargePublishEgress, chargeDirectEgress, excludedRecipient, binaryFrameChargeBytes, envelopeWireBytes, markAdmitted, admittedByBatch } from './egress-budget.js';
 import { ensureWireId, ensureWireState, wireStatePoisoned, poisonWireState } from './wire-state.js';
@@ -151,6 +153,34 @@ async function runUserSubscribeGate(facade, topic) {
 		});
 		return 'INTERNAL_ERROR';
 	}
+}
+
+/**
+ * Deliver one prepared frame to every open member of a cohort topic. The
+ * cohort walk sends the same bytes to every member: the shared id makes
+ * the binary frame identical, and the envelope was identical already.
+ * @param {string} cohort
+ * @param {string | Uint8Array} frame
+ * @param {boolean} binary
+ * @param {boolean} compress
+ * @returns {boolean} whether anyone received it
+ */
+function fanOutCohort(cohort, frame, binary, compress) {
+	const subscribers = subscribersOf(cohort);
+	if (!subscribers) return false;
+	let sent = false;
+	for (const rawWs of subscribers) {
+		if (rawWs.readyState !== 1) continue;
+		const facade = wsWrappers.get(rawWs);
+		if (!facade) continue;
+		try {
+			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) sent = true;
+			bumpOut(/** @type {any} */ (facade).getUserData(), frame);
+		} catch {
+			counters.closedWsAborts++;
+		}
+	}
+	return sent;
 }
 
 /**
@@ -871,6 +901,59 @@ export const platform = {
 
 		if (!wire.state) {
 			const payload = encodeStatelessWirePayload(wire, event, data);
+			// Shared binary fan-out: a stateless codec marked `shared: true` fans
+			// out by cohort - the byte-identical 0x03 frame to every member of
+			// `topic\0bin`, the JSON envelope to every member of `topic\0json`.
+			// Both cohorts are walks here (there is no native publish to hand
+			// them to), so what the branch buys is the cohort bookkeeping, the
+			// server-wide id announced at cohort join, and the split charge.
+			// Eligible only with no sender exclusion and a payload the codec
+			// accepted; an excluding or declined shared publish takes the
+			// per-connection walk below. The frame is identical for every
+			// binary subscriber because the topic-id is the shared id.
+			if (wire.shared && excludeWs === null && payload != null) {
+				// Lazy migration: the FIRST shared publish to a topic cohorts its
+				// current subscribers (a one-time walk, paid once per topic), then
+				// marks the topic shared so a later joiner is cohorted at
+				// subscribe time instead.
+				if (!sharedTopics.has(topic)) {
+					for (const ws of wsConnections) {
+						let ud;
+						try { ud = /** @type {any} */ (ws).getUserData(); } catch { continue; }
+						const subs = ud[WS_SUBSCRIPTIONS];
+						if (!subs || !subs.has(topic)) continue;
+						joinSharedCohort(ws, ud, topic, wire.capability);
+					}
+					sharedTopics.set(topic, wire.capability);
+				}
+				const { bin, json } = cohortTopics(topic);
+				// The one egress charge for this logical publish, split by
+				// cohort: the binary cohort is charged its 0x03 frame, everyone
+				// else the envelope. The binary-cohort size is the shared wire-id
+				// refcount (one reference per cohorted socket), so the split is
+				// exact without a walk.
+				if (!isRelay) {
+					const binCount = Math.min(sharedWireIdRefs(topic), recipients);
+					chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length,
+						binaryFrameChargeBytes(payload.length, seq ?? 0) * binCount + chargeableBytes(envelope, recipients - binCount));
+				}
+				// The binary cohort exists only if a capable client joined it (its
+				// announce succeeded); otherwise this shared topic currently has
+				// only JSON subscribers and skips the binary fan-out entirely.
+				const id = getSharedWireId(topic);
+				if (id !== undefined) {
+					const binaryResult = fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
+					counters.publishOutcomeHook?.(binaryResult);
+				}
+				const jsonResult = fanOutCohort(json, envelope, false, compress);
+				counters.publishOutcomeHook?.(jsonResult);
+				// Cross-worker subscribers: each receiving worker re-derives the
+				// shared codec from its registry (relayPublishWire) and runs ITS
+				// OWN cohort split with its own server-wide id, so the
+				// single-instance path needs no cross-worker id sharing.
+				if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
+				return true;
+			}
 			// The one egress charge for this logical publish. With a capable
 			// connection live and a payload the codec accepted, the walk's
 			// encoded form is the binary frame and the charge reflects it for
@@ -1630,6 +1713,8 @@ export const platform = {
 			return null;
 		}
 		addLogicalSubscription(subs, topic);
+		// Programmatic join of an already-shared topic cohorts the socket too.
+		if (sharedTopics.has(topic)) joinSharedCohort(facade, /** @type {any} */ (facade).getUserData(), topic, sharedTopics.get(topic));
 		return null;
 	},
 
@@ -1712,6 +1797,7 @@ export const platform = {
 			return false;
 		}
 		removeLogicalSubscription(subs, topic);
+		if (sharedTopics.has(topic)) leaveSharedCohort(facade, /** @type {any} */ (facade).getUserData(), topic);
 		wsModule.unsubscribe?.(facade, topic, { platform: ud[WS_PLATFORM] });
 		return true;
 	},

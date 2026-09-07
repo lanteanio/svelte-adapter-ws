@@ -835,6 +835,19 @@ import { createCapCounts } from '../wire.js';
 export const capCounts = createCapCounts();
 
 /**
+ * Topics that have been published through a `shared: true` wire codec, mapped to the
+ * codec's capability. A topic enters on its FIRST shared publish (which also
+ * migrates the topic's current subscribers into cohorts); the subscribe path reads
+ * this so a LATER joiner of an already-shared topic is dual-subscribed into the right
+ * cohort at subscribe time, and the close path reads it to release each shared
+ * topic's wire-id reference. Per worker (one process/worker per module instance),
+ * which is all the single-instance fan-out needs: a client only ever talks to its
+ * home worker, so each worker's cohort topics + wire-ids are self-consistent.
+ * @type {Map<string, string>}
+ */
+export const sharedTopics = new Map();
+
+/**
  * The live pressure snapshot: ONE stable object mutated in place by the 1 Hz
  * sampler and returned by reference from `platform.pressure`. `sampledAt`
  * null is the only discriminator between a real reading and this placeholder.
