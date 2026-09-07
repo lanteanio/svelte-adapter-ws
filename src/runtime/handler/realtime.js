@@ -1598,6 +1598,13 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 			console.error('[svelte-adapter-ws] connection error:', err);
 		}
 	});
+	// Claim the adapter's slots as own properties before anything writes
+	// one. userData is whatever the app's upgrade hook returned, and a plain
+	// assignment onto it is a [[Set]] that an accessor on the key can swallow
+	// whole - leaving the slot unwritten while every falsy guard downstream
+	// keeps re-running its initialization. Declared once here, the later
+	// assignments find an own property and never look at the chain again.
+	declareConnectionSlots(userData);
 	// Promote the handshake carrier to the symbol slot close reads. A carrier
 	// that cannot be found is unrecoverable: the permit would be held with
 	// nothing left to hand it back. fatal() ends the worker; the return keeps
@@ -1608,13 +1615,6 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		if (!permitRestored) return;
 	}
 	registerSocket(rawWs);
-	// Claim the adapter's slots as own properties before anything writes
-	// one. userData is whatever the app's upgrade hook returned, and a plain
-	// assignment onto it is a [[Set]] that an accessor on the key can swallow
-	// whole - leaving the slot unwritten while every falsy guard downstream
-	// keeps re-running its initialization. Declared once here, the later
-	// assignments find an own property and never look at the chain again.
-	declareConnectionSlots(userData);
 	userData[WS_SUBSCRIPTIONS] = new Set();
 
 	// A platform slot already set on a fresh open is unrecoverable structural
