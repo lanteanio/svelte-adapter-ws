@@ -480,7 +480,9 @@ function cohortHooks() {
 	let hooks = /** @type {any} */ (globalThis)[COHORT_HOOKS];
 	if (!hooks) {
 		hooks = { join: null, leave: null };
-		/** @type {any} */ (globalThis)[COHORT_HOOKS] = hooks;
+		// Defined, not assigned: an accessor on the key would swallow the
+		// publication and every caller would install into a discarded object.
+		defineSlot(globalThis, COHORT_HOOKS, hooks);
 	}
 	return hooks;
 }
@@ -560,7 +562,10 @@ function settledRegistries() {
 	let settled = /** @type {any} */ (globalThis)[SETTLED_REGISTRIES];
 	if (!settled) {
 		settled = new WeakSet();
-		/** @type {any} */ (globalThis)[SETTLED_REGISTRIES] = settled;
+		// Defined, not assigned: an accessor here would hand every caller a fresh
+		// WeakSet, so no registry would ever read as settled and the close path
+		// plus a late unsubscribe would charge the same membership twice.
+		defineSlot(globalThis, SETTLED_REGISTRIES, settled);
 	}
 	return settled;
 }
