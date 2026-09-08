@@ -775,7 +775,7 @@ export const platform = {
 		const results = [];
 		for (let i = 0; i < messages.length; i++) {
 			const { topic, event, data } = messages[i];
-			results.push(publish(topic, event, data, /** @type {any} */ (snapshots[i])));
+			results.push(publish(topic, event, data, snapshots[i]));
 		}
 		return results;
 	},

@@ -19,7 +19,7 @@ export const FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK']);
 
 // RFC 9110: a 405 response MUST generate an Allow header. These are the
 // methods ALLOWED_METHODS carries, which is what this adapter can deliver.
-const ALLOW_HEADER = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
+export const ALLOW_HEADER = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
 
 // Every one of these is length-framed. uWS derives a content-length from the
 // body handed to `res.end()`, so leaving it off answers chunked where the

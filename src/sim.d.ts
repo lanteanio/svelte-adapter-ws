@@ -67,6 +67,14 @@ export interface SimClusterApi {
 	/** Force a worker into a re-boot whose `init` hook wedges - it never reaches ready,
 	 *  so the boot-deadline watchdog (not the steady-state timeout) escalates it. */
 	initWedgeWorker(id: number): void;
+	/** Force a worker into a re-boot that reports ready and never reports its relay
+	 *  reader live. It keeps acking heartbeats, so neither the steady-state timeout nor
+	 *  the boot deadline sees it; the attach regime escalates it once the ready-to-attach
+	 *  gap outlives the steady timeout, and the unattached ready edge does not reset the
+	 *  restart budget. What is modelled is the detection: the simulated bus still hands
+	 *  the worker relay frames while it is in this state. Pass `{ recover: false }` to
+	 *  model a worker whose every respawn fails to attach, which exhausts the budget. */
+	attachFailWorker(id: number, opts?: { recover?: boolean }): void;
 	advance(rounds?: number): Promise<void>;
 	/** Advance the virtual clock by `ms`, firing time-driven supervisor behaviour. */
 	advanceTime(ms: number): Promise<void>;
@@ -146,8 +154,8 @@ export interface SimResult {
 	invariantViolations: Array<{ category: string; context: any }>;
 	fatals: SimFatal[];
 	schedulerUncaught: string[];
-	/** Multi-worker runs extend metrics with workers/relay/restarts/flaps/wedges/workersLive/listenPaused. */
-	metrics: { clients: number; framesDelivered: number; workers?: number; relay?: { forwarded: number; delivered: number; dropped: number }; restarts?: number; flaps?: number; wedges?: number; workersLive?: number; listenPaused?: boolean };
+	/** Multi-worker runs extend metrics with workers/relay/restarts/flaps/wedges/initWedges/attachFailures/workersLive/listenPaused. */
+	metrics: { clients: number; framesDelivered: number; workers?: number; relay?: { forwarded: number; delivered: number; dropped: number }; restarts?: number; flaps?: number; wedges?: number; initWedges?: number; attachFailures?: number; workersLive?: number; listenPaused?: boolean };
 	clientFrames: any[][];
 	/** Per-worker client frames (multi-worker only), sorted by worker id. */
 	clusterFrames?: Array<{ worker: number; clients: any[][] }>;

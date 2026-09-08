@@ -326,7 +326,7 @@ describe('cluster sequence authority policy', () => {
 		expectStatement(loopBatch, 'assertStampableSeq(snap?.seq);', 'batch asks the value question itself');
 		expect(loopBatch.indexOf('assertStampableSeq('), 'batch must vet every value before the first publish')
 			.toBeLessThan(loopBatch.indexOf('results.push(publish('));
-		expectStatement(loopBatch, 'results.push(publish(topic, event, data, /** @type {any} */ (snapshots[i])));', 'batch hands publish the snapshot it judged');
+		expectStatement(loopBatch, 'results.push(publish(topic, event, data, snapshots[i]));', 'batch hands publish the snapshot it judged');
 		// publishBatched captures per-message seq/relay/jitter into arrays in
 		// its atomic pre-pass; the stamp and the relay filter both consume the
 		// captured values.

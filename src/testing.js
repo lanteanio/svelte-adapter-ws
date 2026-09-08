@@ -1,7 +1,7 @@
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders } from './runtime/utils/request-headers.js';
-import { FORBIDDEN_METHODS, send405 } from './runtime/handler/http-helpers.js';
+import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
@@ -174,6 +174,9 @@ function stripMappedV4(ip) {
 
 function createNodeApp() {
 	const httpServer = createHttpServer();
+	// A method node's parser refuses is answered like the ones it accepts,
+	// as on the production server.
+	refuseUnparsedForbiddenMethods(httpServer);
 	/** @type {any} */
 	let behavior = {};
 	let wsPathN = '/ws';
@@ -4134,7 +4137,17 @@ export async function createTestServer(options = {}) {
 			// Request too, so a method the fetch specification forbids would throw
 			// out of it, and the answer the RFC requires is 405 with Allow, not
 			// the 400 the construction guard below would give.
-			if (FORBIDDEN_METHODS.has(method)) return send405(res);
+			if (FORBIDDEN_METHODS.has(method)) {
+				// The same 405 the production helper writes, in the response
+				// shape this server mirrors.
+				res.cork(() => {
+					res.writeStatus('405 Method Not Allowed');
+					res.writeHeader('allow', ALLOW_HEADER);
+					res.writeHeader('content-type', 'text/plain');
+					res.end('Method Not Allowed');
+				});
+				return;
+			}
 			// Repeated header lines are merged per header class, mirroring the
 			// production admin route. An ambiguous framing / identity header is
 			// refused below, as soon as the error writer exists.

@@ -1225,13 +1225,13 @@ if (is_primary) {
 					onChange: onCertChange,
 					// A watch that dies AFTER starting arrives as an event, not a
 					// throw, so the catch below never sees it. Reported under its
-					// own id because the causes and the operator's next move
-					// differ; sticky, because nothing re-arms it. A replaced
-					// directory is read once more after this report; the watcher
-					// owns that timer and `stop()` clears it.
+					// own id because the causes and the operator's next move differ
+					// from a watch that never started; sticky, because nothing
+					// re-arms it. The reference is KEPT: a replaced directory gets
+					// one final debounced read after this report, and only `stop()`
+					// clears that timer, so a shutdown inside the debounce window
+					// must still be able to reach it.
 					onError: (err) => {
-						// The dead watcher leaves the set; nothing re-arms it.
-						primaryCertWatchers = primaryCertWatchers.filter((w) => w !== watcher);
 						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH_LOST), /** @type {any} */ (err)?.message || err);
 						primaryTlsWatchDegraded('the primary certificate directory watch stopped, so no worker will be told to reload');
 					}

@@ -826,12 +826,8 @@
 		"file": "test/cluster-relay-attach-gate.test.js",
 		"adaptations": [
 			{
-				"lead": "const INDEX_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8');\n",
-				"ours": "const INDEX_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8');\nconst WATCHDOG_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/worker-watchdog.js', import.meta.url)), 'utf8');\n"
-			},
-			{
-				"lead": "\t\texpect(INDEX_SOURCE).toMatch(/msg\\.type === 'relay-attached'[\\s\\S]{0,400}?meta\\.relayAttached = true/);\n",
-				"ours": "\t\t// The flip itself lives in the shared stamping function, and the primary\n\t\t// routes every inbound worker message through it; the sim drives the\n\t\t// same function, which is what makes its attach regime the primary's.\n\t\texpect(WATCHDOG_SOURCE).toMatch(/msg\\.type === 'relay-attached'[\\s\\S]{0,200}?meta\\.relayAttached = true/);\n\t\texpect(INDEX_SOURCE).toContain(\"recordWorkerMessage(meta, msg, monotonicNow(), cluster_mode) : 'alive';\");\n\t\texpect(INDEX_SOURCE, 'the flag is flipped in exactly one place, and that place is not the primary').not.toMatch(/meta\\.relayAttached = true/);\n"
+				"lead": "\t\t\tINDEX_SOURCE.indexOf(\"msg.type === 'descriptor' && cluster_mode === 'acceptor'\"),\n",
+				"ours": "\t\t\t// No acceptor mode on this runtime: the ready branch is the one transition.\n\t\t\tINDEX_SOURCE.indexOf(\"msg.type === 'ready'\"),\n"
 			}
 		]
 	},
@@ -1482,7 +1478,13 @@
 		]
 	},
 	{
-		"file": "test/control-egress.test.js"
+		"file": "test/control-egress.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\texpectStatement(read('../src/runtime/handler.js'),\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);', 'handler.js');\n",
+				"ours": "\t\texpectStatement(read('../src/runtime/handler/realtime.js'),\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);', 'handler/realtime.js');\n"
+			}
+		]
 	},
 	{
 		"file": "test/connection-slot-declaration.test.js"
@@ -1516,7 +1518,13 @@
 		]
 	},
 	{
-		"file": "test/error-registry-tls.test.js"
+		"file": "test/error-registry-tls.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\texpect(source).toMatch(/if \\(primaryCertWatcher\\) \\{ primaryCertWatcher\\.stop\\(\\);/);\n",
+				"ours": "\t\t\t// One watcher per certificate here, so the shutdown stops each of them.\n\t\t\texpect(source).toMatch(/for \\(const watcher of primaryCertWatchers\\) watcher\\.stop\\(\\);/);\n\t\t\texpect(source).not.toMatch(/primaryCertWatchers = primaryCertWatchers\\.filter/);\n"
+			}
+		]
 	},
 	{
 		"file": "test/fixture/src/routes/__realtime/[...rest]/+server.js"
@@ -1564,14 +1572,6 @@
 			{
 				"lead": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/**\\n\\t * Unsubscribe');",
 				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\tget assertions()');"
-			},
-			{
-				"lead": "import { WS_PUBLISH_GRANT, WS_STATS } from '../src/runtime/utils.js';\n",
-				"ours": "import { WS_PUBLISH_GRANT } from '../src/runtime/utils.js';\n"
-			},
-			{
-				"lead": "\t\tconst ud = {\n\t\t\t[WS_PUBLISH_GRANT]: 'arena:1',\n\t\t\t[WS_STATS]: { messagesOut: 0, bytesOut: 0 }\n\t\t};\n\t\tconst ws = {\n\t\t\tgetUserData: () => ud,\n\t\t\tsend: (frame) => { sent.push(JSON.parse(frame)); return true; }\n\t\t};\n\n\t\trouteGameFrame(ws, undefined, { event: 'move', data: { x: 1 }, id: 9 }, { publishGame }, 1, { ioWorkers: 2 });\n\n\t\texpect(publishGame).not.toHaveBeenCalled();\n\t\texpect(sent).toEqual([{ type: 'game-denied', reason: 'FORBIDDEN', id: 9 }]);\n\t\texpect(ud[WS_STATS].messagesOut).toBe(1);\n\t\texpect(ud[WS_STATS].bytesOut).toBeGreaterThan(0);\n",
-				"ours": "\t\tconst ud = { [WS_PUBLISH_GRANT]: 'arena:1' };\n\t\tconst ws = {\n\t\t\tgetUserData: () => ud,\n\t\t\t// A denial that reached the socket directly would be an uncharged\n\t\t\t// control frame; the route must hand it to the surface's sender.\n\t\t\tsend: () => { throw new Error('the denial bypassed the control sender'); }\n\t\t};\n\t\tconst sendControl = (target, frame) => { expect(target).toBe(ws); sent.push(JSON.parse(frame)); };\n\n\t\trouteGameFrame(ws, undefined, { event: 'move', data: { x: 1 }, id: 9 }, { publishGame }, 1, sendControl, { ioWorkers: 2 });\n\n\t\texpect(publishGame).not.toHaveBeenCalled();\n\t\texpect(sent).toEqual([{ type: 'game-denied', reason: 'FORBIDDEN', id: 9 }]);\n"
 			}
 		]
 	},
