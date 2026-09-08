@@ -1938,7 +1938,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 
 /** @param {any} facade @param {any} context */
 const runIngressApplicationWork = (facade, context) =>
-	dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform);
+	dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);
 /** @param {any} facade @param {any} context */
 const runGameApplicationWork = (facade, context) => {
 	const msg = context.msg;

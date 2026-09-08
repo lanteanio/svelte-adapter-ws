@@ -190,8 +190,18 @@ describe('game-twin cluster gate', () => {
 		const ud = { [WS_PUBLISH_GRANT]: grant, [WS_STATS]: stats };
 		/** @type {string[]} */
 		const sent = [];
-		const ws = { getUserData: () => ud, send: (/** @type {any} */ value) => { sent.push(value); return SENT; } };
-		return { ws, ud, sent, stats };
+		// A denial that reached the socket directly would be an uncharged
+		// control frame; the route must hand it to the surface's sender, which
+		// here records it and counts it out the way the budgeted sender does.
+		const ws = { getUserData: () => ud, send: () => { throw new Error('the denial bypassed the control sender'); } };
+		const sendControl = (/** @type {any} */ target, /** @type {string} */ frame) => {
+			if (target !== ws) throw new Error('the denial was sent to another socket');
+			sent.push(frame);
+			stats.messagesOut++;
+			stats.bytesOut += frame.length;
+			return SENT;
+		};
+		return { ws, ud, sent, stats, sendControl };
 	}
 
 	it('refuses a granted frame FORBIDDEN when the lane is not cluster-safe', () => {
@@ -201,13 +211,13 @@ describe('game-twin cluster gate', () => {
 		// A compute worker owns no sockets: relaying from it would fork the
 		// room sequencer, so the frame is refused even though grant and
 		// event are valid.
-		routeGameFrame(conn.ws, undefined, { event: 'move', data: { x: 1 }, id: 7 }, platform, 1, { role: 'compute' });
+		routeGameFrame(conn.ws, undefined, { event: 'move', data: { x: 1 }, id: 7 }, platform, 1, conn.sendControl, { role: 'compute' });
 		expect(published).toHaveLength(0);
 		expect(conn.sent).toEqual(['{"type":"game-denied","reason":"FORBIDDEN","id":7}']);
 		expect(conn.stats.messagesOut).toBe(1);
 
 		// Without an echoed client id the denial carries none.
-		routeGameFrame(conn.ws, undefined, { event: 'move', data: {}, id: undefined }, platform, 2, { ioWorkers: 2 });
+		routeGameFrame(conn.ws, undefined, { event: 'move', data: {}, id: undefined }, platform, 2, conn.sendControl, { ioWorkers: 2 });
 		expect(conn.sent[1]).toBe('{"type":"game-denied","reason":"FORBIDDEN"}');
 		expect(published).toHaveLength(0);
 	});
@@ -216,7 +226,7 @@ describe('game-twin cluster gate', () => {
 		const conn = makeGameConn('arena');
 		const published = [];
 		const platform = { publishGame: (...args) => { published.push(args); } };
-		routeGameFrame(conn.ws, undefined, { event: 'move', data: { x: 1 }, id: 7 }, platform, 1, { ioWorkers: 1, role: 'io' });
+		routeGameFrame(conn.ws, undefined, { event: 'move', data: { x: 1 }, id: 7 }, platform, 1, conn.sendControl, { ioWorkers: 1, role: 'io' });
 		expect(conn.sent).toHaveLength(0);
 		expect(published).toEqual([[conn.ws, 'arena', 'move', { x: 1 }, 7]]);
 	});
@@ -225,11 +235,11 @@ describe('game-twin cluster gate', () => {
 		const conn = makeGameConn('arena');
 		const platform = { publishGame: () => {} };
 		// Safe topology, valid grant, non-string event: the frame is bad.
-		routeGameFrame(conn.ws, undefined, { event: 42, data: null, id: 1 }, platform, 1, { ioWorkers: 1, role: 'io' });
+		routeGameFrame(conn.ws, undefined, { event: 42, data: null, id: 1 }, platform, 1, conn.sendControl, { ioWorkers: 1, role: 'io' });
 		expect(conn.sent[0]).toBe('{"type":"game-denied","reason":"INVALID","id":1}');
 		// Unsafe topology masks everything as FORBIDDEN: there is no valid
 		// grant on a worker that must not relay.
-		routeGameFrame(conn.ws, undefined, { event: 42, data: null, id: 2 }, platform, 1, { role: 'compute' });
+		routeGameFrame(conn.ws, undefined, { event: 42, data: null, id: 2 }, platform, 1, conn.sendControl, { role: 'compute' });
 		expect(conn.sent[1]).toBe('{"type":"game-denied","reason":"FORBIDDEN","id":2}');
 	});
 
