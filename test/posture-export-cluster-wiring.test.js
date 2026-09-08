@@ -128,7 +128,10 @@ describe('the primary owns the socket and serves the deployment', () => {
 	it('takes a worker report, and pushes immediately only on a transition', () => {
 		const branch = block(indexSource, "} else if (msg.type === 'posture') {", "} else if (msg.type === 'publish') {");
 		expect(branch).toContain('bindPostureExport(msg.path);');
-		expect(branch).toContain('if (postureAggregate.note(msg.threadId, msg.line) && postureExporter !== null) {');
+		// Keyed on the spawn-time id the exit handler retires with, never on a
+		// worker-supplied one, and a report from an untracked worker is dropped.
+		expect(branch).toContain('if (meta && postureAggregate.note(meta.threadId, msg.line) && postureExporter !== null) {');
+		expect(branch).not.toContain('postureAggregate.note(msg.threadId');
 		expect(branch).toContain('postureExporter.broadcast();');
 		// The bind has to happen before the note, or the very first report
 		// arrives at an aggregate no socket is serving and is only seen a

@@ -782,14 +782,25 @@ if (is_primary) {
 				// `relayAttached` where the slot is created. Idempotent by
 				// construction: a worker posts this once, and a respawn arrives
 				// on a fresh slot whose flag starts false again.
-				if (meta) meta.relayAttached = true;
+				if (meta) {
+					meta.relayAttached = true;
+					// Only now is the worker UP as far as the restart budget is
+					// concerned. Stamping the supervisor at `ready` instead would
+					// let a worker the attach regime kills read as stably up - it
+					// is killed only after the steady window, which is also the
+					// stable window - so its every exit would reset the budget and
+					// a deterministic attach failure would flap forever, one
+					// restart per window, never reaching exhaustion.
+					if (meta.slot) restartSupervisor.noteReady(meta.slot);
+				}
 				return;
 			}
 			if (msg.type === 'ready') {
 				// An io worker reports 'ready' once it is listening; a compute
 				// worker once its init hook has resolved. Both mark the worker
-				// confirmed-alive and stamp its uptime clock; the crash-restart
-				// budget resets on a later exit only if it stayed up.
+				// confirmed-alive; the restart budget's uptime clock is stamped
+				// on `relay-attached` (see above), so a worker the attach regime
+				// kills is charged as a fast flapper rather than a stable one.
 				if (meta) { meta.ready = true; meta.readyAt = monotonicNow(); }
 				if (msg.role === 'compute') console.log(`[svelte-adapter-ws] Compute worker ${worker.threadId} ready`);
 				else {
@@ -797,7 +808,6 @@ if (is_primary) {
 					// First listening worker = the service accepts traffic.
 					sdReadyOnce();
 				}
-				if (meta?.slot) restartSupervisor.noteReady(meta.slot);
 				replayDivergenceDiagnostics();
 			} else if (msg.type === 'heartbeat-ack') {
 				// Liveness only; the clock already advanced above.
@@ -809,7 +819,10 @@ if (is_primary) {
 				// A transition earns an immediate push: a defense daemon
 				// reacting to the deployment entering siege must not wait out
 				// the rest of the cadence window.
-				if (postureAggregate.note(msg.threadId, msg.line) && postureExporter !== null) {
+				// Keyed on the spawn-time thread id the exit handler retires with,
+				// never on a worker-supplied one, so an entry cannot outlive the
+				// worker that wrote it.
+				if (meta && postureAggregate.note(meta.threadId, msg.line) && postureExporter !== null) {
 					postureExporter.broadcast();
 				}
 			} else if (msg.type === 'publish') {
