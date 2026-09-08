@@ -50,6 +50,18 @@ function genCert(dir, name, cn, san) {
 	return { key, crt };
 }
 
+/** A legacy single-name certificate: subject CN only, no subjectAltName.
+ * @param {string} dir @param {string} name @param {string} cn */
+function genCertCnOnly(dir, name, cn) {
+	const key = path.join(dir, name + '.key');
+	const crt = path.join(dir, name + '.crt');
+	execFileSync(/** @type {string} */ (openssl), [
+		'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '3650', '-nodes',
+		'-keyout', key, '-out', crt, '-subj', '/CN=' + cn
+	], { stdio: 'ignore' });
+	return { key, crt };
+}
+
 /** @type {Array<() => void>} */
 const cleanups = [];
 afterEach(async () => {
@@ -177,6 +189,23 @@ describe('native TLS', () => {
 		});
 		const sni = await tlsGet(rt.port, '/healthz', 'sni.example');
 		expect(sni.peerCert.subject.CN).toBe('sni.example');
+		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
+		expect(fallback.peerCert.subject.CN).toBe('localhost');
+	});
+
+	it('selects an extra certificate that carries only a subject CN, under that name', async () => {
+		// The one host discovery the family has: SAN DNS names, then the subject
+		// CN for a legacy single-name certificate. Boot and reload discover the
+		// same names, so a CN-only extra pair is served under its CN rather
+		// than refused as one with no name.
+		const cnOnly = genCertCnOnly(fixtures, 'cnonly', 'legacy.example');
+		const rt = await bootTls('SAW_TCN_', {
+			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${cnOnly.crt}`,
+			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${cnOnly.key}`,
+			SSL_WATCH: '0'
+		});
+		const legacy = await tlsGet(rt.port, '/healthz', 'legacy.example');
+		expect(legacy.peerCert.subject.CN).toBe('legacy.example');
 		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
 		expect(fallback.peerCert.subject.CN).toBe('localhost');
 	});

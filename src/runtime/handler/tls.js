@@ -16,7 +16,7 @@ import {
 	ssl_reload_debounce_ms, ssl_sni_hosts, ssl_ocsp_file
 } from './config.js';
 import { setTimer, clearTimer, monotonicNow } from '../runtime.js';
-import { applyServerNames } from '../utils/tls-reload.js';
+import { applyServerNames, parseSniHosts } from '../utils/tls-reload.js';
 import {
 	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
 	recordBootCertExpiry, stopTlsReload, tlsWatchDegraded
@@ -61,23 +61,6 @@ function certPairs() {
 		);
 	}
 	return certs.map((cert, i) => ({ cert, key: keys[i] }));
-}
-
-/**
- * DNS names a certificate serves, from its subjectAltName (DNS entries only).
- * @param {Buffer} certPem
- * @returns {string[]}
- */
-function certHosts(certPem) {
-	// A certificate that does not parse throws here rather than reading as one
-	// with no names: at boot that is the refusal it deserves, and on a reload a
-	// half-written file is then reported as the torn read it is instead of as a
-	// certificate missing its subjectAltName.
-	const san = new X509Certificate(certPem).subjectAltName || '';
-	return san.split(',')
-		.map((part) => part.trim())
-		.filter((part) => part.startsWith('DNS:'))
-		.map((part) => part.slice(4).toLowerCase());
 }
 
 /** @param {string} file @returns {Buffer | null} */
@@ -146,10 +129,14 @@ export function createTlsServer(handleRequest) {
 	for (let i = 1; i < pairs.length; i++) {
 		const certPem = fs.readFileSync(pairs[i].cert);
 		const override = overrideGroups[i - 1];
-		const hosts = override && override.length > 0 ? override : certHosts(certPem);
+		// The one host discovery the family has: SAN DNS names, then the subject
+		// CN for a legacy single-name certificate (parseSniHosts). A certificate
+		// that does not parse throws here rather than reading as one with no
+		// names, which at boot is the refusal it deserves.
+		const hosts = override && override.length > 0 ? override : parseSniHosts(certPem.toString('utf8'));
 		if (hosts.length === 0) {
 			throw new Error(
-				`[svelte-adapter-ws] certificate ${pairs[i].cert} carries no DNS subjectAltName and ` +
+				`[svelte-adapter-ws] certificate ${pairs[i].cert} carries no DNS subjectAltName, no subject CN, and ` +
 				'SSL_SNI_HOSTS names no group for it, so no SNI name would ever select it.'
 			);
 		}
@@ -396,18 +383,18 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 					// derived below.
 					removeServerName() {}
 				};
-				// Hosts stay this file's discovery (certHosts, SAN-only) rather
-				// than applyServerNames' SAN-or-CN fallback: passing them keeps a
-				// CN-only extra certificate refused the way boot refuses it.
+				// Hosts come from the same discovery boot used (parseSniHosts: SAN
+				// DNS names, then the subject CN), so a reload selects a renewed
+				// certificate by exactly the names boot would have.
 				const nextState = [];
 				for (let i = 0; i < sniPairs.length; i++) {
 					current = i;
 					const { pair } = sniPairs[i];
 					const override = overrideGroups[i];
-					const hosts = override && override.length > 0 ? override : certHosts(fs.readFileSync(pair.cert));
+					const hosts = override && override.length > 0 ? override : parseSniHosts(fs.readFileSync(pair.cert, 'utf8'));
 					if (hosts.length === 0) {
 						throw new Error(
-							`certificate ${pair.cert} carries no DNS subjectAltName after reload and ` +
+							`certificate ${pair.cert} carries no DNS subjectAltName and no subject CN after reload and ` +
 							'SSL_SNI_HOSTS names no group for it'
 						);
 					}
