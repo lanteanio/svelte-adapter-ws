@@ -77,3 +77,51 @@ export function send500(res, requestId) {
 	res.writeHead(500, headers);
 	res.end(body);
 }
+
+const FORBIDDEN_405_RAW =
+	'HTTP/1.1 405 Method Not Allowed\r\n' +
+	'allow: ' + ALLOW_HEADER + '\r\n' +
+	'content-type: text/plain\r\n' +
+	'content-length: 18\r\n' +
+	'connection: close\r\n' +
+	'\r\n' +
+	'Method Not Allowed';
+
+/**
+ * Answer the forbidden methods node never hands to the request listener.
+ * llhttp knows TRACE, so it reaches the method gate above; CONNECT is routed
+ * to the 'connect' event instead, and TRACK is not a method llhttp
+ * recognises, so the parser fails the request and node's default
+ * `clientError` handling answers 400 and closes.
+ * The family answers the three fetch-forbidden methods alike, 405 with
+ * Allow, so the raw request line is read off the failed packet and answered
+ * that way. Every other parser failure keeps node's own answer: 431 for a
+ * header block past the limit, 400 otherwise, and a bare destroy for a
+ * socket that is already gone.
+ *
+ * @param {import('node:http').Server} server
+ */
+export function refuseUnparsedForbiddenMethods(server) {
+	// CONNECT parses, but node hands it to the 'connect' event rather than the
+	// request listener, and a server with no listener for it drops the socket.
+	server.on('connect', (/** @type {any} */ _req, /** @type {import('node:net').Socket} */ socket) => {
+		if (socket.writable) socket.end(FORBIDDEN_405_RAW);
+		else socket.destroy();
+	});
+	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
+		if (!socket.writable || (err && err.code === 'ECONNRESET')) {
+			socket.destroy();
+			return;
+		}
+		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
+			const line = err.rawPacket.subarray(0, 8).toString('latin1');
+			const method = line.slice(0, line.indexOf(' ') === -1 ? line.length : line.indexOf(' ')).toUpperCase();
+			if (FORBIDDEN_METHODS.has(method)) {
+				socket.end(FORBIDDEN_405_RAW);
+				return;
+			}
+		}
+		const status = err && err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
+		socket.end('HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
+	});
+}

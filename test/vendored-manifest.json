@@ -1787,5 +1787,14 @@
 				"ours": "api: { options: { kit: { adapter: { name: 'adapter-ws', websocketMetrics: metricsPath } } } }"
 			}
 		]
+	},
+	{
+		"file": "test/http-forbidden-methods.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\texpect(status(propfind), 'an unlisted method still reaches the application')\n\t\t\t.not.toContain('405 Method Not Allowed');\n",
+				"ours": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\t// node:http writes the reason phrase on every status, so the adapter's\n\t\t// refusal is told apart by its fixed Allow list; the application's own\n\t\t// 405 names the methods of the route it matched instead.\n\t\texpect(header(propfind, 'allow'), 'an unlisted method still reaches the application')\n\t\t\t.not.toEqual(['GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS']);\n"
+			}
+		]
 	}
 ]

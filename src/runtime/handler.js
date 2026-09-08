@@ -10,6 +10,7 @@
 /* global STATIC_CACHE_CONTROL */
 /* global WARMUP_PATHS */
 /* global WS_ENABLED */
+import { refuseUnparsedForbiddenMethods } from './handler/http-helpers.js';
 import './_init.js';
 import http from 'node:http';
 import path from 'node:path';
@@ -196,6 +197,8 @@ const tlsModule = is_tls ? await import('./handler/tls.js') : null;
 export const server = tlsModule
 	? tlsModule.createTlsServer(handleRequest)
 	: http.createServer(handleRequest);
+// A method node's parser refuses is answered like the ones it accepts.
+refuseUnparsedForbiddenMethods(server);
 
 /**
  * Message-driven certificate reload: the cluster primary watches the cert
