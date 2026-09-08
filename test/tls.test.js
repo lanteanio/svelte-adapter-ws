@@ -198,7 +198,9 @@ describe('native TLS', () => {
 		// CN for a legacy single-name certificate. Boot and reload discover the
 		// same names, so a CN-only extra pair is served under its CN rather
 		// than refused as one with no name.
-		const cnOnly = genCertCnOnly(fixtures, 'cnonly', 'legacy.example');
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-cnonly-'));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const cnOnly = genCertCnOnly(dir, 'cnonly', 'legacy.example');
 		const rt = await bootTls('SAW_TCN_', {
 			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${cnOnly.crt}`,
 			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${cnOnly.key}`,
