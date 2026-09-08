@@ -562,6 +562,19 @@ providing the cross-instance relay, presence and clustering primitives over
 Redis. Container fleets that scale by replicas need neither `reusePort` nor
 `CLUSTER_WORKERS` - the balancer already spreads connections across replicas.
 
+**systemd integration** is automatic under a `Type=notify` unit and a no-op
+everywhere else: the runtime detects `NOTIFY_SOCKET` and sends `READY` once
+the service accepts traffic (after the app's `init` hook resolves in
+single-process mode; on first listen in clustered mode), `STOPPING` when a
+graceful shutdown begins, and, when `WatchdogSec=` is set, a `WATCHDOG` ping
+at half the timeout from a main-loop timer. `Type=notify` is the readiness
+gate: systemd does not consider the unit started before `READY=1`, and a
+frozen event loop stops the watchdog pings. The messages go through the
+`systemd-notify` helper, which on systemd 246 and later waits until the
+manager has processed each one before it exits; an older manager may fail to
+attribute a datagram whose sender has already exited and silently drop it,
+so below systemd 246 run the unit as `Type=simple` without `WatchdogSec=`.
+
 ## License
 
 MIT
