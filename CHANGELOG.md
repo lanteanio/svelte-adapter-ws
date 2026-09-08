@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Shared binary fan-out by cohort in production: a stateless wire codec marked
+  `shared: true` announces one server-wide wire id to every binary-capable
+  subscriber and delivers the byte-identical `0x03` frame to the binary cohort
+  and the JSON envelope to the JSON cohort. The first shared publish migrates a
+  topic's current subscribers into cohorts; later joiners are cohorted on the
+  wire, batch and programmatic subscribe landings and on the tracked-subscribe
+  primitive; an unsubscribe leaves; a publish with `excludeWs` or a declined
+  encode takes the per-connection walk. The test server mirrored this lane
+  already; production now does the same.
+
+- `TRACE`, `TRACK` and `CONNECT` are answered `405 Method Not Allowed` with
+  an `Allow` header on every lane, including the two node's parser never hands
+  to a request listener: `TRACK` is not a method it knows and `CONNECT` is
+  routed to the `connect` event. The test server's admin lane refuses them
+  before building a `Request`, as the production admin route does.
+
+- `platform.bumpTopicEpoch(topic)` on the test server, minting through the
+  same epoch module as production; its `topicEpoch(topic)` now reads the
+  per-topic generation instead of answering the process generation for every
+  topic.
+
 - `ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED` names a second adapter runtime in
   one worker taking over the subscription accounting sink, the topology
   behind a subscription total frozen under its summed bookkeeping on one side
@@ -528,6 +549,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
+  subscription is a topic-registry entry as well as a Set entry, so one
+  admitted connection must not be able to hold hundreds of megabytes the
+  connection ceiling cannot see. The refusal (`subscribe-denied` with
+  `RATE_LIMITED`) and everything the client already holds are unchanged.
+
+- A stateless wire codec's `publishWireBatch` is rerouted through
+  `publishWire` entry by entry after one egress admission for the whole
+  batch, so a capable subscriber receives one `0x03` frame per entry rather
+  than a single batch frame; a stateful codec keeps the batched walk.
+
+- SSR dedup decides sharing before the body is held: a declared
+  `Content-Length` past the 512 KB cap streams without reading a byte, and an
+  undeclared body is read only up to the cap, then streamed on from where the
+  read stopped.
+
+- Control frames are charged to the control-egress budget at their UTF-8 size
+  rather than their string length, the game lane's denial and the wire-id
+  announces are charged like every other control frame, and the budget
+  exhaustion event carries the connection's request id. A route registered
+  through `registerIngress` receives the calling surface's budgeted control
+  sender as its sixth argument for its own denials.
+
+- The cluster primary stamps a worker's restart budget on its relay attach
+  rather than on ready, so a worker the attach regime keeps killing is charged
+  as a flapper and reaches the restart limit; its posture aggregate is keyed
+  on the spawn-time thread id.
+
+- `ADAPTER-ERR-PRESSURE-TOPIC-REGISTRY` describes the operational event the
+  pressure sampler emits (with `topPublishers` and `topicCount`); the publish
+  path no longer prints a second console line at the threshold.
+
+- The relay frame ceiling is measured in encoded bytes: code units times three
+  decide the certain-under case for free, only the band above walks the string.
+
+- An extra TLS certificate is selected by SNI under the names the family's one
+  host discovery finds: the SAN DNS entries, then the subject CN of a legacy
+  single-name certificate. Boot and reload discover the same names; a
+  certificate with neither is still refused.
+
+- The README states the systemd floor for the notify transport: below systemd
+  246 run the unit as `Type=simple` without `WatchdogSec=`.
+
+- Vendored from the lead at 6175223 (was 7c3da35): the cohort announce through
+  the budgeted sender, the process-wide dashboard and warning slots defined
+  rather than assigned, the dev plugin's sender threading, the cluster sim's
+  shared health sweep and attach fault, the byte and import check scripts, the
+  handshake vectors and the goldens.
+
 - A certificate hot-reload reconciles each additional SNI certificate against
   what that certificate was already serving, instead of rebuilding every SNI
   context from scratch. An extra certificate whose bytes did not change is
@@ -585,6 +655,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `ADAPTER-ERR-CLUSTER-CONFIG-NODE` and `ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR`:
+  the family's catalog declares neither, and an operator whose runbook keys on
+  an id only this adapter mints finds nothing on the lead. Both refusals keep
+  their prose as plain console lines and still exit 1.
+
 - `runAppShutdownHook` is no longer exported from the built handler. The lead
   adapter declares no such name and runs the app's hook inside `shutdown()`,
   which is now what this adapter does too - so the export named a step that is
@@ -599,6 +674,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebSocketOptions['pressure']`.
 
 ### Fixed
+
+- A custom 101 header named `Connection`, `Upgrade`, `Sec-WebSocket-Accept`,
+  `Sec-WebSocket-Extensions` or `Sec-WebSocket-Protocol` is refused by
+  `upgradeResponse()` in any letter case; it went out beside the server's own
+  line and a conforming client refused the handshake with nothing logged.
+
+- A removed or replaced certificate directory no longer spins the watcher: an
+  event naming the watched directory itself triggers an identity check, a
+  removed directory closes the watch and reports once, a replaced one reports
+  once and gets one final debounced read. The primary keeps the reference so a
+  shutdown inside that window still clears the timer.
+
+- The cohort-hook and settled-registry slots on `globalThis` are defined rather
+  than assigned, so an accessor on either key can no longer swallow the
+  publication.
+
+- A frame that parses to a JSON array, a primitive or `null` reaches the app
+  message hook at once, with `msg` set to what parsed.
+
+- The test server charges its wire-id announces to the control budget, and a
+  cohort announce the socket refused past its backpressure limit hands the
+  shared id back and serves the joiner JSON.
+
+- The test server resolves a batch entry's `seq: true` to its own counter draw
+  and `seq: false` to no seq on the stateful lane, as production does.
+
+- A resume flush that closed the connection stops the subscribe landing there
+  instead of cohorting and acking a socket the runtime just closed.
 
 - The cluster primary escalates a worker that reported ready and never
   reported its relay reader live, down the same request-exit and respawn
