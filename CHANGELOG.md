@@ -432,7 +432,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the prerendered trailing-slash rules. A name the raw fast path cannot hold
   (spaces, non-ASCII) gets one decoded lookup, so every indexed file is
   reachable; dot-segment paths still have no key to hit. SSR flows
-  through `getRequest`/`setResponse` with concurrent-request dedup for
+  through the runtime's own request reader and response writer (every
+  non-GET/HEAD body is read here, whether or not the client named a
+  Content-Type, and the response is streamed here, a mid-body failure
+  aborting the exchange) with concurrent-request dedup for
   anonymous GET/HEAD (bodies buffer only up to the 512K share cap - a larger
   render streams and is never shared), single-chunk dynamic compression
   (skipped for credentialed requests as BREACH defense), a default
@@ -702,6 +705,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A resume flush that closed the connection stops the subscribe landing there
   instead of cohorting and acking a socket the runtime just closed.
+
+- A request body sent without a Content-Type reaches the application on the
+  SSR and admin lanes; the runtime reads every non-GET/HEAD body itself, where
+  the previous reader handed the app a null body for exactly that request.
+
+- The shutdown cleanup listeners run only after the in-flight requests have
+  drained, so a listener that closes a pool cannot pull it out from under a
+  request still being served.
 
 - The cluster primary escalates a worker that reported ready and never
   reported its relay reader live, down the same request-exit and respawn

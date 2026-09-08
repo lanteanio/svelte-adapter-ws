@@ -18,6 +18,7 @@
 
 import { spawn } from 'node:child_process';
 import { rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -93,13 +94,18 @@ const WS_OPTS = {
  * A wrapper entry: installs the cleanup listener the case asks for, arms the
  * stdin re-emit, then imports the payload's real entry.
  * @param {string} dir
- * @param {{ cleanupMs?: number }} [opts]
+ * @param {{ cleanupMs?: number, cleanupLog?: boolean }} [opts]
  */
 function writeWrapper(dir, opts = {}) {
 	const file = path.join(dir, 'entry.mjs');
 	writeFileSync(file, [
 		opts.cleanupMs
 			? `process.on('sveltekit:shutdown', () => new Promise((r) => setTimeout(r, ${opts.cleanupMs})));`
+			: '',
+		// A listener that announces itself, so the test can read where in the
+		// shutdown it ran relative to the request still in flight.
+		opts.cleanupLog
+			? "process.on('sveltekit:shutdown', () => { console.log('CLEANUP RAN'); });"
 			: '',
 		"process.stdin.on('data', (d) => { const s = String(d); if (s.includes('shutdown')) process.emit('SIGTERM'); if (s.includes('interrupt')) process.emit('SIGINT'); });",
 		'process.stdin.unref();',
@@ -156,6 +162,42 @@ function whenExited(proc, ms) {
 }
 
 describe('the entry under a stop signal', () => {
+	it('runs the cleanup listeners only after the in-flight requests have drained', async () => {
+		// A listener that closes a pool must not pull it out from under a request
+		// still being served: the drain settles first, then the listeners run.
+		// Both edges are read off the server's own output, so the order is a
+		// fact of the process, not of a delay.
+		const payload = buildRuntime();
+		cleanups.push(() => payload.cleanup());
+		linkPackages(payload);
+		const entry = writeWrapper(payload.dir, { cleanupLog: true });
+		const port = await freePort();
+		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, (text) => text.includes('Ready for traffic'));
+		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
+
+		const held = new Promise((resolve) => {
+			const req = http.get({ host: '127.0.0.1', port, path: '/api/hold?ms=1500' }, (res) => {
+				let body = '';
+				res.on('data', (d) => { body += d; });
+				res.on('end', () => resolve(body));
+			});
+			req.on('error', () => resolve('reset'));
+		});
+		const t0 = Date.now();
+		while (!output.text.includes('[hold] holding') && Date.now() - t0 < 10000) await sleep(25);
+		expect(output.text, 'the held request never reached the server').toContain('[hold] holding');
+
+		requestShutdown(proc);
+		expect(await whenExited(proc, 30000)).toBe(0);
+		expect(await held, 'the held request must be answered, not dropped').toBe('held');
+
+		const released = output.text.indexOf('[hold] released');
+		const cleanup = output.text.indexOf('CLEANUP RAN');
+		expect(released, 'the hold never released').toBeGreaterThan(-1);
+		expect(cleanup, 'the cleanup listener never ran').toBeGreaterThan(-1);
+		expect(cleanup, 'a cleanup listener ran while a request was still in flight').toBeGreaterThan(released);
+	}, 60000);
+
 	it('leaves the rotation on a signal that lands while the server module is still evaluating', async () => {
 		// The server bundle takes 1500ms to evaluate; the signal lands at 300ms,
 		// before the handler module - and with it the lifecycle state - exists.

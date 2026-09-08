@@ -129,6 +129,16 @@ export class Server {
 		if (p === '/api/tiny') {
 			return new Response('ok', { headers: { 'content-type': 'text/html' } });
 		}
+		if (p === '/api/hold') {
+			// A request that stays in flight for ms, announcing both edges on
+			// stdout so a test reads "in flight" and "released" off the server's
+			// own output rather than assuming them from a delay.
+			const ms = Number(url.searchParams.get('ms') || '1000');
+			console.log('[hold] holding');
+			await new Promise((r) => setTimeout(r, ms));
+			console.log('[hold] released');
+			return new Response('held', { headers: { 'content-type': 'text/plain' } });
+		}
 		if (p === '/api/cookie') {
 			const headers = new Headers({ 'content-type': 'text/html' });
 			headers.append('set-cookie', 'a=1; Path=/');
