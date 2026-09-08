@@ -96,32 +96,56 @@ const FORBIDDEN_405_RAW =
  * The family answers the three fetch-forbidden methods alike, 405 with
  * Allow, so the raw request line is read off the failed packet and answered
  * that way. Every other parser failure keeps node's own answer: 431 for a
- * header block past the limit, 400 otherwise, and a bare destroy for a
- * socket that is already gone.
+ * header block past the limit, 408 for a request that timed out, 413 for
+ * chunk extensions past the limit, 400 otherwise, written only when no
+ * response is in flight on the socket, and a bare destroy for a socket that
+ * is already gone.
+ *
+ * Every branch ends by destroying the socket once its answer is flushed. By
+ * the time node emits either event it has detached the socket from HTTP
+ * handling: no timeout, no parser, no place in the server's connection list.
+ * A socket merely ended here would wait for the peer to close it, and a peer
+ * that never does would hold it for the life of the process, out of reach of
+ * closeAllConnections.
  *
  * @param {import('node:http').Server} server
  */
 export function refuseUnparsedForbiddenMethods(server) {
+	/**
+	 * @param {import('node:net').Socket} socket
+	 * @param {string} raw
+	 */
+	const answerAndClose = (socket, raw) => {
+		socket.end(raw, () => socket.destroy());
+	};
 	// CONNECT parses, but node hands it to the 'connect' event rather than the
 	// request listener, and a server with no listener for it drops the socket.
 	server.on('connect', (/** @type {any} */ _req, /** @type {import('node:net').Socket} */ socket) => {
-		if (socket.writable) socket.end(FORBIDDEN_405_RAW);
+		if (socket.writable) answerAndClose(socket, FORBIDDEN_405_RAW);
 		else socket.destroy();
 	});
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
-		if (!socket.writable || (err && err.code === 'ECONNRESET')) {
-			socket.destroy();
+		// A response already on its way (a pipelined bad request behind a
+		// streaming reply) gets no second status line written into its body;
+		// the socket is destroyed as node would destroy it.
+		const inFlight = /** @type {any} */ (socket)._httpMessage;
+		if (!socket.writable || (err && err.code === 'ECONNRESET') || (inFlight && inFlight._headerSent)) {
+			socket.destroy(err);
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
 			const line = err.rawPacket.subarray(0, 8).toString('latin1');
 			const method = line.slice(0, line.indexOf(' ') === -1 ? line.length : line.indexOf(' ')).toUpperCase();
 			if (FORBIDDEN_METHODS.has(method)) {
-				socket.end(FORBIDDEN_405_RAW);
+				answerAndClose(socket, FORBIDDEN_405_RAW);
 				return;
 			}
 		}
-		const status = err && err.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request';
-		socket.end('HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
+		const code = err && err.code;
+		const status = code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large'
+			: code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout'
+				: code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW' ? '413 Content Too Large'
+					: '400 Bad Request';
+		answerAndClose(socket, 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
 	});
 }

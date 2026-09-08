@@ -10,8 +10,8 @@
 /* global STATIC_CACHE_CONTROL */
 /* global WARMUP_PATHS */
 /* global WS_ENABLED */
-import { refuseUnparsedForbiddenMethods } from './handler/http-helpers.js';
 import './_init.js';
+import { refuseUnparsedForbiddenMethods } from './handler/http-helpers.js';
 import http from 'node:http';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
