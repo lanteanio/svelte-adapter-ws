@@ -24,7 +24,7 @@ import { createMetricsCollections } from './metrics-collector.js';
 import { createPostureAggregator } from './posture-collector.js';
 import { formatVersionBanner, runtimeVersionInfo } from './version-info.js';
 import { startPostureExport } from './utils/posture-export.js';
-import { classifyWorkerHealth, resolveBootTimeout, routeWorkerMessage } from './worker-watchdog.js';
+import { recordWorkerMessage, resolveBootTimeout, routeWorkerMessage, sweepWorkerHealth } from './worker-watchdog.js';
 import { certExpiryAlert, createCertWatcher, createTlsDegradedLedger, readCertIdentity, reloadClusterTls } from './utils/tls-reload.js';
 import { readFdLimits, fdPreflightWarning } from './utils/fd-limit.js';
 import { createSdNotify } from './utils/sd-notify.js';
@@ -610,22 +610,21 @@ if (is_primary) {
 	const heartbeatSweep = setIntervalTimer(() => {
 		if (shutting_down) return;
 		const t = monotonicNow();
-		for (const [worker, meta] of workers) {
-			// A ready worker is judged by the tight steady-state timeout; a
-			// still-booting one by the generous, separate boot deadline. A
-			// slow-but-healthy init acks throughout boot via its pre-start
-			// liveness responder, so its clock stays fresh under either
-			// timeout - only a genuine wedge goes stale.
-			const verdict = classifyWorkerHealth(meta, t, { steadyTimeoutMs: HEARTBEAT_TIMEOUT_MS, bootTimeoutMs: WORKER_BOOT_TIMEOUT_MS });
-			if (verdict.escalate) {
+		// A ready worker is judged by the tight steady-state timeout, and by the
+		// ready-to-attach gap; a still-booting one by the generous, separate boot
+		// deadline. A slow-but-healthy init acks throughout boot via its
+		// pre-start liveness responder, so its clock stays fresh under either
+		// timeout - only a genuine wedge goes stale. The sweep is the shared one
+		// the cluster sim runs too, so both judge a cohort the same way.
+		sweepWorkerHealth(workers, t, { steadyTimeoutMs: HEARTBEAT_TIMEOUT_MS, bootTimeoutMs: WORKER_BOOT_TIMEOUT_MS }, {
+			escalate: (worker, meta, verdict) => {
 				console.error(
 					`[primary] Worker ${meta.threadId} (${meta.slot.role}#${meta.slot.index}) ${verdict.reason}, asking it to exit...`
 				);
 				requestWorkerExit(worker, 1);
-			} else {
-				worker.postMessage({ type: 'heartbeat' });
-			}
-		}
+			},
+			keep: (worker) => { worker.postMessage({ type: 'heartbeat' }); }
+		});
 		// Self-heal the live-plus-spawning-plus-pending invariant: if any slot
 		// has somehow ended up with no live worker, no booting worker, and no
 		// pending respawn, schedule its restart. A correct event path never
@@ -771,37 +770,34 @@ if (is_primary) {
 
 		worker.on('message', (msg) => {
 			const meta = workers.get(worker);
-			// Any inbound message proves the worker is alive: advance the
-			// heartbeat clock so a worker saturated with publish/relay traffic
-			// (whose heartbeat-ack queues behind the publishes) is never
-			// false-flagged as unresponsive under sustained fan-out.
-			if (meta) meta.lastHeartbeat = monotonicNow();
+			// Every liveness stamp the primary makes - the heartbeat clock any
+			// inbound message advances, the ready edge and its readyAt, the
+			// relay-attached flip - is made by recordWorkerMessage, so the health
+			// verdict is driven elsewhere with a meta this same code produced.
+			const transition = meta ? recordWorkerMessage(meta, msg, monotonicNow(), cluster_mode) : 'alive';
 			if (msg.type === 'relay-attached') {
 				// The worker's relay reader is live, so frames handed to its ring
-				// will now be drained. Before this the fan-out skips it - see
-				// `relayAttached` where the slot is created. Idempotent by
-				// construction: a worker posts this once, and a respawn arrives
-				// on a fresh slot whose flag starts false again.
-				if (meta) {
-					meta.relayAttached = true;
-					// Only now is the worker UP as far as the restart budget is
-					// concerned. Stamping the supervisor at `ready` instead would
-					// let a worker the attach regime kills read as stably up - it
-					// is killed only after the steady window, which is also the
-					// stable window - so its every exit would reset the budget and
-					// a deterministic attach failure would flap forever, one
-					// restart per window, never reaching exhaustion.
-					if (meta.slot) restartSupervisor.noteReady(meta.slot);
-				}
+				// will now be drained. Before this the fan-out skipped it - see
+				// `relayAttached` where the slot is created. A worker posts this
+				// once, and a respawn arrives on a fresh slot whose flag starts
+				// false again; a repeat is not a transition and stamps nothing.
+				// Only now is the worker UP as far as the restart budget is
+				// concerned. Stamping the supervisor at `ready` instead would let
+				// a worker the attach regime kills read as stably up - it is
+				// killed only after the steady window, which is also the stable
+				// window - so its every exit would reset the budget and a
+				// deterministic attach failure would flap forever, one restart
+				// per window, never reaching exhaustion.
+				if (transition === 'attached' && meta.slot) restartSupervisor.noteReady(meta.slot);
 				return;
 			}
 			if (msg.type === 'ready') {
 				// An io worker reports 'ready' once it is listening; a compute
 				// worker once its init hook has resolved. Both mark the worker
-				// confirmed-alive; the restart budget's uptime clock is stamped
-				// on `relay-attached` (see above), so a worker the attach regime
-				// kills is charged as a fast flapper rather than a stable one.
-				if (meta) { meta.ready = true; meta.readyAt = monotonicNow(); }
+				// confirmed-alive (recordWorkerMessage above); the restart budget's
+				// uptime clock is stamped on `relay-attached`, so a worker the
+				// attach regime kills is charged as a fast flapper rather than a
+				// stable one.
 				if (msg.role === 'compute') console.log(`[svelte-adapter-ws] Compute worker ${worker.threadId} ready`);
 				else {
 					console.log(`[svelte-adapter-ws] Worker thread ${worker.threadId} listening on :${port}`);

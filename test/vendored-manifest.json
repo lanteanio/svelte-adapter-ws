@@ -823,7 +823,17 @@
 		"file": "test/client.test.js"
 	},
 	{
-		"file": "test/cluster-relay-attach-gate.test.js"
+		"file": "test/cluster-relay-attach-gate.test.js",
+		"adaptations": [
+			{
+				"lead": "const INDEX_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8');\n",
+				"ours": "const INDEX_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8');\nconst WATCHDOG_SOURCE = readFileSync(fileURLToPath(new URL('../src/runtime/worker-watchdog.js', import.meta.url)), 'utf8');\n"
+			},
+			{
+				"lead": "\t\texpect(INDEX_SOURCE).toMatch(/msg\\.type === 'relay-attached'[\\s\\S]{0,400}?meta\\.relayAttached = true/);\n",
+				"ours": "\t\t// The flip itself lives in the shared stamping function, and the primary\n\t\t// routes every inbound worker message through it; the sim drives the\n\t\t// same function, which is what makes its attach regime the primary's.\n\t\texpect(WATCHDOG_SOURCE).toMatch(/msg\\.type === 'relay-attached'[\\s\\S]{0,200}?meta\\.relayAttached = true/);\n\t\texpect(INDEX_SOURCE).toContain(\"recordWorkerMessage(meta, msg, monotonicNow(), cluster_mode) : 'alive';\");\n\t\texpect(INDEX_SOURCE, 'the flag is flipped in exactly one place, and that place is not the primary').not.toMatch(/meta\\.relayAttached = true/);\n"
+			}
+		]
 	},
 	{
 		"file": "test/codec-relay.test.js",
