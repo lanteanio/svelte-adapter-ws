@@ -463,11 +463,13 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    in; app hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). Every `websocket.*`
    option the family declares ships here. The per-connection caps are the
-   family's: 1,000,000 for the retained-state maps, except subscriptions per
-   connection at 65,536 (a landed subscription is a topic-registry entry as
-   well as a Set entry, so one connection must not be able to hold hundreds of
-   megabytes the connection ceiling cannot see); the 65,537th subscribe is
-   answered `subscribe-denied` with `RATE_LIMITED` and everything held stays.
+   family's: 1,000,000 for the large retained-state maps, 65,536 for
+   subscriptions per connection (a landed subscription is a topic-registry
+   entry as well as a Set entry, so one connection must not be able to hold
+   hundreds of megabytes the connection ceiling cannot see), and the small
+   fixed ones for pending subscribes and ingress bindings; the 65,537th
+   subscribe is answered `subscribe-denied` with `RATE_LIMITED` and
+   everything held stays.
    Graceful shutdown drains live sockets itself (`http.close()` never
    completes while one is open): new upgrades are refused the moment drain
    begins, every client gets the reconnect advisory with the
