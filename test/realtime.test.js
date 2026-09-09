@@ -55,6 +55,11 @@ export function authenticate({ cookies }) {
 	cookies.set('sess', 'abc123', { path: '/', httpOnly: true });
 }
 
+// The most recently opened socket, held past its close so a request can be
+// made on a socket the peer has already left.
+let lastOpened = null;
+export function open(ws) { lastOpened = ws; }
+
 export function close() {}
 
 export async function message(ws, { data, msg, platform }) {
@@ -62,7 +67,14 @@ export async function message(ws, { data, msg, platform }) {
 	const text = new TextDecoder().decode(data);
 	let cmd;
 	try { cmd = JSON.parse(text); } catch { return; }
-	if (cmd.cmd === 'publish') {
+	if (cmd.cmd === 'askLast') {
+		// A request on the held socket, reported back to the asker with the
+		// time it took to settle.
+		const started = Date.now();
+		const outcome = await platform.request(lastOpened, 'question', null, { timeoutMs: 5000 })
+			.then((v) => ({ value: v }), (err) => ({ error: err.message }));
+		platform.send(ws, 'answers', 'last', { ...outcome, ms: Date.now() - started });
+	} else if (cmd.cmd === 'publish') {
 		platform.publish(cmd.topic, cmd.event, cmd.data, cmd.options);
 	} else if (cmd.cmd === 'publishBatched') {
 		platform.publishBatched(cmd.messages);
@@ -273,6 +285,26 @@ describe('connection lifecycle', () => {
 		const result = await client.next((f) => f.topic === 'answers' && f.event === 'result');
 		expect(result.data).toBe(42);
 		client.close();
+	});
+
+	it('settles a request on a peer-closed socket at once, saying the frame could not be sent', async () => {
+		const asker = connect();
+		await asker.open();
+		asker.send({ type: 'subscribe', topic: 'answers', ref: 1 });
+		await asker.next((f) => f.type === 'subscribed');
+		// The peer opens last, so the fixture holds its socket, then leaves.
+		const peer = connect();
+		await peer.open();
+		peer.close();
+		await new Promise((r) => setTimeout(r, 100));
+
+		asker.send(JSON.stringify({ cmd: 'askLast' }));
+		const result = await asker.next((f) => f.topic === 'answers' && f.event === 'last');
+		// Rejected at the send, not by the 5 s timer: the socket's userData
+		// survives its close, so the entry is made and the send is what refuses.
+		expect(result.data.error).toContain('connection closed; the request frame could not be sent');
+		expect(result.data.ms).toBeLessThan(2000);
+		asker.close();
 	});
 
 	it('replays before acking a recover-tagged subscribe', async () => {

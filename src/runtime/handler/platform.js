@@ -509,15 +509,20 @@ function request(facade, event, data, options) {
 		const entry = { resolve, reject, timer, sent: false };
 		pending.set(ref, entry);
 		const payload = JSON.stringify({ type: 'request', ref, event, data: data ?? null });
-		// A `2` result means the frame never reached the transport - the close
-		// sweep reads this to say which side of transmission the close landed on.
-		let result = 2;
+		// The send outcome is recorded so the close sweep can say which side
+		// of transmission the close landed on: 2 (DROPPED) means the frame
+		// never reached the transport even though the call returned. A throw
+		// is a closed socket: the request is settled here, at once, with the
+		// detail that says nothing was sent, rather than left to its timer.
 		try {
-			result = /** @type {any} */ (facade).send(payload, false, false);
+			entry.sent = /** @type {any} */ (facade).send(payload, false, false) !== 2;
 		} catch {
 			counters.closedWsAborts++;
+			clearTimer(timer);
+			pending.delete(ref);
+			reject(new Error(adapterErrorMessage(ADAPTER_ERROR_IDS.REQUEST_CLOSED, REQUEST_CLOSED_DETAIL.SEND_FAILED)));
+			return;
 		}
-		entry.sent = result !== 2;
 		bumpOut(userData, payload);
 	});
 }
@@ -1142,7 +1147,8 @@ export const platform = {
 		}
 		const compressIntent = Boolean(opts && opts.compress === true);
 		const compress = WS_COMPRESSION_ON && compressIntent;
-		const sharedExclude = (opts && opts.excludeWs) || null;
+		const sharedExclude = opts != null && opts.excludeWs !== undefined && opts.excludeWs !== null
+			? opts.excludeWs : null;
 		// Read and validate EVERY entry before anything is stamped: a numeric
 		// per-entry seq must pass the value check and the clustered authority
 		// rule while the batch is still whole, or a mid-loop refusal would
