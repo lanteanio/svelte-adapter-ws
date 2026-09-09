@@ -29,14 +29,12 @@ describe('the send lanes stamp an explicit seq, side-effect-free', () => {
 	/** @type {any} */ let platform;
 	/** @type {any} */ let state;
 	/** @type {any} */ let symbols;
-	/** @type {any} */ let resume;
 
 	beforeAll(async () => {
 		expect(buildFixtureOnce('default'), 'fixture build must succeed').toBe(true);
 		({ platform } = await import(pathToFileURL(path.join(builtDir, 'platform.js')).href));
 		state = await import(pathToFileURL(path.join(builtDir, 'state.js')).href);
 		symbols = await import(pathToFileURL(path.join(builtDir, '..', 'utils.js')).href);
-		resume = await import(pathToFileURL(path.join(builtDir, 'resume-capture.js')).href);
 	}, 120000);
 
 	function scriptedWs(caps = null) {
@@ -115,12 +113,8 @@ describe('the send lanes stamp an explicit seq, side-effect-free', () => {
 		// actually fire: captureResumeFrame appends only to buffers that
 		// already exist, so asserting on an empty map can never catch the
 		// mutant. Seed one, prove the seq'd send leaves it untouched.
-		// Opened through the production opener rather than by seeding a module
-		// map: this repo keeps the resume buffers in handler/resume-capture.js,
-		// and driving the real registration path is what a stray capture would
-		// actually have to survive.
-		const handle = resume.beginResumeCapture([topic], ws);
-		const capture = handle.entries[0].buffer;
+		const capture = { frames: [], overflow: false };
+		state.resumeBuffers.set(topic, new Set([capture]));
 		try {
 			platform.send(ws, topic, 'update', { v: 1 }, { seq: 900 });
 			platform.sendWire(ws, topic, 'update', { v: 2 },
@@ -129,7 +123,7 @@ describe('the send lanes stamp an explicit seq, side-effect-free', () => {
 			expect(state.maxSeenSeq.has(topic), 'the max-seen guard must not record a gap-fill seq').toBe(false);
 			expect(capture.frames.length, 'a single-target send must not enter an open resume capture').toBe(0);
 		} finally {
-			resume.discardResumeCapture(handle);
+			state.resumeBuffers.delete(topic);
 		}
 	});
 

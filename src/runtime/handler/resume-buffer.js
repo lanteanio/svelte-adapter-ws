@@ -1,0 +1,213 @@
+import { resumeBuffers, maxSeenSeq, counters } from './state.js';
+import { WS_COMPRESSION_ON } from './config.js';
+import { bumpOut } from './pressure-metrics.js';
+import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { privateValueMetadata } from '../utils/observability-privacy.js';
+
+// Live-frame buffering for the replay-to-live cutover. When a connection
+// gap-fills a topic on subscribe (a recover offset), the server reads the
+// backend, then subscribes the client to live. Between those two steps an ASYNC
+// resume hook yields the event loop, so a publish landing in that window is past
+// the backend read but not yet on the live membership - the client would never
+// see it, a silent gap. The barrier here holds those live frames: a buffer is
+// opened BEFORE the resume await, every fan-out site appends to it during the
+// window, and once live membership is installed the held frames are flushed in
+// order (deduped against what the resume already covered) before the ack.
+//
+// A synchronous (in-memory) resume never yields a macrotask, so nothing is
+// captured and the flush is a no-op - identical to the pre-barrier behavior. The
+// window only ever holds frames behind a network-backed resume.
+
+/**
+ * @typedef {{ topic: string, buffer: { frames: { seq: number | null, envelope: string, compress: boolean }[], overflow: boolean }, before: number }} ResumeCaptureEntry
+ * @typedef {{ ws: any, entries: ResumeCaptureEntry[] }} ResumeCaptureHandle
+ */
+
+/**
+ * Open a live-frame buffer for each topic about to be resumed, BEFORE the resume
+ * await. Records each topic's current max-seen seq as the fallback dedup floor
+ * (used when the resume hook does not report the watermark it covered).
+ * @param {string[]} topics
+ * @param {any} ws
+ * @returns {ResumeCaptureHandle}
+ */
+export function beginResumeCapture(topics, ws) {
+	/** @type {ResumeCaptureEntry[]} */
+	const entries = [];
+	for (const topic of topics) {
+		const buffer = { frames: [], overflow: false };
+		let set = resumeBuffers.get(topic);
+		if (set === undefined) { set = new Set(); resumeBuffers.set(topic, set); }
+		set.add(buffer);
+		const before = maxSeenSeq.get(topic);
+		entries.push({ topic, buffer, before: typeof before === 'number' ? before : 0 });
+	}
+	return { ws, entries };
+}
+
+/** @param {ResumeCaptureHandle} handle @param {ResumeCaptureEntry} entry */
+function unregister(handle, entry) {
+	const set = resumeBuffers.get(entry.topic);
+	if (set === undefined) return;
+	set.delete(entry.buffer);
+	if (set.size === 0) resumeBuffers.delete(entry.topic);
+}
+
+/**
+ * Close every buffer in the handle WITHOUT delivering anything. Used on the
+ * early-return race path (a concurrent subscribe already installed the topic, so
+ * the client is live and the buffered frames would be duplicates).
+ * @param {ResumeCaptureHandle} handle
+ */
+export function discardResumeCapture(handle) {
+	for (const entry of handle.entries) unregister(handle, entry);
+}
+
+/**
+ * Flush the frames held for one topic to the connection, in capture (seq) order,
+ * skipping any the resume already covered, then close the buffer. `coveredSeq` is
+ * the highest seq the resume hook reported delivering for this topic; when it is
+ * not a number the entry's pre-window max-seen seq is the conservative floor (a
+ * cooperating backend reports the exact watermark so the boundary is exact; a
+ * non-reporting one may re-deliver the small window between buffer-open and the
+ * backend read, which the client tolerates far better than a gap).
+ * @param {ResumeCaptureHandle} handle
+ * @param {string} topic
+ * @param {number | undefined} coveredSeq
+ * @returns {boolean} True when this connection is no longer usable - the flush
+ * closed it, or a send revealed it was already gone. The caller should stop:
+ * uWS runs the close handler synchronously inside `end()` and every later
+ * `send` on that handle throws, so anything the caller does afterwards is
+ * bookkeeping for a connection that no longer exists. (`getUserData` keeps
+ * working, and each call site already guards its own sends, so this is a
+ * correctness-and-noise boundary rather than a crash boundary.)
+ */
+export function flushResumeTopic(handle, topic, coveredSeq) {
+	const entry = handle.entries.find((e) => e.topic === topic);
+	if (entry === undefined) return false;
+	const ws = handle.ws;
+	const truncationMarker = () =>
+		'{"topic":' + JSON.stringify('__replay:' + topic) + ',"event":"truncated","data":null}';
+	// uWS send results, as everywhere else in this runtime: 0 = enqueued behind
+	// backpressure (delivers, in order - NOT a drop), 1 = sent, 2 = dropped past
+	// maxBackpressure. A refusal does not throw, so a flush that only caught
+	// throws kept handing frames to a socket that was discarding every one of
+	// them, charged each to bytesOut as delivered, and then let the client go
+	// live believing it was caught up with a hole in the middle it has no way to
+	// detect. Every send here asks the same question - did these bytes reach the
+	// client - so they share one answer. `gone` is what separates "refused" from
+	// "there is no socket any more": only the first is worth signalling to, and
+	// only the second must stop us calling end() on a corpse.
+	let gone = false;
+	/** @param {string} payload @param {boolean} compress @returns {boolean} */
+	const deliver = (payload, compress) => {
+		let result;
+		try { result = ws.send(payload, false, compress); }
+		catch { counters.closedWsAborts++; gone = true; return false; }
+		if (result === 2) return false;
+		bumpOut(ws, payload);
+		return true;
+	};
+	// The window overflowed the frame cap: the tail past the cap was never
+	// captured, and the client has no gap detection, so trusting a partial flush
+	// would leave a silent hole. Signal a truncation on the replay channel FIRST
+	// - the same marker a replay backend emits for an uncoverable range - so this
+	// critical resync signal is not itself lost behind the backpressure the
+	// partial flush below would build. The client drops its stale per-topic
+	// offset and cold-resyncs; the partial frames are then a best-effort extra.
+	//
+	// The marker is only SIGNALLED if it was actually taken. Recording the intent
+	// instead let a dropped marker satisfy the check below, so the one case that
+	// most needs the escalation - a socket refusing from the very first byte -
+	// was the case that skipped it.
+	let needsSignal = entry.buffer.overflow;
+	let signalled = needsSignal && deliver(truncationMarker(), false);
+	const floor = typeof coveredSeq === 'number' ? coveredSeq : entry.before;
+	for (const f of entry.buffer.frames) {
+		if (gone) break;
+		if (f.seq !== null && f.seq <= floor) continue; // already covered by the resume
+		if (!deliver(f.envelope, WS_COMPRESSION_ON && f.compress)) {
+			// Same consequence as the overflow above - an uncoverable hole - so it
+			// earns the same signal. Stop here rather than keep feeding a socket
+			// that is discarding everything.
+			if (!gone) needsSignal = true;
+			break;
+		}
+	}
+	let closed = false;
+	if (needsSignal && !signalled && !gone) {
+		// Either the overflow marker above was itself dropped, or the flush was
+		// refused partway. The client drops its stale offset and cold-resyncs
+		// rather than trusting a window it only partly received.
+		if (!deliver(truncationMarker(), false) && !gone) {
+			// The socket is refusing even this: there is no way to tell the
+			// client it has a hole, and staying connected is the one outcome
+			// that leaves it silently wrong. Closing forces a reconnect, whose
+			// resume starts from the last seq the client actually received - so
+			// the missed tail is re-delivered rather than lost. 1013 is a RETRY
+			// class code for the client, not a terminal one.
+			try { ws.end(1013, 'Resume incomplete'); closed = true; }
+			catch { counters.closedWsAborts++; gone = true; }
+		}
+	}
+	unregister(handle, entry);
+	// Drop the entry from the handle too, so a repeat flush for this topic is a
+	// no-op and the batch final-sweep discard only touches un-flushed topics.
+	const ei = handle.entries.indexOf(entry);
+	if (ei !== -1) handle.entries.splice(ei, 1);
+	return closed || gone;
+}
+
+/**
+ * True if the topic's buffer overflowed the frame cap during the window (the
+ * caller should tell the client to cold-rehydrate rather than trust a partial
+ * flush).
+ * @param {ResumeCaptureHandle} handle @param {string} topic
+ */
+export function resumeTopicOverflowed(handle, topic) {
+	const entry = handle.entries.find((e) => e.topic === topic);
+	return entry !== undefined && entry.buffer.overflow;
+}
+
+/**
+ * Normalize the value a `resume` hook returns into the highest seq it delivered
+ * for `topic`, or `undefined` when it reported nothing (the flush then falls back
+ * to the pre-window floor). Accepts a per-topic map `{ [topic]: seq }` or, for the
+ * single-topic callers, a bare number.
+ * @param {unknown} covered
+ * @param {string} topic
+ * @returns {number | undefined}
+ */
+export function coveredSeqFor(covered, topic) {
+	if (covered == null) return undefined;
+	if (typeof covered === 'number') return covered;
+	if (typeof covered === 'object') {
+		// `covered` is whatever the app's `resume` hook returned, so this property
+		// read can throw - a getter, a Proxy, a lazy ORM row. It is guarded HERE
+		// rather than at each call site because the batch subscribe path reads it
+		// between beginPendingSubscribe and settlePendingSubscribe: an escape there
+		// aborts the loop with the remaining topics still marked in flight, leaking
+		// a pending entry per topic that is never drained, so every later
+		// unsubscribe on those topics falsely reports cancelling an in-flight grant
+		// and the map grows unbounded per hostile batch.
+		//
+		// A hook that cannot be read is treated as covering nothing, which is the
+		// same answer a hook returning a non-number gives.
+		try {
+			const v = /** @type {Record<string, unknown>} */ (covered)[topic];
+			return typeof v === 'number' ? v : undefined;
+		} catch (err) {
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.resume',
+				event: 'resume.hook-read-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'Reading the resume hook result threw for a topic; that topic is treated as covering nothing.',
+				attributes: { topic: privateValueMetadata(topic, 'topic'), error: diagnosticError(err) }
+			});
+			return undefined;
+		}
+	}
+	return undefined;
+}

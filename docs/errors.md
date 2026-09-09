@@ -422,6 +422,24 @@ Log line begins:
 
 **What to do.** Fix the hook if resume coverage matters for these topics, and do not read a `resumed` ack as evidence a gap was filled. Clients that subscribe with recover offsets recover anyway; clients that do not are missing history without any signal.
 
+## ADAPTER-ERR-RESUME-HOOK-READ
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.resume event=resume.hook-read-failed severity=error] Reading the resume hook result threw for a topic; that topic is treated as covering nothing.
+```
+
+**Cause.** The resume hook returned a value whose properties threw while being read, typically a getter or a proxy.
+
+**Consequence.** That topic loses only the hook's watermark report, not its replay: the hook has already run to completion, so whatever it replayed is on the wire, and the held-frame flush falls back to the pre-window floor and delivers the whole captured window. The client can therefore see duplicates inside that window rather than a gap. Other topics in the same batch are unaffected: the read is guarded here precisely so one unreadable topic cannot abort the loop and leak the rest as permanently in-flight.
+
+**Automatic recovery.** The subscribe completes on the ordinary no-watermark path, the same answer a hook returning a non-number gives. Possible re-delivery inside the captured window is the cost; nothing is silently lost, because an overflowed or refused flush still escalates to the truncation signal like any other.
+
+**What to do.** Return a plain object from the resume hook. Values whose property reads have side effects cannot be read safely on this path.
+
 ## ADAPTER-ERR-AUTHENTICATE
 
 Severity: error

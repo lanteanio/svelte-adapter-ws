@@ -38,7 +38,7 @@ import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
-import { capCounts, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, sharedTopics, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { capCounts, captureResumeFrame, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, resumeBuffers, sharedTopics, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
 import { cohortTopics, joinSharedCohort, leaveSharedCohort } from './cohort.js';
 import { getSharedWireId, sharedWireIdRefs } from './shared-wire-id.js';
 import { seqBound } from './seq-bound.js';
@@ -63,17 +63,11 @@ import {
 const RELAY_RECEIVE = Symbol('adapter-ws.relay-receive');
 import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload, assertGameLaneClusterSafe } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
-import { captureResumeFrame, resumeCaptureActive } from './resume-capture.js';
+import { WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS } from './config.js';
 import { bumpOut } from './conn-stats.js';
 import { isWarmupRequest } from './warmup-registry.js';
 
 const OPEN = 1;
-
-// Whether a permessage-deflate compressor is configured; when false every
-// send stays uncompressed and the per-message flag costs nothing.
-const WS_COMPRESSION_ON = Boolean(WS_OPTIONS && WS_OPTIONS.compression);
-
-const ALLOW_NON_ASCII_TOPICS = Boolean(WS_OPTIONS && WS_OPTIONS.allowNonAsciiTopics);
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 
@@ -429,9 +423,12 @@ function publish(topic, event, data, options) {
 	counters.publishOutcomeHook?.(recipients > 0);
 	chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 
-	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
-
 	const compress = WS_COMPRESSION_ON && compressOption !== false;
+	// A connection still gap-filling this topic (a resume cutover in flight) is
+	// not yet subscribed to live, so hold this frame in its buffer to flush once
+	// it subscribes - otherwise a publish landing inside the async resume window
+	// is lost. Empty in the common case: one size check guards the hot path.
+	if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, envelope, compress);
 	const sent = (fanOut(topic, envelope, null, compress) & FANOUT_SENT) !== 0;
 	// Relay to sibling workers via the primary; a no-op in single-process
 	// mode (no parentPort). `{ relay: false }` is for a message that arrives
@@ -764,8 +761,8 @@ export const platform = {
 			}
 			if (relayed.length > 0) relayBatched(relayed, compressOptIn);
 		}
-		if (resumeCaptureActive()) {
-			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
+		if (resumeBuffers.size > 0) {
+			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].seq, events[i].env, compressOptIn);
 		}
 		deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressOptIn);
 		// One outcome for the whole fast-path batch: the shared frame is one
@@ -895,9 +892,12 @@ export const platform = {
 		}
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		if (!isRelay) counters.publishCountWindow++;
-		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 		const compressIntent = compressOption === true;
 		const compress = WS_COMPRESSION_ON && compressIntent;
+		// A connection still gap-filling this topic (resume cutover in flight) is not
+		// yet subscribed to live, so hold the JSON envelope it would receive as a
+		// caps-less subscriber; it flushes on subscribe. One guarded size check.
+		if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, envelope, compress);
 		const excludeWs = excludeOption || null;
 
 		// Cross-worker relay decision, taken once for every exit below. A codec
@@ -1355,8 +1355,10 @@ export const platform = {
 					relayCap !== undefined ? datas[i] : undefined);
 			}
 		}
-		if (resumeCaptureActive()) {
-			for (let i = 0; i < count; i++) captureResumeFrame(topic, envelopes[i]);
+		// Resume cutover in flight: hold the per-entry JSON envelopes a caps-less
+		// resuming subscriber would receive from this stateful batch.
+		if (resumeBuffers.size > 0) {
+			for (let i = 0; i < count; i++) captureResumeFrame(topic, seqs[i] === 0 ? null : seqs[i], envelopes[i], compress);
 		}
 		const subscribers = subscribersOf(topic);
 		if (!subscribers) return relayed;
@@ -1987,7 +1989,7 @@ export const platform = {
 		if (seq !== null) recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
 		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));
-		if (resumeCaptureActive()) captureResumeFrame(topic, env);
+		if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, env, false);
 		const subscribers = subscribersOf(topic);
 		let delivered = 0;
 		// The compact fan-out payload is shared by every capable recipient;
@@ -2354,7 +2356,7 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 	// Resume cutover in flight on this worker: hold the JSON envelope a
 	// resuming subscriber would receive from this cross-worker frame. The
 	// codec re-encode path above captures inside publishWire.
-	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
+	if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, envelope, compress === true);
 	const walked = fanOut(topic, envelope, null, WS_COMPRESSION_ON && compress === true);
 	// The receiving worker's fan-out is its own outcome, as on the family's
 	// native tier: the origin reported its local fan-out, this reports ours.
@@ -2430,8 +2432,8 @@ export function relayPublishBatched(events, compress) {
 	}
 	// A resuming connection receives these events as per-event JSON on either
 	// path, so hold each per-event envelope - never the wrapped batch frame.
-	if (resumeCaptureActive()) {
-		for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
+	if (resumeBuffers.size > 0) {
+		for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].seq, events[i].env, compress === true);
 	}
 	if (!batchFastPathEligible(firstTopic, batchTopics)) {
 		// Slow path: per-event fan-out, mirroring the local fallback and the

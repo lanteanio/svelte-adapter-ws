@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching row, a registry method documented in a stale signature, or a help
   string that drifts from the manifest now fails the suite.
 
+- The resume gap-fill flush knows when the socket refuses: it stops at the
+  first frame shed past the backpressure ceiling instead of pushing the rest
+  into the void, sends the client a `truncated` marker on the replay channel
+  so it drops its stale offset and cold-resyncs, closes with 1013 when even
+  the marker is refused, and reports that close to the subscribe lane so no
+  ack or cohort join is attempted on a connection that is gone. A resume
+  hook may report the watermark it covered, per topic or as a bare number on
+  the single lane, and the flush skips what the hook already delivered.
+
+- `ADAPTER-ERR-RESUME-HOOK-READ` (`resume.hook-read-failed`): reading a
+  resume hook's returned value threw for a topic, which is treated as covering
+  nothing for that topic alone.
+
 - Static assets and prerendered pages evaluate `If-Match` and
   `If-Unmodified-Since`, in the RFC 9110 order ahead of `If-None-Match` and
   `If-Modified-Since`, and answer `412 Precondition Failed` when the
@@ -565,6 +578,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface could be broken in every consumer with all other checks green.
 
 ### Changed
+
+- A recover-tagged subscribe opens its resume capture window before it
+  awaits the subscribe gate, on the single and the batch lane, so a frame
+  that follows it in the same TCP read cannot publish into a window not yet
+  open. A subscribe the gate denies closes the window with nothing
+  delivered.
 
 - `ws_publish_outcomes_total` counts fan-outs, not logical publishes, at the
   sites where the family's native tier hands one publish to its transport:

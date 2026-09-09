@@ -89,8 +89,8 @@ import { registerGameIngress, gameLaneClusterSafe } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
 import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
-import { beginResumeCapture, discardResumeCapture, flushResumeTopic } from './resume-capture.js';
-import { bumpIn, bumpOut, setStatsEnabled } from './conn-stats.js';
+import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
+import { bumpIn, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
@@ -2027,8 +2027,19 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// Enrol before the await so a revocation landing while the hook is parked
 	// can see this subscribe and cancel it.
 	const pendingToken = beginPendingSubscribe(userData, msg.topic, subs.has(msg.topic));
+	// Resume-on-subscribe: the capture window opens HERE, before the gate
+	// await, not after it. `ws` delivers every frame of one TCP read back to
+	// back with no microtask checkpoint between them, so a window opened after
+	// the await would miss a publish the very next frame triggers - the publish
+	// the barrier exists to hold. A denial below closes the window with nothing
+	// delivered; the earlier floor only widens the span the resume may
+	// re-deliver, which the client dedups.
+	const _wantsRecover = wantsRecover({ hasResumeHook: wsModule.resume, recover: msg.recover });
+	let capture = _wantsRecover ? beginResumeCapture([msg.topic], facade) : null;
+	let covered;
 	const denial = await runUserSubscribeGate(facade, msg.topic);
 	if (denial !== null) {
+		if (capture !== null) discardResumeCapture(capture);
 		if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
 			unwindRevokedMembership(facade, msg.topic);
 			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
@@ -2038,7 +2049,6 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	}
 	// Post-await held re-check - except when a gap-fill was requested: live
 	// membership arriving during the await carries no history.
-	const _wantsRecover = wantsRecover({ hasResumeHook: wsModule.resume, recover: msg.recover });
 	if (subs.has(msg.topic) && !_wantsRecover) {
 		const heldVerdict = settleHeldSubscribe(userData, msg.topic, pendingToken);
 		if (heldVerdict === 'ack') {
@@ -2056,29 +2066,34 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// the plugin's hook can run; the landing confirms the hook actually
 	// admitted this socket.
 	if (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic), topic: msg.topic })) {
+		if (capture !== null) discardResumeCapture(capture);
 		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
 	if (exceedsSubscriptionCap({ held: subs.has(msg.topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
+		if (capture !== null) discardResumeCapture(capture);
 		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
 	// Resume-on-subscribe: gap-fill via the resume hook before subscribing to
-	// live, so __replay frames precede the first live frame.
-	let capture = null;
+	// live, so __replay frames precede the first live frame. A revoked
+	// recover subscribes plainly, and the window it opened closes empty.
 	const _recoverRevoked = recoverIsRevoked({
 		held: subs instanceof Set && subs.has(msg.topic),
 		wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !hasUserSubscribeHook()),
 		cancelled: isPendingSubscribeCancelled(userData, msg.topic, pendingToken),
 		topic: msg.topic
 	});
-	if (!_recoverRevoked && _wantsRecover) {
+	if (capture !== null && _recoverRevoked) {
+		discardResumeCapture(capture);
+		capture = null;
+	}
+	if (capture !== null) {
 		const epochs = Number.isInteger(msg.recover.epoch) ? { [msg.topic]: msg.recover.epoch } : undefined;
-		capture = beginResumeCapture([msg.topic], facade);
 		try {
-			await wsModule.resume(facade, {
+			covered = await wsModule.resume(facade, {
 				sessionId: userData[WS_SESSION_ID],
 				lastSeenSeqs: { [msg.topic]: msg.recover.offset },
 				lastSeenEpochs: epochs,
@@ -2121,13 +2136,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// A flush that closed the connection leaves nobody to cohort or to ack:
 	// every send below would charge a closed-socket abort for a close this
 	// runtime performed itself, so the landing stops here.
-	if (capture && flushResumeTopic(capture, msg.topic, (payload) => {
-		try {
-			const result = facade.send(payload, false, false);
-			if (result !== 2) bumpOut(userData, payload);
-			return result;
-		} catch { return 2; }
-	})) return;
+	if (capture && flushResumeTopic(capture, msg.topic, coveredSeqFor(covered, msg.topic))) return;
 	// A topic already promoted to shared fan-out cohorts this new joiner
 	// into the right cohort (announcing the server-wide id now) so the
 	// next cohort-split publish reaches it. No-op for an ordinary topic.
@@ -2192,6 +2201,16 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		: valid.filter((_t, i) => !authzDenied[i]);
 	// Enrol every topic in the batch before the hook awaits.
 	const batchTokens = valid.map((t) => beginPendingSubscribe(userData, t, _authzSubs instanceof Set && _authzSubs.has(t)));
+	// The capture window opens with the enrolment, before the hook awaits (see
+	// handleSubscribe): a frame that follows this one in the same TCP read runs
+	// before any await here resumes, and a publish it triggers must land in the
+	// window. A recover-tagged topic the gates then deny keeps nothing: the
+	// sweep after the subscribe loop closes every buffer that was not flushed.
+	let batchCapture = null;
+	if (msg.recover && typeof msg.recover === 'object' && wsModule.resume) {
+		const recovering = valid.filter((t) => wantsRecover({ hasResumeHook: wsModule.resume, recover: msg.recover[t] }));
+		if (recovering.length > 0) batchCapture = beginResumeCapture(recovering, facade);
+	}
 
 	/** @type {Record<string, string> | null} */
 	let batchDenials = null;
@@ -2248,7 +2267,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	let recoverSeqs = null;
 	/** @type {Record<string, number> | null} */
 	let recoverEpochs = null;
-	let batchCapture = null;
+	let batchCovered;
 	if (msg.recover && typeof msg.recover === 'object') {
 		for (let i = 0; i < valid.length; i++) {
 			const t = valid[i];
@@ -2268,9 +2287,8 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			}
 		}
 		if (recoverSeqs !== null && wsModule.resume) {
-			batchCapture = beginResumeCapture(Object.keys(recoverSeqs), facade);
 			try {
-				await wsModule.resume(facade, {
+				batchCovered = await wsModule.resume(facade, {
 					sessionId: userData[WS_SESSION_ID],
 					lastSeenSeqs: recoverSeqs,
 					lastSeenEpochs: recoverEpochs || undefined,
@@ -2329,13 +2347,13 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		// A close here ends the connection, so the topics after this one
 		// have nobody to ack and nothing to flush to. Stop the loop; the
 		// discard below still closes their buffers, and it reads no socket.
-		if (batchCapture && flushResumeTopic(batchCapture, topic, (payload) => {
-			try {
-				const result = facade.send(payload, false, false);
-				if (result !== 2) bumpOut(userData, payload);
-				return result;
-			} catch { return 2; }
-		})) break;
+		if (batchCapture) {
+			// Batch: honor only a per-topic map watermark; a bare number is ambiguous
+			// across topics (it would apply one floor to all and could wrongly skip a
+			// lagging topic), so ignore it here - the pre-window floor covers that topic.
+			const cov = (batchCovered !== null && typeof batchCovered === 'object') ? coveredSeqFor(batchCovered, topic) : undefined;
+			if (flushResumeTopic(batchCapture, topic, cov)) break;
+		}
 		if (sharedTopics.has(topic)) joinSharedCohort(facade, userData, topic, sharedTopics.get(topic));
 		sendSubscribed(facade, topic, ref);
 	}

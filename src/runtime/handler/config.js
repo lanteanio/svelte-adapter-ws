@@ -177,6 +177,21 @@ export function get_origin(headers) {
 	return port ? `${protocol}://${hostWithoutPort}:${port}` : `${protocol}://${host}`;
 }
 
+// Whether a WebSocket permessage-deflate compressor is configured (any non-DISABLED
+// `websocket.compression`). Used by the platform publish/send methods to resolve
+// the per-message `compress` flag: when this is false (the default), every send
+// stays uncompressed exactly as before. Per-message compression is only ever
+// requested when a compressor actually exists, because passing `compress: true`
+// on a connection with no compressor is not free.
+export const WS_COMPRESSION_ON = Boolean(WS_OPTIONS && WS_OPTIONS.compression);
+
+// The observer lanes (`checkSubscribe(..., { requireGrant: true })`) are fed
+// client-named topics even though the check itself lives on the server-side
+// Platform API. Keep their alphabet identical to the wire subscribe boundary.
+// Exported from the shared config module so platform.js reads the same
+// build-substituted WS_OPTIONS value as the wire handler.
+export const ALLOW_NON_ASCII_TOPICS = Boolean(WS_OPTIONS && WS_OPTIONS.allowNonAsciiTopics);
+
 // The reserved admin prefix, or `false` when the auto-mount is off. Derived
 // here rather than at the route registration because the admin handler needs it
 // too: it is what the handler checks the request's own pathname against, and

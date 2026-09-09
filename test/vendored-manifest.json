@@ -1243,22 +1243,6 @@
 			{
 				"lead": "let uWS = null;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\n// Visible skip, never a silent in-body return: a case that returns early on a\n// missing binding reports PASSED with zero assertions, the reporting shape\n// helpers/real-runtime.js exists to forbid.\nconst itUWS = uWS ? it : it.skip;",
 				"ours": "// The lead gates this case on a native binding a contributor may not have.\n// Here the transport is `ws`, an ordinary dependency of this package, so the\n// answer is always yes and the case RUNS - the same reasoning\n// helpers/real-runtime.js records for its own always-true `hasUWS`.\nconst itUWS = it;"
-			},
-			{
-				"lead": "\t/** @type {any} */ let symbols;",
-				"ours": "\t/** @type {any} */ let symbols;\n\t/** @type {any} */ let resume;"
-			},
-			{
-				"lead": "\t\tsymbols = await import(pathToFileURL(path.join(builtDir, '..', 'utils.js')).href);",
-				"ours": "\t\tsymbols = await import(pathToFileURL(path.join(builtDir, '..', 'utils.js')).href);\n\t\tresume = await import(pathToFileURL(path.join(builtDir, 'resume-capture.js')).href);"
-			},
-			{
-				"lead": "\t\tconst capture = { frames: [], overflow: false };\n\t\tstate.resumeBuffers.set(topic, new Set([capture]));",
-				"ours": "\t\t// Opened through the production opener rather than by seeding a module\n\t\t// map: this repo keeps the resume buffers in handler/resume-capture.js,\n\t\t// and driving the real registration path is what a stray capture would\n\t\t// actually have to survive.\n\t\tconst handle = resume.beginResumeCapture([topic], ws);\n\t\tconst capture = handle.entries[0].buffer;"
-			},
-			{
-				"lead": "\t\t\tstate.resumeBuffers.delete(topic);",
-				"ours": "\t\t\tresume.discardResumeCapture(handle);"
 			}
 		]
 	},
@@ -1917,6 +1901,36 @@
 			{
 				"lead": "\t'src/runtime/handler.js',",
 				"ours": "\t'src/runtime/handler/realtime.js',"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/handler/resume-buffer.js"
+	},
+	{
+		"file": "test/resume-flush-refusal.test.js",
+		"adaptations": [
+			{
+				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
+				"ours": "const describeUWS = describe;"
+			}
+		]
+	},
+	{
+		"file": "test/resume-flush-caller-guard.test.js",
+		"adaptations": [
+			{
+				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
+				"ours": "const describeUWS = describe;"
+			}
+		]
+	},
+	{
+		"file": "test/error-registry-resume-divergence.test.js",
+		"adaptations": [
+			{
+				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
+				"ours": "const describeUWS = describe;"
 			}
 		]
 	}

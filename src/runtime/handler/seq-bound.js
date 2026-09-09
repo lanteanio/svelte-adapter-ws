@@ -12,8 +12,7 @@
 import { createSeqBound } from '../utils/seq-bound.js';
 import { TOPIC_SEQS_WARN_THRESHOLD } from '../utils/caps.js';
 import { numSubscribers } from './topic-registry.js';
-import { topicSeqs, maxSeenSeq } from './state.js';
-import { resumeTopicHeld } from './resume-capture.js';
+import { maxSeenSeq, resumeBuffers, topicSeqs } from './state.js';
 import { maybeWarnTopicRegistry } from './pressure-metrics.js';
 
 /* global WS_OPTIONS */
@@ -40,7 +39,7 @@ export const seqBound = createSeqBound({
 	floorCap: CAPACITY === 0 ? 0 : Math.max(1024, Math.floor(CAPACITY / 4)),
 	isProtected(topic) {
 		try {
-			if (resumeTopicHeld(topic)) return true;
+			if (resumeBuffers.size > 0 && resumeBuffers.has(topic)) return true;
 			return numSubscribers(topic) > 0;
 		} catch {
 			return true;

@@ -41,6 +41,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	RELAY_GAP: 'ADAPTER-ERR-RELAY-GAP',
 	DIVERGENCE_QUIET: 'ADAPTER-ERR-DIVERGENCE-QUIET',
 	RESUME_HOOK: 'ADAPTER-ERR-RESUME-HOOK',
+	RESUME_HOOK_READ: 'ADAPTER-ERR-RESUME-HOOK-READ',
 	AUTHENTICATE: 'ADAPTER-ERR-AUTHENTICATE',
 	SSR: 'ADAPTER-ERR-SSR',
 	UPGRADE_HOOK: 'ADAPTER-ERR-UPGRADE-HOOK',
@@ -505,6 +506,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		sources: Object.freeze(['src/runtime/handler/realtime.js']),
 		anchor: 'adapter-err-resume-hook',
 		help: 'docs/errors.md#adapter-err-resume-hook'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.RESUME_HOOK_READ,
+		code: null,
+		event: 'resume.hook-read-failed',
+		component: 'runtime.resume',
+		severity: 'error',
+		emission: 'direct',
+		problemPrefix: 'Reading the resume hook result threw for a topic; that topic is treated as covering nothing.',
+		messagePrefix: direct('runtime.resume', 'resume.hook-read-failed', 'error', 'Reading the resume hook result threw for a topic; that topic is treated as covering nothing.'),
+		cause: 'The resume hook returned a value whose properties threw while being read, typically a getter or a proxy.',
+		consequence: 'That topic loses only the hook\'s watermark report, not its replay: the hook has already run to completion, so whatever it replayed is on the wire, and the held-frame flush falls back to the pre-window floor and delivers the whole captured window. The client can therefore see duplicates inside that window rather than a gap. Other topics in the same batch are unaffected: the read is guarded here precisely so one unreadable topic cannot abort the loop and leak the rest as permanently in-flight.',
+		automaticRecovery: 'The subscribe completes on the ordinary no-watermark path, the same answer a hook returning a non-number gives. Possible re-delivery inside the captured window is the cost; nothing is silently lost, because an overflowed or refused flush still escalates to the truncation signal like any other.',
+		nextAction: 'Return a plain object from the resume hook. Values whose property reads have side effects cannot be read safely on this path.',
+		sources: Object.freeze(['src/runtime/handler/resume-buffer.js']),
+		anchor: 'adapter-err-resume-hook-read',
+		help: 'docs/errors.md#adapter-err-resume-hook-read'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.AUTHENTICATE,

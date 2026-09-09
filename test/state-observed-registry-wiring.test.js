@@ -72,7 +72,7 @@ describe('one observed registry, declared in one place', () => {
 		// scope, so a re-export pointing the other way puts topicSeqs in the
 		// temporal dead zone and the worker never boots.
 		const seqBound = readSource('../src/runtime/handler/seq-bound.js');
-		expect(seqBound).toContain("import { topicSeqs, maxSeenSeq } from './state.js';");
+		expect(seqBound).toContain("import { maxSeenSeq, resumeBuffers, topicSeqs } from './state.js';");
 		expect(seqBound, 'seq-bound.js declares its own registry again').not.toMatch(/export const maxSeenSeq/);
 		expect(seqBound).toContain('seenMap: maxSeenSeq,');
 		const state = readSource('../src/runtime/handler/state.js');
