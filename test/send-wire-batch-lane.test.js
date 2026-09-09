@@ -86,9 +86,11 @@ function connect(caps) {
 	state.wsConnections.add(facade);
 	return {
 		facade,
+		rawWs,
 		sent,
-		/** Frames after the wire-id announce, which is the subscribe's, not this send's. */
+		/** Data frames only: the wire-id announce a first binary send emits is asserted on its own. */
 		frames() { return sent.filter((f) => !(f.text && f.text.startsWith('{"type":"wire-id"'))); },
+		announces() { return sent.filter((f) => f.text && f.text.startsWith('{"type":"wire-id"')); },
 		leave() {
 			state.wsConnections.delete(facade);
 			state.wsWrappers.delete(rawWs);
@@ -167,7 +169,111 @@ describe('sendWireBatch', () => {
 			expect(h.seq).toBe(0);
 			// The batch form went to the codec, with every entry's payload.
 			expect(JSON.parse(new TextDecoder().decode(h.payload))).toEqual(['update-batch', { updates: [{ i: 1 }, { i: 2 }] }]);
+			// The topic's wire id was announced before the first frame that uses it.
+			expect(conn.announces()).toHaveLength(1);
+			expect(conn.sent.indexOf(conn.announces()[0])).toBeLessThan(conn.sent.indexOf(frames[0]));
 		} finally {
+			conn.leave();
+		}
+	});
+
+	it('falls back to one binary frame per entry, each with seq 0, when the codec declines the batch form', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.encode = (event, data) => (event === 'update-batch' ? null : new TextEncoder().encode(JSON.stringify(data)));
+			const result = platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: { i: 1 }, seq: 5 }, { data: { i: 2 }, seq: 6 }], codec);
+			expect(result).toBe(1);
+			const frames = conn.frames();
+			expect(frames.map((f) => f.binary !== undefined)).toEqual([true, true]);
+			expect(frames.map((f) => header(/** @type {Uint8Array} */ (f.binary)).seq)).toEqual([0, 0]);
+			expect(frames.map((f) => JSON.parse(new TextDecoder().decode(header(/** @type {Uint8Array} */ (f.binary)).payload)))).toEqual([{ i: 1 }, { i: 2 }]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('sends the per-entry JSON envelopes when the codec attaches no state to the connection', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.state = { onAttach: () => null };
+			const result = platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec);
+			expect(result).toBe(1);
+			expect(conn.frames().map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`,
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('poisons the capability when the batch frame is shed, and serves JSON from then on', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			// The announce has to get through, so the ceiling is crossed only
+			// after the wire id exists: one warm send, then the socket is buried.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], codec)).toBe(1);
+			conn.rawWs.bufferedAmount = 2 * 1024 * 1024;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }], codec)).toBe(2);
+			conn.rawWs.bufferedAmount = 0;
+			const before = conn.frames().length;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 2 }, { data: 3 }], codec)).toBe(1);
+			// Poisoned: a capable connection is served the envelopes, never a frame
+			// its decoder could no longer follow.
+			expect(conn.frames().slice(before).map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":2}`,
+				`{"topic":"${TOPIC}","event":"update","data":3}`
+			]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('counts every frame it sends in the connection stats', async () => {
+		const dir = pathToFileURL(payload.dir).href;
+		const stats = await import(`${dir}/handler/conn-stats.js`);
+		const conn = connect([CAP]);
+		const plain = connect([]);
+		try {
+			stats.setStatsEnabled(true);
+			const ud = conn.facade.getUserData();
+			const pd = plain.facade.getUserData();
+			ud[symbols.WS_STATS] = { messagesOut: 0, bytesOut: 0 };
+			pd[symbols.WS_STATS] = { messagesOut: 0, bytesOut: 0 };
+			platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec());
+			platform.sendWireBatch(plain.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec());
+			// The capable connection got the announce and one batch frame; the
+			// plain one got two envelopes.
+			expect(ud[symbols.WS_STATS].messagesOut).toBe(2);
+			expect(pd[symbols.WS_STATS].messagesOut).toBe(2);
+			expect(ud[symbols.WS_STATS].bytesOut).toBeGreaterThan(0);
+			expect(pd[symbols.WS_STATS].bytesOut).toBe(2 * Buffer.byteLength(`{"topic":"${TOPIC}","event":"update","data":1}`));
+		} finally {
+			stats.setStatsEnabled(false);
+			conn.leave();
+			plain.leave();
+		}
+	});
+
+	it('charges one closed-socket abort for a connection that closed under the walk, and stops', async () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			// A codec that declines the batch form and every entry, so the walk
+			// has three envelope sends to attempt and no reason of its own to
+			// stop early; a closed socket must cost one abort, not three.
+			const warm = statefulCodec();
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], warm)).toBe(1);
+			codec.encode = () => null;
+			conn.rawWs.readyState = 3;
+			const before = state.counters.closedWsAborts;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }, { data: 3 }], codec)).toBe(2);
+			expect(state.counters.closedWsAborts - before).toBe(1);
+		} finally {
+			conn.rawWs.readyState = 1;
 			conn.leave();
 		}
 	});

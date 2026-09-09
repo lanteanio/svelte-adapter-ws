@@ -111,6 +111,10 @@ beforeAll(async () => {
 	// 'uniform' is held by batch-capable sockets only; 'mixed' by a capable and
 	// a plain one; 'nobody' by no socket at all.
 	await connect('capableThree', ['batch'], ['uniform']);
+	// 'buried' is held by one socket sitting past its backpressure ceiling, so
+	// every send to it is shed.
+	const shed = await connect('shed', [], ['buried']);
+	shed.rawWs.bufferedAmount = 2 * 1024 * 1024;
 }, 60000);
 
 afterAll(() => {
@@ -124,6 +128,28 @@ describe('the single-publish lane', () => {
 		platform.publish('mixed', 'e', 1);
 		platform.publish('nobody', 'e', 1);
 		expect(take()).toEqual([true, false]);
+	});
+
+	it('reports a subscriber past its backpressure ceiling as reached, while the publish itself reports no send', () => {
+		// A shed frame is a fan-out that reached a subscriber and delivered
+		// nothing: the outcome family says reached, the return value says not
+		// sent, and the two must not be read off one bit.
+		const shed = connections.find((c) => c.name === 'shed');
+		expect(shed, 'the buried subscriber is scripted in').toBeDefined();
+		const stateless = {
+			capability: NOBODY_CAP,
+			schemaVersion: 1,
+			encode(event, data) { return new TextEncoder().encode(JSON.stringify([event, data])); }
+		};
+		take();
+		// The lanes that read the outcome off the walk itself: the wire fast
+		// path and the relay receive half.
+		expect(platform.publishWire('buried', 'pos', { x: 1 }, stateless)).toBe(false);
+		relay.relayPublish('buried', envelope('buried', 'e', 1), false, null);
+		expect(take()).toEqual([true, true]);
+		// And the single-publish lane's return value says not sent.
+		expect(platform.publish('buried', 'e', 1)).toBe(false);
+		take();
 	});
 
 	it('reports one outcome per message of a batch(), which is N publishes', () => {
@@ -218,7 +244,8 @@ describe('the wire lane', () => {
 		};
 		take();
 		platform.publishWire('wired', 'pos', { x: 1 }, declining);
-		expect(take()).toEqual([true]);
+		platform.publishWire('nobody', 'pos', { x: 1 }, declining);
+		expect(take()).toEqual([true, false]);
 	});
 
 	it('reports nothing for a stateful walk', () => {
@@ -333,6 +360,13 @@ describe('the relay receive half', () => {
 			{ topic: 'uniform', env: envelope('uniform', 'b', 2), seq: null }
 		], false);
 		expect(take()).toEqual([true]);
+		// The shape most receiving workers see: no local subscriber, so the
+		// fast path is trivially eligible and its one frame reaches nobody.
+		relay.relayPublishBatched([
+			{ topic: 'nobody', env: envelope('nobody', 'a', 1), seq: null },
+			{ topic: 'nobody', env: envelope('nobody', 'b', 2), seq: null }
+		], false);
+		expect(take()).toEqual([false]);
 	});
 
 	it('reports one outcome per event for a relayed batch it fans out per event', () => {

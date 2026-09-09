@@ -571,10 +571,11 @@ function batchFastPathEligible(firstTopic, batchTopics) {
 			if (touchesAny && !touchesAll) return false;
 		}
 		if (!touchesAny) continue;
-		// A registered socket with no facade yet has advertised nothing: it
-		// cannot be judged capable, so the batch takes the slow path.
+		// A socket is registered and wrapped in one synchronous block, so one
+		// without a facade is not a live connection; the walk that delivers
+		// skips it, and so does this.
 		const facade = wsWrappers.get(rawWs);
-		if (!facade) return false;
+		if (!facade) continue;
 		const caps = /** @type {any} */ (facade).getUserData()[WS_CAPS];
 		if (!caps || !caps.has('batch')) return false;
 	}
@@ -613,9 +614,9 @@ function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 		if (!receives) continue;
 		const facade = wsWrappers.get(rawWs);
 		if (!facade) continue;
-		reached = true;
 		try {
 			/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
+			reached = true;
 			bumpOut(/** @type {any} */ (facade).getUserData(), sharedBatchEnv);
 		} catch {
 			counters.closedWsAborts++;
@@ -1009,8 +1010,8 @@ export const platform = {
 			// other exit of this lane is a per-connection walk, which the
 			// family does not count.
 			// `recipients` is the admission read of this topic's live count and,
-			// with no exclusion, exactly what the walk below reaches; only the
-			// relay path, which took no admission, reads the registry here.
+			// with no exclusion, what the walk below reaches; only the relay
+			// path, which took no admission, reads the registry here.
 			if (payload == null && excludeWs === null) counters.publishOutcomeHook?.((isRelay ? numSubscribers(topic) : recipients) > 0);
 			if (relayed) {
 				// A declined frame (null payload) declines identically on every
@@ -1445,28 +1446,42 @@ export const platform = {
 		if (!Array.isArray(entries) || entries.length === 0) return 1;
 		let ud = null;
 		try { ud = /** @type {any} */ (ws).getUserData(); } catch { counters.closedWsAborts++; return 2; }
+		const caps = ud[WS_CAPS];
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		const count = entries.length;
+		// The JSON-only send reads each entry as it reaches it and allocates
+		// nothing but the string it sends; `source` is the pinned payload array
+		// once the binary path has read the entries, so a fallback from there
+		// sees what the batch encode saw.
+		const sendJsonFrom = (i, source) => {
+			let result = 1;
+			for (; i < count; i++) {
+				const d = source === null ? entries[i].data : source[i];
+				const json = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(d ?? null) + '}';
+				try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
+				bumpOut(ud, json);
+			}
+			return result;
+		};
+		if (!caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability) || !wire.state) {
+			return sendJsonFrom(0, null);
+		}
+		const state = ensureWireState(ws, ud, wire);
+		if (state == null) return sendJsonFrom(0, null);
+		// From here the payloads are pinned: the batch encode is handed the whole
+		// array, and a decline falls back to per-entry encodes that must see the
+		// same values.
 		const datas = new Array(count);
 		const envelopes = new Array(count);
 		for (let i = 0; i < count; i++) {
 			datas[i] = entries[i].data;
 			envelopes[i] = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
 		}
-		const sendJson = () => {
-			let result = 1;
-			try {
-				for (const env of envelopes) {
-					result = /** @type {any} */ (ws).send(env, false, compress);
-					bumpOut(ud, env);
-				}
-			} catch { counters.closedWsAborts++; return 2; }
-			return result;
-		};
-		const caps = ud[WS_CAPS];
-		if (!wire || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability) || !wire.state) return sendJson();
-		const state = ensureWireState(ws, ud, wire);
-		if (state == null) return sendJson();
+		// One thrown send ends the call: the first is charged as a closed-socket
+		// abort and every later frame of this batch is refused without touching
+		// the socket again, so a connection that closed under the walk costs
+		// one abort, not one per entry.
+		let gone = false;
 		const result = deliverStatefulWireBatch({
 			wire,
 			event,
@@ -1480,7 +1495,14 @@ export const platform = {
 			ensureId: ensureWireId,
 			poison: poisonWireState,
 			compress,
-			counters
+			counters,
+			send(target, value, binary) {
+				if (gone) return 3;
+				let r;
+				try { r = /** @type {any} */ (target).send(value, binary, compress); } catch { counters.closedWsAborts++; gone = true; return 3; }
+				bumpOut(ud, value);
+				return r;
+			}
 		});
 		return result === 3 ? 2 : result;
 	},
