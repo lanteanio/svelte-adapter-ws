@@ -658,6 +658,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `options.excludeWs` on `platform.publish`, `platform.batch` and
+  `platform.publishBatched`. The family's JSON lanes read `seq`, `relay`,
+  `compress` and `jitterMs` and nothing else; sender exclusion is a wire-lane
+  option, on `publishWire` and per entry or per call on `publishWireBatch`,
+  and that is where it stays. The `Platform.publish` declaration no longer
+  names it.
+
+- `Platform.assertions` from the declarations. The runtime member stays; the
+  family's declaration does not name it.
+
 - `ADAPTER-ERR-CLUSTER-CONFIG-NODE` and `ADAPTER-ERR-CLUSTER-CONFIG-ACCEPTOR`:
   the family's catalog declares neither, and an operator whose runbook keys on
   an id only this adapter mints finds nothing on the lead. Both refusals keep
@@ -677,6 +687,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebSocketOptions['pressure']`.
 
 ### Fixed
+
+- The `Platform` declaration carries `trace`, `bumpTopicEpoch`, a typed
+  `traceContext` and a readonly `requestId`, the way the family declares
+  them; `publish` accepts the same `seq` values as the runtime (`bigint` and
+  `null` included).
 
 - A custom 101 header named `Connection`, `Upgrade`, `Sec-WebSocket-Accept`,
   `Sec-WebSocket-Extensions` or `Sec-WebSocket-Protocol` is refused by

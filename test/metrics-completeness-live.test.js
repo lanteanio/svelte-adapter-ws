@@ -189,11 +189,9 @@ describe('a booted worker reports a complete metrics document', () => {
 });
 
 // The outcome family answers "did this publish reach anyone", and every lane
-// in the family has to answer it the same way. The single-publish lanes deduct
-// an excluded socket that holds the topic; the two batch lanes read the bare
-// subscriber count, so a publish that reached nobody counted as delivered.
-// "Broadcast to the room excluding the sender" makes that every publish into a
-// room of one.
+// in the family has to answer it the same way: the single-publish lane and
+// the batched lane both read the topic's subscriber count, so a publish into
+// a topic nobody holds is no_subscribers on either.
 describe('the outcome family counts a publish that reached nobody as no_subscribers', () => {
 	const DRIVER = `
 export function open() {}
@@ -203,17 +201,18 @@ export function message(ws, { data, msg, platform }) {
 	let cmd;
 	try { cmd = JSON.parse(new TextDecoder().decode(data)); } catch { return; }
 	if (cmd.cmd !== 'drive') return;
-	// Every call excludes the only subscriber, so nothing reaches a socket.
-	platform.publish('solo', 'e', 1, { excludeWs: ws });
+	// The driving socket holds 'solo'; every call below goes to a topic no
+	// socket holds, so nothing reaches anyone on either lane.
+	platform.publish('nobody', 'e', 1);
 	platform.publishBatched([
-		{ topic: 'solo', event: 'a', data: 1, options: { excludeWs: ws } },
-		{ topic: 'solo', event: 'b', data: 2, options: { excludeWs: ws } }
+		{ topic: 'nobody', event: 'a', data: 1 },
+		{ topic: 'nobody', event: 'b', data: 2 }
 	]);
 	platform.send(ws, 'outcome', 'done', { ok: true });
 }
 `;
 
-	it('deducts the excluded socket on the batch lanes too', async () => {
+	it('reports no_subscribers on the batched lane too', async () => {
 		const built = buildRuntime({
 			replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) },
 			wsHandlerSource: DRIVER,

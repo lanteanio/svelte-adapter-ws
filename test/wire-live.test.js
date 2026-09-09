@@ -79,9 +79,6 @@ export async function message(ws, { data, msg, platform }) {
 		const entries = cmd.entries.map((e) => ('excludeWs' in e ? { ...e, excludeWs: resolve(e.excludeWs) } : e));
 		const options = cmd.options && 'excludeWs' in cmd.options ? { ...cmd.options, excludeWs: resolve(cmd.options.excludeWs) } : cmd.options;
 		platform.publishWireBatch(cmd.topic, cmd.event, entries, statelessCodec, options);
-	} else if (cmd.cmd === 'batch') {
-		platform.batch([{ topic: cmd.topic, event: cmd.event, data: cmd.data,
-			options: cmd.excludeSelf ? { excludeWs: ws } : undefined }]);
 	}
 }
 `;
@@ -360,26 +357,4 @@ describe('publish option contracts', () => {
 		audience.close();
 	});
 
-	it('batch() honors per-message excludeWs (sender echo suppression)', async () => {
-		const sender = connect();
-		const other = connect();
-		await sender.open();
-		await other.open();
-		sender.send({ type: 'subscribe', topic: 'echo.room', ref: 1 });
-		other.send({ type: 'subscribe', topic: 'echo.room', ref: 1 });
-		await sender.next((f) => f.json?.type === 'subscribed');
-		await other.next((f) => f.json?.type === 'subscribed');
-
-		sender.send(JSON.stringify({ cmd: 'batch', topic: 'echo.room', event: 'move', data: { x: 1 }, excludeSelf: true }));
-		// The other subscriber receives the excluded event; the sender only
-		// ever sees the marker published after it, proving the exclusion
-		// rather than racing a delivery that had not arrived yet.
-		const atOther = await other.next((f) => f.json?.event === 'move');
-		expect(atOther.json.data).toEqual({ x: 1 });
-		sender.send(JSON.stringify({ cmd: 'batch', topic: 'echo.room', event: 'marker', data: null }));
-		await sender.next((f) => f.json?.event === 'marker');
-		expect(sender.frames.some((f) => f.json?.event === 'move')).toBe(false);
-		sender.close();
-		other.close();
-	});
 });

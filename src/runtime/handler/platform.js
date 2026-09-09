@@ -295,7 +295,7 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
  * @param {string} topic
  * @param {string} event
  * @param {unknown} [data]
- * @param {{ relay?: boolean, seq?: boolean | number, compress?: boolean, jitterMs?: number, excludeWs?: object } | undefined} [options]
+ * @param {{ relay?: boolean, seq?: boolean | number, compress?: boolean, jitterMs?: number } | undefined} [options]
  * @returns {boolean}
  */
 /**
@@ -363,7 +363,6 @@ function publish(topic, event, data, options) {
 	const relayOption = options != null ? options.relay : undefined;
 	const compressOption = options != null ? options.compress : undefined;
 	const jitterOption = options != null ? options.jitterMs : undefined;
-	const excludeWs = (options && options.excludeWs) || null;
 	assertClusterSequenceAuthorityValues(seqOption, relayOption);
 	// The VALUE, ahead of the ceiling below. Stamping is the last step on this
 	// lane, so a seq the wire cannot carry used to be answered with a plain
@@ -373,13 +372,11 @@ function publish(topic, event, data, options) {
 	assertStampableSeq(seqOption);
 
 	// Egress recipients are the topic's local subscribers, read once per
-	// logical publish, with an excluded socket that holds the topic deducted;
-	// the ceiling decision runs BEFORE the sequence is stamped, so a refused
-	// publish leaves no client-visible seq gap and nothing reaches the fan-out
-	// or the relay.
-	const recipients = excludedRecipient(excludeWs, topic)
-		? Math.max(0, numSubscribers(topic) - 1)
-		: numSubscribers(topic);
+	// logical publish; the ceiling decision runs BEFORE the sequence is
+	// stamped, so a refused publish leaves no client-visible seq gap and
+	// nothing reaches the fan-out or the relay. Sender exclusion is a wire-lane
+	// option (publishWire, publishWireBatch); this lane reads none.
+	const recipients = numSubscribers(topic);
 	let egressTenant = null;
 	if (egressGate.armed) {
 		egressTenant = resolvePublishTenant(topic);
@@ -419,13 +416,11 @@ function publish(topic, event, data, options) {
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
 	const compress = WS_COMPRESSION_ON && compressOption !== false;
-	const sent = fanOut(topic, envelope, excludeWs, compress);
+	const sent = fanOut(topic, envelope, null, compress);
 	// Relay to sibling workers via the primary; a no-op in single-process
 	// mode (no parentPort). `{ relay: false }` is for a message that arrives
 	// through an external pub/sub source (Redis, Postgres) that already fans
 	// out to every process - relaying it again would deliver duplicates.
-	// Exclusion stays local: an excluded socket cannot be connected to any
-	// other worker, so the relay still fires exactly once.
 	const relayed = !!(parentPort && relayOption !== false);
 	if (relayed) {
 		// The stamped seq rides as explicit relay-frame metadata so the
@@ -608,13 +603,11 @@ export const platform = {
 		const msgSeqs = new Array(messages.length);
 		const msgRelays = new Array(messages.length);
 		const msgJitters = new Array(messages.length);
-		const msgExcludes = new Array(messages.length);
 		for (let i = 0; i < messages.length; i++) {
 			const o = /** @type {any} */ (messages[i].options);
 			const seqOption = o != null ? o.seq : undefined;
 			const relayOption = o != null ? o.relay : undefined;
 			msgJitters[i] = o != null ? o.jitterMs : undefined;
-			msgExcludes[i] = o != null ? o.excludeWs : undefined;
 			assertClusterSequenceAuthorityValues(seqOption, relayOption);
 			// And the VALUE, here rather than in the stamping loop below. This
 			// path loses no frame either way - its send sits after the loop -
@@ -666,7 +659,7 @@ export const platform = {
 				const m = messages[i];
 				publish(m.topic, m.event, m.data, /** @type {any} */ (markAdmitted({
 					seq: msgSeqs[i], relay: msgRelays[i], jitterMs: msgJitters[i],
-					excludeWs: msgExcludes[i], compress: compressOptIn
+					compress: compressOptIn
 				})));
 			}
 			return;
@@ -693,14 +686,7 @@ export const platform = {
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
 			counters.publishCountWindow++;
-			// The excluded socket is deducted per ENTRY, the way the single
-			// publish lanes do it. Reading the bare topic count instead reports
-			// a publish that reached nobody as delivered, and "broadcast to the
-			// room excluding the sender" makes that every publish into a room
-			// of one.
-			counters.publishOutcomeHook?.(
-				(excludedRecipient(msgExcludes[i], m.topic) ? recipients - 1 : recipients) > 0
-			);
+			counters.publishOutcomeHook?.(recipients > 0);
 			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
 			// See publish(): the compare-free record for the monotonic in-memory
 			// counter, the monotone-max guard for an explicit numeric seq.
@@ -758,7 +744,7 @@ export const platform = {
 			const o = /** @type {any} */ (messages[i].options);
 			const snap = o == null
 				? o
-				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };
+				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };
 			assertClusterSequenceAuthority(snap);
 			// And the VALUE, on the same snapshot the authority check just
 			// read. The authority question is answered for the whole batch up

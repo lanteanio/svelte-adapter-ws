@@ -315,7 +315,7 @@ describe('cluster sequence authority policy', () => {
 		// batch() snapshots each message's option fields once and judges the
 		// snapshot, then hands publish() the SAME snapshot - so the atomic
 		// pre-pass and the per-message stamp cannot disagree.
-		expect(loopBatch).toContain(': { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs, excludeWs: o.excludeWs };');
+		expect(loopBatch).toContain(': { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };');
 		expectStatement(loopBatch, 'assertClusterSequenceAuthority(snap);', 'batch vets every snapshot');
 		expect(loopBatch.indexOf('assertClusterSequenceAuthority(snap);'),
 			'batch must vet every snapshot before the first publish')

@@ -1,5 +1,5 @@
 import type { Adapter } from '@sveltejs/kit';
-import type { TraceContext } from './observability.js';
+import type { TraceContext, TraceOperationOptions, TraceSpan } from './observability.js';
 import type { upgradeResponse } from './upgrade-response.js';
 
 /**
@@ -753,7 +753,7 @@ export interface MetricsRegistry {
  * documentation in svelte-adapter-uws; the shapes here type the core surface.
  */
 export interface Platform {
-	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number; compress?: boolean; jitterMs?: number; excludeWs?: object }): boolean;
+	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number | bigint | null; compress?: boolean; jitterMs?: number }): boolean;
 	publishBatched(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>, options?: { compress?: boolean }): void;
 	batch(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>): boolean[];
 	send(ws: object, topic: string, event: string, data?: unknown, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
@@ -783,6 +783,7 @@ export interface Platform {
 	diagnostic(diagnosticId: string): unknown;
 	topic(name: string): object;
 	topicEpoch(name: string): number;
+	bumpTopicEpoch(topic: string): number;
 	onPressure(cb: (snapshot: PressureSnapshot) => void): () => void;
 	onPublishRate(cb: (top: PressureSnapshot['topPublishers']) => void): () => void;
 	now(): number;
@@ -815,11 +816,18 @@ export interface Platform {
 	 * answer does not know how many siblings it has.
 	 */
 	metricsSnapshot(options?: { timeoutMs?: number }): Promise<string | null>;
-	readonly assertions: Map<string, number>;
 	readonly closedWsAborts: number;
 	readonly maxPayloadLength: number;
-	readonly traceContext: unknown;
-	requestId?: string;
+	readonly traceContext: TraceContext | null;
+	readonly trace: Readonly<{
+		readonly enabled: boolean;
+		current(): TraceContext | null;
+		extract(carrier: Headers | Record<string, unknown>): TraceContext | null;
+		inject<T extends Headers | Record<string, string>>(carrier: T, context?: TraceContext | null): T;
+		run<T>(name: string, options: TraceOperationOptions, fn: (span: TraceSpan | null) => T): T;
+		withContext<T>(context: TraceContext | null, fn: () => T): T;
+	}>;
+	readonly requestId: string;
 }
 
 /**
