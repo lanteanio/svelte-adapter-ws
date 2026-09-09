@@ -2392,7 +2392,15 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 				platform: userData[WS_PLATFORM]
 			});
 		} catch (err) {
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RESUME_HOOK), err);
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.resume',
+				event: 'resume.hook-failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'The resume hook threw; the client falls back to a fresh subscribe.',
+				attributes: { error: diagnosticError(err) }
+			});
 		}
 	}
 	sendControl(facade, '{"type":"resumed"}');

@@ -206,6 +206,42 @@ Log line begins:
 
 **What to do.** Read the attached error and look at whatever instruments the process; a DataCloneError names the wrapper's payload, not the adapter's. A primary that died or a port that closed does NOT emit this event - that posting is a silent no-op and the collection deadline answers degraded without a line - so the absence of this line is not evidence the primary is healthy. Compare the expected and reporting worker counts for that.
 
+## ADAPTER-ERR-SINK-FAILED
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.observability event=operational.sink.failed severity=error] The configured operational event sink failed; console fallback was restored for this event.
+```
+
+**Cause.** The application-supplied operational event sink threw while handling an event.
+
+**Consequence.** That event went to the console instead of the sink. If the sink is the only path into log aggregation, events are reaching the process output and nothing else.
+
+**Automatic recovery.** Per event. The sink is attempted again for the next event rather than being disabled.
+
+**What to do.** Fix the sink so it cannot throw; a sink that throws for a class of events loses exactly that class from aggregation while the console keeps them.
+
+## ADAPTER-ERR-PRESSURE-LISTENER
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.listener-failed severity=error] A pressure listener failed.
+```
+
+**Cause.** An application listener registered through platform.onPressure for pressure-state notifications threw.
+
+**Consequence.** That listener missed the notification. Pressure accounting itself is unaffected, so shedding and limits still apply.
+
+**Automatic recovery.** Yes. A throwing listener stays registered and is called again on the next notification.
+
+**What to do.** Fix the listener. Application code that reacts to pressure by shedding load is not running while it throws, so the process can stay under pressure longer than intended.
+
 ## ADAPTER-ERR-PRESSURE-RUNAWAY-PUBLISHER
 
 Severity: warn
@@ -277,6 +313,24 @@ Log line begins:
 **Automatic recovery.** Yes, by time: the window rotates (default 1000 ms) and publishing under the ceiling resumes on its own. Relayed frames from sibling workers are never refused.
 
 **What to do.** Decide whether the traffic or the ceiling is wrong. The attributes name the scope, the dimension (messages, bytes, or deliveries), and the configured limit; read the topic reference beside your `pressure.topPublishers` deliveries figures to see whether one publisher is spending the budget. Raise the ceiling in `websocket.egress` if the load is intended. On the dev plugin this event is the whole report: dev enforces the ceilings live but registers no metrics and reports its pressure egress figures as zeros, so the counts named above exist only in production and createTestServer.
+
+## ADAPTER-ERR-EGRESS-EVICTED
+
+Severity: warn
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.window-evicted severity=warn] The egress ledger dropped a usage window that was still counting, so that key is unmetered for the rest of it.
+```
+
+**Cause.** More distinct topics or tenants published inside one window than the ledger can hold, so seating a new key took a live window from another. The ledger reclaims lapsed windows first and only evicts a live one when none is left, which makes this a statement about topic or tenant CARDINALITY rather than about publish volume. Per scope the line is throttled to once a minute, so it reports the condition rather than every eviction - which would fire at the rate of the churn causing it.
+
+**Consequence.** The evicted key starts its next publish from an empty window, so its ceiling cannot refuse anything it already spent: enforcement is not wrong for other keys, it is ABSENT for that one until the window it lost would have rotated. A deployment that evicts steadily is one where the busiest topics are metered and the tail is not.
+
+**Automatic recovery.** Partly, and only by the traffic changing: the ledger holds its bound and keeps serving, and cardinality falling back under the bound restores full enforcement on its own. Nothing raises the bound.
+
+**What to do.** Treat it as a cardinality problem, not a capacity one. Check whether topic names embed unbounded identifiers, and scope tenant ids to the tenants you actually meter. The exact count is `egress_evicted_total{scope}` in production and createTestServer; the dev plugin registers no metrics, so there this line is the whole report.
 
 ## ADAPTER-ERR-EGRESS-TENANT-RESOLVER
 
@@ -357,7 +411,7 @@ Severity: error
 Log line begins:
 
 ```
-[svelte-adapter-ws] the resume hook threw
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.resume event=resume.hook-failed severity=error] The resume hook threw; the client falls back to a fresh subscribe.
 ```
 
 **Cause.** The application resume hook threw while answering a client GAP-FILL request, so some or all of the replay frames it owed were never sent. The same hook failing on the subscribe-time backfill is ADAPTER-ERR-RECOVER-HOOK instead.
@@ -537,16 +591,34 @@ Severity: warn
 Log line begins:
 
 ```
-[svelte-adapter-ws] [tls] certificate reload failed; serving the previous certificate
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.reload-skipped severity=warn] A certificate reload was skipped and the previous certificate was kept; the renewal on disk is not being served.
 ```
 
 **Cause.** A certificate change was seen on disk but not applied, usually because the new material was unreadable or incomplete at the moment it was read.
 
-**Consequence.** The server keeps serving the previous certificate. The renewal on disk is not in use, so the served certificate can expire while a valid one sits unread. READINESS PROBES STAY GREEN throughout, which is what makes this quiet.
+**Consequence.** The server keeps serving the previous certificate and enters a degraded TLS state. The renewal on disk is not in use, so the served certificate can expire while a valid one sits unread. READINESS PROBES STAY GREEN throughout, which is what makes this quiet.
 
-**Automatic recovery.** The next watcher event retries the reload; a clean read applies the renewal.
+**Automatic recovery.** The next reload that succeeds applies the certificate and clears the degraded state.
 
-**What to do.** Confirm the served certificate matches the one on disk rather than assuming renewal succeeded - the probe cannot see this. Treat the warning as expiry risk, not noise.
+**What to do.** Confirm the served certificate matches the one on disk rather than assuming renewal succeeded, and read the TLS degraded state rather than the probe, which cannot see this. Treat the warning as expiry risk, not noise.
+
+## ADAPTER-ERR-TLS-SWAP
+
+Severity: error
+
+Log line begins:
+
+```
+[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.swap-failed severity=error] A certificate swap failed mid-apply; some SNI hosts may be unroutable until the retry succeeds.
+```
+
+**Cause.** Applying a new certificate set failed partway through the swap.
+
+**Consequence.** The swap is partial: a host already moved to the new certificate has a fresh, empty SNI router until the retry replays the routes, so its handshakes complete while its requests are force-closed; a host removed but not yet re-added falls back to the default context, so it serves the boot-time certificate and its handshakes complete wherever that certificate covers it. The TLS degraded state is set for the duration.
+
+**Automatic recovery.** A one-shot retry is armed from the failure itself, rather than from the next filesystem event, because the throw may have consumed the last event of a renewal burst and the next one could be months away. A persistent fault therefore retries at that cadence instead of spinning.
+
+**What to do.** Probe every SNI host with an HTTP request rather than only a handshake: both partial shapes complete handshakes while a host is either force-closing requests or still serving the boot certificate. Then read the attached error to pick the repair - certificate material explains only a throw inside the apply step, while a route-replay failure has nothing wrong with the material and resolves through the armed retry or a restart.
 
 ## ADAPTER-ERR-TLS-WATCH
 

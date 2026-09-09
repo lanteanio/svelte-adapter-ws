@@ -488,15 +488,17 @@ describe('native TLS', () => {
 		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
 		writeFileSync(extraCert, readFileSync(path.join(fixtures, 'wild.crt')));
 		writeFileSync(extraKey, '-----BEGIN PRIVATE KEY-----\ntorn');
-		const errors = [];
-		const originalError = console.error;
-		console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+		// A skipped reload is a warn-severity operational event, and the default
+		// sink writes those through console.warn.
+		const warnings = [];
+		const originalWarn = console.warn;
+		console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
 		try {
 			rt.handler.reloadTls();
 		} finally {
-			console.error = originalError;
+			console.warn = originalWarn;
 		}
-		expect(errors.some((line) => line.includes('ADAPTER-ERR-TLS-RELOAD-SKIPPED'))).toBe(true);
+		expect(warnings.some((line) => line.includes('event=tls.reload-skipped'))).toBe(true);
 		// The default still serves the boot certificate: the claim in the
 		// degraded reason is true of every pair, not only the torn one.
 		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');

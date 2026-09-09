@@ -21,7 +21,7 @@ import {
 	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
 	recordBootCertExpiry, stopTlsReload, tlsWatchDegraded
 } from './tls-state.js';
-import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
+import { ADAPTER_ERROR_IDS } from '../error-registry.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 
 // How long stapling keeps serving the last good OCSP response after the
@@ -316,7 +316,15 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	/** @type {import('node:tls').SecureContext[]} */
 	let pairContexts = sniPairs.map(({ context }) => context);
 
-	return () => {
+	// The one-shot retry a mid-apply failure arms from its own failure path:
+	// the throw may have consumed the last fs event of the renewal burst, so
+	// waiting for the next watcher event could mean waiting for the next
+	// renewal months away. Each retry re-arms only from its own failure, so a
+	// persistent fault retries at this cadence (loudly) instead of spinning.
+	/** @type {any} */
+	let retryTimer = null;
+
+	const reload = () => {
 		// Whether this pass genuinely put different bytes in front of a client.
 		// Only what actually changed counts, which is what makes a fleet's
 		// generation numbers comparable.
@@ -410,7 +418,14 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				// in pair order so a host two certificates carry keeps going to
 				// the later one exactly as it did at boot.
 				if (nextDefault !== null) {
-					server.setSecureContext(nextDefault);
+					try {
+						server.setSecureContext(nextDefault);
+					} catch (err) {
+						// The server was touched: "kept the previous cert" would
+						// be a lie from here, and the catch below must say so.
+						/** @type {any} */ (err).tlsAppTouched = true;
+						throw err;
+					}
 					servedFingerprint = fingerprint;
 					swapped = true;
 				}
@@ -426,18 +441,49 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
 			}
 		} catch (err) {
+			if (err && /** @type {any} */ (err).tlsAppTouched) {
+				// The default context was being replaced when the swap failed.
+				// Clear the fingerprint so the next watcher event or broadcast
+				// bypasses the gate and re-runs the full swap instead of
+				// no-opping until the next genuine renewal months away.
+				servedFingerprint = null;
+				emitOperationalEvent({
+					source: 'svelte-adapter-ws',
+					component: 'runtime.tls',
+					event: 'tls.swap-failed',
+					severity: 'error',
+					dataClass: 'pseudonymous',
+					message: 'A certificate swap failed mid-apply; some SNI hosts may be unroutable until the retry succeeds.',
+					attributes: { error: diagnosticError(err) }
+				});
+				markTlsFailed(err, 'a certificate swap failed mid-apply');
+				if (retryTimer === null) {
+					retryTimer = setTimer(() => { retryTimer = null; reload(); }, ssl_reload_debounce_ms > 0 ? ssl_reload_debounce_ms : 500);
+					if (typeof retryTimer?.unref === 'function') retryTimer.unref();
+				}
+				return;
+			}
 			// A renewal mid-write can present a torn pair; the next watcher
 			// event (or reload broadcast) retries. The served context stays on
 			// the previous certificate set, default included - nothing was
 			// swapped before every pair validated - so there is no partial swap
-			// to report and no retry to arm.
-			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_RELOAD_SKIPPED), err);
+			// to report.
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.tls',
+				event: 'tls.reload-skipped',
+				severity: 'warn',
+				dataClass: 'pseudonymous',
+				message: 'A certificate reload was skipped and the previous certificate was kept; the renewal on disk is not being served.',
+				attributes: { error: diagnosticError(err) }
+			});
 			// Degraded rather than benign: the renewal on disk is NOT being
 			// served, and every probe stays green while the certificate that IS
 			// being served runs down. Cleared by the next reload that succeeds.
 			markTlsFailed(err, 'the certificate on disk did not validate, so the previous one is still being served');
 		}
 	};
+	return reload;
 }
 
 /**
