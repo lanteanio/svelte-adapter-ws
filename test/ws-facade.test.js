@@ -111,11 +111,14 @@ describe('throw-on-closed contract', () => {
 			() => facade.subscribe('t'),
 			() => facade.unsubscribe('t'),
 			() => facade.getBufferedAmount(),
-			() => facade.getUserData(),
 			() => facade.publish('t', 'x')
 		]) {
 			expect(call).toThrow(CLOSED_MESSAGE);
 		}
+		// userData outlives the handle, as the family's socket keeps it: a
+		// caller that reads it after the close is not thrown at, and the send
+		// above is where the closed socket refuses.
+		expect(() => facade.getUserData()).not.toThrow();
 		// close/end stay safe no-ops - nothing reaps through them.
 		expect(() => facade.close()).not.toThrow();
 		expect(() => facade.end(1000)).not.toThrow();

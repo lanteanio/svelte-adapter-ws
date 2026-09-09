@@ -214,7 +214,9 @@ function createNodeApp() {
 				wrappers.delete(wrapper);
 			},
 			getUserData() {
-				if (invalid) throw new Error(CLOSED_MESSAGE);
+				// Survives the close, as the family's socket does: the userData
+				// object outlives the handle, and a request or send on the closed
+				// socket refuses at the send.
 				return userData;
 			},
 			send(message, isBinary = false, _compress = false) {

@@ -161,7 +161,10 @@ export function wrapWebSocket(rawWs, userData, opts) {
 		},
 
 		getUserData() {
-			if (rawWs.readyState !== OPEN) throwClosed();
+			// Survives the close, as the family's socket does: the userData
+			// object outlives the transport handle, so a caller that reads it
+			// after a close is not thrown at; the send is where a closed
+			// socket refuses.
 			return userData;
 		},
 

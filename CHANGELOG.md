@@ -696,6 +696,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `publishWireBatch` on the stateful lane resolves the exclusion per entry:
+  the call-level `excludeWs` is the default and an entry carrying its own
+  overrides it, so the author hears the entry that names someone else. The
+  lane skipped the call-level socket for the whole batch.
+
+- `publishGame` charges the SENDER's frozen attribution tenant, never the
+  topic resolver's: the client relaying through the game lane is the party
+  whose budget the fan-out spends.
+
+- A throwing resume hook is reported as the `resume.hook-failed` operational
+  event, and a certificate renewal that does not validate as
+  `tls.reload-skipped`; both were console lines. A default-context swap that
+  fails mid-apply is `tls.swap-failed` and arms its own one-shot retry. The
+  registry carries `ADAPTER-ERR-TLS-SWAP`, `ADAPTER-ERR-SINK-FAILED`,
+  `ADAPTER-ERR-PRESSURE-LISTENER` and `ADAPTER-ERR-EGRESS-EVICTED` for the
+  events the runtime already emitted without an entry.
+
+- A closed socket still answers `getUserData()`, on the production facade and
+  on the test server's: the userData object outlives the handle, as the
+  family's socket keeps it, and a send or request on the closed socket refuses
+  at the send. `platform.request` on a peer-closed socket therefore reports
+  that the frame could not be sent rather than that it was never sent.
+
 - The `Platform` declaration carries `trace`, `bumpTopicEpoch`, a typed
   `traceContext` and a readonly `requestId`, the way the family declares
   them; `publish` accepts the same `seq` values as the runtime (`bigint` and
