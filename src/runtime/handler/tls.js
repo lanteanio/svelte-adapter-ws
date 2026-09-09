@@ -19,7 +19,6 @@ import {
 	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
 	recordBootCertExpiry, stopTlsReload, tlsWatchDegraded
 } from './tls-state.js';
-import { ADAPTER_ERROR_IDS } from '../error-registry.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 
 // Why the reload path is degraded once a directory watch is gone. Two reasons,
@@ -130,6 +129,12 @@ export function createTlsServer(handleRequest) {
 		reloadNow = reload;
 		server.once('close', () => {
 			if (reloadNow === reload) reloadNow = null;
+			// A retry armed by a failed swap must not fire into a closed server,
+			// nor into the next one from this closure.
+			if (tlsRetryTimer !== null) {
+				clearTimer(tlsRetryTimer);
+				tlsRetryTimer = null;
+			}
 		});
 		// In a worker thread the cluster PRIMARY owns the cert-directory watch
 		// and broadcasts a reload message the runtime routes into reloadTls();
@@ -146,6 +151,13 @@ export function createTlsServer(handleRequest) {
 
 	return server;
 }
+
+/**
+ * The one-shot retry a failed swap armed, or null. Module-level so the
+ * server's close handler can clear it.
+ * @type {any}
+ */
+let tlsRetryTimer = null;
 
 /**
  * The reload action for the CURRENT TLS server, or null when no TLS server
@@ -256,14 +268,6 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 	/** @type {import('node:tls').SecureContext[]} */
 	let pairContexts = sniPairs.map(({ context }) => context);
 
-	// The one-shot retry a mid-apply failure arms from its own failure path:
-	// the throw may have consumed the last fs event of the renewal burst, so
-	// waiting for the next watcher event could mean waiting for the next
-	// renewal months away. Each retry re-arms only from its own failure, so a
-	// persistent fault retries at this cadence (loudly) instead of spinning.
-	/** @type {any} */
-	let retryTimer = null;
-
 	const reload = () => {
 		// Whether this pass genuinely put different bytes in front of a client.
 		// Only what actually changed counts, which is what makes a fleet's
@@ -372,9 +376,12 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 			}
 		} catch (err) {
 			if (err && /** @type {any} */ (err).tlsAppTouched) {
-				// The default context was being replaced when the swap failed.
-				// Clear the fingerprint so the next watcher event or broadcast
-				// bypasses the gate and re-runs the full swap instead of
+				// The apply step threw after validation had passed: an extra pair
+				// rewritten between its validation read and the registry's read,
+				// or the default context refused by the server. The staging is
+				// discarded, so the served set is exactly what it was; the
+				// fingerprint is cleared so the next watcher event or broadcast
+				// bypasses the gate and re-runs the full reconcile instead of
 				// no-opping until the next genuine renewal months away.
 				servedFingerprint = null;
 				emitOperationalEvent({
@@ -387,9 +394,18 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 					attributes: { error: diagnosticError(err) }
 				});
 				markTlsFailed(err, 'a certificate swap failed mid-apply');
-				if (retryTimer === null) {
-					retryTimer = setTimer(() => { retryTimer = null; reload(); }, ssl_reload_debounce_ms > 0 ? ssl_reload_debounce_ms : 500);
-					if (typeof retryTimer?.unref === 'function') retryTimer.unref();
+				// One-shot retry from the failure itself: the throw may have
+				// consumed the last fs event of the renewal burst, and the next
+				// one could be months away. Re-armed only from its own failure,
+				// so a persistent fault retries at this cadence instead of
+				// spinning; guarded on reloadNow so a closed or replaced server
+				// never receives it.
+				if (tlsRetryTimer === null) {
+					tlsRetryTimer = setTimer(() => {
+						tlsRetryTimer = null;
+						if (reloadNow === reload) reload();
+					}, ssl_reload_debounce_ms > 0 ? ssl_reload_debounce_ms : 500);
+					if (typeof tlsRetryTimer?.unref === 'function') tlsRetryTimer.unref();
 				}
 				return;
 			}

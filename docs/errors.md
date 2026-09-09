@@ -418,7 +418,7 @@ Log line begins:
 
 **Consequence.** The client is still sent `resumed`, because that ack is not conditional on the hook. It therefore believes its gap was handled and reports nothing. Whether the history is actually recovered depends on whether the subscribe frames it sends next carry recover offsets; if they do not, the gap is permanent and silent on both sides.
 
-**Automatic recovery.** None for the gap. No fallback subscribe is triggered by this failure - the client simply continues its normal sequence.
+**Automatic recovery.** None for the gap. Despite the message text, no fallback subscribe is triggered by this failure - the client simply continues its normal sequence.
 
 **What to do.** Fix the hook if resume coverage matters for these topics, and do not read a `resumed` ack as evidence a gap was filled. Clients that subscribe with recover offsets recover anyway; clients that do not are missing history without any signal.
 
@@ -614,11 +614,11 @@ Log line begins:
 
 **Cause.** Applying a new certificate set failed partway through the swap.
 
-**Consequence.** The swap is partial: a host already moved to the new certificate has a fresh, empty SNI router until the retry replays the routes, so its handshakes complete while its requests are force-closed; a host removed but not yet re-added falls back to the default context, so it serves the boot-time certificate and its handshakes complete wherever that certificate covers it. The TLS degraded state is set for the duration.
+**Consequence.** Nothing changed on the wire: every context is built and validated before any is taken, and the staged set is discarded on a throw, so the served certificates - default and every SNI name - are exactly what they were. The renewal on disk is not being served, and the TLS degraded state is set for the duration.
 
 **Automatic recovery.** A one-shot retry is armed from the failure itself, rather than from the next filesystem event, because the throw may have consumed the last event of a renewal burst and the next one could be months away. A persistent fault therefore retries at that cadence instead of spinning.
 
-**What to do.** Probe every SNI host with an HTTP request rather than only a handshake: both partial shapes complete handshakes while a host is either force-closing requests or still serving the boot certificate. Then read the attached error to pick the repair - certificate material explains only a throw inside the apply step, while a route-replay failure has nothing wrong with the material and resolves through the armed retry or a restart.
+**What to do.** Read the attached error. An extra pair rewritten between its validation read and the apply read - a certbot burst landing mid-reload - resolves through the armed retry once the write completes; a default context the server refused names the material to fix. Confirm the served certificate afterwards rather than assuming the renewal took.
 
 ## ADAPTER-ERR-TLS-WATCH
 
