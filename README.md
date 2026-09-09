@@ -446,8 +446,9 @@ HTTP/2 and the entire observability ecosystem
    sibling packages' liveness sweeps expect it; the JS topic registry with a
    per-topic reverse index so a publish walks subscribers, not connections;
    and the full `platform` surface - publish (seq-stamped per topic),
-   publishBatched with the shared batch frame for cap-holders, send, sendTo,
-   sendCoalesced with the drain pump, request/requestTopic over reply frames,
+   publishBatched with the shared batch frame when every interested
+   subscriber can decode it, send, sendTo, sendCoalesced with the drain pump,
+   request/requestTopic over reply frames,
    subscribe/checkSubscribe/unsubscribe with the shared authorization-policy
    predicates and pending-subscribe revocation machinery, the game lane
    (grantPublish/publishGame), adviseReconnect, hlc, and the extensions-facing

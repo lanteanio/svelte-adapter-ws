@@ -176,7 +176,7 @@ describe('relayPublish', () => {
 });
 
 describe('relayPublishBatched', () => {
-	it('hands batch-capable subscribers one shared frame and the rest per-event envelopes', async () => {
+	it('serves one shared frame only when every interested subscriber can decode it', async () => {
 		const capable = connect();
 		const plain = connect();
 		await capable.open();
@@ -184,23 +184,33 @@ describe('relayPublishBatched', () => {
 		capable.send({ type: 'hello', caps: ['batch'] });
 		await subscribed(capable, 'relay.b1');
 		await subscribed(plain, 'relay.b1');
+		await subscribed(capable, 'relay.b2');
 
-		const events = [
+		rt.handler.relayPublishBatched([
 			{ topic: 'relay.b1', env: '{"topic":"relay.b1","event":"a","data":1,"seq":10}', seq: 10 },
 			{ topic: 'relay.b1', env: '{"topic":"relay.b1","event":"b","data":2,"seq":11}', seq: 11 }
-		];
-		rt.handler.relayPublishBatched(events, false);
+		], false);
 
-		// Everyone interested holds the topic and someone lacks the batch cap,
-		// so the receive-side detection serves each connection by ITS caps:
-		// the capable one decodes the shared batch frame...
+		// Someone interested lacks the batch cap, so the receive-side detection
+		// takes the per-event slow path for everyone, exactly as the origin
+		// would have: both connections receive the envelopes in order and no
+		// batch frame at all.
+		for (const c of [capable, plain]) {
+			const first = await c.next((f) => f.json?.event === 'a');
+			const second = await c.next((f) => f.json?.event === 'b');
+			expect(first.json.seq).toBe(10);
+			expect(second.json.seq).toBe(11);
+			expect(c.frames.find((f) => f.json?.type === 'batch')).toBeUndefined();
+		}
+
+		// relay.b2 is held by the capable connection alone: one shared frame.
+		rt.handler.relayPublishBatched([
+			{ topic: 'relay.b2', env: '{"topic":"relay.b2","event":"c","data":3,"seq":20}', seq: 20 },
+			{ topic: 'relay.b2', env: '{"topic":"relay.b2","event":"d","data":4,"seq":21}', seq: 21 }
+		], false);
 		const batch = await capable.next((f) => f.json?.type === 'batch');
-		expect(batch.json.events.map((e) => e.seq)).toEqual([10, 11]);
-		// ...and the caps-less one receives the per-event envelopes in order.
-		const first = await plain.next((f) => f.json?.event === 'a');
-		const second = await plain.next((f) => f.json?.event === 'b');
-		expect(first.json.seq).toBe(10);
-		expect(second.json.seq).toBe(11);
+		expect(batch.json.events.map((e) => e.seq)).toEqual([20, 21]);
+		expect(capable.frames.filter((f) => f.json?.event === 'c' || f.json?.event === 'd')).toEqual([]);
 		capable.close();
 		plain.close();
 	});

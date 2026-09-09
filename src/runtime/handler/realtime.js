@@ -579,14 +579,16 @@ const hWsConnectionDuration = containMetricInstrument(METRICS?.histogram?.(
 		buckets: [...WS_CONNECTION_DURATION_BUCKETS]
 	}
 ));
-// Scope note, because it differs from the family's other backend and the
-// difference is not a choice: there, the counter covers native fan-out calls
-// only, and a publish that excludes a socket falls through to a per-socket
-// walk that the breakdown never sees. Every publish here IS that walk, so the
-// same scope would count nothing at all. It therefore covers every logical
-// publish, classified by whether the publish reached anyone with the excluded
-// socket deducted - which is also why this family sums to ws_publishes_total
-// here. The help string is the manifest's, and the manifest is vendored.
+// Scope, shared with the family's native tier: the counter covers the
+// fan-outs one publish call hands to the transport there - the single-publish
+// lane, the JSON fast paths of the wire lanes, the shared-cohort publish (one
+// per cohort), the batched fast path (one per batch) and each relay
+// receiver's own fan-out - and a per-connection walk (an excluding publish, a
+// stateful or capable wire delivery, the game lane) reports none. Every
+// publish here is a JS walk, so the hook fires at the sites where that tier's
+// native publish fires and nowhere else, and an alert tuned on one adapter
+// reads the same on the other. The help string is the manifest's, and the
+// manifest is vendored.
 const mPublishOutcomes = containMetricInstrument(METRICS?.counter(
 	'ws_publish_outcomes_total', 'Publish calls by aggregate delivery outcome', ['outcome']
 ));

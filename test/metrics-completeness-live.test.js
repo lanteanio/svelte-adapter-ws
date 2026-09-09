@@ -188,10 +188,12 @@ describe('a booted worker reports a complete metrics document', () => {
 	});
 });
 
-// The outcome family answers "did this publish reach anyone", and every lane
+// The outcome family answers "did this fan-out reach anyone", and every lane
 // in the family has to answer it the same way: the single-publish lane and
 // the batched lane both read the topic's subscriber count, so a publish into
-// a topic nobody holds is no_subscribers on either.
+// a topic nobody holds is no_subscribers on either. The family counts
+// fan-outs, not logical publishes: a batch that travels as one shared frame
+// is one outcome however many events it carries.
 describe('the outcome family counts a publish that reached nobody as no_subscribers', () => {
 	const DRIVER = `
 export function open() {}
@@ -245,9 +247,10 @@ export function message(ws, { data, msg, platform }) {
 			const by = (v) => out
 				.filter((s) => s.labels && s.labels.outcome === v)
 				.reduce((n, s) => n + s.value, 0);
-			// Three logical publishes, none of which reached a socket.
+			// Two fan-outs, neither of which reached a socket: the single publish
+			// and the batched lane's one shared frame for its two events.
 			expect(by('delivered'), 'a publish nobody received counted as delivered').toBe(0);
-			expect(by('no_subscribers')).toBe(3);
+			expect(by('no_subscribers')).toBe(2);
 		} finally {
 			ws.close();
 			await server.close();

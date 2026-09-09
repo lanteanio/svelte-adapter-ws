@@ -528,49 +528,74 @@ function request(facade, event, data, options) {
 }
 
 /**
+ * The batched lane's fast-path detection against this worker's local
+ * subscriber set, run on the origin and again on every relay receiver. One
+ * shared batch frame may stand in for N per-event publishes only when every
+ * interested connection holds every batch topic (all-see-all, so the one
+ * frame reaches exactly the right set) AND advertised the batch capability
+ * (a caps-less connection cannot decode the frame). Anything else takes the
+ * per-event slow path, which is also the safe degradation for a mixed room.
+ *
+ * @param {string} firstTopic
+ * @param {Set<string> | null} batchTopics - the distinct topics when the batch spans more than one, else null
+ * @returns {boolean}
+ */
+function batchFastPathEligible(firstTopic, batchTopics) {
+	for (const [rawWs, topics] of allSockets()) {
+		if (rawWs.readyState !== OPEN || topics.size === 0) continue;
+		let touchesAny = false;
+		if (batchTopics === null) {
+			touchesAny = topics.has(firstTopic);
+		} else {
+			let touchesAll = true;
+			for (const t of batchTopics) {
+				if (topics.has(t)) touchesAny = true;
+				else touchesAll = false;
+			}
+			if (touchesAny && !touchesAll) return false;
+		}
+		if (!touchesAny) continue;
+		const facade = wsWrappers.get(rawWs);
+		if (!facade) continue;
+		const caps = /** @type {any} */ (facade).getUserData()[WS_CAPS];
+		if (!caps || !caps.has('batch')) return false;
+	}
+	return true;
+}
+
+/**
  * Deliver a batch of pre-built per-event envelopes to this worker's local
- * subscribers: the shared batch frame to 'batch'-capable connections, the
- * per-event envelopes (filtered to each connection's subscriptions in the
- * multi-topic shape) to everyone else. The fast/slow detection is the
- * caller's; this is the one walk the local fast path and the cross-worker
- * receive path share, so the two cannot drift in what a subscriber sees.
+ * subscribers as ONE shared batch frame each. The caller has already decided
+ * the fast path is eligible (batchFastPathEligible), so every receiving
+ * connection advertised the batch capability and holds every batch topic;
+ * this is the one walk the local fast path and the cross-worker receive path
+ * share, so the two cannot drift in what a subscriber sees.
  *
  * @param {Array<{ topic: string, env: string }>} events
- * @param {boolean} allSameTopic
  * @param {string} firstTopic
- * @param {Set<string> | null} batchTopics - the distinct topics when not allSameTopic
+ * @param {Set<string> | null} batchTopics - the distinct topics when the batch spans more than one, else null
  * @param {boolean} compress
  */
-function deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compress) {
+function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 	const slice = new Array(events.length);
 	for (let i = 0; i < events.length; i++) slice[i] = events[i].env;
 	const sharedBatchEnv = wrapBatchEnvelope(slice);
 	for (const [rawWs, topics] of allSockets()) {
 		if (rawWs.readyState !== OPEN) continue;
 		let receives = false;
-		if (allSameTopic) {
+		if (batchTopics === null) {
 			receives = topics.has(firstTopic);
 		} else {
-			for (const t of /** @type {Set<string>} */ (batchTopics)) {
+			for (const t of batchTopics) {
 				if (topics.has(t)) { receives = true; break; }
 			}
 		}
 		if (!receives) continue;
 		const facade = wsWrappers.get(rawWs);
 		if (!facade) continue;
-		const userData = /** @type {any} */ (facade).getUserData();
-		const caps = userData[WS_CAPS];
 		try {
-			if (caps && caps.has('batch')) {
-				/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
-				bumpOut(userData, sharedBatchEnv);
-			} else {
-				for (let i = 0; i < events.length; i++) {
-					if (!allSameTopic && !topics.has(events[i].topic)) continue;
-					/** @type {any} */ (facade).send(events[i].env, false, compress);
-					bumpOut(userData, events[i].env);
-				}
-			}
+			/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
+			bumpOut(/** @type {any} */ (facade).getUserData(), sharedBatchEnv);
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -631,25 +656,13 @@ export const platform = {
 		for (let i = 1; i < messages.length; i++) {
 			if (messages[i].topic !== firstTopic) { allSameTopic = false; break; }
 		}
-		let allSeeAll = allSameTopic;
 		/** @type {Set<string> | null} */
 		let batchTopics = null;
 		if (!allSameTopic) {
 			batchTopics = new Set();
 			for (let i = 0; i < messages.length; i++) batchTopics.add(messages[i].topic);
-			allSeeAll = true;
-			for (const [rawWs, topics] of allSockets()) {
-				if (rawWs.readyState !== OPEN || topics.size === 0) continue;
-				let touchesAny = false;
-				let touchesAll = true;
-				for (const t of batchTopics) {
-					if (topics.has(t)) touchesAny = true;
-					else touchesAll = false;
-				}
-				if (touchesAny && !touchesAll) { allSeeAll = false; break; }
-			}
 		}
-		if (!allSameTopic && !allSeeAll) {
+		if (!batchFastPathEligible(firstTopic, batchTopics)) {
 			// The batch is atomic on this path too: admitting per event would
 			// deliver a prefix and refuse the tail, which is the mid-batch
 			// shedding the budget forbids. Each topic carries its own
@@ -657,9 +670,10 @@ export const platform = {
 			// tenant decides once on everything it owns in the batch.
 			if (egressGate.armed && !admitBatchEgress(messages, null)) return;
 			// Slow-path fallback: per-event publish() so small / disjoint batch
-			// shapes pay no shared-frame machinery. The snapshot, not a spread
-			// of the live options object: publish() consumes exactly the
-			// fields the atomic pre-pass above already judged.
+			// shapes pay no shared-frame machinery, and the safe degradation
+			// when an interested subscriber cannot decode the shared frame.
+			// The snapshot, not a spread of the live options object: publish()
+			// consumes exactly the fields the atomic pre-pass above judged.
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
 				publish(m.topic, m.event, m.data, /** @type {any} */ (markAdmitted({
@@ -691,7 +705,6 @@ export const platform = {
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
 			counters.publishCountWindow++;
-			counters.publishOutcomeHook?.(recipients > 0);
 			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
 			// See publish(): the compare-free record for the monotonic in-memory
 			// counter, the monotone-max guard for an explicit numeric seq.
@@ -731,7 +744,12 @@ export const platform = {
 		if (resumeCaptureActive()) {
 			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
 		}
-		deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compressOptIn);
+		deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressOptIn);
+		// One outcome for the whole fast-path batch: the shared frame is one
+		// fan-out, and the family counts fan-outs, not the logical publishes
+		// inside them (the slow path above reports one per event through
+		// publish()). Same cadence as the family's native tier.
+		counters.publishOutcomeHook?.(recipients > 0);
 	},
 
 	/**
@@ -853,10 +871,7 @@ export const platform = {
 			else recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 		}
 		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
-		if (!isRelay) {
-			counters.publishCountWindow++;
-			counters.publishOutcomeHook?.(recipients > 0);
-		}
+		if (!isRelay) counters.publishCountWindow++;
 		if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 		const compressIntent = compressOption === true;
 		const compress = WS_COMPRESSION_ON && compressIntent;
@@ -888,6 +903,10 @@ export const platform = {
 			// charge is the envelope's UTF-8 bytes times the recipient set.
 			if (!isRelay) chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 			const sent = fanOut(topic, envelope, excludeWs, compress);
+			// The outcome family counts the fan-outs the family's native tier
+			// hands to one publish call; an excluding publish is a per-socket
+			// walk there that the family never sees, so it reports none here.
+			if (excludeWs === null) counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
 			if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
 			return sent || relayed;
 		}
@@ -933,13 +952,17 @@ export const platform = {
 				// The binary cohort exists only if a capable client joined it (its
 				// announce succeeded); otherwise this shared topic currently has
 				// only JSON subscribers and skips the binary fan-out entirely.
-				// The outcome of this logical publish was reported once above,
-				// like every other publishWire exit; the cohort walks do not
-				// report again, so the outcome family keeps summing to the
-				// publish family.
+				// Each cohort is one fan-out, and the outcome family counts
+				// fan-outs: a shared publish reports the binary cohort (when it
+				// exists) and the JSON cohort separately, as the family's
+				// native tier does with its two publish calls.
 				const id = getSharedWireId(topic);
-				if (id !== undefined) fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
+				if (id !== undefined) {
+					fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
+					counters.publishOutcomeHook?.(numSubscribers(bin) > 0);
+				}
 				fanOutCohort(json, envelope, false, compress);
+				counters.publishOutcomeHook?.(numSubscribers(json) > 0);
 				// Cross-worker subscribers: each receiving worker re-derives the
 				// shared codec from its registry (relayPublishWire) and runs ITS
 				// OWN cohort split with its own server-wide id, so the
@@ -959,6 +982,11 @@ export const platform = {
 					: chargeableBytes(envelope, recipients);
 				chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, wireBytes);
 			}
+			// A declined frame with no exclusion is the envelope to everyone -
+			// one fan-out on the family's native tier, so one outcome. Every
+			// other exit of this lane is a per-connection walk, which the
+			// family does not count.
+			if (payload == null && excludeWs === null) counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
 			if (relayed) {
 				// A declined frame (null payload) declines identically on every
 				// worker, so the codec carry would be dead IPC weight: relay the
@@ -1159,10 +1187,12 @@ export const platform = {
 		const excludes = new Array(count);
 		const entrySeqs = new Array(count);
 		let sawEntrySeq = false;
+		let anyExclude = sharedExclude !== null;
 		for (let i = 0; i < count; i++) {
 			const entry = entries[i];
 			datas[i] = entry.data;
 			excludes[i] = entry.excludeWs;
+			if (entry.excludeWs != null) anyExclude = true;
 			// The entry lane speaks the same table as the options lane, and
 			// resolveEntrySeq is the ONE spelling of it for every surface:
 			// number and bigint are the explicit authority, true is the
@@ -1275,15 +1305,13 @@ export const platform = {
 		// serialised, so an aborted batch never creates the topic's stats.
 		chargePublishEgress(topic, egressTenant, count, deliveries, batchBytes, batchWireBytes);
 		counters.publishCountWindow += count;
-		// One outcome per LOGICAL publish, so the outcome family always sums to
-		// the publish family. Every entry shares this topic's subscriber set,
-		// but not its exclusion: exDeduct already holds whether THIS entry's
-		// excluded socket was one of them, and reading the bare count instead
-		// would report an entry that reached nobody as delivered.
-		if (counters.publishOutcomeHook !== null) {
-			for (let i = 0; i < count; i++) {
-				counters.publishOutcomeHook(recipients - (exDeduct === null ? 0 : exDeduct[i]) > 0);
-			}
+		// Outcomes on the JSON fast path only - no capable subscriber and no
+		// exclusion - where the family's native tier runs one fan-out per
+		// entry; the per-connection walk below reports none, as its walk
+		// reports none. Counted before the subscriber check: a batch into an
+		// empty topic is N fan-outs that reached nobody.
+		if (!anyExclude && !capCounts.has(wire?.capability) && counters.publishOutcomeHook !== null) {
+			for (let i = 0; i < count; i++) counters.publishOutcomeHook(recipients > 0);
 		}
 		// Cross-worker relay: one relay envelope per entry, exactly as N
 		// publishWire calls would send - the receive path re-encodes each
@@ -1873,8 +1901,10 @@ export const platform = {
 			// { seq: null, delivered: 0 } is this lane's refusal shape.
 			if (!admitPublishEgress(topic, egressTenant, 1, recipients)) return { seq: null, delivered: 0 };
 		}
+		// Counted as a publish, never as an outcome: this lane is a
+		// per-connection walk on the family's native tier, which the outcome
+		// family does not see.
 		counters.publishCountWindow++;
-		counters.publishOutcomeHook?.(recipients > 0);
 		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
 		if (seq !== null) recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
@@ -2248,6 +2278,9 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 	// codec re-encode path above captures inside publishWire.
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 	fanOut(topic, envelope, null, WS_COMPRESSION_ON && compress === true);
+	// The receiving worker's fan-out is its own outcome, as on the family's
+	// native tier: the origin reported its local fan-out, this reports ours.
+	counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
 }
 
 /**
@@ -2311,40 +2344,32 @@ export function relayPublishBatched(events, compress) {
 	for (let i = 1; i < events.length; i++) {
 		if (events[i].topic !== firstTopic) { allSameTopic = false; break; }
 	}
-	let allSeeAll = allSameTopic;
 	/** @type {Set<string> | null} */
 	let batchTopics = null;
 	if (!allSameTopic) {
 		batchTopics = new Set();
 		for (let i = 0; i < events.length; i++) batchTopics.add(events[i].topic);
-		allSeeAll = true;
-		for (const [rawWs, topics] of allSockets()) {
-			if (rawWs.readyState !== OPEN || topics.size === 0) continue;
-			let touchesAny = false;
-			let touchesAll = true;
-			for (const t of batchTopics) {
-				if (topics.has(t)) touchesAny = true;
-				else touchesAll = false;
-			}
-			if (touchesAny && !touchesAll) { allSeeAll = false; break; }
-		}
 	}
 	// A resuming connection receives these events as per-event JSON on either
 	// path, so hold each per-event envelope - never the wrapped batch frame.
 	if (resumeCaptureActive()) {
 		for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].env);
 	}
-	if (!allSameTopic && !allSeeAll) {
+	if (!batchFastPathEligible(firstTopic, batchTopics)) {
 		// Slow path: per-event fan-out, mirroring the local fallback and the
 		// receive-side shape cap-less subscribers on this worker would have
-		// seen if the originator had taken its slow path too.
+		// seen if the originator had taken its slow path too. Each fan-out is
+		// its own outcome, as on the family's native tier.
 		for (let i = 0; i < events.length; i++) {
 			fanOut(events[i].topic, events[i].env, null, compressGated);
+			counters.publishOutcomeHook?.(numSubscribers(events[i].topic) > 0);
 		}
 		return;
 	}
-	// Fast path: the same shared-frame walk the local fast path takes.
-	deliverBatchedEnvelopes(events, allSameTopic, firstTopic, batchTopics, compressGated);
+	// Fast path: the same shared-frame walk the local fast path takes - one
+	// fan-out, one outcome.
+	deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressGated);
+	counters.publishOutcomeHook?.(numSubscribers(firstTopic) > 0);
 }
 
 export { hasUserSubscribeHook, runUserSubscribeGate, WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS };

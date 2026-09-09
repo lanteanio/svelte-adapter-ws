@@ -151,8 +151,10 @@ describe('the relay receive lanes record what a sibling worker sent', () => {
 		// subscriber: a worker that recorded only what it delivered would report
 		// a different map from a sibling with a different subscription mix, and
 		// the comparison would fire on a difference that is not a loss.
+		const decisionAt = body.indexOf('if (!batchFastPathEligible(');
+		expect(decisionAt, 'the batched lane no longer decides its fan-out where this pin expects').toBeGreaterThan(-1);
 		expect(body.indexOf('recordSeen('), 'the batch records after it has decided how to fan out')
-			.toBeLessThan(body.indexOf('let allSeeAll'));
+			.toBeLessThan(decisionAt);
 	});
 
 	it('gates the contiguity tracker so an unarmed deployment allocates nothing', () => {

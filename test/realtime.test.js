@@ -249,7 +249,7 @@ describe('connection lifecycle', () => {
 		client.close();
 	});
 
-	it('serves the batch frame to cap-holders and individual frames otherwise', async () => {
+	it('serves the batch frame only when every interested subscriber can decode it', async () => {
 		const plain = connect();
 		const capable = connect();
 		await plain.open();
@@ -260,15 +260,33 @@ describe('connection lifecycle', () => {
 		await plain.next((f) => f.type === 'subscribed');
 		await capable.next((f) => f.type === 'subscribed');
 
+		// A mixed room takes the per-event slow path for everyone: the plain
+		// subscriber cannot decode the shared frame, and the capable one gets
+		// the same per-event envelopes rather than a frame its neighbour never
+		// sees.
 		plain.send(JSON.stringify({ cmd: 'publishBatched', messages: [
 			{ topic: 'bt', event: 'a', data: 1 },
 			{ topic: 'bt', event: 'b', data: 2 }
 		] }));
+		for (const c of [plain, capable]) {
+			await c.next((f) => f.topic === 'bt' && f.event === 'a');
+			await c.next((f) => f.topic === 'bt' && f.event === 'b');
+			expect(c.frames.find((f) => f.type === 'batch')).toBeUndefined();
+		}
+
+		// With the plain subscriber gone every interested subscriber holds the
+		// capability, and the batch travels as one shared frame. The probe
+		// subscribe orders the unsubscribe ahead of the publish.
+		plain.send({ type: 'unsubscribe', topic: 'bt' });
+		plain.send({ type: 'subscribe', topic: 'probe', ref: 2 });
+		await plain.next((f) => f.type === 'subscribed' && f.topic === 'probe');
+		capable.send(JSON.stringify({ cmd: 'publishBatched', messages: [
+			{ topic: 'bt', event: 'c', data: 3 },
+			{ topic: 'bt', event: 'd', data: 4 }
+		] }));
 		const batch = await capable.next((f) => f.type === 'batch');
-		expect(batch.events.length).toBe(2);
-		await plain.next((f) => f.topic === 'bt' && f.event === 'a');
-		await plain.next((f) => f.topic === 'bt' && f.event === 'b');
-		expect(plain.frames.find((f) => f.type === 'batch')).toBeUndefined();
+		expect(batch.events.map((e) => e.event)).toEqual(['c', 'd']);
+		expect(capable.frames.filter((f) => f.topic === 'bt' && (f.event === 'c' || f.event === 'd'))).toEqual([]);
 		plain.close();
 		capable.close();
 	});

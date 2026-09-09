@@ -557,6 +557,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ws_publish_outcomes_total` counts fan-outs, not logical publishes, at the
+  sites where the family's native tier hands one publish to its transport:
+  one per publish, one per entry on the wire batch lane's JSON fast path,
+  one per cohort of a shared publish, one per batched fast-path frame, and
+  one per relay receiver's own fan-out. An excluding publish, a stateful or
+  capable wire delivery and the game lane are per-connection walks and
+  report none. The family no longer sums to `ws_publishes_total`; it reads
+  the same on both adapters for the same traffic.
+
+- `publishBatched` takes its per-event slow path whenever an interested
+  subscriber has not advertised the `batch` capability, on the origin and on
+  every relay receiver, so a mixed room receives per-event envelopes
+  throughout rather than a shared frame beside them. A room where every
+  interested subscriber is capable still receives one shared frame.
+
 - Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
   subscription is a topic-registry entry as well as a Set entry, so one
   admitted connection must not be able to hold hundreds of megabytes the
