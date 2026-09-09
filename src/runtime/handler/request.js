@@ -154,7 +154,7 @@ export function handleRequest(req, res) {
 		if (realtimeRoutes.tryAdminRoute(req, res, pathname, state)) return;
 	}
 
-	// Static fast path: one Map lookup on the RAW undecoded pathname, five
+	// Static fast path: one Map lookup on the RAW undecoded pathname, seven
 	// header reads, nothing else. Because the index holds prerendered HTML
 	// under its clean aliases too, most prerendered pages are also served here.
 	// An encoded traversal misses by construction - the cache simply has no

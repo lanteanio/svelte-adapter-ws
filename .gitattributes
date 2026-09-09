@@ -15,7 +15,3 @@ protocol.schema.json -text
 # on bytes git invented.
 test-vectors/*.json -text
 test/dst-goldens/*.json -text
-
-# A PKCS#12 bundle is binary by nature; declaring it keeps check-source-bytes
-# from reading its DER bytes as control characters in a text file.
-*.pfx binary

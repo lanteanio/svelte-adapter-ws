@@ -3,7 +3,6 @@
 // reload swapping the served certificate without a restart.
 
 import https from 'node:https';
-import tls from 'node:tls';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
