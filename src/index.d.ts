@@ -608,23 +608,126 @@ export interface AdapterOptions {
 }
 
 export interface PressureSnapshot {
-	/** Wall-clock ms of the last completed sample; null before the first tick. */
-	sampledAt: number | null;
-	active: boolean;
-	/** 0..1 worker saturation (worst-of threshold distances plus lease backlog). */
-	value: number;
-	subscriberRatio: number;
-	publishRate: number;
-	memoryMB: number;
-	reason: 'NONE' | 'PUBLISH_RATE' | 'SUBSCRIBERS' | 'MEMORY' | 'CPU_QUOTA' | 'PSI' | 'CAPACITY';
-	psi: { cpuSome10: number; memoryFull10: number; ioFull10: number } | null;
-	cpuThrottle: { throttledRatio: number; nrThrottledDelta: number } | null;
-	maxBufferedBytes: number;
-	backpressuredConnections: number;
-	droppedFrames: number;
-	droppedBytes: number;
-	egress: { deliveries: number; bytes: number; refusedTopic: number; refusedTenant: number };
-	topPublishers: Array<{ topic: string; messagesPerSec: number; bytesPerSec: number; deliveriesPerSec: number }>;
+	/**
+	 * Wall-clock milliseconds of the most recent completed sample, or `null`
+	 * when the sampler has not folded yet - which is the only thing in this
+	 * shape that distinguishes a reading from the initial placeholder, since
+	 * every number below starts at `0` and `0` is a legitimate value for all of
+	 * them except `memoryMB`. Branch on it before rendering or alerting:
+	 *
+	 * ```js
+	 * const p = platform.pressure;
+	 * if (p.sampledAt === null) return 'not sampled yet';
+	 * ```
+	 *
+	 * It also dates the reading, so `Date.now() - sampledAt` growing past the
+	 * sample interval is a wedged sampler - the same condition the
+	 * `pressure_sample_timestamp_seconds` gauge exists to alert on. Always
+	 * `null` in the Vite dev plugin and in `createTestServer`, which fabricate
+	 * the snapshot and never sample.
+	 */
+	readonly sampledAt: number | null;
+	/** `true` when `reason !== 'NONE'`. Convenience flag for boolean checks. */
+	readonly active: boolean;
+	/**
+	 * Worker-global saturation in `0..1`. `0` is idle, `1` is saturated;
+	 * higher always means more pressure. It is the worst-of the active
+	 * threshold signals' distance toward their thresholds, folded with the
+	 * worst per-connection internal flow-control reading. Use it for a coarse
+	 * "how loaded is this worker" gauge (e.g. `value > 0.8` for a high-load
+	 * guard); `reason` still names the most urgent specific signal.
+	 *
+	 * The per-connection component is a client-asserted report: a
+	 * flow-controlled client states its own starved-send backlog when it asks
+	 * for a fresh window, because the server deliberately never mirrors the
+	 * client's permit consumption. The report is clamped to at most `1` and
+	 * halved every sample, so the worst a hostile or broken client can do is
+	 * hold `value` high while it keeps re-asserting - it can never touch
+	 * `reason`, `active`, or any admission posture, which derive only from
+	 * server-side counters. Automation that must resist a lying client should
+	 * gate on `reason` (or the specific snapshot fields) rather than on
+	 * `value` alone.
+	 */
+	readonly value: number;
+	/**
+	 * Average subscriptions per connection on this worker
+	 * (`totalSubscriptions / connections`). `0` when the worker has no
+	 * connections.
+	 */
+	readonly subscriberRatio: number;
+	/** `platform.publish()` calls per second on this worker, last sample window. */
+	readonly publishRate: number;
+	/** Resident-set size in megabytes (`process.memoryUsage().rss`). */
+	readonly memoryMB: number;
+	/**
+	 * Most urgent active signal. Precedence is fixed:
+	 * `MEMORY > CAPACITY > CPU_QUOTA > PSI > PUBLISH_RATE > SUBSCRIBERS > NONE`.
+	 * `'CAPACITY'` appears only when the protection posture is engaged
+	 * (`elevated`/`siege`) and outranks every signal except `MEMORY`.
+	 * `'CPU_QUOTA'` (container CFS quota suspending the process) and `'PSI'`
+	 * (kernel stall time) appear only on hosts exposing those sources.
+	 */
+	readonly reason: 'NONE' | 'PUBLISH_RATE' | 'SUBSCRIBERS' | 'MEMORY' | 'CPU_QUOTA' | 'PSI' | 'CAPACITY';
+	/**
+	 * Kernel stall-time readings (avg10 percentages from `/proc/pressure`),
+	 * or `null` on hosts without PSI.
+	 */
+	readonly psi: { cpuSome10: number, memoryFull10: number, ioFull10: number } | null;
+	/**
+	 * Container CFS-quota throttling over the last sample window, or `null`
+	 * outside a quota-limited cgroup. `throttledRatio` is the fraction of
+	 * the window the whole process sat suspended by the scheduler.
+	 */
+	readonly cpuThrottle: { throttledRatio: number, nrThrottledDelta: number } | null;
+	/**
+	 * Worst per-connection outbound queue depth (`ws.getBufferedAmount()`, in
+	 * bytes) seen over the connections sampled this tick. `0` in the healthy
+	 * steady state. Compare against `maxBackpressure` (1 MB default) to gauge how
+	 * close the worst consumer is to the point where the send lane begins shedding frames.
+	 * The walk is bounded (up to 1024 connections per tick), so on a worker
+	 * holding more than that this is a bounded sample rather than an exact max.
+	 */
+	readonly maxBufferedBytes: number;
+	/**
+	 * Number of sampled connections holding a notable outbound queue (more than
+	 * 64 KB of un-flushed bytes) at sample time - a wedged or slow consumer count
+	 * rather than the transient in-flight bytes of a healthy flush. Bounded by
+	 * the same per-tick sample cap as `maxBufferedBytes`.
+	 */
+	readonly backpressuredConnections: number;
+	/** Exact frames the send lane dropped during the last sample window. */
+	readonly droppedFrames: number;
+	/** Exact payload bytes the send lane dropped during the last sample window. */
+	readonly droppedBytes: number;
+	/**
+	 * Worker publish-egress figures for the last sample window: local
+	 * deliveries (recipients times messages, exclusions deducted), charged
+	 * wire bytes, and `websocket.egress` ceiling refusals per scope. All
+	 * zeros while nothing publishes; the ceilings' own enforcement window
+	 * (`egress.windowMs`) is independent of this reporting window.
+	 *
+	 * `bytes` is the encoded UTF-8 length while a `bytes` ceiling is armed -
+	 * the unit that ceiling decides on - and the character length while none
+	 * is, because measuring an encoding walks every envelope and nothing
+	 * reads the result until a ceiling does. The two agree for ASCII
+	 * payloads, which is what the adapter's own envelope framing is.
+	 * In `createTestServer` these are live cumulative totals instead (the
+	 * harness runs no sampler; `sampledAt` stays `null` there), and the dev
+	 * plugin reports inert zeros while still enforcing the ceilings.
+	 */
+	readonly egress: {
+		deliveries: number;
+		bytes: number;
+		refusedTopic: number;
+		refusedTenant: number;
+	};
+	/**
+	 * Top 5 topics by message rate during the last sample window, sorted
+	 * descending by `messagesPerSec`. Each entry is
+	 * `{ topic, messagesPerSec, bytesPerSec, deliveriesPerSec }`. Empty when
+	 * no `platform.publish()` calls landed in the window.
+	 */
+	readonly topPublishers: TopicPublishRate[];
 }
 
 /**
@@ -753,71 +856,7 @@ export interface MetricsRegistry {
  * documentation in svelte-adapter-uws; the shapes here type the core surface.
  */
 export interface Platform {
-	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number | bigint | null; compress?: boolean; jitterMs?: number }): boolean;
-	publishBatched(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>, options?: { compress?: boolean }): void;
-	batch(messages: Array<{ topic: string; event: string; data?: unknown; options?: object }>): boolean[];
-	send(ws: object, topic: string, event: string, data?: unknown, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
-	sendTo(filter: (userData: any) => boolean, topic: string, event: string, data?: unknown, options?: { compress?: boolean }): number;
-	sendCoalesced(ws: object, message: { key?: string; topic: string; event: string; data?: unknown }): void;
-	publishWire(topic: string, event: string, data: unknown, wire: object, options?: object): boolean;
-	publishWireBatch(topic: string, event: string, entries: Array<{ data: unknown; excludeWs?: object; seq?: number }>, wire: object, options?: object): boolean;
-	sendWire(ws: object, topic: string, event: string, data: unknown, wire: object, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
-	sendWireBatch(ws: object, topic: string, event: string, entries: Array<{ data: unknown; seq?: number }>, wire: object): number;
-	registerWireCodec(wire: object): void;
-	request(ws: object, event: string, data?: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
-	requestTopic(topic: string, event: string, data?: unknown, options?: { timeoutMs?: number }): Promise<Array<{ ok: boolean; reply?: unknown; error?: string }>>;
-	subscribe(ws: object, topic: string): Promise<string | null>;
-	checkSubscribe(ws: object, topic: string, options?: { requireGrant?: boolean }): Promise<string | null>;
-	unsubscribe(ws: object, topic: string): boolean;
-	authorizeWireSubscribe(mode?: 'legacy' | 'strict'): 'legacy' | 'strict';
-	grantPublish(ws: object, topic: string): boolean;
-	revokePublish(ws: object): boolean;
-	publishGrant(ws: object): string | null;
-	publishGame(senderWs: object, topic: string, event: string, data: unknown, id?: number | string): { seq: number | null; delivered: number };
-	adviseReconnect(options?: { windowMs?: number; afterMs?: number; close?: boolean; compress?: boolean; filter?: (userData: any) => boolean }): number;
-	subscribers(topic: string): number;
-	forEachSubscriber(topic: string, fn: (ws: object, userData: object) => void): void;
-	bufferedAmount(ws: object): number;
-	isWarmupRequest(request: Request): boolean;
-	introspect(): object;
-	diagnostic(diagnosticId: string): unknown;
-	topic(name: string): object;
-	topicEpoch(name: string): number;
-	bumpTopicEpoch(topic: string): number;
-	onPressure(cb: (snapshot: PressureSnapshot) => void): () => void;
-	onPublishRate(cb: (top: PressureSnapshot['topPublishers']) => void): () => void;
-	now(): number;
-	monotonic(): number;
-	random: { float(): number; u32(): number; uuid(): string; bytes(n: number): Uint8Array };
-	hlc(): { wall: number; logical: number; nodeId: string };
-	readonly connections: number;
-	readonly pressure: PressureSnapshot;
-	readonly protection: 'normal' | 'elevated' | 'siege';
-	/**
-	 * The registry `WebSocketOptions.metrics` names, or `null` when unset. The
-	 * SAME instance the adapter populates, so a scrape route can render it
-	 * directly - and with the Vite plugin the module is bundled into the app's
-	 * own server graph, so a direct import reads this instance too.
-	 */
-	readonly metrics: MetricsRegistry | null;
-	/**
-	 * Cluster-wide metrics in Prometheus text, or `null` when no registry is
-	 * configured. Built from the values the adapter wrote rather than from
-	 * rendered text, so it needs no `serialize()` and stays on canonical
-	 * unprefixed manifest names however the registry renders its own output.
-	 * Under `CLUSTER_WORKERS` the primary collects every worker and merges,
-	 * and the two ways that can fall short are reported apart. A worker that
-	 * misses the primary's deadline is absent from the merge: the document
-	 * renders what arrived and `metrics_snapshot_workers_reporting` falls
-	 * below `..._expected`, with `metrics_snapshot_degraded` still `0`. A
-	 * scrape that never hears back from the primary answers with the
-	 * requesting worker ALONE and sets `metrics_snapshot_degraded` - the
-	 * expected/reporting pair cannot say so, because a worker that got no
-	 * answer does not know how many siblings it has.
-	 */
-	metricsSnapshot(options?: { timeoutMs?: number }): Promise<string | null>;
-	readonly closedWsAborts: number;
-	readonly maxPayloadLength: number;
+	readonly requestId: string;
 	readonly traceContext: TraceContext | null;
 	readonly trace: Readonly<{
 		readonly enabled: boolean;
@@ -827,7 +866,237 @@ export interface Platform {
 		run<T>(name: string, options: TraceOperationOptions, fn: (span: TraceSpan | null) => T): T;
 		withContext<T>(context: TraceContext | null, fn: () => T): T;
 	}>;
-	readonly requestId: string;
+	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number | bigint | null; compress?: boolean; jitterMs?: number }): boolean;
+	publishWire(
+		topic: string,
+		event: string,
+		data: unknown,
+		wire: {
+			capability: string;
+			schemaVersion: number;
+			encode: (event: string, data: unknown, state?: unknown) => Uint8Array | null;
+			shared?: boolean;
+			state?: {
+				onAttach: (ws: WebSocket<any>) => unknown;
+				onDetach?: (ws: WebSocket<any>, state: unknown) => void;
+			};
+		},
+		options?: {
+			relay?: boolean;
+			seq?: boolean | number | bigint | null;
+			compress?: boolean;
+			excludeWs?: WebSocket<any>;
+		}
+	): boolean;
+	sendWire(
+		ws: WebSocket<any>,
+		topic: string,
+		event: string,
+		data: unknown,
+		wire: {
+			capability: string;
+			schemaVersion: number;
+			encode: (event: string, data: unknown, state?: unknown) => Uint8Array | null;
+			state?: {
+				onAttach: (ws: WebSocket<any>) => unknown;
+				onDetach?: (ws: WebSocket<any>, state: unknown) => void;
+			};
+		},
+		options?: { compress?: boolean; seq?: number | bigint | false | null }
+	): number;
+	publishWireBatch(
+		topic: string,
+		event: string,
+		entries: Array<{ data: unknown; excludeWs?: WebSocket<any>; seq?: boolean | number | bigint | null }>,
+		wire: {
+			capability: string;
+			schemaVersion: number;
+			encode: (event: string, data: unknown, state?: unknown) => Uint8Array | null;
+			state?: {
+				onAttach: (ws: WebSocket<any>) => unknown;
+				onDetach?: (ws: WebSocket<any>, state: unknown) => void;
+			};
+		},
+		options?: {
+			seq?: boolean | null;
+			relay?: boolean;
+			compress?: boolean;
+			excludeWs?: WebSocket<any>;
+		}
+	): boolean;
+	sendWireBatch(
+		ws: WebSocket<any>,
+		topic: string,
+		event: string,
+		entries: Array<{ data: unknown }>,
+		wire: {
+			capability: string;
+			schemaVersion: number;
+			encode: (event: string, data: unknown, state?: unknown) => Uint8Array | null;
+			state?: {
+				onAttach: (ws: WebSocket<any>) => unknown;
+				onDetach?: (ws: WebSocket<any>, state: unknown) => void;
+			};
+		},
+		options?: { compress?: boolean }
+	): number;
+	registerWireCodec(wire: {
+		capability: string;
+		schemaVersion: number;
+		encode: (event: string, data: unknown, state?: unknown) => Uint8Array | null;
+		shared?: boolean;
+		state?: {
+			onAttach: (ws: WebSocket<any>) => unknown;
+			onDetach?: (ws: WebSocket<any>, state: unknown) => void;
+		};
+	}): void;
+	batch(messages: {
+		topic: string;
+		event: string;
+		data?: unknown;
+		options?: { relay?: boolean; seq?: boolean | number | bigint | null; compress?: boolean; jitterMs?: number };
+	}[]): boolean[];
+	publishBatched(messages: Array<{
+		topic: string;
+		event: string;
+		data?: unknown;
+		coalesceKey?: string;
+		options?: { relay?: boolean; seq?: boolean | number | bigint | null };
+	}>, options?: {
+		compress?: boolean;
+	}): void;
+	request<TReply = unknown>(
+		ws: WebSocket<any>,
+		event: string,
+		data?: unknown,
+		options?: { timeoutMs?: number }
+	): Promise<TReply>;
+	requestTopic<TReply = unknown>(
+		topic: string,
+		event: string,
+		data?: unknown,
+		options?: { timeoutMs?: number }
+	): Promise<Array<{ ok: true; reply: TReply } | { ok: false; error: string }>>;
+	send(ws: WebSocket<any>, topic: string, event: string, data?: unknown, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
+	sendCoalesced(
+		ws: WebSocket<any>,
+		message: { key: string; topic: string; event: string; data?: unknown }
+	): void;
+	sendTo(filter: (userData: any) => boolean, topic: string, event: string, data?: unknown, options?: { compress?: boolean }): number;
+	adviseReconnect(options?: { windowMs?: number; afterMs?: number; close?: boolean; filter?: (userData: any) => boolean; compress?: boolean }): number;
+	readonly connections: number;
+	readonly closedWsAborts: number;
+	introspect(): {
+		connections: number;
+		closedWsAborts: number;
+		protection: 'normal' | 'elevated' | 'siege';
+		maxPayloadLength: number;
+		versions: RuntimeVersionInfo;
+		pressure: {
+			sampledAt: number | null;
+			active: boolean;
+			reason: 'NONE' | 'PUBLISH_RATE' | 'SUBSCRIBERS' | 'MEMORY' | 'CPU_QUOTA' | 'PSI' | 'CAPACITY';
+			value: number;
+			subscriberRatio: number;
+			publishRate: number;
+			memoryMB: number;
+			maxBufferedBytes: number;
+			backpressuredConnections: number;
+			droppedFrames: number;
+			droppedBytes: number;
+			egress: {
+				deliveries: number;
+				bytes: number;
+				refusedTopic: number;
+				refusedTenant: number;
+			};
+		};
+		assertions: Record<string, number>;
+		diagnostics: {
+			retained: number;
+			recent: Array<{
+				diagnosticId: string;
+				kind: 'state-divergence';
+				observedAt: number;
+				complete: boolean;
+				affectedStreamCount: number;
+				evidenceTruncated: boolean;
+			}>;
+		};
+	};
+	diagnostic(diagnosticId: string): {
+		diagnosticId: string;
+		kind: 'state-divergence';
+		epoch: number;
+		observedAt: number;
+		complete: boolean;
+		evidenceTruncated: boolean;
+		explainedBySequenceSummary: boolean;
+		expectedWorkers: number;
+		reportingWorkers: number;
+		workers: Array<{
+			threadId: number;
+			role: 'majority' | 'minority';
+			totalStreams: number;
+			sampledStreams: number;
+			truncated: boolean;
+		}>;
+		affectedStreams: Array<{
+			streamId: string;
+			classification: 'tail-sequence-gap' | 'stream-presence-mismatch';
+			gapLowerBound: number | null;
+			workers: Array<{
+				threadId: number;
+				role: 'majority' | 'minority';
+				sequence: number | null;
+			}>;
+		}>;
+	} | null;
+	subscribers(topic: string): number;
+	isWarmupRequest(request: Request): boolean;
+	forEachSubscriber(
+		topic: string,
+		fn: (ws: WebSocket<unknown>, userData: any) => void
+	): void;
+	readonly maxPayloadLength: number;
+	bufferedAmount(ws: WebSocket<unknown>): number;
+	subscribe(ws: WebSocket<unknown>, topic: string): Promise<string | null>;
+	checkSubscribe(
+		ws: WebSocket<unknown>,
+		topic: string,
+		options?: { requireGrant?: boolean }
+	): Promise<string | null>;
+	authorizeWireSubscribe(): 'legacy' | 'strict';
+	authorizeWireSubscribe(mode: 'legacy' | 'strict'): 'legacy' | 'strict';
+	unsubscribe(ws: WebSocket<unknown>, topic: string): boolean;
+	grantPublish(ws: WebSocket<unknown>, topic: string): boolean;
+	revokePublish(ws: WebSocket<unknown>): boolean;
+	publishGrant(ws: WebSocket<unknown>): string | null;
+	publishGame(
+		senderWs: WebSocket<unknown> | null,
+		topic: string,
+		event: string,
+		data?: unknown,
+		id?: number | string
+	): { seq: number | null; delivered: number };
+	readonly pressure: PressureSnapshot;
+	readonly protection: 'normal' | 'elevated' | 'siege';
+	readonly metrics: MetricsRegistry | null;
+	metricsSnapshot(options?: { timeoutMs?: number }): Promise<string | null>;
+	onPressure(cb: (snapshot: PressureSnapshot) => void): () => void;
+	onPublishRate(cb: (events: TopicPublishRate[]) => void): () => void;
+	topic(topic: string): TopicHelper;
+	topicEpoch(topic: string): number;
+	bumpTopicEpoch(topic: string): number;
+	now(): number;
+	monotonic(): number;
+	hlc(): { wall: number; logical: number; nodeId: string };
+	random: {
+		float(): number;
+		u32(): number;
+		uuid(): string;
+		bytes(n: number): Uint8Array;
+	};
 }
 
 /**

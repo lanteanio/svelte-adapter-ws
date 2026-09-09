@@ -572,6 +572,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   throughout rather than a shared frame beside them. A room where every
   interested subscriber is capable still receives one shared frame.
 
+- The `Platform` declaration carries the full signatures: typed wire codec
+  objects on the wire lanes, `coalesceKey` and the per-message `relay` and
+  `seq` options on `publishBatched`, `seq?: boolean | number | bigint | null`
+  on a `publishWireBatch` entry, generic `request<TReply>` and
+  `requestTopic<TReply>` with the discriminated reply union, a required
+  `key` on `sendCoalesced`, `senderWs: WebSocket | null` and optional `data`
+  on `publishGame`, both `authorizeWireSubscribe` overloads, and the shaped
+  `introspect()`, `diagnostic()` and `topic()` results in place of `object`
+  and `unknown`. `PressureSnapshot` fields are `readonly` and
+  `topPublishers` is `TopicPublishRate[]`.
+
+- `sendWireBatch` takes `options?: { compress?: boolean }` and no per-entry
+  `seq`: the binary batch frame's seq slot is always 0, whatever an entry
+  carries, and a codec without per-connection state sends the per-entry
+  JSON envelopes rather than a binary frame.
+
 - Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
   subscription is a topic-registry entry as well as a Set entry, so one
   admitted connection must not be able to hold hundreds of megabytes the

@@ -1398,50 +1398,63 @@ export const platform = {
 	},
 
 	/**
+	 * Multi-entry single-target send via a stateful plugin codec: one tick's
+	 * same-event updates for ONE subscriber as a single binary frame (the
+	 * codec's `<event>-batch` form), or the per-entry JSON envelopes when the
+	 * connection has no capability, is poisoned, or the codec keeps no
+	 * per-connection state to batch against. The per-subscriber twin of
+	 * publishWireBatch, for the culled (per-viewer) delivery walks. No seq is
+	 * stamped and no seq option exists here - one options value cannot be
+	 * one-seq-per-entry - so the binary batch frame carries seq 0; a gap-fill
+	 * replaying seq'd history sends its discrete frames through `sendWire`.
+	 *
 	 * @param {object} ws
 	 * @param {string} topic
-	 * @param {string} event
-	 * @param {Array<{ data: unknown, seq?: number }>} entries
+	 * @param {string} event - the PER-ENTRY event name
+	 * @param {Array<{ data: unknown }>} entries
 	 * @param {{ capability: string, schemaVersion: number, encode: Function, state?: object }} wire
-	 * @returns {number}
+	 * @param {{ compress?: boolean }} [options]
+	 * @returns {number} send status of the LAST frame sent (0/1/2), or 2 on a closed socket
 	 */
-	sendWireBatch(ws, topic, event, entries, wire) {
+	sendWireBatch(ws, topic, event, entries, wire, options) {
 		if (!Array.isArray(entries) || entries.length === 0) return 1;
 		let ud = null;
 		try { ud = /** @type {any} */ (ws).getUserData(); } catch { counters.closedWsAborts++; return 2; }
+		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		const count = entries.length;
 		const datas = new Array(count);
-		const seqs = new Array(count);
 		const envelopes = new Array(count);
 		for (let i = 0; i < count; i++) {
 			datas[i] = entries[i].data;
-			seqs[i] = typeof entries[i].seq === 'number' ? entries[i].seq : 0;
 			envelopes[i] = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
 		}
-		const caps = ud[WS_CAPS];
-		if (!wire || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability)) {
+		const sendJson = () => {
 			let result = 1;
 			try {
 				for (const env of envelopes) {
-					result = /** @type {any} */ (ws).send(env, false, false);
+					result = /** @type {any} */ (ws).send(env, false, compress);
 					bumpOut(ud, env);
 				}
 			} catch { counters.closedWsAborts++; return 2; }
 			return result;
-		}
+		};
+		const caps = ud[WS_CAPS];
+		if (!wire || !caps || !caps.has(wire.capability) || wireStatePoisoned(ud, wire.capability) || !wire.state) return sendJson();
 		const state = ensureWireState(ws, ud, wire);
+		if (state == null) return sendJson();
 		const result = deliverStatefulWireBatch({
 			wire,
 			event,
 			datas,
 			envelopes,
-			seqs,
-			state: state ?? {},
+			seqs: new Array(count).fill(0),
+			state,
 			ws,
 			ud,
 			topic,
 			ensureId: ensureWireId,
 			poison: poisonWireState,
+			compress,
 			counters
 		});
 		return result === 3 ? 2 : result;
