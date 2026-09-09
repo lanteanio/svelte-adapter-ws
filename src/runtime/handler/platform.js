@@ -163,12 +163,13 @@ async function runUserSubscribeGate(facade, topic) {
  * @param {string | Uint8Array} frame
  * @param {boolean} binary
  * @param {boolean} compress
- * @returns {boolean} whether anyone received it
+ * @returns {number} FANOUT_REACHED and FANOUT_SENT bits
  */
 function fanOutCohort(cohort, frame, binary, compress) {
 	const subscribers = subscribersOf(cohort);
-	if (!subscribers) return false;
+	if (!subscribers) return 0;
 	let sent = false;
+	let refused = false;
 	for (const rawWs of subscribers) {
 		if (rawWs.readyState !== 1) continue;
 		const facade = wsWrappers.get(rawWs);
@@ -177,30 +178,43 @@ function fanOutCohort(cohort, frame, binary, compress) {
 			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) {
 				sent = true;
 				bumpOut(/** @type {any} */ (facade).getUserData(), frame);
+			} else {
+				refused = true;
 			}
 		} catch {
 			counters.closedWsAborts++;
 		}
 	}
-	return sent;
+	return sent ? FANOUT_REACHED | FANOUT_SENT : refused ? FANOUT_REACHED : 0;
 }
+
+// What a fan-out walk reports, as bits. REACHED is what the family's native
+// tier's publish returns - the topic had a live subscriber - and is what the
+// outcome hook classifies; SENT is whether at least one send was accepted,
+// which is what a publish call returns. Both come off the one walk, and the
+// walk's common path pays what it always paid: one store per accepted send.
+// A subscriber whose send was shed past the backpressure ceiling was reached
+// and not sent; one whose send threw had closed under the walk and counts as
+// neither.
+const FANOUT_REACHED = 1;
+const FANOUT_SENT = 2;
 
 /**
  * Deliver one text envelope to every live subscriber of `topic`, excluding at
- * most one connection (matched as facade or raw socket). Returns whether any
- * delivery happened. Sheds per-socket past the backpressure ceiling exactly
- * like a direct send.
+ * most one connection (matched as facade or raw socket). Sheds per-socket past
+ * the backpressure ceiling exactly like a direct send.
  *
  * @param {string} topic
  * @param {string} envelope
  * @param {object | null} excludeWs
  * @param {boolean} compress
- * @returns {boolean}
+ * @returns {number} FANOUT_REACHED and FANOUT_SENT bits
  */
 function fanOut(topic, envelope, excludeWs, compress) {
 	const subscribers = subscribersOf(topic);
-	if (!subscribers) return false;
+	if (!subscribers) return 0;
 	let sent = false;
+	let refused = false;
 	for (const rawWs of subscribers) {
 		if (rawWs.readyState !== OPEN) continue;
 		const facade = wsWrappers.get(rawWs);
@@ -211,12 +225,14 @@ function fanOut(topic, envelope, excludeWs, compress) {
 			if (result !== 2) {
 				sent = true;
 				bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
+			} else {
+				refused = true;
 			}
 		} catch {
 			counters.closedWsAborts++;
 		}
 	}
-	return sent;
+	return sent ? FANOUT_REACHED | FANOUT_SENT : refused ? FANOUT_REACHED : 0;
 }
 
 /**
@@ -416,7 +432,7 @@ function publish(topic, event, data, options) {
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
 
 	const compress = WS_COMPRESSION_ON && compressOption !== false;
-	const sent = fanOut(topic, envelope, null, compress);
+	const sent = (fanOut(topic, envelope, null, compress) & FANOUT_SENT) !== 0;
 	// Relay to sibling workers via the primary; a no-op in single-process
 	// mode (no parentPort). `{ relay: false }` is for a message that arrives
 	// through an external pub/sub source (Redis, Postgres) that already fans
@@ -555,8 +571,10 @@ function batchFastPathEligible(firstTopic, batchTopics) {
 			if (touchesAny && !touchesAll) return false;
 		}
 		if (!touchesAny) continue;
+		// A registered socket with no facade yet has advertised nothing: it
+		// cannot be judged capable, so the batch takes the slow path.
 		const facade = wsWrappers.get(rawWs);
-		if (!facade) continue;
+		if (!facade) return false;
 		const caps = /** @type {any} */ (facade).getUserData()[WS_CAPS];
 		if (!caps || !caps.has('batch')) return false;
 	}
@@ -575,11 +593,13 @@ function batchFastPathEligible(firstTopic, batchTopics) {
  * @param {string} firstTopic
  * @param {Set<string> | null} batchTopics - the distinct topics when the batch spans more than one, else null
  * @param {boolean} compress
+ * @returns {boolean} whether the walk reached a live subscriber
  */
 function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 	const slice = new Array(events.length);
 	for (let i = 0; i < events.length; i++) slice[i] = events[i].env;
 	const sharedBatchEnv = wrapBatchEnvelope(slice);
+	let reached = false;
 	for (const [rawWs, topics] of allSockets()) {
 		if (rawWs.readyState !== OPEN) continue;
 		let receives = false;
@@ -593,6 +613,7 @@ function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 		if (!receives) continue;
 		const facade = wsWrappers.get(rawWs);
 		if (!facade) continue;
+		reached = true;
 		try {
 			/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
 			bumpOut(/** @type {any} */ (facade).getUserData(), sharedBatchEnv);
@@ -600,6 +621,7 @@ function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 			counters.closedWsAborts++;
 		}
 	}
+	return reached;
 }
 
 export const platform = {
@@ -902,13 +924,13 @@ export const platform = {
 			// Every local recipient gets the JSON envelope on this exit, so the
 			// charge is the envelope's UTF-8 bytes times the recipient set.
 			if (!isRelay) chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
-			const sent = fanOut(topic, envelope, excludeWs, compress);
+			const walked = fanOut(topic, envelope, excludeWs, compress);
 			// The outcome family counts the fan-outs the family's native tier
 			// hands to one publish call; an excluding publish is a per-socket
 			// walk there that the family never sees, so it reports none here.
-			if (excludeWs === null) counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
+			if (excludeWs === null) counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
 			if (relayed) batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
-			return sent || relayed;
+			return (walked & FANOUT_SENT) !== 0 || relayed;
 		}
 
 		if (!wire.state) {
@@ -958,11 +980,11 @@ export const platform = {
 				// native tier does with its two publish calls.
 				const id = getSharedWireId(topic);
 				if (id !== undefined) {
-					fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
-					counters.publishOutcomeHook?.(numSubscribers(bin) > 0);
+					const walkedBin = fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
+					counters.publishOutcomeHook?.((walkedBin & FANOUT_REACHED) !== 0);
 				}
-				fanOutCohort(json, envelope, false, compress);
-				counters.publishOutcomeHook?.(numSubscribers(json) > 0);
+				const walkedJson = fanOutCohort(json, envelope, false, compress);
+				counters.publishOutcomeHook?.((walkedJson & FANOUT_REACHED) !== 0);
 				// Cross-worker subscribers: each receiving worker re-derives the
 				// shared codec from its registry (relayPublishWire) and runs ITS
 				// OWN cohort split with its own server-wide id, so the
@@ -986,7 +1008,10 @@ export const platform = {
 			// one fan-out on the family's native tier, so one outcome. Every
 			// other exit of this lane is a per-connection walk, which the
 			// family does not count.
-			if (payload == null && excludeWs === null) counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
+			// `recipients` is the admission read of this topic's live count and,
+			// with no exclusion, exactly what the walk below reaches; only the
+			// relay path, which took no admission, reads the registry here.
+			if (payload == null && excludeWs === null) counters.publishOutcomeHook?.((isRelay ? numSubscribers(topic) : recipients) > 0);
 			if (relayed) {
 				// A declined frame (null payload) declines identically on every
 				// worker, so the codec carry would be dead IPC weight: relay the
@@ -2290,10 +2315,10 @@ export function relayPublish(topic, envelope, compress, seq, capability, event, 
 	// resuming subscriber would receive from this cross-worker frame. The
 	// codec re-encode path above captures inside publishWire.
 	if (resumeCaptureActive()) captureResumeFrame(topic, envelope);
-	fanOut(topic, envelope, null, WS_COMPRESSION_ON && compress === true);
+	const walked = fanOut(topic, envelope, null, WS_COMPRESSION_ON && compress === true);
 	// The receiving worker's fan-out is its own outcome, as on the family's
 	// native tier: the origin reported its local fan-out, this reports ours.
-	counters.publishOutcomeHook?.(numSubscribers(topic) > 0);
+	counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
 }
 
 /**
@@ -2374,15 +2399,15 @@ export function relayPublishBatched(events, compress) {
 		// seen if the originator had taken its slow path too. Each fan-out is
 		// its own outcome, as on the family's native tier.
 		for (let i = 0; i < events.length; i++) {
-			fanOut(events[i].topic, events[i].env, null, compressGated);
-			counters.publishOutcomeHook?.(numSubscribers(events[i].topic) > 0);
+			const walked = fanOut(events[i].topic, events[i].env, null, compressGated);
+			counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
 		}
 		return;
 	}
 	// Fast path: the same shared-frame walk the local fast path takes - one
 	// fan-out, one outcome.
-	deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressGated);
-	counters.publishOutcomeHook?.(numSubscribers(firstTopic) > 0);
+	const reached = deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressGated);
+	counters.publishOutcomeHook?.(reached);
 }
 
 export { hasUserSubscribeHook, runUserSubscribeGate, WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS };

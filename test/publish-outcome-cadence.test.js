@@ -125,6 +125,16 @@ describe('the single-publish lane', () => {
 		platform.publish('nobody', 'e', 1);
 		expect(take()).toEqual([true, false]);
 	});
+
+	it('reports one outcome per message of a batch(), which is N publishes', () => {
+		take();
+		platform.batch([
+			{ topic: 'mixed', event: 'a', data: 1 },
+			{ topic: 'mixed', event: 'b', data: 2 },
+			{ topic: 'nobody', event: 'c', data: 3 }
+		]);
+		expect(take()).toEqual([true, true, false]);
+	});
 });
 
 describe('the batched lane', () => {
@@ -276,6 +286,24 @@ describe('the wire batch lane', () => {
 		platform.publishWireBatch('wired', 'pos', [{ data: 1 }, { data: 2 }], capableStateful);
 		expect(take()).toEqual([]);
 	});
+
+	it('reports one outcome per entry of a stateless batch, which reroutes entry by entry through publishWire', () => {
+		const stateless = {
+			capability: NOBODY_CAP,
+			schemaVersion: 1,
+			encode(event, data) { return new TextEncoder().encode(JSON.stringify([event, data])); }
+		};
+		const plain = connections.find((c) => c.name === 'plain');
+		take();
+		platform.publishWireBatch('mixed', 'pos', [{ data: 1 }, { data: 2 }], stateless);
+		expect(take()).toEqual([true, true]);
+		// An excluding entry, or an excluding call, is an excluding publishWire
+		// per entry: a walk, reported by neither.
+		platform.publishWireBatch('mixed', 'pos', [{ data: 1 }, { data: 2, excludeWs: plain?.facade }], stateless);
+		expect(take()).toEqual([true]);
+		platform.publishWireBatch('mixed', 'pos', [{ data: 1 }, { data: 2 }], stateless, { excludeWs: plain?.facade });
+		expect(take()).toEqual([]);
+	});
 });
 
 describe('the game lane', () => {
@@ -283,7 +311,9 @@ describe('the game lane', () => {
 		const capable = connections.find((c) => c.name === 'capable');
 		platform.grantPublish(capable?.facade, 'mixed');
 		take();
-		platform.publishGame(capable?.facade, 'mixed', 'move', { x: 1 }, 'input-1');
+		const result = platform.publishGame(capable?.facade, 'mixed', 'move', { x: 1 }, 'input-1');
+		// The walk ran: plain holds the topic and the sender is excluded.
+		expect(result.delivered).toBe(1);
 		expect(take()).toEqual([]);
 	});
 });
