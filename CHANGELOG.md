@@ -355,10 +355,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - First-class in-process TLS: PEM pairs with comma-separated multi-cert SNI
   (per-name contexts from each cert SAN, wildcard SANs matched one label
-  deep, or the SSL_SNI_HOSTS override), PKCS#12 bundles via
-  SSL_PFX/SSL_PFX_PASSPHRASE, OCSP stapling from an externally-maintained DER
-  response (SSL_OCSP_FILE, re-read per handshake, with the last good bytes
-  age-bounded to an OCSP validity window), and certificate hot-reload on
+  deep, or the SSL_SNI_HOSTS override) and certificate hot-reload on
   SSL_WATCH (default on) that applies setSecureContext to new connections
   without re-binding the listener and re-derives the SNI name set from the
   reloaded certificates, so a renewal that changes SANs serves the new names
@@ -665,6 +662,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a worker inside its own bound never loses the race to its supervisor.
 
 ### Removed
+
+- `SSL_PFX`, `SSL_PFX_PASSPHRASE` and `SSL_OCSP_FILE`. The family's TLS
+  surface is the PEM pair, per-name extra pairs and the hot reload; a
+  PKCS#12 bundle and OCSP stapling were knobs only this adapter read, and a
+  deployment configured with them could not move back.
 
 - `options.excludeWs` on `platform.publish`, `platform.batch` and
   `platform.publishBatched`. The family's JSON lanes read `seq`, `relay`,

@@ -355,8 +355,6 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
 | `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |
 | `SSL_SNI_HOSTS` | - | Per-cert SNI name override, semicolon-grouped. |
-| `SSL_PFX` / `SSL_PFX_PASSPHRASE` | - | PKCS#12 bundle instead of the PEM pair. |
-| `SSL_OCSP_FILE` | - | Externally-maintained DER OCSP response to staple. |
 | `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
 | `CLUSTER_WORKERS` | - | In-process cluster: worker-thread count or `auto` (Linux; see Deployment). |
 | `CLUSTER_MODE` | `reuseport` | The one mode this runtime has; `acceptor` refuses with the reason. |
@@ -372,8 +370,8 @@ so does every invalid cluster configuration (see Deployment).
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
 not give up is capability. In-process TLS is first class through `node:https`,
-and it is a superset of what the native tier offers - SNI, multiple certs, PFX,
-OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
+with the family's surface - SNI, multiple certs, hot reload. Node also brings
+HTTP/2 and the entire observability ecosystem
 (APM agents, OpenTelemetry auto-instrumentation, `AsyncLocalStorage`,
 `--inspect`), none of which hooks a native addon.
 
@@ -419,9 +417,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    `node:https` with first-class in-process TLS: a PEM pair (`SSL_CERT`/
    `SSL_KEY`, comma-separated lists for multiple certificates - the first
    pair is the default context, every further pair serves the SNI names its
-   cert carries or the `SSL_SNI_HOSTS` override), a PKCS#12 bundle
-   (`SSL_PFX`/`SSL_PFX_PASSPHRASE`), OCSP stapling from an
-   externally-maintained response file (`SSL_OCSP_FILE`), and certificate
+   cert carries or the `SSL_SNI_HOSTS` override) and certificate
    hot-reload (`SSL_WATCH`, default on; `SSL_RELOAD_DEBOUNCE_MS`) that swaps
    the secure context in place so a certbot renewal never drops a live
    connection. The probe TLS section runs unattended against committed

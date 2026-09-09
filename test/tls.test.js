@@ -1,5 +1,5 @@
-// In-process TLS end to end: cert/key and PFX boots, WebSocket upgrades over
-// TLS, SNI selecting the right certificate, OCSP stapling, and the hot
+// In-process TLS end to end: cert/key boots, WebSocket upgrades over TLS,
+// SNI selecting the right certificate, and the hot
 // reload swapping the served certificate without a restart.
 
 import https from 'node:https';
@@ -170,17 +170,6 @@ describe('native TLS', () => {
 		expect(welcome.type).toBe('welcome');
 	});
 
-	it('boots from a PKCS#12 bundle', async () => {
-		const rt = await bootTls('SAW_T3_', {
-			SSL_PFX: path.join(fixtures, 'bundle.pfx'),
-			SSL_PFX_PASSPHRASE: 'testpass',
-			SSL_WATCH: '0'
-		});
-		const res = await tlsGet(rt.port, '/healthz');
-		expect(res.status).toBe(200);
-		expect(res.peerCert.subject.CN).toBe('localhost');
-	});
-
 	it('selects the SNI certificate for its host and the default otherwise', async () => {
 		const rt = await bootTls('SAW_T4_', {
 			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'sni.crt')}`,
@@ -210,36 +199,6 @@ describe('native TLS', () => {
 		expect(legacy.peerCert.subject.CN).toBe('legacy.example');
 		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
 		expect(fallback.peerCert.subject.CN).toBe('localhost');
-	});
-
-	it('staples the configured OCSP response to a handshake that asks', async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), 'saw-ocsp-'));
-		const ocspBytes = Buffer.from('fake-der-ocsp-response');
-		const ocspFile = path.join(dir, 'ocsp.der');
-		writeFileSync(ocspFile, ocspBytes);
-		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		const rt = await bootTls('SAW_T5_', {
-			SSL_CERT: path.join(fixtures, 'localhost.crt'),
-			SSL_KEY: path.join(fixtures, 'localhost.key'),
-			SSL_OCSP_FILE: ocspFile,
-			SSL_WATCH: '0'
-		});
-		const stapled = await new Promise((resolve, reject) => {
-			const socket = tls.connect({
-				host: '127.0.0.1',
-				port: rt.port,
-				rejectUnauthorized: false,
-				requestOCSP: true
-			});
-			socket.on('OCSPResponse', (response) => { resolve(response); socket.destroy(); });
-			socket.on('error', reject);
-			socket.on('secureConnect', () => {
-				// No response event by handshake end means nothing was stapled.
-				setTimeout(() => { resolve(null); socket.destroy(); }, 200);
-			});
-		});
-		expect(stapled && Buffer.from(/** @type {Buffer} */ (stapled)).equals(ocspBytes)).toBe(true);
 	});
 
 	it('hot-reloads a renewed certificate without a restart', async () => {
@@ -591,32 +550,4 @@ describe('native TLS', () => {
 		expect(stop.slice(0, stop.indexOf('\n}')), 'stopTlsReload no longer disarms the sentinel').toContain('disarmTlsExpirySentinel();');
 	});
 
-	it('counts no swap for a PKCS#12 bundle that did not change', async () => {
-		// The bundle has no PEM identity, so its change gate is a digest of its
-		// bytes. Without one the arm-time catch-up read swapped the same bundle
-		// back in on every boot and recorded a generation for it.
-		const rt = await bootTls('SAW_T16_', {
-			SSL_PFX: path.join(fixtures, 'bundle.pfx'),
-			SSL_PFX_PASSPHRASE: 'testpass',
-			SSL_WATCH: '1'
-		});
-		expect((await tlsGet(rt.port, '/healthz')).status).toBe(200);
-		expect(rt.handler.tlsReloadState().generation, 'an unchanged bundle was counted as a swap').toBe(0);
-		rt.handler.reloadTls();
-		expect(rt.handler.tlsReloadState().generation).toBe(0);
-	});
-
-	it('refuses an ambiguous PFX plus PEM configuration', async () => {
-		process.env.SAW_T7_SSL_PFX = path.join(fixtures, 'bundle.pfx');
-		process.env.SAW_T7_SSL_CERT = path.join(fixtures, 'localhost.crt');
-		process.env.SAW_T7_SSL_KEY = path.join(fixtures, 'localhost.key');
-		const payload = buildRuntime({ replace: { ENV_PREFIX: JSON.stringify('SAW_T7_') } });
-		cleanups.push(() => {
-			delete process.env.SAW_T7_SSL_PFX;
-			delete process.env.SAW_T7_SSL_CERT;
-			delete process.env.SAW_T7_SSL_KEY;
-			payload.cleanup();
-		});
-		await expect(payload.importRuntime()).rejects.toThrow(/mutually exclusive/);
-	});
 });

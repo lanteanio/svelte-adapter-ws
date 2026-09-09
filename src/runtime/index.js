@@ -331,8 +331,7 @@ if (is_primary) {
 	// worker-side (handler/tls.js).
 	const ssl_cert = env('SSL_CERT', '');
 	const ssl_key = env('SSL_KEY', '');
-	const ssl_pfx = env('SSL_PFX', '');
-	const is_tls = !!(ssl_cert && ssl_key) || !!ssl_pfx;
+	const is_tls = !!(ssl_cert && ssl_key);
 	const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
@@ -345,15 +344,11 @@ if (is_primary) {
 	// on its own schedule and a key can live apart from its cert, so keying
 	// the broadcast on the first pair's directory alone would let every other
 	// pair's renewal land unseen - no broadcast, a fleet serving stale SNI
-	// certs until they expire. Identity/expiry observability still reads the
-	// FIRST PEM cert (the default context); a PKCS#12 bundle is not PEM, so a
-	// PFX deployment watches and broadcasts without the identity record
-	// rather than logging a spurious read failure on every renewal.
-	const watched_files = ssl_pfx
-		? [ssl_pfx]
-		: [...ssl_cert.split(','), ...ssl_key.split(',')].map((s) => s.trim()).filter(Boolean);
+	// certs until they expire. Identity/expiry observability reads the FIRST
+	// cert (the default context).
+	const watched_files = [...ssl_cert.split(','), ...ssl_key.split(',')].map((s) => s.trim()).filter(Boolean);
 	const watched_dirs = [...new Set(watched_files.map((f) => dirname(f)))];
-	const identity_cert_path = ssl_pfx ? '' : ssl_cert.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
+	const identity_cert_path = ssl_cert.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
 
 	console.log(
 		`[svelte-adapter-ws] Primary thread starting ${num} workers ` +
@@ -1175,10 +1170,6 @@ if (is_primary) {
 		let failure = null;
 		primaryTlsState = reloadClusterTls({
 			workers: workers.keys(),
-			// No identity source on a PFX deployment: the broadcast still goes
-			// out, the workers still swap, and the primary simply keeps no
-			// expiry record instead of reporting a spurious read failure on
-			// every successful renewal.
 			source: identity_cert_path ? { certPath: identity_cert_path } : undefined,
 			state: primaryTlsState,
 			onError: (err) => { failure = err && err.message ? err.message : String(err); }
@@ -1197,7 +1188,7 @@ if (is_primary) {
 		// baseline to report against, and its expiry so a later failure can be
 		// reported with the number that says how urgent it is. A parse failure
 		// only degrades primary-side observability - the workers gate on their
-		// own reads. Skipped for a PFX bundle, which has no PEM identity to read.
+		// own reads.
 		if (identity_cert_path) {
 			try {
 				primaryTlsState = readCertIdentity(identity_cert_path);
