@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Static assets and prerendered pages evaluate `If-Match` and
+  `If-Unmodified-Since`, in the RFC 9110 order ahead of `If-None-Match` and
+  `If-Modified-Since`, and answer `412 Precondition Failed` when the
+  precondition does not hold; a failed `If-Match` is never converted into a
+  304 by a validator later in the chain. `If-None-Match` and `If-Match` take
+  the list form and `*`. `staticPreconditions` is the exported pure planner
+  the case table pins.
+
 - Shared binary fan-out by cohort in production: a stateless wire codec marked
   `shared: true` announces one server-wide wire id to every binary-capable
   subscriber and delivers the byte-identical `0x03` frame to the binary cohort

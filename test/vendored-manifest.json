@@ -1814,5 +1814,43 @@
 				"ours": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\t// node:http writes the reason phrase on every status, so the adapter's\n\t\t// refusal is told apart by its fixed Allow list; the application's own\n\t\t// 405 names the methods of the route it matched instead.\n\t\texpect(header(propfind, 'allow'), 'an unlisted method still reaches the application')\n\t\t\t.not.toEqual(['GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS']);\n"
 			}
 		]
+	},
+	{
+		"file": "test/static-preconditions.test.js",
+		"adaptations": [
+			{
+				"lead": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst res = {\n\t\tcork(fn) { fn(); return res; },\n\t\twriteStatus(s) { rec.status = s; return res; },\n\t\twriteHeader(k, v) { rec.headers.push([k, v]); return res; },\n\t\tend(b) { rec.body = b === undefined ? null : Buffer.from(b); return res; },\n\t\tendWithoutBody(n) { rec.bodyLength = n; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
+				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
+			},
+			{
+				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
+				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
+			}
+		]
+	},
+	{
+		"file": "test/static-assets-negotiate.test.js",
+		"adaptations": [
+			{
+				"lead": "function recorder() {\n\tconst rec = {\n\t\tstatus: '',\n\t\t/** @type {[string, string][]} */\n\t\theaders: [],\n\t\t/** @type {Buffer | null} */\n\t\tbody: null,\n\t\tbodyLength: -1,\n\t\tres: /** @type {any} */ (null)\n\t};\n\tconst res = {\n\t\tcork(/** @type {() => void} */ fn) { fn(); return res; },\n\t\twriteStatus(/** @type {string} */ status) { rec.status = status; return res; },\n\t\twriteHeader(/** @type {string} */ key, /** @type {string} */ value) { rec.headers.push([key, value]); return res; },\n\t\tend(/** @type {Buffer | undefined} */ body) { rec.body = body === undefined ? null : Buffer.from(body); return res; },\n\t\tendWithoutBody(/** @type {number} */ length) { rec.bodyLength = length; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
+				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
+			},
+			{
+				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
+				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
+			},
+			{
+				"lead": "\t\tuWS = (await import('uWebSockets.js')).default;\n\t\tconst { cacheDir, serveStatic }",
+				"ours": "\t\tconst { cacheDir, serveStatic }"
+			},
+			{
+				"lead": "\t\tconst app = uWS.App().get('/wire-probe/asset.txt', (res, req) => {\n\t\t\tres.onAborted(() => {});\n\t\t\tserveStatic(\n\t\t\t\tres, entry,\n\t\t\t\treq.getHeader('accept-encoding'),\n\t\t\t\treq.getHeader('if-none-match'),\n\t\t\t\tfalse,\n\t\t\t\treq.getHeader('range'),\n\t\t\t\treq.getHeader('if-range')\n\t\t\t);\n\t\t});\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.listen('127.0.0.1', 0, (socket) => {\n\t\t\t\tif (!socket) return reject(new Error('uWS failed to listen'));\n\t\t\t\tlistenSocket = socket;\n\t\t\t\tport = uWS.us_socket_local_port(socket);\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});",
+				"ours": "\t\tconst app = http.createServer((req, res) => {\n\t\t\tif (req.url !== '/wire-probe/asset.txt') { res.writeHead(404); res.end(); return; }\n\t\t\tconst h = req.headers;\n\t\t\tserveStatic(\n\t\t\t\tres, entry,\n\t\t\t\tString(h['accept-encoding'] || ''),\n\t\t\t\tString(h['if-none-match'] || ''),\n\t\t\t\tfalse,\n\t\t\t\tString(h['range'] || ''),\n\t\t\t\tString(h['if-range'] || '')\n\t\t\t);\n\t\t});\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.once('error', reject);\n\t\t\tapp.listen(0, '127.0.0.1', () => {\n\t\t\t\tlistenSocket = app;\n\t\t\t\tport = /** @type {import('node:net').AddressInfo} */ (app.address()).port;\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});"
+			},
+			{
+				"lead": "\t\t\ttry { uWS.us_listen_socket_close(listenSocket); } catch { /* already closed */ }",
+				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
+			}
+		]
 	}
 ]

@@ -431,7 +431,7 @@ OCSP stapling. Node also brings HTTP/2 and the entire observability ecosystem
    install needs no devDependencies. The in-memory static cache answers with
    negotiated precompressed representations (per-representation weak ETags),
    single byte ranges cut in the negotiated representation's coordinates,
-   If-None-Match/If-Modified-Since/If-Range preconditions, the dotfile refusal with its
+   If-Match/If-Unmodified-Since/If-None-Match/If-Modified-Since/If-Range preconditions, the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
    single-chunk dynamic compression with the BREACH-defense credential skip, a

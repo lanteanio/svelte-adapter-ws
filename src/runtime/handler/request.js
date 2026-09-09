@@ -172,6 +172,8 @@ export function handleRequest(req, res) {
 				method === 'HEAD',
 				/** @type {string} */ (h['range']) || '',
 				/** @type {string} */ (h['if-range']) || '',
+				/** @type {string} */ (h['if-match']) || '',
+				/** @type {string} */ (h['if-unmodified-since']) || '',
 				/** @type {string} */ (h['if-modified-since']) || ''
 			);
 			if (tracingEnabled) {
@@ -311,6 +313,8 @@ export function handleRequest(req, res) {
 			method === 'HEAD',
 			/** @type {string} */ (h['range']) || '',
 			/** @type {string} */ (h['if-range']) || '',
+			/** @type {string} */ (h['if-match']) || '',
+			/** @type {string} */ (h['if-unmodified-since']) || '',
 			/** @type {string} */ (h['if-modified-since']) || ''
 		);
 		const served = tracingEnabled
