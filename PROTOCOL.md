@@ -1,7 +1,7 @@
 # The Lantean protocol
 
-[README](./README.md) | [migration guide](./MIGRATION.md) |
-[conformance index](./docs/protocol-conformance.md) |
+[README](./README.md) | [migration guide](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/MIGRATION.md) |
+[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |
 [protocol schema](./protocol.schema.json) | [test vectors](./test-vectors/README.md) |
 [release history](./CHANGELOG.md)
 
@@ -10,7 +10,7 @@ The Lantean protocol is the WebSocket wire contract spoken by
 contract a third-party client - in any language - implements against.
 `svelte-adapter-uws` is the reference implementation; `svelte-realtime` is
 built on top of it and speaks the same wire. The name is implementation-neutral
-on purpose: four surfaces speak this protocol (the uWS production runtime, the
+on purpose: four surfaces speak this protocol (the reference uWS production runtime, the
 Vite dev server, the in-process test handler, and the deterministic simulator),
 and a third party may add more, so the contract is named for itself, not for
 one package.
@@ -1794,7 +1794,7 @@ the transport itself also closes.
 
 This appendix is the wire-specific decision record. The cross-package index
 routes protocol evolution through
-[Protocol compatibility](./docs/decisions/protocol-compatibility.md).
+[Protocol compatibility](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/decisions/protocol-compatibility.md).
 
 These non-choices are deliberate and are recorded so they are not relitigated:
 
@@ -1948,7 +1948,7 @@ wire:
   record-limit, topology, and stream-error constants for runtimes whose schema
   tooling ignores prose.
 
-A [minimal dependency-free Core client](./examples/minimal-client.mjs) (~40
+A [minimal dependency-free Core client](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/examples/minimal-client.mjs) (~40
 lines) implements connect, subscribe, data-event dispatch, and
 resume-on-subscribe - the complete Core class (section 13) by construction. It
 is exercised by the repository's

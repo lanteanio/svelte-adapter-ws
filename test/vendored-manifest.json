@@ -1879,6 +1879,26 @@
 			{
 				"lead": "https://github.com/lanteanio/svelte-adapter-ws/blob/dev/test/minimal-client.test.js",
 				"ours": "https://github.com/lanteanio/svelte-adapter-uws/blob/dev/test/minimal-client.test.js"
+			},
+			{
+				"lead": "[README](./README.md) | [migration guide](./MIGRATION.md) |",
+				"ours": "[README](./README.md) | [migration guide](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/MIGRATION.md) |"
+			},
+			{
+				"lead": "[conformance index](./docs/protocol-conformance.md) |",
+				"ours": "[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |"
+			},
+			{
+				"lead": "[Protocol compatibility](./docs/decisions/protocol-compatibility.md).",
+				"ours": "[Protocol compatibility](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/decisions/protocol-compatibility.md)."
+			},
+			{
+				"lead": "A [minimal dependency-free Core client](./examples/minimal-client.mjs) (~40",
+				"ours": "A [minimal dependency-free Core client](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/examples/minimal-client.mjs) (~40"
+			},
+			{
+				"lead": "on purpose: four surfaces speak this protocol (the uWS production runtime, the",
+				"ours": "on purpose: four surfaces speak this protocol (the reference uWS production runtime, the"
 			}
 		]
 	},
