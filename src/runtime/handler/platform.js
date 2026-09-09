@@ -1305,14 +1305,16 @@ export const platform = {
 		for (const rawWs of subscribers) {
 			if (rawWs.readyState !== 1) continue;
 			const facade = wsWrappers.get(rawWs);
-			if (!facade || facade === sharedExclude || rawWs === sharedExclude) continue;
-			// Per-entry exclusion: a connection excluded from some entries gets
-			// its own filtered batch.
+			if (!facade) continue;
+			// Per-entry exclusion: the call-level socket is the DEFAULT for
+			// every entry and an entry carrying its own overrides it, so a
+			// connection excluded from some entries gets its own filtered
+			// batch. A null entry value is absent, not an override to nothing.
 			/** @type {number[] | null} */
 			let keep = null;
 			for (let i = 0; i < count; i++) {
-				const ex = excludes[i];
-				if (ex !== undefined && (ex === facade || ex === rawWs)) {
+				const ex = excludes[i] != null ? excludes[i] : sharedExclude;
+				if (ex !== null && (ex === facade || ex === rawWs)) {
 					if (keep === null) {
 						keep = [];
 						for (let j = 0; j < i; j++) keep.push(j);
@@ -1848,13 +1850,20 @@ export const platform = {
 		// binary recipients are charged the envelope size too: the 0x03 form
 		// is per-capability and encoded lazily inside the walk, and forcing
 		// the encode on every publish just to price it would tax the 60 Hz
-		// lane.
+		// lane. The game lane is the one publish with a socket in hand - its
+		// tenant is the SENDER's frozen attribution, never the topic resolver:
+		// the client relaying through this lane is the party whose budget the
+		// fan-out spends.
 		const recipients = excludedRecipient(/** @type {any} */ (senderWs), topic)
 			? Math.max(0, numSubscribers(topic) - 1)
 			: numSubscribers(topic);
 		let egressTenant = null;
 		if (egressGate.armed) {
-			egressTenant = resolvePublishTenant(topic);
+			if (egressGate.account !== null && egressGate.account.tenantEnabled) {
+				let att = null;
+				try { att = /** @type {any} */ (senderWs).getUserData()[WS_ATTRIBUTION] ?? null; } catch { att = null; }
+				egressTenant = att !== null && typeof att.tenantId === 'string' ? att.tenantId : null;
+			}
 			// { seq: null, delivered: 0 } is this lane's refusal shape.
 			if (!admitPublishEgress(topic, egressTenant, 1, recipients)) return { seq: null, delivered: 0 };
 		}
