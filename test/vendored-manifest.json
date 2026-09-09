@@ -1852,5 +1852,43 @@
 				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
 			}
 		]
+	},
+	{
+		"file": "PROTOCOL.md",
+		"adaptations": [
+			{
+				"lead": "`svelte-adapter-ws` is the reference implementation; `svelte-realtime` is",
+				"ours": "`svelte-adapter-uws` is the reference implementation; `svelte-realtime` is"
+			},
+			{
+				"lead": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-ws` repository.",
+				"ours": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-uws` repository."
+			},
+			{
+				"lead": "- **Applies to:** `svelte-adapter-ws` 0.6.0 and later, its bundled client, and",
+				"ours": "- **Applies to:** `svelte-adapter-uws` 0.6.0 and later, its bundled client, and"
+			},
+			{
+				"lead": "The reference `svelte-adapter-ws` runtime does not terminate QUIC and does",
+				"ours": "The reference `svelte-adapter-uws` runtime does not terminate QUIC and does"
+			},
+			{
+				"lead": "`svelte-adapter-ws` runtime does not terminate QUIC; this section is",
+				"ours": "`svelte-adapter-uws` runtime does not terminate QUIC; this section is"
+			},
+			{
+				"lead": "https://github.com/lanteanio/svelte-adapter-ws/blob/dev/test/minimal-client.test.js",
+				"ours": "https://github.com/lanteanio/svelte-adapter-uws/blob/dev/test/minimal-client.test.js"
+			}
+		]
+	},
+	{
+		"file": "test/message-hook-containment.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\t['src/runtime/handler.js', 2],",
+				"ours": "\t\t\t['src/runtime/handler/realtime.js', 2],"
+			}
+		]
 	}
 ]
