@@ -710,8 +710,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A throwing resume hook is reported as the `resume.hook-failed` operational
   event, and a certificate renewal that does not validate as
   `tls.reload-skipped`; both were console lines. A default-context swap that
-  fails mid-apply is `tls.swap-failed` and arms its own one-shot retry. The
-  registry carries `ADAPTER-ERR-TLS-SWAP`, `ADAPTER-ERR-SINK-FAILED`,
+  fails mid-apply is `tls.swap-failed` and arms its own one-shot retry, which
+  the server's close clears and which fires only for the server that armed
+  it. The registry carries `ADAPTER-ERR-TLS-SWAP`, `ADAPTER-ERR-SINK-FAILED`,
   `ADAPTER-ERR-PRESSURE-LISTENER` and `ADAPTER-ERR-EGRESS-EVICTED` for the
   events the runtime already emitted without an entry.
 
