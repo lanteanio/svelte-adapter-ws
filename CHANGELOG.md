@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The README documents the observability contract in three tables the build
+  now gates: the registry contract method by method with its signature and
+  whether it is required, every signal with its type and how it merges across
+  workers, and a canonical row per signal carrying labels, unit, scope,
+  aggregate, origin, formula and help. The `websocket.metrics` JSDoc lists
+  every signal the adapter registers. A signal added to the manifest without a
+  matching row, a registry method documented in a stale signature, or a help
+  string that drifts from the manifest now fails the suite.
+
 - Static assets and prerendered pages evaluate `If-Match` and
   `If-Unmodified-Since`, in the RFC 9110 order ahead of `If-None-Match` and
   `If-Modified-Since`, and answer `412 Precondition Failed` when the

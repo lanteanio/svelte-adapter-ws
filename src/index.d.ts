@@ -280,34 +280,210 @@ export interface WebSocketOptions {
 	 */
 	adminAuthAcknowledged?: boolean;
 	/**
-	 * Prometheus-style registry for transport, admission and posture
-	 * observability. Off by default; when set, the adapter registers the
-	 * manifest's worker signals and emits them from the request, upgrade,
-	 * message and publish paths, with gauges riding the existing 1 Hz pressure
-	 * sampler. No client identity - address or session - ever reaches a label.
+	 * Prometheus-style registry for admission and posture observability.
+	 * Off by default; when set, the adapter registers and emits:
 	 *
-	 * This is a **module path**, like `handler`, not a live object: adapter
+	 * - `http_requests_total{method,outcome}` - completed HTTP requests
+	 *   (counter), with a bounded verb and success/client-error/server-error/
+	 *   aborted outcome.
+	 * - `http_request_duration_seconds{method,outcome}` - HTTP completion
+	 *   duration (histogram with explicit fractional-second buckets).
+	 * - `upgrade_admitted_total` - upgrades accepted (counter).
+	 * - `upgrade_rejected_total{reason}` - upgrades rejected before open
+	 *   (counter). Reasons, in the order the upgrade path can reach them:
+	 *   `siege`, `over_capacity`, `cursor_lane`, `connection_capacity`,
+	 *   `duplicate_header` (a
+	 *   repeated `Host` / `Origin` / `Authorization` / framing header, which
+	 *   cannot be given one reading), `ip_rate_limit`, `bad_origin`,
+	 *   `deferred_overflow`,
+	 *   `auth_timeout`, `auth_rejected`, `hook_error`. One more reason,
+	 *   `auth_rate_limit`, is emitted on the `connect({ auth: true })`
+	 *   preflight POST rather than on an upgrade - it shares this counter
+	 *   because it refuses the same client at the door in front of the
+	 *   handshake. That preflight also refuses a repeated framing header
+	 *   with a `400`, and THAT rejection is not counted on any series, so a
+	 *   dashboard built on this counter sees duplicate-header refusals from
+	 *   the upgrade path only.
+	 * - `upgrade_duration_seconds{outcome}` - admit/reject/abort/error decision
+	 *   duration (histogram with explicit seconds-valued buckets).
+	 * - `upgrade_inflight` - upgrades between admission and open (gauge,
+	 *   sampled once per pressure interval).
+	 * - `upgrade_deferred_depth` - callbacks retained by the bounded pacing
+	 *   queue (gauge).
+	 * - `upgrade_deferred_oldest_age_seconds` - live age of the oldest retained
+	 *   callback (gauge).
+	 * - `upgrade_deferred_rejected_total` - callbacks shed because that finite
+	 *   queue was full (counter).
+	 * - `ws_connection_headroom` - remaining reserved-or-live connection
+	 *   permits (gauge). Registered only when `maxConnections` is enabled
+	 *   and updated on each permit acquire/release.
+	 * - `waiting_room_queue_depth` - clients polling the waiting room
+	 *   (gauge, sampled; `0` when the room is off).
+	 * - `protection_posture_state` - `0` normal / `1` elevated / `2` siege
+	 *   (gauge, sampled).
+	 * - `protection_posture_transitions_total{from,to}` - posture level
+	 *   changes (counter).
+	 * - `framework_assertion_violations_total{category,severity}` - framework
+	 *   invariant violations, mirroring the queryable `platform.assertions`
+	 *   Map. `severity` is `soft` (a recoverable `assert`) or `fatal` (a
+	 *   hard-tier termination). Category cardinality is bounded by the
+	 *   source-declared categories (counter).
+	 * - `upgrade_rate_map_evicted_total{door}` - rate-limit entries evicted at
+	 *   the map cap; `door` is `upgrade` or `auth` (counter).
+	 * - `ws_connections` - live WebSocket connections on this worker (gauge,
+	 *   sampled).
+	 * - `ws_connection_duration_seconds{outcome}` - clean/abnormal connection
+	 *   lifetime (histogram).
+	 * - `ws_messages_total{kind,outcome}` - completed inbound text/binary
+	 *   messages by success/error outcome (counter).
+	 * - `ws_message_admission_rejected_total{reason,scope}` - application
+	 *   messages shed by the established-message rate/concurrency/queue gate.
+	 * - `ws_message_duration_seconds{kind,outcome}` - awaited inbound handler
+	 *   duration (histogram with explicit fractional-second buckets).
+	 * - `ws_subscriptions` - live topic subscriptions across this worker's
+	 *   connections (gauge, sampled). Divide by `ws_connections` for the
+	 *   subscriber ratio; the two are exported separately because averaging
+	 *   per-worker ratios is not the cluster ratio.
+	 * - `ws_publishes_total` - publish calls on this worker (counter). Counts
+	 *   publishes, never per-recipient deliveries: one publish is one
+	 *   logical event however many subscribers it reaches.
+	 * - `ws_publish_outcomes_total{outcome}` - the fan-outs one publish call
+	 *   hands to the transport, classified as delivered/no-subscribers
+	 *   (counter), with no recipient walk. A publish that excludes a socket is
+	 *   delivered by a per-socket walk instead, so it is counted by
+	 *   `ws_publishes_total` and is absent here: the two do not sum.
+	 * - `ws_backpressure_max_bytes` - worst per-connection outbound buffered
+	 *   bytes over the sampled connection set (gauge, sampled; `0` when healthy).
+	 * - `ws_backpressure_connections` - sampled connections holding a
+	 *   backpressured outbound queue (gauge, sampled; `0` when healthy).
+	 * - `ws_dropped_frames_total` - exact outbound frames the send lane shed at the
+	 *   configured backpressure limit (counter).
+	 * - `ws_dropped_bytes_total` - exact payload bytes in those shed frames
+	 *   (counter, bytes).
+	 * - `egress_refused_total{scope}` - publishes refused pre-hoc by a
+	 *   configured `websocket.egress` ceiling (counter); nothing was
+	 *   delivered, relayed, or sequence-stamped for them. `scope` is `topic`
+	 *   or `tenant`.
+	 * - `egress_window_evicted_total{scope}` - live usage windows dropped at
+	 *   the egress ledger's key cap (counter). Each one stops enforcing that
+	 *   key's ceiling for the rest of its window, and the symptom is FEWER
+	 *   refusals, so a non-zero rate here is what distinguishes a budget that
+	 *   has run out of ledger room from traffic that simply fits.
+	 * - `pressure_saturation` - worker saturation, `0` healthy to `1` at the
+	 *   configured thresholds (gauge, sampled).
+	 * - `pressure_reason` - the live pressure reason as a severity-ordered
+	 *   code: `0` none, `1` subscribers, `2` publish rate, `3` psi, `4` cpu
+	 *   quota, `5` capacity, `6` memory (gauge, sampled).
+	 * - `pressure_reason_transitions_total{from,to}` - pressure reason changes,
+	 *   including incident entry and recovery (counter). Both labels use the
+	 *   bounded reason vocabulary, so brief incidents remain visible without
+	 *   introducing unbounded cardinality.
+	 * - `pressure_sample_timestamp_seconds` - unix time of the most recent
+	 *   completed pressure sample (gauge). The sampling timer is `unref`'d; if
+	 *   it stops, every sampled gauge above keeps serving its last value while
+	 *   the target still reads up. Alert on this timestamp's age.
+	 * - `resident_memory_bytes` - process RSS (gauge, sampled). Worker threads
+	 *   share one address space, so every worker reports the same value.
+	 * - `heap_used_ratio` - used fraction of the nearest memory wall: heap
+	 *   against the V8 `heap_size_limit`, resident set against the cgroup
+	 *   memory limit, worst-of (gauge, sampled). The heap arm is
+	 *   per-isolate, so each worker has its own.
+	 * - `psi_cpu_some_avg10`, `psi_memory_full_avg10`, `psi_io_full_avg10` -
+	 *   kernel pressure-stall readings (gauges, sampled). Registered only when
+	 *   the startup probe finds PSI; a later transient read failure writes `NaN`
+	 *   instead of serving a stale reading beside a fresh sample timestamp.
+	 * - `cpu_throttled_ratio` - fraction of the sampled window the cgroup CPU
+	 *   quota held the process suspended (gauge, sampled). Same startup-probe and
+	 *   transient-`NaN` semantics as the PSI gauges.
+	 * - `open_fds` / `fd_soft_limit` - open descriptors and the soft limit
+	 *   (gauges, sampled every ~5 pressure intervals). Registered only where
+	 *   the source exists (Linux, macOS). Whole-process values: every worker
+	 *   reports the same number.
+	 * - `state_divergence_total{role}` - cross-worker state-hash divergence
+	 *   detections; `role` is `majority` or `minority` (counter). Structure-only
+	 *   hash, so no topic strings and no client identity.
+	 * - `relay_gap_frames_total` - relayed frames proven lost to this worker
+	 *   (counter). Counts frames, not incidents; a lower bound.
+	 * - `relay_spill_quarantines_total{reason}` - lagging relay peers quarantined
+	 *   at the finite pending-byte or pending-age ceiling (`bytes` or `age`).
+	 * - `relay_spill_dropped_bytes_total` - pending relay bytes discarded at
+	 *   quarantine (counter).
+	 * - `relay_spill_pending_age_seconds` - worst oldest-pending age observed by
+	 *   the reporting worker at quarantine (gauge). Measured from the peer's
+	 *   last drain progress, so it reads "stopped draining", not "behind".
+	 * - `relay_frame_refused_total{lane}` - publishes refused by the sender-side
+	 *   relay frame ceiling; local subscribers still received them (counter).
+	 *   `lane` is `publish` or `batched`.
+	 * - `relay_frame_oversized_total` - relay frames the primary refused to
+	 *   reassemble at the reader ceiling, attributed once to a surviving
+	 *   worker's registry (counter).
+	 * - `framework_resource_growth_suspected_total{resource}` - sustained-growth
+	 *   suspicions from the optional resource-growth auditor (counter).
+	 *   Registered only when `resourceGrowthAuditIntervalMs` is set.
+	 *
+	 * Every metric declares how it combines across worker threads. That law is
+	 * executed, not merely documented: `platform.metricsSnapshot()` merges the
+	 * cluster with it. See the README metrics table for the per-metric column.
+	 *
+	 * With metrics enabled, transport completion wrappers read a monotonic
+	 * timer and emit bounded-label counters/histograms; gauges ride the existing
+	 * pressure sampler. With the option unset the original handlers are
+	 * registered unchanged and the publish sites make only a null-hook check:
+	 * no timer, label, request closure, WeakMap entry, or recipient walk. A registry built with
+	 * `createMetrics({ prefix: 'app_' })` prefixes its own `serialize()` output;
+	 * `platform.metricsSnapshot()` deliberately stays on canonical, unprefixed
+	 * manifest names so its merge law is independent of registry rendering.
+	 * No client identity (IP, session) ever appears in a label.
+	 *
+	 * The two counters record server decisions, not client behaviour: a
+	 * client that disconnects mid-upgrade is counted in neither, so their
+	 * sum can read below a load balancer's attempt count under flappy
+	 * clients. Instrument failures are contained - a registry that throws
+	 * on emit logs once and is silenced, never disturbing the upgrade path
+	 * or the sampler - while a registry that throws during instrument
+	 * creation fails at startup, loudly.
+	 *
+	 * This is a **module path** (like `handler`), not a live object: adapter
 	 * options are serialized into the build, so a registry constructed in
-	 * `svelte.config.js` could never reach the production runtime. Point it at
-	 * a module whose default export (or a named `metrics` / `registry` export)
-	 * is the registry; the adapter populates it and exposes it as
+	 * `svelte.config.js` could never reach the production runtime. Point it at a
+	 * module whose default export (or a named `metrics` / `registry` export) is
+	 * the registry; the adapter populates it and exposes it on
 	 * `platform.metrics`.
 	 *
-	 * The adapter serves no scrape route of its own - the app writes an
-	 * ordinary `+server.js` reading `platform.metrics.serialize()`, or awaits
-	 * `platform.metricsSnapshot()` for the cluster-wide merge.
-	 *
-	 * **One instance, with the Vite plugin.** With
-	 * `import ws from 'svelte-adapter-ws/vite'` in `vite.config.js` - the
-	 * standard setup, which also provides dev WebSockets - the registry is
-	 * bundled into the app's own server graph and deduplicated with every
-	 * route that imports it, so `platform.metrics` and a direct
-	 * `import { metrics } from '$lib/server/metrics.js'` read the SAME object.
-	 * Without the plugin the adapter falls back to a standalone bundle, which
-	 * instantiates the module a second time: adapter counters land on a copy
-	 * only `platform.metrics` reaches, an app-graph import reads the other,
-	 * empty one, and any module-level side effect runs twice per process. The
+	 * **One instance, with the Vite plugin.** With the adapter's Vite plugin in
+	 * `vite.config.js` (`import ws from 'svelte-adapter-ws/vite'` - the
+	 * standard setup, it also provides dev WebSockets), the registry is bundled
+	 * into the app's own server graph and deduplicated with every route that
+	 * imports it, so `platform.metrics` and a direct
+	 * `import { metrics } from '$lib/server/metrics.js'` read the SAME
+	 * instance and either read point works. Without the plugin the adapter
+	 * falls back to a standalone bundle, which instantiates the module a
+	 * second time: adapter counters then land on a copy that only
+	 * `platform.metrics` can reach, a direct app-graph import reads the other,
+	 * empty copy, and any module-level side effect runs twice per process. The
 	 * build warns when it takes that fallback.
+	 *
+	 * @example
+	 * ```js
+	 * // src/lib/server/metrics.js
+	 * import { createMetrics } from 'svelte-adapter-uws-extensions/prometheus';
+	 * export const metrics = createMetrics();
+	 *
+	 * // svelte.config.js
+	 * adapter({
+	 *   websocket: {
+	 *     upgradeAdmission: { maxConcurrent: 1000, maxConnections: 50000 },
+	 *     protection: 'auto',
+	 *     metrics: './src/lib/server/metrics.js'
+	 *   }
+	 * });
+	 *
+	 * // src/routes/metrics/+server.js
+	 * export const GET = ({ platform }) =>
+	 *   new Response(platform.metrics.serialize(), {
+	 *     headers: { 'content-type': 'text/plain; version=0.0.4' }
+	 *   });
+	 * ```
 	 */
 	metrics?: string;
 	/** Max inbound frame bytes (default 1 MiB). */

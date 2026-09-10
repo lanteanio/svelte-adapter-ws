@@ -1910,5 +1910,14 @@
 				"ours": "\t\t\t['src/runtime/handler/realtime.js', 2],"
 			}
 		]
+	},
+	{
+		"file": "test/metrics-label-contract.test.js",
+		"adaptations": [
+			{
+				"lead": "\t'src/runtime/handler.js',",
+				"ours": "\t'src/runtime/handler/realtime.js',"
+			}
+		]
 	}
 ]
