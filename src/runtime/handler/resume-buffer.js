@@ -1,6 +1,6 @@
 import { resumeBuffers, maxSeenSeq, counters } from './state.js';
 import { WS_COMPRESSION_ON } from './config.js';
-import { bumpOut } from './pressure-metrics.js';
+import { bumpOut } from './conn-stats.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { privateValueMetadata } from '../utils/observability-privacy.js';
 
@@ -105,7 +105,7 @@ export function flushResumeTopic(handle, topic, coveredSeq) {
 		try { result = ws.send(payload, false, compress); }
 		catch { counters.closedWsAborts++; gone = true; return false; }
 		if (result === 2) return false;
-		bumpOut(ws, payload);
+		bumpOut(ws.getUserData(), payload);
 		return true;
 	};
 	// The window overflowed the frame cap: the tail past the cap was never

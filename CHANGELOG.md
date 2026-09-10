@@ -579,12 +579,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- A recover-tagged subscribe opens its resume capture window before it
-  awaits the subscribe gate, on the single and the batch lane, so a frame
-  that follows it in the same TCP read cannot publish into a window not yet
-  open. A subscribe the gate denies closes the window with nothing
-  delivered.
-
 - `ws_publish_outcomes_total` counts fan-outs, not logical publishes, at the
   sites where the family's native tier hands one publish to its transport:
   one per publish, one per entry on the wire batch lane's JSON fast path,

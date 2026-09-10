@@ -1905,33 +1905,31 @@
 		]
 	},
 	{
-		"file": "src/runtime/handler/resume-buffer.js"
-	},
-	{
-		"file": "test/resume-flush-refusal.test.js",
+		"file": "src/runtime/handler/resume-buffer.js",
 		"adaptations": [
 			{
-				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
-				"ours": "const describeUWS = describe;"
+				"lead": "import { bumpOut } from './pressure-metrics.js';",
+				"ours": "import { bumpOut } from './conn-stats.js';"
+			},
+			{
+				"lead": "\t\tbumpOut(ws, payload);",
+				"ours": "\t\tbumpOut(ws.getUserData(), payload);"
 			}
 		]
+	},
+	{
+		"file": "test/resume-flush-refusal.test.js"
 	},
 	{
 		"file": "test/resume-flush-caller-guard.test.js",
 		"adaptations": [
 			{
-				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
-				"ours": "const describeUWS = describe;"
+				"lead": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });",
+				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back with\n\t\t// no checkpoint between them, so the spill would otherwise run before the\n\t\t// subscribe's gate await resumes and the capture window opens. The native\n\t\t// transport returns to its loop between the two.\n\t\tawait new Promise((r) => setTimeout(r, 50));\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
 			}
 		]
 	},
 	{
-		"file": "test/error-registry-resume-divergence.test.js",
-		"adaptations": [
-			{
-				"lead": "const describeUWS = hasUWS ? describe : describe.skip;",
-				"ours": "const describeUWS = describe;"
-			}
-		]
+		"file": "test/error-registry-resume-divergence.test.js"
 	}
 ]

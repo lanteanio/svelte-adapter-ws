@@ -22,7 +22,7 @@ import { hasUWS, EVAL_TIME_ENV } from './helpers/real-runtime.js';
 import { buildFixtureOnce } from './helpers/fixture-build.js';
 import { createStateHashDetector } from '../src/runtime/state-hash-detector.js';
 
-const describeUWS = describe;
+const describeUWS = hasUWS ? describe : describe.skip;
 const fixtureDir = fileURLToPath(new URL('./fixture', import.meta.url));
 
 describeUWS('ADAPTER-ERR-RESUME-HOOK-READ', () => {

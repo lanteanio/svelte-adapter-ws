@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { hasUWS, startRealRuntime } from './helpers/real-runtime.js';
 
-const describeUWS = describe;
+const describeUWS = hasUWS ? describe : describe.skip;
 
 const TOPIC = 'resume-refusal-probe';
 
