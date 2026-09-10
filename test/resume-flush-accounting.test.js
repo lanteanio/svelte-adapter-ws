@@ -52,7 +52,7 @@ describe('the gap-fill flush accounts for what it sent', () => {
 		connStats.setStatsEnabled(true);
 		config.armCloseHookAccounting(true);
 		const ud = conn.getUserData();
-		ud[symbols.WS_STATS] = { messagesOut: 0, bytesOut: 0 };
+		ud[symbols.WS_STATS] = connStats.createConnStats(0);
 		const capture = resumeBuffer.beginResumeCapture([topic], conn);
 		try {
 			state.captureResumeFrame(topic, 5, envelope, false);

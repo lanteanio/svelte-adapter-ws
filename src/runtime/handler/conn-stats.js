@@ -16,6 +16,22 @@ export function statsAreEnabled() {
 }
 
 /**
+ * The per-connection stats slot. Built in ONE place so a caller that seeds it
+ * by hand cannot describe a connection this runtime never produces: a slot
+ * missing a field reads as 0 + undefined rather than as the miscount it is.
+ * @param {number} openedAt
+ */
+export function createConnStats(openedAt) {
+	return {
+		openedAt,
+		messagesIn: 0,
+		messagesOut: 0,
+		bytesIn: 0,
+		bytesOut: 0
+	};
+}
+
+/**
  * @param {any} userData
  * @param {string | ArrayBuffer | Uint8Array} payload
  */

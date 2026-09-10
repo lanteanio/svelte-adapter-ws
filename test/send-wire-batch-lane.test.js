@@ -241,8 +241,10 @@ describe('sendWireBatch', () => {
 			stats.setStatsEnabled(true);
 			const ud = conn.facade.getUserData();
 			const pd = plain.facade.getUserData();
-			ud[symbols.WS_STATS] = { messagesOut: 0, bytesOut: 0 };
-			pd[symbols.WS_STATS] = { messagesOut: 0, bytesOut: 0 };
+			// The runtime's own slot shape, not a two-field stand-in: a lane that
+			// touched a field this pair omits would read as untouched here.
+			ud[symbols.WS_STATS] = stats.createConnStats(0);
+			pd[symbols.WS_STATS] = stats.createConnStats(0);
 			platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec());
 			platform.sendWireBatch(plain.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec());
 			// The capable connection got the announce and one batch frame; the

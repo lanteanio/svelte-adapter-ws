@@ -764,12 +764,14 @@ export const platform = {
 		if (resumeBuffers.size > 0) {
 			for (let i = 0; i < events.length; i++) captureResumeFrame(events[i].topic, events[i].seq, events[i].env, compressOptIn);
 		}
-		deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressOptIn);
+		const reached = deliverBatchedEnvelopes(events, firstTopic, batchTopics, compressOptIn);
 		// One outcome for the whole fast-path batch: the shared frame is one
 		// fan-out, and the family counts fan-outs, not the logical publishes
 		// inside them (the slow path above reports one per event through
-		// publish()). Same cadence as the family's native tier.
-		counters.publishOutcomeHook?.(recipients > 0);
+		// publish()). Same cadence as the family's native tier, and the same
+		// answer it gives: what the one frame reached, not what the registry
+		// held for the first topic when the batch was admitted.
+		counters.publishOutcomeHook?.(reached);
 	},
 
 	/**

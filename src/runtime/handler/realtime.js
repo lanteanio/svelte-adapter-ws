@@ -90,7 +90,7 @@ import { registerSocket, unregisterSocket } from './topic-registry.js';
 import { wrapWebSocket } from './ws-facade.js';
 import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate, ALLOW_NON_ASCII_TOPICS } from './platform.js';
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
-import { bumpIn, setStatsEnabled } from './conn-stats.js';
+import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
@@ -1686,13 +1686,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 
 	const sessionId = randomUuid();
 	userData[WS_SESSION_ID] = sessionId;
-	userData[WS_STATS] = {
-		openedAt: monotonicNow(),
-		messagesIn: 0,
-		messagesOut: 0,
-		bytesIn: 0,
-		bytesOut: 0
-	};
+	userData[WS_STATS] = createConnStats(monotonicNow());
 
 	wsWrappers.set(rawWs, facade);
 	wsConnections.add(facade);

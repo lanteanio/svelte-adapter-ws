@@ -585,8 +585,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one per cohort of a shared publish, one per batched fast-path frame, and
   one per relay receiver's own fan-out. An excluding publish, a stateful or
   capable wire delivery and the game lane are per-connection walks and
-  report none. The family no longer sums to `ws_publishes_total`; it reads
-  the same on both adapters for the same traffic.
+  report none. Each outcome is classified by what its own fan-out reached,
+  not by a separate read of the subscriber registry. The family no longer
+  sums to `ws_publishes_total`; it reads the same on both adapters for the
+  same traffic.
 
 - `publishBatched` takes its per-event slow path whenever an interested
   subscriber has not advertised the `batch` capability, on the origin and on

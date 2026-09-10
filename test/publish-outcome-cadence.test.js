@@ -202,6 +202,55 @@ describe('the batched lane', () => {
 		]);
 		expect(take()).toEqual([false]);
 	});
+
+	it('does not count a subscriber whose send threw as reached', async () => {
+		const doomed = await connect('doomed', ['batch'], ['doomed-topic']);
+		const transport = doomed.rawWs.send;
+		// readyState stays OPEN, so the walk gets as far as the send and the
+		// transport itself throws - what a socket freed under the walk does.
+		doomed.rawWs.send = () => { throw new Error('gone'); };
+		const before = state.counters.closedWsAborts;
+		try {
+			take();
+			platform.publishBatched([
+				{ topic: 'doomed-topic', event: 'a', data: 1 },
+				{ topic: 'doomed-topic', event: 'b', data: 2 }
+			]);
+			expect(take(), 'one shared frame, and it reached nobody').toEqual([false]);
+			expect(state.counters.closedWsAborts - before).toBe(1);
+		} finally {
+			doomed.rawWs.send = transport;
+		}
+	});
+
+	it('ignores a registered socket with no facade rather than judging it', () => {
+		// A socket is registered and wrapped in one synchronous block, so an
+		// un-wrapped one is not a live connection. Judging it would make the
+		// batch ineligible for the fast path, and the same traffic would then
+		// report one outcome per event instead of one for the shared frame.
+		/** @type {any} */
+		const orphan = {
+			readyState: 1,
+			bufferedAmount: 0,
+			send(_payloadOut, _opts, cb) { cb?.(); },
+			terminate() { this.readyState = 3; },
+			close() { this.readyState = 3; },
+			_socket: { remoteAddress: '10.0.0.2' }
+		};
+		registry.registerSocket(orphan);
+		registry.subscribeSocket(orphan, 'uniform');
+		try {
+			take();
+			platform.publishBatched([
+				{ topic: 'uniform', event: 'a', data: 1 },
+				{ topic: 'uniform', event: 'b', data: 2 }
+			]);
+			expect(take()).toEqual([true]);
+		} finally {
+			registry.unsubscribeSocket(orphan, 'uniform');
+			registry.unregisterSocket(orphan);
+		}
+	});
 });
 
 describe('the wire lane', () => {
@@ -376,5 +425,16 @@ describe('the relay receive half', () => {
 			{ topic: 'mixed', env: envelope('mixed', 'b', 2), seq: null }
 		], false);
 		expect(take()).toEqual([true, true]);
+	});
+
+	it('classifies a declined relayed frame by the topic\'s subscriber count', () => {
+		// The relay half computes no recipient count of its own, so this arm
+		// reads the registry instead. Reading the local count here reports a
+		// fan-out that reached two subscribers as reaching nobody.
+		platform.registerWireCodec({ capability: SHARED_CAP, schemaVersion: 1, encode() { return null; } });
+		take();
+		expect(relay.relayPublishWire('shared', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
+		expect(relay.relayPublishWire('nobody', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
+		expect(take()).toEqual([true, false]);
 	});
 });
