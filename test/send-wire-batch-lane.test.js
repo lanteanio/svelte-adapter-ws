@@ -327,6 +327,32 @@ describe('sendWireBatch', () => {
 		}
 	});
 
+	it('sends the fallback envelopes from the payloads the batch encode saw, not a second read', () => {
+		const conn = connect([CAP]);
+		try {
+			// Shed exactly one frame, the wire-id announce: ensureWireId then
+			// reports -1 and the walk falls back to envelopes. Those must carry
+			// the values already handed to the codec, because reading a getter a
+			// second time here sends bytes the codec never saw.
+			let shed = 1;
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', {
+				configurable: true,
+				get() { return shed-- > 0 ? 2 * 1024 * 1024 : 0; }
+			});
+			let reads = 0;
+			const entries = [{ get data() { return ++reads; } }, { get data() { return ++reads; } }];
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', entries, statefulCodec())).toBe(1);
+			expect(reads).toBe(2);
+			expect(conn.frames().map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`,
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
+		} finally {
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
+			conn.leave();
+		}
+	});
+
 	it('hands the compress option to the transport, and sends plain without it', () => {
 		const conn = connect([CAP]);
 		try {
