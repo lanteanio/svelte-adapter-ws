@@ -264,16 +264,65 @@ describe('sendWireBatch', () => {
 			const codec = statefulCodec();
 			// A codec that declines the batch form and every entry, so the walk
 			// has three envelope sends to attempt and no reason of its own to
-			// stop early; a closed socket must cost one abort, not three.
-			const warm = statefulCodec();
-			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], warm)).toBe(1);
+			// stop early; a closed socket must cost one abort, not three. No
+			// wire id is warmed first: a declined entry goes straight to its
+			// envelope, so this walk never reaches the announce.
 			codec.encode = () => null;
 			conn.rawWs.readyState = 3;
 			const before = state.counters.closedWsAborts;
 			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }, { data: 3 }], codec)).toBe(2);
 			expect(state.counters.closedWsAborts - before).toBe(1);
+			expect(conn.announces()).toHaveLength(0);
 		} finally {
 			conn.rawWs.readyState = 1;
+			conn.leave();
+		}
+	});
+
+	it('charges the wire-id announce its own abort when the batch declines and the entries encode', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			// Batch form declined, entries carried: the walk needs a wire id, and
+			// the announce is a send of its own onto a socket that is already
+			// gone. It charges before the envelope fallback charges again, so
+			// this branch costs two - the count the walk's own guard cannot
+			// lower, because the announce never passes through it.
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			conn.rawWs.readyState = 3;
+			const before = state.counters.closedWsAborts;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(2);
+			expect(state.counters.closedWsAborts - before).toBe(2);
+		} finally {
+			conn.rawWs.readyState = 1;
+			conn.leave();
+		}
+	});
+
+	it('sends the binary batch for a payload the codec carries and JSON cannot', () => {
+		const conn = connect([CAP]);
+		try {
+			// The envelopes are the FALLBACK. Building them up front costs a
+			// JSON.stringify per entry on the path that never sends one, and a
+			// BigInt or a cycle throws that eager build out of the call - zero
+			// frames sent, where the codec had the frame ready.
+			const codec = {
+				capability: CAP,
+				schemaVersion: 1,
+				state: { onAttach: () => ({ schemaVersion: 1 }) },
+				encode: (event, data) => new TextEncoder().encode(
+					event + ':' + JSON.stringify(data, (_k, v) => (typeof v === 'bigint' ? `${v}n` : v))
+				)
+			};
+			const result = platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1n }, { data: 2n }], codec);
+			expect(result).toBe(1);
+			const frames = conn.frames();
+			expect(frames).toHaveLength(1);
+			expect(frames[0].binary).toBeInstanceOf(Uint8Array);
+			expect(new TextDecoder().decode(header(frames[0].binary).payload))
+				.toBe('update-batch:{"updates":["1n","2n"]}');
+		} finally {
 			conn.leave();
 		}
 	});

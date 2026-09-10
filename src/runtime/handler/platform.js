@@ -1449,10 +1449,13 @@ export const platform = {
 		const caps = ud[WS_CAPS];
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		const count = entries.length;
-		// The JSON-only send reads each entry as it reaches it and allocates
-		// nothing but the string it sends; `source` is the pinned payload array
-		// once the binary path has read the entries, so a fallback from there
-		// sees what the batch encode saw.
+		// `source` is the pinned payload array once one exists, and null while it
+		// does not - this walk then reads the caller's entry as it reaches it.
+		// Pinning protects what has already been BUILT, and a JSON-only send
+		// builds nothing a later entry's toJSON could go back and rewrite. It is
+		// also one socket, so no two subscribers can be handed different bytes
+		// for the same entry. Deciding it here keeps the JSON-only send
+		// allocating nothing but the string it sends.
 		const sendJsonFrom = (i, source) => {
 			let result = 1;
 			for (; i < count; i++) {
@@ -1468,43 +1471,58 @@ export const platform = {
 		}
 		const state = ensureWireState(ws, ud, wire);
 		if (state == null) return sendJsonFrom(0, null);
-		// From here the payloads are pinned: the batch encode is handed the whole
-		// array, and a decline falls back to per-entry encodes that must see the
-		// same values.
+		// The batch encode is application code handed the whole array, so from
+		// here the payloads are pinned: a decline falls back to per-entry encodes
+		// that have to see what the batch attempt saw. This is the one array the
+		// binary path allocates, handed to the codec directly rather than copied
+		// into a second one. The JSON envelopes are NOT built here - a batch the
+		// codec carries sends no envelope at all, and a payload the codec can
+		// carry but JSON cannot (a BigInt, a cycle) would throw the whole send
+		// away before the frame it can encode is ever built.
 		const datas = new Array(count);
-		const envelopes = new Array(count);
-		for (let i = 0; i < count; i++) {
-			datas[i] = entries[i].data;
-			envelopes[i] = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
-		}
-		// One thrown send ends the call: the first is charged as a closed-socket
-		// abort and every later frame of this batch is refused without touching
-		// the socket again, so a connection that closed under the walk costs
-		// one abort, not one per entry.
-		let gone = false;
-		const result = deliverStatefulWireBatch({
-			wire,
-			event,
-			datas,
-			envelopes,
-			seqs: new Array(count).fill(0),
-			state,
-			ws,
-			ud,
-			topic,
-			ensureId: ensureWireId,
-			poison: poisonWireState,
-			compress,
-			counters,
-			send(target, value, binary) {
-				if (gone) return 3;
-				let r;
-				try { r = /** @type {any} */ (target).send(value, binary, compress); } catch { counters.closedWsAborts++; gone = true; return 3; }
-				bumpOut(ud, value);
-				return r;
+		for (let i = 0; i < count; i++) datas[i] = entries[i].data;
+		const schemaVersion = typeof state.schemaVersion === 'number' ? state.schemaVersion : wire.schemaVersion;
+		const payload = wire.encode(event + '-batch', { updates: datas }, state);
+		if (payload == null) {
+			// The codec declined the batch (older codec, unrepresentable entry):
+			// the N sendWire bodies this call replaces.
+			let result = 1;
+			for (let i = 0; i < count; i++) {
+				const p = wire.encode(event, datas[i], state);
+				if (p == null) {
+					const json = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
+					try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
+					bumpOut(ud, json);
+					continue;
+				}
+				const id = ensureWireId(ws, ud, topic);
+				if (id === -1) {
+					poisonWireState(ws, ud, wire.capability);
+					return sendJsonFrom(i, datas);
+				}
+				const frame = buildBinaryFrame(schemaVersion, id, 0, p);
+				try { result = /** @type {any} */ (ws).send(frame, true, compress); } catch { counters.closedWsAborts++; return 2; }
+				bumpOut(ud, frame);
+				if (result === 2) {
+					poisonWireState(ws, ud, wire.capability);
+					return sendJsonFrom(i + 1, datas);
+				}
 			}
-		});
-		return result === 3 ? 2 : result;
+			return result;
+		}
+		const id = ensureWireId(ws, ud, topic);
+		if (id === -1) {
+			// Dropped wire-id announce; the batch encode already advanced this
+			// connection's dictionaries - the desync poisoning exists for.
+			poisonWireState(ws, ud, wire.capability);
+			return sendJsonFrom(0, datas);
+		}
+		const frame = buildBinaryFrame(schemaVersion, id, 0, payload);
+		let result;
+		try { result = /** @type {any} */ (ws).send(frame, true, compress); } catch { counters.closedWsAborts++; return 2; }
+		bumpOut(ud, frame);
+		if (result === 2) poisonWireState(ws, ud, wire.capability);
+		return result;
 	},
 
 	registerWireCodec,
