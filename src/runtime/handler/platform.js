@@ -188,8 +188,8 @@ function fanOutCohort(cohort, frame, binary, compress) {
 // which is what a publish call returns. Both come off the one walk, and the
 // walk's common path pays what it always paid: one store per accepted send.
 // A subscriber whose send was shed past the backpressure ceiling was reached
-// and not sent; one whose send threw had closed under the walk and counts as
-// neither.
+// and not sent; one whose send threw counts as neither and is charged a
+// closed-socket abort.
 const FANOUT_REACHED = 1;
 const FANOUT_SENT = 2;
 

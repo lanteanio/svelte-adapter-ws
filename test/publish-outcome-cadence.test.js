@@ -278,6 +278,30 @@ describe('the batched lane', () => {
 			registry.unregisterSocket(orphan);
 		}
 	});
+
+	it('does not let a closed socket decide the batch shape', async () => {
+		// A socket that closed but is still registered is not a live view: it
+		// neither receives the frame nor makes the batch ineligible for the
+		// shared frame the live holders can all decode.
+		const gone = await connect('goneUniform', [], ['uniform']);
+		gone.rawWs.readyState = 3;
+		try {
+			take();
+			platform.publishBatched([
+				{ topic: 'uniform', event: 'a', data: 1 },
+				{ topic: 'uniform', event: 'b', data: 2 }
+			]);
+			expect(take(), 'one shared frame, judged by the live holders').toEqual([true]);
+		} finally {
+			gone.rawWs.readyState = 1;
+			state.wsConnections.delete(gone.facade);
+			state.wsWrappers.delete(gone.rawWs);
+			registry.unsubscribeSocket(gone.rawWs, 'uniform');
+			registry.unregisterSocket(gone.rawWs);
+			state.capCounts.adjust(gone.userData[symbols.WS_CAPS], null);
+			connections.splice(connections.indexOf(gone), 1);
+		}
+	});
 });
 
 describe('the wire lane', () => {
@@ -347,6 +371,68 @@ describe('the wire lane', () => {
 		platform.publishWire('shared', 'pos', { x: 1 }, shared);
 		// capable joined the binary cohort, plain the JSON cohort: two fan-outs.
 		expect(take()).toEqual([true, true]);
+	});
+
+	it('reports a shed cohort member as reached', async () => {
+		// The cohort walk reads the same rule as the plain walk: a frame shed
+		// past the ceiling reached its subscriber. The buried holder has no
+		// codec, so it is the JSON cohort, and the binary cohort never forms.
+		const buried = await connect('buriedShared', [], ['buried-shared']);
+		buried.rawWs.bufferedAmount = 2 * 1024 * 1024;
+		const shared = {
+			capability: SHARED_CAP,
+			schemaVersion: 1,
+			shared: true,
+			encode(event, data) { return new TextEncoder().encode(JSON.stringify([event, data])); }
+		};
+		try {
+			take();
+			platform.publishWire('buried-shared', 'pos', { x: 1 }, shared);
+			expect(take()).toEqual([true]);
+		} finally {
+			state.wsConnections.delete(buried.facade);
+			state.wsWrappers.delete(buried.rawWs);
+			registry.unsubscribeSocket(buried.rawWs, 'buried-shared');
+			registry.unregisterSocket(buried.rawWs);
+			state.capCounts.adjust(buried.userData[symbols.WS_CAPS], null);
+			connections.splice(connections.indexOf(buried), 1);
+		}
+	});
+
+	it('does not count a subscriber whose send threw as reached, on the fast path and the relay half', async () => {
+		const doomed = await connect('doomedWire', [], ['doomed-wire']);
+		const transport = doomed.rawWs.send;
+		doomed.rawWs.send = () => { throw new Error('gone'); };
+		const before = state.counters.closedWsAborts;
+		try {
+			take();
+			expect(platform.publishWire('doomed-wire', 'pos', { x: 1 }, stateless)).toBe(false);
+			relay.relayPublish('doomed-wire', envelope('doomed-wire', 'e', 1), false, null);
+			expect(take(), 'two fan-outs, each reaching nobody').toEqual([false, false]);
+			expect(state.counters.closedWsAborts - before).toBe(2);
+		} finally {
+			doomed.rawWs.send = transport;
+			state.wsConnections.delete(doomed.facade);
+			state.wsWrappers.delete(doomed.rawWs);
+			registry.unsubscribeSocket(doomed.rawWs, 'doomed-wire');
+			registry.unregisterSocket(doomed.rawWs);
+			state.capCounts.adjust(doomed.userData[symbols.WS_CAPS], null);
+			connections.splice(connections.indexOf(doomed), 1);
+		}
+	});
+
+	it('reports nothing for a declined frame that excludes a socket', () => {
+		// The exclusion turns the envelope fan-out into a per-socket walk on
+		// this arm exactly as on the JSON fast path.
+		const plain = connections.find((c) => c.name === 'plain');
+		const declining = {
+			capability: STATELESS_CAP,
+			schemaVersion: 1,
+			encode() { return null; }
+		};
+		take();
+		platform.publishWire('wired', 'pos', { x: 1 }, declining, { excludeWs: plain?.facade });
+		expect(take()).toEqual([]);
 	});
 });
 
@@ -459,12 +545,33 @@ describe('the relay receive half', () => {
 		// reads the registry instead. Reading the local count here reports a
 		// fan-out that reached two subscribers as reaching nobody.
 		// The registration below is PERMANENT - the codec registry has no
-		// unregister - so this case has to stay last in the file and the file has
-		// to keep running in declaration order.
+		// unregister - so this case and the one after it, which relies on the
+		// registration, stay last in the file, and the file has to keep running
+		// in declaration order.
 		platform.registerWireCodec({ capability: SHARED_CAP, schemaVersion: 1, encode() { return null; } });
 		take();
 		expect(relay.relayPublishWire('shared', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
 		expect(relay.relayPublishWire('nobody', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
 		expect(take()).toEqual([true, false]);
+	});
+
+	it('fans a relayed frame with a registered codec out once, through the codec re-encode alone', () => {
+		// The re-encode is the delivery. A relayed frame that carries a
+		// capability this worker knows must not ALSO fan out its JSON
+		// envelope: that would hand every subscriber the frame twice and
+		// report two outcomes for one publish.
+		const capable = connections.find((c) => c.name === 'capable');
+		expect(capable).toBeDefined();
+		const transport = capable.rawWs.send;
+		let sends = 0;
+		capable.rawWs.send = (payloadOut, opts, cb) => { sends++; transport(payloadOut, opts, cb); };
+		try {
+			take();
+			relay.relayPublish('shared', envelope('shared', 'pos', { x: 1 }), false, null, SHARED_CAP, 'pos', { x: 1 });
+			expect(take()).toEqual([true]);
+			expect(sends, 'one frame to the capable subscriber').toBe(1);
+		} finally {
+			capable.rawWs.send = transport;
+		}
 	});
 });
