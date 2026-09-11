@@ -1950,7 +1950,7 @@
 		"adaptations": [
 			{
 				"lead": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });",
-				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back with\n\t\t// no checkpoint between them, so the spill would otherwise run before the\n\t\t// subscribe's gate await resumes and the capture window opens. The native\n\t\t// transport returns to its loop between the two.\n\t\tawait new Promise((r) => setTimeout(r, 50));\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
+				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back, so a\n\t\t// spill in the same read would run before the subscribe's gate await\n\t\t// resumes and the capture window opens. A round trip in between puts the\n\t\t// spill in a later read, after that await has settled.\n\t\texpect(await answers(victim, 'window'), 'the liveness probe never worked').toBe(true);\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
 			}
 		]
 	},

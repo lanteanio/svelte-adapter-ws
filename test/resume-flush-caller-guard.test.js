@@ -101,11 +101,11 @@ describeUWS('a resume flush that closes its connection (built runtime)', () => {
 		// Open the capture window. The resume hook suspends until released, so
 		// everything published below is held in the buffer rather than sent.
 		victim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });
-		// `ws` hands every frame of one TCP read to the handler back to back with
-		// no checkpoint between them, so the spill would otherwise run before the
-		// subscribe's gate await resumes and the capture window opens. The native
-		// transport returns to its loop between the two.
-		await new Promise((r) => setTimeout(r, 50));
+		// `ws` hands every frame of one TCP read to the handler back to back, so a
+		// spill in the same read would run before the subscribe's gate await
+		// resumes and the capture window opens. A round trip in between puts the
+		// spill in a later read, after that await has settled.
+		expect(await answers(victim, 'window'), 'the liveness probe never worked').toBe(true);
 		victim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });
 		const spilled = await victim.waitFor((f) => f?.event === 'spilled', 20000);
 		expect(spilled, 'the fixture never filled the capture window').not.toBeNull();

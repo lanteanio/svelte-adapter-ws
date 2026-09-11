@@ -1,15 +1,17 @@
-// The batch subscribe lane's resume path, driven by a real client over a real
-// socket. Everything else that touches the resume buffers calls the primitives
-// directly with a scripted socket, so this lane - the one the bundled client
-// actually uses, because it attaches a recover map to the subscribe-batch it
-// sends on every reconnect - had no coverage at all.
+// The subscribe lanes' resume path, driven by a real client over a real
+// socket against the built runtime. The bundled client attaches a recover map
+// to the subscribe-batch it sends on every reconnect, so the batch lane is the
+// one a reconnecting app actually exercises; the single lane is the same
+// contract one topic at a time.
 //
-// What is pinned here is the sweep at the end of the lane. A recovered topic
-// the loop never flushes has to be closed by something, and only the sweep
-// does it: a buffer left registered keeps resumeBuffers non-empty for the life
-// of the worker, so every later publish on that topic appends to a buffer
-// nobody drains, and the topic stays pinned in the seq registry. Nothing on
-// the wire looks wrong while that happens, which is why it needs a test.
+// What is pinned here is that every resume buffer a lane opens is closed
+// again, whichever exit the lane takes. A buffer left registered keeps
+// resumeBuffers non-empty for the life of the worker, so every later publish
+// on that topic appends to a buffer nobody drains, and the topic stays pinned
+// in the seq registry. Nothing on the wire looks wrong while that happens,
+// which is why it needs a test. Also pinned: a topic the subscribe hook denies
+// opens no buffer and is never handed to the resume hook, and a flush that
+// closes the connection stops the batch loop with nothing after it subscribed.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -19,7 +21,9 @@ import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 const WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
 	idleTimeout: 120,
-	maxBackpressure: 1024 * 1024,
+	// Low enough that a flush into a client that stopped reading is refused
+	// partway, which is what makes the close-under-flush exit reachable.
+	maxBackpressure: 4096,
 	closeOnBackpressureLimit: false,
 	sendPingsAutomatically: true,
 	compression: false,
@@ -37,11 +41,32 @@ const WS_OPTS = {
 	unsafeSameOriginWithoutHostPin: false
 };
 
-// `resume` only has to EXIST for the recover lane to engage. Answering no
-// covered seqs keeps the flush out of the way of the sweep being pinned.
+// `resume` has to EXIST for the recover lane to engage; it records the topics
+// it was asked about, answers nothing covered, and parks when the connection
+// asked it to so the capture window stays open for a spill. `subscribe` denies
+// one syntactically valid topic, which is the shape of an app-side grant
+// refusal (a `__` topic would be refused earlier, before the recover lane).
+const DENIED = 'batch-resume-denied';
 const WS_HANDLER = `
-export function resume() { return {}; }
-export function message() {}
+const seen = [];
+export function subscribe(ws, topic) { return topic !== ${JSON.stringify(DENIED)}; }
+export function resume(ws, { lastSeenSeqs }) {
+	seen.push(Object.keys(lastSeenSeqs));
+	const ud = ws.getUserData();
+	if (!ud.__park) return {};
+	return new Promise((resolve) => { ud.__release = () => resolve({}); });
+}
+export function message(ws, { data, platform }) {
+	const msg = JSON.parse(Buffer.from(data).toString());
+	if (msg.type === 'seen') platform.send(ws, 'probe', 'seen', { nonce: msg.nonce, seen: seen.map((k) => k.slice()) });
+	if (msg.type === 'park') { ws.getUserData().__park = true; platform.send(ws, 'probe', 'parked', { nonce: msg.nonce }); }
+	if (msg.type === 'spill') {
+		const payload = 'x'.repeat(msg.bytes);
+		for (let i = 0; i < msg.count; i++) platform.publish(msg.topic, 'tick', { i, payload }, { seq: false });
+		platform.send(ws, 'probe', 'spilled', { count: msg.count });
+	}
+	if (msg.type === 'release') { const ud = ws.getUserData(); const fn = ud.__release; ud.__release = null; fn?.(); }
+}
 `;
 
 /** @type {ReturnType<typeof buildRuntime>} */
@@ -50,6 +75,8 @@ let payload;
 let rt;
 /** @type {any} */
 let state;
+/** @type {any} */
+let registry;
 
 beforeAll(async () => {
 	payload = buildRuntime({
@@ -57,9 +84,11 @@ beforeAll(async () => {
 		wsHandlerSource: WS_HANDLER
 	});
 	rt = await bootRuntime(payload);
-	// The server runs in THIS process, so the built state module the handler
-	// mutates is the one imported here.
-	state = await import(`${pathToFileURL(payload.dir).href}/handler/state.js`);
+	// The server runs in THIS process, so the built modules the handler
+	// mutates are the ones imported here.
+	const dir = pathToFileURL(payload.dir).href;
+	state = await import(`${dir}/handler/state.js`);
+	registry = await import(`${dir}/handler/topic-registry.js`);
 }, 60000);
 
 afterAll(async () => {
@@ -73,6 +102,8 @@ function connect() {
 	const frames = [];
 	/** @type {Array<(f: any) => void>} */
 	const waiters = [];
+	/** @type {number[]} */
+	const closes = [];
 	ws.on('message', (raw) => {
 		let json;
 		try { json = JSON.parse(raw.toString()); } catch { json = undefined; }
@@ -80,9 +111,11 @@ function connect() {
 		frames.push(frame);
 		for (const w of waiters.splice(0)) w(frame);
 	});
+	ws.on('close', (code) => { closes.push(code); });
 	return {
 		ws,
 		frames,
+		closes,
 		open: () => new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); }),
 		send: (obj) => ws.send(JSON.stringify(obj)),
 		next: (pred) => new Promise((res) => {
@@ -95,8 +128,25 @@ function connect() {
 	};
 }
 
-describe('the batch subscribe lane closes every resume buffer it opens', () => {
-	it('closes the buffer of a recovered topic the loop acked as already held', async () => {
+/** The topic lists the resume hook has been handed so far, in call order. */
+async function seenByResume(client, nonce) {
+	client.send({ type: 'seen', nonce });
+	const frame = await client.next((f) => f.json?.event === 'seen' && f.json.data?.nonce === nonce);
+	return frame.json.data.seen;
+}
+
+/** Poll until `pred` holds or the budget runs out. */
+async function until(pred, ms) {
+	const t0 = Date.now();
+	while (!pred()) {
+		if (Date.now() - t0 > ms) return false;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	return true;
+}
+
+describe('the subscribe lanes close every resume buffer they open', () => {
+	it('batch: closes the buffer of a recovered topic the loop acked as already held', async () => {
 		const topic = 'batch-resume-held';
 		const client = connect();
 		await client.open();
@@ -119,24 +169,104 @@ describe('the batch subscribe lane closes every resume buffer it opens', () => {
 		}
 	});
 
-	it('closes the buffers of recovered topics the grant gate denied', async () => {
-		const allowed = 'batch-resume-allowed';
+	it('single: closes the buffer of a recovered topic that turns out to be already held', async () => {
+		const topic = 'single-resume-held';
 		const client = connect();
 		await client.open();
 		try {
-			client.send({
-				type: 'subscribe-batch',
-				topics: [allowed, '__internal/denied'],
-				ref: 3,
-				recover: { [allowed]: { offset: 0 }, '__internal/denied': { offset: 0 } }
-			});
-			await client.next((f) => f.json?.type === 'subscribed' && f.json.topic === allowed && f.json.ref === 3);
-			// Whatever the second topic's verdict, the lane must leave nothing
-			// registered once it returns: a denied topic opens no buffer, and a
-			// flushed one deregisters its own.
+			client.send({ type: 'subscribe', topic, ref: 1 });
+			await client.next((f) => f.json?.type === 'subscribed' && f.json.ref === 1);
+			expect(state.resumeBuffers.size).toBe(0);
+			// A recover request skips the pre-await held check (live membership
+			// arriving during the await carries no history), opens the window,
+			// and only after the resume await finds the topic held: that exit
+			// acks and must close the window it opened.
+			client.send({ type: 'subscribe', topic, ref: 2, recover: { offset: 0 } });
+			await client.next((f) => f.json?.type === 'subscribed' && f.json.ref === 2);
+			expect(state.resumeBuffers.has(topic), 'the held-ack exit must close its buffer').toBe(false);
 			expect(state.resumeBuffers.size).toBe(0);
 		} finally {
 			client.close();
 		}
 	});
+
+	it('batch: a topic the subscribe hook denies opens no buffer and is never handed to the resume hook', async () => {
+		const allowed = 'batch-resume-allowed';
+		const client = connect();
+		await client.open();
+		try {
+			const before = (await seenByResume(client, 'before')).length;
+			client.send({
+				type: 'subscribe-batch',
+				topics: [allowed, DENIED],
+				ref: 3,
+				recover: { [allowed]: { offset: 0 }, [DENIED]: { offset: 0 } }
+			});
+			await client.next((f) => f.json?.type === 'subscribed' && f.json.topic === allowed && f.json.ref === 3);
+			const denied = await client.next((f) => f.json?.type === 'subscribe-denied' && f.json.topic === DENIED && f.json.ref === 3);
+			expect(denied.json.reason).toBe('FORBIDDEN');
+			// The denial is decided BEFORE the recover set is built, so the hook
+			// serves history for the admitted topic only and no buffer was ever
+			// opened for the denied one - not opened-then-swept, never opened.
+			const seen = await seenByResume(client, 'after');
+			expect(seen.slice(before)).toEqual([[allowed]]);
+			expect(state.resumeBuffers.size).toBe(0);
+		} finally {
+			client.close();
+		}
+	});
+
+	it('batch: a flush that closes the connection stops the loop, and the sweep closes the rest', async () => {
+		const first = 'batch-resume-spill';
+		const second = 'batch-resume-after-spill';
+		const bystander = connect();
+		await bystander.open();
+		const victim = connect();
+		await victim.open();
+		try {
+			// Park the resume hook so the capture window stays open while the
+			// spill lands in it.
+			victim.send({ type: 'park', nonce: 'p' });
+			await victim.next((f) => f.json?.event === 'parked');
+			victim.send({
+				type: 'subscribe-batch',
+				topics: [first, second],
+				ref: 4,
+				recover: { [first]: { offset: 0 }, [second]: { offset: 0 } }
+			});
+			// The batch is parked in its hook with both buffers open once the
+			// spill has been asked for and answered: the frames of one read are
+			// handled in order, and the spill's own reply proves it ran.
+			await until(() => state.resumeBuffers.size === 2, 5000);
+			expect(state.resumeBuffers.size, 'both recovered topics hold a buffer while the hook is parked').toBe(2);
+			// Enough held bytes to bury a reader that stopped: the flush pushes
+			// all of them in one synchronous loop.
+			victim.send({ type: 'spill', topic: first, count: 160, bytes: 32 * 1024 });
+			await victim.next((f) => f.json?.event === 'spilled');
+
+			// Stop reading, then release: the flush of the FIRST topic finds the
+			// socket past its ceiling, refuses the rest and the marker, and
+			// closes the connection. The loop must stop there.
+			victim.ws._socket.pause();
+			const aborts = state.counters.closedWsAborts;
+			victim.send({ type: 'release' });
+			expect(await until(() => state.resumeBuffers.size === 0, 10000), 'the lane returned and swept').toBe(true);
+			victim.ws._socket.resume();
+			await until(() => victim.closes.length > 0, 10000);
+
+			// The topic after the closing flush was never subscribed: nothing
+			// touched the dead socket, so nothing was charged for it either.
+			expect(registry.numSubscribers(second), 'the loop stopped before the second topic').toBe(0);
+			expect(registry.numSubscribers(first)).toBe(0);
+			expect(state.counters.closedWsAborts - aborts).toBe(0);
+			// The worker is still serving.
+			bystander.send({ type: 'seen', nonce: 'alive' });
+			const alive = await bystander.next((f) => f.json?.event === 'seen' && f.json.data?.nonce === 'alive');
+			expect(alive).toBeDefined();
+		} finally {
+			try { victim.ws._socket.resume(); } catch { /* already gone */ }
+			victim.close();
+			bystander.close();
+		}
+	}, 30000);
 });
