@@ -2,9 +2,11 @@
 // resume buffer instead of a platform method, so it is where a second byte
 // counter goes unnoticed: this runtime counts bytesOut in BYTES on every
 // other lane, and a flushed frame must not report UTF-16 code units instead.
-// The sweep after the batch subscribe loop is pinned here too - a recovered
-// topic that never reached its flush must not stay registered capturing
-// frames for a connection nobody will drain.
+// The second case pins the PRIMITIVE the batch lane sweeps with: a flush
+// deregisters only its own topic, so closing the rest is discardResumeCapture's
+// job and not something the flush does on its way past. The lane-level call
+// that must make that sweep is not pinned here - driving it needs a batch
+// whose loop stops before a recovered topic reaches its flush.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'node:path';
@@ -76,8 +78,9 @@ describe('the gap-fill flush accounts for what it sent', () => {
 			expect(state.resumeBuffers.has(flushed)).toBe(true);
 			expect(state.resumeBuffers.has(denied)).toBe(true);
 			resumeBuffer.flushResumeTopic(capture, flushed, 0);
-			// A flush deregisters its own topic; the one the subscribe loop
-			// skipped is still open, and only the sweep closes it.
+			// A flush deregisters its own topic and leaves every other buffer in
+			// the handle open, so a caller that flushes some topics and not others
+			// still holds live buffers until it discards the handle.
 			expect(state.resumeBuffers.has(flushed)).toBe(false);
 			expect(state.resumeBuffers.has(denied)).toBe(true);
 			resumeBuffer.discardResumeCapture(capture);

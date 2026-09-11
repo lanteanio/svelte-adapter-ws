@@ -289,8 +289,8 @@ describe('sendWireBatch', () => {
 			// Batch form declined, entries carried: the walk needs a wire id, and
 			// the announce is a send of its own onto a socket that is already
 			// gone. It charges before the envelope fallback charges again, so
-			// this branch costs two - the count the walk's own guard cannot
-			// lower, because the announce never passes through it.
+			// this branch costs two: the announce is a send the batch walk never
+			// sees, so no guard inside that walk can lower the count.
 			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
 			conn.rawWs.readyState = 3;
 			const before = state.counters.closedWsAborts;
@@ -398,6 +398,84 @@ describe('sendWireBatch', () => {
 			]);
 			expect(frames.every((f) => f.opts.compress === false)).toBe(true);
 		} finally {
+			conn.leave();
+		}
+	});
+
+	it('reads the caller entries one at a time on the JSON-only send', () => {
+		const plain = connect([]);
+		try {
+			let reads = 0;
+			const entries = [
+				{ get data() { reads++; return 1; } },
+				{ get data() { reads++; return 2; } },
+				{ get data() { reads++; return 3; } }
+			];
+			// No capability, so this is the JSON-only walk: it reads each entry as
+			// it reaches it and allocates nothing else. The socket dies on the
+			// first send, so the two entries after it are never sent - and must
+			// never be read either, because reading application data for a frame
+			// that will not exist is a side effect the caller did not ask for.
+			plain.rawWs.send = () => { throw new Error('gone'); };
+			expect(platform.sendWireBatch(plain.facade, TOPIC, 'update', entries, statefulCodec())).toBe(2);
+			expect(reads).toBe(1);
+		} finally {
+			plain.leave();
+		}
+	});
+
+	it('falls back from a dropped announce to the payloads the codec was handed', () => {
+		const conn = connect([CAP]);
+		try {
+			// Batch declined, entry 0 carried, wire id NOT yet announced: the
+			// announce is shed, ensureWireId reports -1, and the walk falls back
+			// from entry 0 with the pinned array. Re-reading the entries here
+			// would hand this subscriber different bytes than the codec saw.
+			let shed = 1;
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', {
+				configurable: true,
+				get() { return shed-- > 0 ? 2 * 1024 * 1024 : 0; }
+			});
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			let reads = 0;
+			const entries = [{ get data() { reads++; return 1; } }, { get data() { reads++; return 2; } }];
+			platform.sendWireBatch(conn.facade, TOPIC, 'update', entries, codec);
+			expect(reads).toBe(2);
+			expect(conn.frames().map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`,
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
+		} finally {
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
+			conn.leave();
+		}
+	});
+
+	it('falls back from a shed entry frame to the payloads the codec was handed', () => {
+		const conn = connect([CAP]);
+		try {
+			// Warm the wire id first so the announce is out of the way; the ONE
+			// shed frame below is then entry 0's binary frame, which poisons the
+			// capability and falls back from entry 1 with the pinned array.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
+			let shed = 1;
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', {
+				configurable: true,
+				get() { return shed-- > 0 ? 2 * 1024 * 1024 : 0; }
+			});
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			let reads = 0;
+			const entries = [{ get data() { reads++; return 1; } }, { get data() { reads++; return 2; } }];
+			platform.sendWireBatch(conn.facade, TOPIC, 'update', entries, codec);
+			expect(reads).toBe(2);
+			const texts = conn.frames().filter((f) => f.text).map((f) => f.text);
+			expect(texts[texts.length - 1]).toBe(`{"topic":"${TOPIC}","event":"update","data":2}`);
+		} finally {
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
 			conn.leave();
 		}
 	});

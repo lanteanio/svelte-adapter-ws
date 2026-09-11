@@ -220,6 +220,15 @@ describe('the batched lane', () => {
 			expect(state.counters.closedWsAborts - before).toBe(1);
 		} finally {
 			doomed.rawWs.send = transport;
+			// The only connection built outside beforeAll: take it back out of every
+			// set it entered, or a later case asserting on a connection or cap total
+			// inherits it.
+			state.wsConnections.delete(doomed.facade);
+			state.wsWrappers.delete(doomed.rawWs);
+			registry.unsubscribeSocket(doomed.rawWs, 'doomed-topic');
+			registry.unregisterSocket(doomed.rawWs);
+			state.capCounts.adjust(doomed.userData[symbols.WS_CAPS], null);
+			connections.splice(connections.indexOf(doomed), 1);
 		}
 	});
 
@@ -431,6 +440,9 @@ describe('the relay receive half', () => {
 		// The relay half computes no recipient count of its own, so this arm
 		// reads the registry instead. Reading the local count here reports a
 		// fan-out that reached two subscribers as reaching nobody.
+		// The registration below is PERMANENT - the codec registry has no
+		// unregister - so this case has to stay last in the file and the file has
+		// to keep running in declaration order.
 		platform.registerWireCodec({ capability: SHARED_CAP, schemaVersion: 1, encode() { return null; } });
 		take();
 		expect(relay.relayPublishWire('shared', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);

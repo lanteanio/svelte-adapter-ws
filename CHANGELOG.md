@@ -585,10 +585,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one per cohort of a shared publish, one per batched fast-path frame, and
   one per relay receiver's own fan-out. An excluding publish, a stateful or
   capable wire delivery and the game lane are per-connection walks and
-  report none. Each outcome is classified by what its own fan-out reached,
-  not by a separate read of the subscriber registry. The family no longer
-  sums to `ws_publishes_total`; it reads the same on both adapters for the
-  same traffic.
+  report none. The family no longer sums to `ws_publishes_total`; it reads
+  the same on both adapters for the same traffic.
 
 - `publishBatched` takes its per-event slow path whenever an interested
   subscriber has not advertised the `batch` capability, on the origin and on
@@ -610,7 +608,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sendWireBatch` takes `options?: { compress?: boolean }` and no per-entry
   `seq`: the binary batch frame's seq slot is always 0, whatever an entry
   carries, and a codec without per-connection state sends the per-entry
-  JSON envelopes rather than a binary frame.
+  JSON envelopes rather than a binary frame. Those envelopes are the
+  FALLBACK and are built only on the paths that send them, so a payload the
+  codec carries and `JSON.stringify` cannot (a BigInt, a circular structure)
+  still reaches the wire as its binary frame.
 
 - Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
   subscription is a topic-registry entry as well as a Set entry, so one
