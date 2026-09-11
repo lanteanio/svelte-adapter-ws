@@ -615,7 +615,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key` on `sendCoalesced`, `senderWs: WebSocket | null` and optional `data`
   on `publishGame`, both `authorizeWireSubscribe` overloads, and the shaped
   `introspect()`, `diagnostic()` and `topic()` results in place of `object`
-  and `unknown`. `PressureSnapshot` fields are `readonly` and
+  and `unknown`. `PressureSnapshot`'s top-level fields are `readonly` and
   `topPublishers` is `TopicPublishRate[]`.
 
 - `sendWireBatch` takes `options?: { compress?: boolean }` and no per-entry
@@ -624,7 +624,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON envelopes rather than a binary frame. Those envelopes are the
   FALLBACK and are built only on the paths that send them, so a payload the
   codec carries and `JSON.stringify` cannot (a BigInt, a circular structure)
-  still reaches the wire as its binary frame.
+  still reaches the wire as its binary frame. The `wire` argument is
+  required: a call without one throws rather than sending envelopes.
 
 - Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
   subscription is a topic-registry entry as well as a Set entry, so one

@@ -391,6 +391,11 @@ describe('sendWireBatch', () => {
 				`{"topic":"${TOPIC}","event":"update","data":1}`,
 				`{"topic":"${TOPIC}","event":"update","data":2}`
 			]);
+			// The batch encode advanced this connection's dictionaries past what
+			// its decoder saw, so the capability is poisoned: a batch the codec
+			// would carry is served as envelopes from here on.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }], statefulCodec())).toBe(1);
+			expect(conn.frames().slice(2).map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":3}`]);
 		} finally {
 			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
 			conn.leave();
@@ -489,6 +494,11 @@ describe('sendWireBatch', () => {
 				`{"topic":"${TOPIC}","event":"update","data":1}`,
 				`{"topic":"${TOPIC}","event":"update","data":2}`
 			]);
+			// The dropped announce poisons the capability on this walk too: the
+			// entry encodes advanced the dictionaries, so a later batch the codec
+			// would carry is served as envelopes.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }], statefulCodec())).toBe(1);
+			expect(conn.frames().slice(2).map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":3}`]);
 		} finally {
 			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
 			conn.leave();
@@ -521,8 +531,151 @@ describe('sendWireBatch', () => {
 			expect(conn.frames().filter((f) => f.text).map((f) => f.text)).toEqual([
 				`{"topic":"${TOPIC}","event":"update","data":2}`
 			]);
+			// The shed entry frame poisons the capability: the frames before it
+			// advanced the dictionaries past what the decoder received, so a
+			// later batch the codec would carry is served as envelopes.
+			const before = conn.frames().length;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }], statefulCodec())).toBe(1);
+			expect(conn.frames().slice(before).map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":3}`]);
 		} finally {
 			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
+			conn.leave();
+		}
+	});
+
+	it('charges one abort and counts nothing when the batch frame throws on a socket that closed after its announce', async () => {
+		const dir = pathToFileURL(payload.dir).href;
+		const stats = await import(`${dir}/handler/conn-stats.js`);
+		const conn = connect([CAP]);
+		try {
+			// Warm the wire id so the announce is not the send that throws: the
+			// batch frame's own catch is the one under test, and it is reached
+			// only on a connection whose id is already known.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
+			stats.setStatsEnabled(true);
+			const ud = conn.facade.getUserData();
+			ud[symbols.WS_STATS] = stats.createConnStats(0);
+			conn.rawWs.readyState = 3;
+			const aborts = state.counters.closedWsAborts;
+			const sent = conn.sent.length;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec())).toBe(2);
+			expect(state.counters.closedWsAborts - aborts).toBe(1);
+			expect(conn.sent.length, 'nothing reached the transport').toBe(sent);
+			// A frame the transport refused is not a frame it sent.
+			expect(ud[symbols.WS_STATS].messagesOut).toBe(0);
+			expect(ud[symbols.WS_STATS].bytesOut).toBe(0);
+		} finally {
+			stats.setStatsEnabled(false);
+			conn.rawWs.readyState = 1;
+			conn.leave();
+		}
+	});
+
+	it('charges one abort and counts nothing when an entry frame throws on a socket that closed after its announce', async () => {
+		const dir = pathToFileURL(payload.dir).href;
+		const stats = await import(`${dir}/handler/conn-stats.js`);
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			// Batch declined, entries carried, wire id warm: the first entry
+			// frame is the send that throws, and the walk stops there.
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			let encodes = 0;
+			const counting = codec.encode;
+			codec.encode = (event, data) => { if (!event.endsWith('-batch')) encodes++; return counting(event, data); };
+			stats.setStatsEnabled(true);
+			const ud = conn.facade.getUserData();
+			ud[symbols.WS_STATS] = stats.createConnStats(0);
+			conn.rawWs.readyState = 3;
+			const aborts = state.counters.closedWsAborts;
+			const sent = conn.sent.length;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }, { data: 3 }], codec)).toBe(2);
+			expect(state.counters.closedWsAborts - aborts).toBe(1);
+			expect(encodes, 'the walk stops at the first refused send').toBe(1);
+			expect(conn.sent.length).toBe(sent);
+			expect(ud[symbols.WS_STATS].messagesOut).toBe(0);
+		} finally {
+			stats.setStatsEnabled(false);
+			conn.rawWs.readyState = 1;
+			conn.leave();
+		}
+	});
+
+	it('counts a JSON envelope only once the transport accepted it', async () => {
+		const dir = pathToFileURL(payload.dir).href;
+		const stats = await import(`${dir}/handler/conn-stats.js`);
+		const plain = connect([]);
+		try {
+			stats.setStatsEnabled(true);
+			const pd = plain.facade.getUserData();
+			pd[symbols.WS_STATS] = stats.createConnStats(0);
+			plain.rawWs.send = () => { throw new Error('gone'); };
+			expect(platform.sendWireBatch(plain.facade, TOPIC, 'update', [{ data: 1 }], statefulCodec())).toBe(2);
+			expect(pd[symbols.WS_STATS].messagesOut).toBe(0);
+			expect(pd[symbols.WS_STATS].bytesOut).toBe(0);
+		} finally {
+			stats.setStatsEnabled(false);
+			plain.leave();
+		}
+	});
+
+	it('counts and compresses every frame of the declined walk: the envelope, the announce and the entry frame', async () => {
+		const dir = pathToFileURL(payload.dir).href;
+		const stats = await import(`${dir}/handler/conn-stats.js`);
+		const conn = connect([CAP]);
+		try {
+			stats.setStatsEnabled(true);
+			const ud = conn.facade.getUserData();
+			ud[symbols.WS_STATS] = stats.createConnStats(0);
+			// The mixed codec: batch declined, entry 0 to its envelope, entry 1
+			// encoded - which announces the wire id on the way to its frame.
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => {
+				if (event.endsWith('-batch')) return null;
+				return data === 1 ? null : perEntry(event, data);
+			};
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec, { compress: true })).toBe(1);
+			const envelope = `{"topic":"${TOPIC}","event":"update","data":1}`;
+			expect(conn.sent.map((f) => (f.text !== undefined ? 'text' : 'binary'))).toEqual(['text', 'text', 'binary']);
+			expect(conn.sent[0].text).toBe(envelope);
+			expect(conn.announces()).toHaveLength(1);
+			expect(ud[symbols.WS_STATS].messagesOut).toBe(3);
+			expect(ud[symbols.WS_STATS].bytesOut).toBe(
+				Buffer.byteLength(envelope) + Buffer.byteLength(conn.sent[1].text) + conn.sent[2].binary.byteLength
+			);
+			// The option reaches both data sends of this walk, not only the
+			// batch frame.
+			expect(conn.sent[0].opts).toEqual({ binary: false, compress: true });
+			expect(conn.sent[2].opts).toEqual({ binary: true, compress: true });
+		} finally {
+			stats.setStatsEnabled(false);
+			conn.leave();
+		}
+	});
+
+	it('stamps the schema version the attached state carries, not the codec declaration', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.state = { onAttach: () => ({ schemaVersion: 7 }) };
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }], codec)).toBe(1);
+			const frames = conn.frames();
+			expect(frames).toHaveLength(1);
+			expect(header(frames[0].binary).schemaVersion).toBe(7);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('sends nothing and reports 1 for an empty entry list', () => {
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [], statefulCodec())).toBe(1);
+			expect(conn.sent).toHaveLength(0);
+		} finally {
 			conn.leave();
 		}
 	});
