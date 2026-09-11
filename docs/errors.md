@@ -796,13 +796,13 @@ Log line begins:
 
 **Cause.** A worker slot crashed and was respawned repeatedly without ever reaching stable uptime, exhausting its restart budget.
 
-**Consequence.** The primary exits with status 1 (its worker threads die with the process) and the whole service goes down until an orchestrator respawns it.
+**Consequence.** The primary exits - hard-killing if other workers are still alive, so the teardown is clean - and the whole service goes down until an orchestrator respawns the process.
 
 **Automatic recovery.** None inside the process. An orchestrator respawn, where one is configured, is the recovery path.
 
 **What to do.** Read the failing worker crash output above this line: the restart limit is the symptom and the repeated worker crash is the fault. A loop this fast is usually a boot-time error, not load.
 
-## ADAPTER-ERR-WORKER-EXIT-FORCED
+## ADAPTER-ERR-WORKER-EXIT-SIGKILL
 
 Severity: error
 
@@ -812,13 +812,13 @@ Log line begins:
 [primary] worker 
 ```
 
-**Cause.** A worker was asked to exit and had not done so within the exit grace period, so the primary terminated that worker thread in place. A wedged event loop cannot process the exit request; terminating just the thread is safe here because a plain Node worker holds no native socket handles.
+**Cause.** A worker was asked to exit and had not done so within the exit grace period, so the primary killed the WHOLE PROCESS with SIGKILL. A wedged worker cannot close itself, and the family resolves a wedged worker by process death rather than by terminating the one thread.
 
-**Consequence.** Only the wedged worker dies: its connections drop and those clients reconnect onto a sibling. The slot respawns under the restart budget, so a worker that wedges on every boot eventually exhausts it (see ADAPTER-ERR-WORKER-RESTART-LIMIT).
+**Consequence.** Every worker dies, not just the wedged one: all connections drop, in-flight requests are lost, and no shutdown hook runs. The process is expected to be respawned by whatever supervises it - systemd, a container runtime, an orchestrator. Without one, the service stays down.
 
-**Automatic recovery.** Yes - the exit fires the normal restart path and a replacement occupies the same slot.
+**Automatic recovery.** None inside the process. Recovery is the supervisor restarting it.
 
-**What to do.** Find why the worker would not exit. A blocked event loop is the usual cause - a synchronous hook, an unbounded loop, or a native call that does not return - and it will happen again at the next exit request. Most exit requests print their reason above this line; the one that does not is the shutdown budget expiring, where the request went to every worker at once.
+**What to do.** Find why the worker would not exit. A blocked event loop is the usual cause - a synchronous hook, an unbounded loop, or a native call that does not return - and it will happen again at the next exit request. Most exit requests print their reason above this line; the one that does not is the shutdown budget expiring, where the request went to every worker at once and this one did not go.
 
 ## ADAPTER-ERR-RELAY-SPILL-QUARANTINE
 
@@ -834,7 +834,7 @@ Log line begins:
 
 **Consequence.** The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.
 
-**Automatic recovery.** The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is terminated in place and its slot respawned - the mechanism ADAPTER-ERR-WORKER-EXIT-FORCED documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.
+**Automatic recovery.** The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is resolved by killing the whole process for the orchestrator to respawn - the mechanism ADAPTER-ERR-WORKER-EXIT-SIGKILL documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.
 
 **What to do.** Read the reason on the line. An AGE spill means that worker stopped draining its ring - a blocked event loop is the usual cause, and it is the worker's own thread to profile, not the primary's. A BYTES spill can mean either: a peer merely behind on a ceiling sized too close to the largest relayed frame, where raising CLUSTER_RELAY_MAX_PENDING_KB to a few times that frame is the fix, or sustained fan-out the relay is undersized for, where a wider ceiling only delays the next spill. The droppedBytes on the line tells you which.
 

@@ -540,9 +540,12 @@ HTTP/2 and the entire observability ecosystem
    `SSL_KEY`, comma-separated lists for multiple certificates - the first
    pair is the default context, every further pair serves the SNI names its
    cert carries or the `SSL_SNI_HOSTS` override) and certificate
-   hot-reload (`SSL_WATCH`, default on; `SSL_RELOAD_DEBOUNCE_MS`) that swaps
-   the secure context in place so a certbot renewal never drops a live
-   connection. The probe TLS section runs unattended against committed
+   hot-reload (`SSL_WATCH`, default on; `SSL_RELOAD_DEBOUNCE_MS`) that
+   registers a renewed certificate under its SNI names in place, so a certbot
+   renewal is served on new SNI-matched handshakes without re-binding the
+   listen socket or dropping a live connection. A non-SNI / unmatched-SNI
+   client keeps the boot-time certificate until a restart: the default
+   context is static. The probe TLS section runs unattended against committed
    fixtures. HTTP serving goes through the public
    `@sveltejs/kit/node` primitives - `getRequest`, `setResponse`,
    `createReadableStream` - bundled into the build output so a production

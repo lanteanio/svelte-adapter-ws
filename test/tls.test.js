@@ -1,6 +1,7 @@
 // In-process TLS end to end: cert/key boots, WebSocket upgrades over TLS,
-// SNI selecting the right certificate, and the hot
-// reload swapping the served certificate without a restart.
+// SNI selecting the right certificate, and the hot reload serving a renewed
+// certificate to SNI-matched handshakes without a restart while a client that
+// sends no servername keeps the boot certificate.
 
 import https from 'node:https';
 import { execFileSync } from 'node:child_process';
@@ -222,14 +223,18 @@ describe('native TLS', () => {
 		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
 		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
 
+		// The renewal is served to handshakes that name it.
 		let renewed = null;
 		const t0 = Date.now();
 		while (Date.now() - t0 < 5000) {
 			await new Promise((r) => setTimeout(r, 150));
-			const probe = await tlsGet(rt.port, '/healthz');
+			const probe = await tlsGet(rt.port, '/healthz', 'sni.example');
 			if (probe.peerCert.subject.CN === 'sni.example') { renewed = probe; break; }
 		}
 		expect(renewed?.peerCert.subject.CN).toBe('sni.example');
+		// A client that sends no servername keeps the boot certificate: the
+		// server's own context is static for the process lifetime.
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
 	}, 15000);
 
 	it('swaps the renewed certificate on reloadTls() without a watcher event', async () => {
@@ -255,9 +260,42 @@ describe('native TLS', () => {
 		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
 		rt.handler.reloadTls();
 
-		const after = await tlsGet(rt.port, '/healthz');
+		const after = await tlsGet(rt.port, '/healthz', 'sni.example');
 		expect(after.peerCert.subject.CN).toBe('sni.example');
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
 	});
+
+	itOpenssl('serves a same-name renewal to SNI handshakes and the boot certificate to the rest', async () => {
+		// The ordinary renewal: the same names, a fresh key pair. A handshake
+		// naming the host gets the renewal; one that sends no servername is
+		// answered by the server's own context, which stays on the boot
+		// certificate for the process lifetime, and is still served.
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlssame-'));
+		const boot = genCert(dir, 'boot', 'localhost', 'DNS:localhost');
+		const renewal = genCert(dir, 'renewal', 'localhost', 'DNS:localhost');
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(boot.crt, certPath);
+		copyFileSync(boot.key, keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T16_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		const bootSni = await tlsGet(rt.port, '/healthz', 'localhost');
+		const bootPlain = await tlsGet(rt.port, '/healthz');
+		expect(bootSni.peerCert.fingerprint256).toBe(bootPlain.peerCert.fingerprint256);
+
+		copyFileSync(renewal.crt, certPath);
+		copyFileSync(renewal.key, keyPath);
+		rt.handler.reloadTls();
+		expect(rt.handler.tlsReloadState().generation).toBe(1);
+
+		const sni = await tlsGet(rt.port, '/healthz', 'localhost');
+		expect(sni.status).toBe(200);
+		expect(sni.peerCert.fingerprint256).not.toBe(bootSni.peerCert.fingerprint256);
+		const plain = await tlsGet(rt.port, '/healthz');
+		expect(plain.status).toBe(200);
+		expect(plain.peerCert.fingerprint256).toBe(bootPlain.peerCert.fingerprint256);
+	}, 30000);
 
 	it('reports a zeroed reload record on a plain-HTTP build, as a snapshot', async () => {
 		// Why the record does not live in handler/tls.js: that module is
@@ -321,7 +359,7 @@ describe('native TLS', () => {
 		const recovered = rt.handler.tlsReloadState();
 		expect(recovered.generation).toBe(1);
 		expect(recovered.degraded, 'a validation failure is cleared by a success').toBeNull();
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('sni.example');
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
 
 	it('selects a wildcard SAN certificate for names under it, one label deep', async () => {
@@ -409,7 +447,7 @@ describe('native TLS', () => {
 
 		// No fs event was ever delivered for it; the arm-time read is what
 		// served it, and it counts as the swap it is.
-		const probe = await tlsGet(port, '/healthz');
+		const probe = await tlsGet(port, '/healthz', 'sni.example');
 		expect(probe.peerCert.subject.CN).toBe('sni.example');
 		expect(handler.tlsReloadState().generation).toBe(1);
 	});
@@ -466,10 +504,14 @@ describe('native TLS', () => {
 		expect(failed.failures).toBe(1);
 		expect(failed.degraded).toContain('previous one is still being served');
 
-		// The key finishes writing; the next reload takes the whole set.
+		// The key finishes writing; the next reload takes the whole set: the
+		// renewed default serves under its own name, the extra pair under its
+		// pinned one, and a client that sends no servername keeps the boot
+		// certificate.
 		copyFileSync(path.join(fixtures, 'wild.key'), extraKey);
 		rt.handler.reloadTls();
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('sni.example');
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
 		expect((await tlsGet(rt.port, '/healthz', 'extra.example')).peerCert.subject.CN).toBe('wild.example');
 		const recovered = rt.handler.tlsReloadState();
 		expect(recovered.generation).toBe(1);

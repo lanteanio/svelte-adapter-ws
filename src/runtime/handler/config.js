@@ -28,10 +28,12 @@ export const is_tls = !!(ssl_cert && ssl_key);
 
 /**
  * TLS certificate hot-reload. When TLS is configured the server watches the
- * cert files and, on a renewed cert (certbot / cert-manager), swaps the
- * secure context in place - node's setSecureContext applies to NEW
- * connections without re-binding the listen socket or dropping live ones.
- * Default ON when TLS is set; SSL_WATCH=0 opts out.
+ * cert directory and, on a renewed cert (certbot / cert-manager), registers
+ * the fresh cert under its SNI names in place so it is served WITHOUT
+ * re-binding the listen socket or dropping live connections. Default ON when
+ * TLS is set (zero-config renewal "just works"); SSL_WATCH=0 opts out. A
+ * non-SNI / unmatched-SNI client keeps the boot-time cert until a restart
+ * (the default context is not hot-swapped).
  */
 export const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 

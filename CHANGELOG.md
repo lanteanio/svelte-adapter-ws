@@ -579,6 +579,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A certificate hot-reload serves the renewed certificate to handshakes that
+  name one of its SNI hosts and leaves the server's own context on the boot
+  certificate, so a client that sends no servername, or one the renewal does
+  not name, keeps the boot certificate until a restart. This is the family's
+  reload contract; the default context is no longer replaced in place.
+
+- A worker still alive when its exit grace expires takes the process down
+  with a self-SIGKILL for the orchestrator to respawn, under
+  `ADAPTER-ERR-WORKER-EXIT-SIGKILL` (`cluster.worker-exit-sigkill`), and an
+  exhausted restart budget hard-exits the same way while other workers are
+  alive. The family resolves a wedged worker by process death; the thread is
+  no longer terminated in place with its slot respawned.
+
 - `ws_publish_outcomes_total` counts fan-outs, not logical publishes, at the
   sites where the family's native tier hands one publish to its transport:
   one per publish, one per entry on the wire batch lane's JSON fast path,
@@ -718,6 +731,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a worker inside its own bound never loses the race to its supervisor.
 
 ### Removed
+
+- `ADAPTER-ERR-WORKER-EXIT-FORCED` (`cluster.worker-exit-forced`). The family
+  declares one id for a worker that misses its exit grace,
+  `ADAPTER-ERR-WORKER-EXIT-SIGKILL`, and this adapter now raises that one.
 
 - `SSL_PFX`, `SSL_PFX_PASSPHRASE` and `SSL_OCSP_FILE`. The family's TLS
   surface is the PEM pair, per-name extra pairs and the hot reload; a

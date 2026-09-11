@@ -124,8 +124,8 @@ const relay_frame_max_bytes = parseIntEnv(
 	0
 ) * 1024;
 
-// Cross-worker state-hash divergence ACTION gate. The primary owns
-// worker.terminate() and never sees the per-build websocket options, so the
+// Cross-worker state-hash divergence ACTION gate. The primary owns the worker
+// exit request and never sees the per-build websocket options, so the
 // restart action is threaded as a primary-level env var, like the other
 // cluster knobs above. Default off: a detected divergence is logged and
 // counted (via a notice the worker increments) but no worker is auto-killed.
@@ -445,7 +445,7 @@ if (is_primary) {
 		onExhausted: (slot) => {
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.WORKER_RESTART_LIMIT,
 				`${slot.role}#${slot.index} (${RESTART_MAX_ATTEMPTS}). Exiting.`));
-			process.exit(1);
+			primaryHardExit(1);
 		},
 		shuttingDown: () => shutting_down,
 		delayBase: 100,
@@ -572,14 +572,13 @@ if (is_primary) {
 		);
 	}
 
-	// Ask a worker to exit cleanly; force it after the grace. The clean-exit
-	// message protocol is the family shape: the worker flushes and closes on
-	// its own event loop, so a busy-but-alive worker leaves cleanly well
-	// inside the grace. Only a genuine wedge (a loop that cannot process the
-	// message) reaches the fallback, and there this runtime terminates just
-	// that worker thread in place - a plain Node worker holds no native
-	// socket handles, so terminate() is safe and the slot respawns under the
-	// restart budget instead of the whole process going down.
+	// Ask a worker to close its server and exit itself (clean); if it does not
+	// (a genuine deadlock - it cannot process the message), SIGKILL the whole
+	// process for a clean orchestrator respawn. A wedged worker is never
+	// terminated in place: the family resolves it by process death, so the
+	// same fault reads the same way on every adapter. The grace is generous: a
+	// busy-but-alive worker closes and exits in well under it, so only a real
+	// wedge reaches the SIGKILL.
 	const WORKER_EXIT_GRACE_MS = 5000;
 	/** @type {Set<import('node:worker_threads').Worker>} */
 	const exit_requested = new Set();
@@ -590,16 +589,29 @@ if (is_primary) {
 		try { worker.postMessage({ type: 'terminate', code }); } catch {}
 		const t = setTimer(() => {
 			if (workers.has(worker)) {
-				const meta = workers.get(worker);
 				console.error(adapterConsoleLine(
-					ADAPTER_ERROR_IDS.WORKER_EXIT_FORCED,
-					`${meta?.threadId ?? -1} did not exit within ${WORKER_EXIT_GRACE_MS}ms; ` +
-					'terminating the worker thread (a wedged worker cannot self-close) - its slot respawns under the restart budget.'
+					ADAPTER_ERROR_IDS.WORKER_EXIT_SIGKILL,
+					`${worker.threadId} did not exit within ${WORKER_EXIT_GRACE_MS}ms; ` +
+					'SIGKILL-ing the process for a clean respawn (a wedged worker cannot self-close).'
 				));
-				void worker.terminate();
+				process.kill(process.pid, 'SIGKILL');
 			}
 		}, WORKER_EXIT_GRACE_MS);
 		if (t && t.unref) t.unref();
+	}
+	/**
+	 * Terminal primary exit. With any worker still alive the primary is
+	 * delivered as a self-SIGKILL for a clean signal (the orchestrator
+	 * respawns); with no live workers left it exits normally with the code.
+	 * @param {number} code
+	 */
+	function primaryHardExit(code) {
+		if (workers.size > 0) {
+			console.error(`[primary] hard exit with ${workers.size} live worker(s); SIGKILL for a clean teardown (orchestrator respawns).`);
+			process.kill(process.pid, 'SIGKILL');
+		} else {
+			process.exit(code);
+		}
 	}
 
 	const heartbeatSweep = setIntervalTimer(() => {

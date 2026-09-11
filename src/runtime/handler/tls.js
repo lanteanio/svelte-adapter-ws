@@ -1,8 +1,11 @@
 // In-process TLS through node:https: the cert/key pair for the default
 // context, additional pairs served per SNI name, and a certificate hot-reload
-// that swaps the secure context in place - node applies setSecureContext to
-// NEW connections without re-binding the listen socket, so a certbot renewal
-// never drops a live connection.
+// that registers a renewed certificate under the SNI names it carries without
+// re-binding the listen socket, so a certbot renewal never drops a live
+// connection. The server's own context is static: it serves the boot
+// certificate for the process lifetime, so a client that sends no servername,
+// or one the renewal does not name, keeps the boot certificate until a
+// restart. The renewed certificate reaches SNI-matched handshakes only.
 
 import https from 'node:https';
 import fs from 'node:fs';
@@ -125,7 +128,7 @@ export function createTlsServer(handleRequest) {
 		// is taken from it, so no host list is passed: SSL_SNI_HOSTS groups
 		// belong to the EXTRA certificates here, never to pairs[0].
 		recordBootCertExpiry(pairs[0].cert);
-		const reload = buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts);
+		const reload = buildReloader(pairs, sniPairs, overrideGroups, sniContexts);
 		reloadNow = reload;
 		server.once('close', () => {
 			if (reloadNow === reload) reloadNow = null;
@@ -221,35 +224,44 @@ export function reloadTls() {
  *
  * EVERYTHING IS VALIDATED BEFORE ANYTHING IS SWAPPED. The default pair and
  * every extra pair are read and built into secure contexts first; only once
- * all of them held does the server take the new default and the live SNI map
- * get replaced. A renewal caught mid-write - a rewritten certificate whose key
- * is still being written, an extra pair that no longer parses - therefore
- * leaves the served set exactly as it was, default included, and the failure
- * line can say so truthfully.
+ * all of them held does the live SNI map get replaced. A renewal caught
+ * mid-write - a rewritten certificate whose key is still being written, an
+ * extra pair that no longer parses - therefore leaves the served set exactly
+ * as it was, default included, and the failure line can say so truthfully.
+ *
+ * The server's own context is never replaced. A renewed default certificate
+ * is registered under the SNI names it carries, in front of the extra pairs,
+ * so an SNI-matched handshake gets the renewal while a client that sends no
+ * servername keeps the boot certificate until a restart.
  *
  * The SNI map is DERIVED, not edited: after every pair has reconciled, it is
  * rebuilt from each pair's final host list in pair order, the same rule boot
  * applied. Reconciling pair by pair over one shared map is what deleted a host
  * an earlier pair still carried when a later pair dropped it.
  *
- * @param {import('node:https').Server} server
  * @param {{ cert: string, key: string }[]} pairs
  * @param {Array<{ pair: { cert: string, key: string }, hosts: string[], context: import('node:tls').SecureContext }>} sniPairs
  * @param {string[][]} overrideGroups - SSL_SNI_HOSTS groups, indexed like sniPairs
  * @param {Map<string, import('node:tls').SecureContext>} sniContexts
  * @returns {() => void}
  */
-function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
-	// The change gate is the default certificate's fingerprint, baselined
-	// here at module eval: a reload of an unchanged file is no swap, and the
-	// arm-time catch-up read counts nothing.
-	/** @type {string | null} */
-	let servedFingerprint = null;
+function buildReloader(pairs, sniPairs, overrideGroups, sniContexts) {
+	// The default pair's reload state, baselined here at module eval: no
+	// names registered (the server's own context serves the boot certificate)
+	// and the boot certificate's fingerprint as the change gate, so a reload
+	// of an unchanged file is no swap and the arm-time catch-up read counts
+	// nothing.
+	/** @type {{ hosts: string[], fingerprint: string | null }} */
+	let defaultState = { hosts: [], fingerprint: null };
 	try {
-		servedFingerprint = new X509Certificate(fs.readFileSync(pairs[0].cert)).fingerprint256;
+		defaultState.fingerprint = new X509Certificate(fs.readFileSync(pairs[0].cert)).fingerprint256;
 	} catch {
-		servedFingerprint = null;
+		defaultState.fingerprint = null;
 	}
+	// The context a renewed default certificate serves with under its SNI
+	// names; null until the first renewal.
+	/** @type {import('node:tls').SecureContext | null} */
+	let defaultContext = null;
 
 	// What each extra pair currently serves, so a reload reconciles against it
 	// rather than rebuilding blind. Baselined from the boot registration; a
@@ -274,18 +286,6 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 		// generation numbers comparable.
 		let swapped = false;
 		try {
-			// The default pair: read, fingerprint-gated, and BUILT before it
-			// is taken, so a torn key throws here with nothing swapped yet.
-			const certPem = fs.readFileSync(pairs[0].cert);
-			const fingerprint = (() => {
-				try { return new X509Certificate(certPem).fingerprint256; } catch { return null; }
-			})();
-			/** @type {{ cert: Buffer, key: Buffer } | null} */
-			let nextDefault = null;
-			if (!(fingerprint !== null && fingerprint === servedFingerprint)) {
-				nextDefault = { cert: certPem, key: fs.readFileSync(pairs[0].key) };
-				tls.createSecureContext(nextDefault);
-			}
 			// SNI names are re-derived from the RELOADED certs, not replayed
 			// from the boot-time lists: a renewal that adds, drops or changes
 			// SANs must serve under the new name set, and a name the renewal
@@ -297,11 +297,14 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 			// part-way therefore discards the staging instead of leaving the
 			// callback on a half-applied certificate set.
 			const nextPairContexts = pairContexts.slice();
+			let nextDefaultContext = defaultContext;
 			/** @type {object | null} */
 			let memoOptions = null;
 			/** @type {import('node:tls').SecureContext | null} */
 			let memoContext = null;
-			let current = 0;
+			// Which pair the registry is collecting for: -1 is the default
+			// pair, otherwise an index into sniPairs.
+			let current = -1;
 			const registry = {
 				/** @param {string} _host @param {any} options */
 				addServerName(_host, options) {
@@ -318,7 +321,8 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 						});
 						memoOptions = options;
 					}
-					nextPairContexts[current] = /** @type {any} */ (memoContext);
+					if (current === -1) nextDefaultContext = memoContext;
+					else nextPairContexts[current] = /** @type {any} */ (memoContext);
 				},
 				// Removal is a property of the rebuilt map, not an edit: a host
 				// this pair dropped is absent from its final list, and whether
@@ -326,6 +330,17 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				// derived below.
 				removeServerName() {}
 			};
+			// The default pair first: read, fingerprint-gated, validated and
+			// BUILT before anything is taken, so a torn key throws here with
+			// nothing swapped yet. Its names are the certificate's own (SAN
+			// DNS names, then the subject CN); SSL_SNI_HOSTS groups belong to
+			// the extra pairs.
+			const appliedDefault = applyServerNames(
+				registry,
+				{ certPath: pairs[0].cert, keyPath: pairs[0].key },
+				defaultState
+			);
+			if (appliedDefault.changed) swapped = true;
 			// Hosts come from the same discovery boot used (parseSniHosts: SAN
 			// DNS names, then the subject CN), so a reload selects a renewed
 			// certificate by exactly the names boot would have.
@@ -349,25 +364,19 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 				if (applied.changed) swapped = true;
 				nextState.push(applied);
 			}
-			// Everything validated. Commit: the default first, then the map,
-			// in pair order so a host two certificates carry keeps going to
-			// the later one exactly as it did at boot.
-			if (nextDefault !== null) {
-				try {
-					server.setSecureContext(nextDefault);
-				} catch (err) {
-					// The server was touched: "kept the previous cert" would
-					// be a lie from here, and the catch below must say so.
-					/** @type {any} */ (err).tlsAppTouched = true;
-					throw err;
-				}
-				servedFingerprint = fingerprint;
-				swapped = true;
-			}
+			// Everything validated. Commit the map in pair order - the
+			// default pair's overlay first, then the extra pairs - so a host
+			// two certificates carry keeps going to the later one exactly as
+			// it did at boot. The server's own context is not touched.
 			sniContexts.clear();
+			if (nextDefaultContext !== null) {
+				for (const host of appliedDefault.hosts) sniContexts.set(host.toLowerCase(), nextDefaultContext);
+			}
 			for (let i = 0; i < nextState.length; i++) {
 				for (const host of nextState[i].hosts) sniContexts.set(host.toLowerCase(), nextPairContexts[i]);
 			}
+			defaultState = { hosts: appliedDefault.hosts, fingerprint: appliedDefault.fingerprint };
+			defaultContext = nextDefaultContext;
 			sniState = nextState;
 			pairContexts = nextPairContexts;
 			if (swapped) {
@@ -376,14 +385,14 @@ function buildReloader(server, pairs, sniPairs, overrideGroups, sniContexts) {
 			}
 		} catch (err) {
 			if (err && /** @type {any} */ (err).tlsAppTouched) {
-				// The apply step threw after validation had passed: an extra pair
-				// rewritten between its validation read and the registry's read,
-				// or the default context refused by the server. The staging is
-				// discarded, so the served set is exactly what it was; the
-				// fingerprint is cleared so the next watcher event or broadcast
-				// bypasses the gate and re-runs the full reconcile instead of
-				// no-opping until the next genuine renewal months away.
-				servedFingerprint = null;
+				// The apply step threw after validation had passed: a pair
+				// rewritten between its validation read and the registry's
+				// read. The staging is discarded, so the served set is exactly
+				// what it was; the default pair's fingerprint is cleared so the
+				// next watcher event or broadcast bypasses the gate and re-runs
+				// the full reconcile instead of no-opping until the next
+				// genuine renewal months away.
+				defaultState = { hosts: defaultState.hosts, fingerprint: null };
 				emitOperationalEvent({
 					source: 'svelte-adapter-ws',
 					component: 'runtime.tls',
