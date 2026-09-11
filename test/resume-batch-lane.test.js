@@ -207,7 +207,7 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 				ref: 3,
 				recover: { [allowed]: { offset: 0 }, [DENIED]: { offset: 0 } }
 			});
-			expect(await until(() => state.resumeBuffers.size > 0, 5000), 'the lane reached its parked hook').toBe(true);
+			expect(await until(() => state.resumeBuffers.has(allowed), 5000), 'the lane reached its parked hook').toBe(true);
 			// The denial is decided BEFORE the recover set is built: the admitted
 			// topic holds a buffer, the denied one never got one.
 			expect(state.resumeBuffers.has(allowed)).toBe(true);
@@ -222,6 +222,9 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 			expect(seen.slice(before)).toEqual([[allowed]]);
 			expect(state.resumeBuffers.size).toBe(0);
 		} finally {
+			// A failure above may leave the lane parked; let it finish so its
+			// buffers close and no later case reads them.
+			try { client.send({ type: 'release' }); } catch { /* already gone */ }
 			client.close();
 		}
 	});
@@ -246,7 +249,7 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 			});
 			// Both buffers are open once the lane has reached its parked hook;
 			// the spill sent after that lands in the first topic's buffer.
-			expect(await until(() => state.resumeBuffers.size === 2, 5000), 'both recovered topics hold a buffer while the hook is parked').toBe(true);
+			expect(await until(() => state.resumeBuffers.has(first) && state.resumeBuffers.has(second), 5000), 'both recovered topics hold a buffer while the hook is parked').toBe(true);
 			// Enough held bytes to bury a reader that stopped: the flush pushes
 			// all of them in one synchronous loop.
 			victim.send({ type: 'spill', topic: first, count: 160, bytes: 32 * 1024 });
@@ -262,8 +265,9 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 			expect(await until(() => state.resumeBuffers.size === 0, 10000), 'the lane returned and swept').toBe(true);
 			victim.ws._socket.resume();
 			expect(await until(() => victim.closes.length > 0, 10000), 'the victim saw its close').toBe(true);
-			// The close frame is queued behind the one refused frame, so on this
-			// transport the victim does read the flush's own code.
+			// The close frame is written after the frames the socket accepted
+			// (a refused frame is never queued), so on this transport the victim
+			// does read the flush's own code.
 			expect(victim.closes, 'the flush closed the connection, nothing else did').toEqual([1013]);
 
 			// The topic after the closing flush was never subscribed: nothing
@@ -277,6 +281,7 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 			expect(alive).toBeDefined();
 		} finally {
 			try { victim.ws._socket.resume(); } catch { /* already gone */ }
+			try { victim.send({ type: 'release' }); } catch { /* already gone */ }
 			victim.close();
 			bystander.close();
 		}
