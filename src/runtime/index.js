@@ -335,10 +335,11 @@ if (is_primary) {
 	const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
-	// SSL_SNI_HOSTS is deliberately NOT read here: its semicolon groups
-	// override the EXTRA certificates' SAN discovery (handler/tls.js), never
-	// the first certificate this identity record describes. The workers parse
-	// it themselves when they build their SNI contexts.
+	// SSL_SNI_HOSTS is deliberately NOT read here: it names reload hosts
+	// (with one certificate, that certificate's; with extra certificates, the
+	// extras' groups - handler/tls.js), and this identity record is read for
+	// its expiry only. The workers parse it themselves when they build their
+	// SNI contexts.
 	// Watch every certificate-bearing DIRECTORY, deduped, exactly as the
 	// single-process watch does (handler/tls.js): certbot renews each domain
 	// on its own schedule and a key can live apart from its cert, so keying

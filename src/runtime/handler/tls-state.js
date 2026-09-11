@@ -78,8 +78,8 @@ function disarmTlsExpirySentinel() {
 const tlsLedger = createTlsDegradedLedger({
 	health: tlsHealth,
 	onRecovered: (was, still) => {
-		if (still === null) console.log(`[svelte-adapter-ws] [tls] certificate reload recovered (was: ${was})`);
-		else console.log(`[svelte-adapter-ws] [tls] certificate reload recovered (was: ${was}); still degraded: ${still}`);
+		if (still === null) console.log(`[tls] certificate reload recovered (was: ${was})`);
+		else console.log(`[tls] certificate reload recovered (was: ${was}); still degraded: ${still}`);
 	},
 	armSentinel: armTlsExpirySentinel,
 	disarmSentinel: disarmTlsExpirySentinel

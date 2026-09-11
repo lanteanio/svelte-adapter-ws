@@ -391,9 +391,13 @@ function buildReloader(pairs, sniPairs, overrideGroups, sniContexts) {
 			if (swapped) {
 				markTlsSwapped(pairs[0].cert);
 				const health = tlsReloadState();
+				// The recorded expiry is the default certificate's; the line
+				// names it only when that certificate is what changed, so a
+				// renewal of an extra pair alone is not paired with a date
+				// that is not its own.
+				const expires = appliedDefault.changed ? `expires ${health.notAfterText ?? 'unknown'}; ` : '';
 				console.log(
-					`[tls] renewed certificate now served (SNI: ${swappedHosts.join(', ')}; expires ${health.notAfterText ?? 'unknown'}; ` +
-					`generation ${health.generation})`
+					`[tls] renewed certificate now served (SNI: ${swappedHosts.join(', ')}; ${expires}generation ${health.generation})`
 				);
 			}
 		} catch (err) {

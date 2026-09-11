@@ -85,6 +85,23 @@ async function bootTls(prefix, envVars) {
 }
 
 /**
+ * The console.log lines a synchronous call printed.
+ * @param {() => void} fn
+ */
+function captureLog(fn) {
+	/** @type {string[]} */
+	const lines = [];
+	const original = console.log;
+	console.log = (...args) => { lines.push(args.map(String).join(' ')); };
+	try {
+		fn();
+	} finally {
+		console.log = original;
+	}
+	return lines;
+}
+
+/**
  * One TLS request without certificate verification, returning body + peer cert.
  * @param {number} port
  * @param {string} reqPath
@@ -281,14 +298,81 @@ describe('native TLS', () => {
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 
 		const rt = await bootTls('SAW_T17_', { SSL_CERT: certPath, SSL_KEY: keyPath, SSL_SNI_HOSTS: 'other.example' });
+		// Boot registers nothing: the override names reload hosts only.
+		expect((await tlsGet(rt.port, '/healthz', 'other.example')).peerCert.subject.CN).toBe('localhost');
 		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
 		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
-		rt.handler.reloadTls();
+		const lines = captureLog(() => rt.handler.reloadTls());
 		expect(rt.handler.tlsReloadState().generation).toBe(1);
+		// The default certificate changed, so the line carries its expiry.
+		expect(lines).toContain(`[tls] renewed certificate now served (SNI: other.example; expires ${rt.handler.tlsReloadState().notAfterText}; generation 1)`);
 
 		expect((await tlsGet(rt.port, '/healthz', 'other.example')).peerCert.subject.CN).toBe('sni.example');
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('localhost');
 		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
+	});
+
+	it('keeps the served set when the apply step fails after validation, and retries on its own', async () => {
+		// A certificate file whose leaf validates but whose trailing PEM block
+		// is garbage: the identity read and the key check pass, and building
+		// the secure context throws inside the registry - after validation,
+		// so this is the mid-apply branch, not the skipped-reload one.
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsmidapply-'));
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+
+		const rt = await bootTls('SAW_T19_', { SSL_CERT: certPath, SSL_KEY: keyPath, SSL_RELOAD_DEBOUNCE_MS: '50' });
+		const garbage = '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n';
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt'), 'utf8') + garbage);
+		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
+		/** @type {string[]} */
+		const errors = [];
+		const originalError = console.error;
+		console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+		try {
+			rt.handler.reloadTls();
+		} finally {
+			console.error = originalError;
+		}
+		expect(errors.some((line) => line.includes('event=tls.swap-failed')), 'the failure is reported as a swap that failed mid-apply').toBe(true);
+		const failed = rt.handler.tlsReloadState();
+		expect(failed.failures).toBe(1);
+		expect(failed.generation, 'nothing reached the served set').toBe(0);
+		expect(failed.degraded).toBe('a certificate swap failed mid-apply');
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('localhost');
+
+		// The failure armed its own retry, re-armed from each failure. The
+		// writes above also woke the directory watch, so let that settle; in
+		// the quiet window after it nothing touches the directory, and only
+		// the retry can keep the failure count climbing.
+		await new Promise((r) => setTimeout(r, 400));
+		const settled = rt.handler.tlsReloadState().failures;
+		await new Promise((r) => setTimeout(r, 400));
+		expect(rt.handler.tlsReloadState().failures, 'the retry fired without an fs event').toBeGreaterThan(settled);
+
+		// The file is made whole; the next attempt serves the renewal.
+		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
+		/** @type {string[]} */
+		const logs = [];
+		const originalLog = console.log;
+		console.log = (...args) => { logs.push(args.map(String).join(' ')); };
+		try {
+			const t0 = Date.now();
+			while (rt.handler.tlsReloadState().generation === 0 && Date.now() - t0 < 3000) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+		} finally {
+			console.log = originalLog;
+		}
+		const recovered = rt.handler.tlsReloadState();
+		expect(recovered.generation).toBe(1);
+		expect(recovered.degraded).toBeNull();
+		expect(logs).toContain('[tls] certificate reload recovered (was: a certificate swap failed mid-apply)');
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
 
 	itOpenssl('keeps an extra pair ahead of a renewed default that now carries the same host', async () => {
@@ -590,7 +674,10 @@ describe('native TLS', () => {
 
 		writeFileSync(extraCert, readFileSync(path.join(fixtures, 'wild.crt')));
 		writeFileSync(extraKey, readFileSync(path.join(fixtures, 'wild.key')));
-		rt.handler.reloadTls();
+		const lines = captureLog(() => rt.handler.reloadTls());
+		// The line names only what changed this pass, and no expiry: the
+		// recorded expiry is the default certificate's, which did not change.
+		expect(lines).toContain('[tls] renewed certificate now served (SNI: sni.example; generation 1)');
 
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('wild.example');
 		// The default did not change and is not counted; the extra pair did.
@@ -622,7 +709,10 @@ describe('native TLS', () => {
 
 		copyFileSync(secondRenewed.crt, secondCert);
 		copyFileSync(secondRenewed.key, secondKey);
-		rt.handler.reloadTls();
+		const lines = captureLog(() => rt.handler.reloadTls());
+		// Only the pair that changed is named; the first extra pair and the
+		// default did not.
+		expect(lines).toContain('[tls] renewed certificate now served (SNI: b.example; generation 1)');
 
 		expect((await tlsGet(rt.port, '/healthz', 'b.example')).peerCert.subject.CN).toBe('second-renewed.example');
 		expect((await tlsGet(rt.port, '/healthz', 'shared.example')).peerCert.subject.CN, 'the host fell through to the default').toBe('first.example');
