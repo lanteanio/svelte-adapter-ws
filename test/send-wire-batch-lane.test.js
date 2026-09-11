@@ -679,4 +679,126 @@ describe('sendWireBatch', () => {
 			conn.leave();
 		}
 	});
+
+	it('sends nothing and reports 1 for entries that are not an array', () => {
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', /** @type {any} */ (null), statefulCodec())).toBe(1);
+			expect(conn.sent).toHaveLength(0);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('does not poison a frame the transport queued behind a drain', () => {
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
+			// Bytes still buffered after the send, below the ceiling: the frame
+			// was accepted and reports 0. That is the ordinary under-load
+			// answer, and the decoder received every byte, so nothing is
+			// poisoned and the next batch is still binary - on the batch path
+			// and on the declined walk alike.
+			conn.rawWs.bufferedAmount = 100;
+			const before = conn.frames().length;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec())).toBe(0);
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }, { data: 4 }], codec)).toBe(0);
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 5 }], statefulCodec())).toBe(0);
+			const kinds = conn.frames().slice(before).map((f) => (f.binary ? 'binary' : 'text'));
+			expect(kinds, 'one batch frame, two entry frames, one batch frame').toEqual(['binary', 'binary', 'binary', 'binary']);
+		} finally {
+			conn.rawWs.bufferedAmount = 0;
+			conn.leave();
+		}
+	});
+
+	it('hands the attached state to the batch encode and to every entry encode', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.state = { onAttach: () => ({ schemaVersion: 1, tag: 'attached' }) };
+			/** @type {any[]} */
+			const states = [];
+			codec.encode = (event, data, state) => {
+				states.push(state);
+				return event.endsWith('-batch') ? null : new TextEncoder().encode(JSON.stringify([event, data]));
+			};
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			expect(states).toHaveLength(3);
+			expect(states[0]?.tag).toBe('attached');
+			expect(states.every((s) => s === states[0]), 'one state object per connection, every encode sees it').toBe(true);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('stamps the codec schema version when the attached state carries none', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.schemaVersion = 3;
+			codec.state = { onAttach: () => ({}) };
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }], codec)).toBe(1);
+			expect(header(conn.frames()[0].binary).schemaVersion).toBe(3);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('sends the per-entry JSON envelopes to a connection that has advertised no capabilities', () => {
+		const conn = connect([CAP]);
+		const ud = conn.facade.getUserData();
+		const caps = ud[symbols.WS_CAPS];
+		try {
+			// Before its hello lands a connection carries no capability set at
+			// all; it is a JSON subscriber, not an error.
+			ud[symbols.WS_CAPS] = undefined;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }], statefulCodec())).toBe(1);
+			expect(conn.frames().map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":1}`]);
+		} finally {
+			ud[symbols.WS_CAPS] = caps;
+			conn.leave();
+		}
+	});
+
+	it('reports 2 when the last envelope it sent was shed', () => {
+		const plain = connect([]);
+		const conn = connect([CAP]);
+		try {
+			plain.rawWs.bufferedAmount = 2 * 1024 * 1024;
+			expect(platform.sendWireBatch(plain.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], statefulCodec())).toBe(2);
+			// The declined walk's own return: every entry declines to its
+			// envelope and every envelope is shed.
+			const codec = statefulCodec();
+			codec.encode = () => null;
+			conn.rawWs.bufferedAmount = 2 * 1024 * 1024;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(2);
+			expect(plain.frames()).toHaveLength(0);
+			expect(conn.frames()).toHaveLength(0);
+		} finally {
+			plain.rawWs.bufferedAmount = 0;
+			conn.rawWs.bufferedAmount = 0;
+			plain.leave();
+			conn.leave();
+		}
+	});
+
+	it('writes null for an entry without data, on the JSON-only send and the declined-entry envelope', () => {
+		const plain = connect([]);
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(plain.facade, TOPIC, 'update', [{}], statefulCodec())).toBe(1);
+			expect(plain.frames().map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":null}`]);
+			const codec = statefulCodec();
+			codec.encode = () => null;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{}], codec)).toBe(1);
+			expect(conn.frames().map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":null}`]);
+		} finally {
+			plain.leave();
+			conn.leave();
+		}
+	});
 });

@@ -7,10 +7,10 @@
 // a whole frame - so it is bounded per connection, in bytes over time, and a
 // connection that blows the bound is cut rather than served.
 //
-// MEASURED at the worst legal shape: one 8,121-byte `subscribe-batch` carrying
-// 1,344 shortest-legal topics is answered with 97,484 bytes across 1,345
-// frames. Twelve times what it cost to ask, and repeatable - the frame is
-// legal, so nothing refuses the next one.
+// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte
+// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with
+// 97,484 bytes across 1,345 frames. Twelve times what it cost to ask, and
+// repeatable - the frame is legal, so nothing refuses the next one.
 //
 // WHY THE EXISTING DEFENCES MISS IT. The control-frame limit (wire.js,
 // 8 KiB) bounds one frame, which bounds the frame COUNT per inbound frame but
@@ -38,7 +38,7 @@ import { emitOperationalEvent } from '../diagnostic.js';
  * The window arithmetic is pure (utils/byte-budget.js); this owns only the
  * per-connection slot, which is declared at open with every other slot.
  *
- * @param {any} ws the connection facade
+ * @param {import('uWebSockets.js').WebSocket<any>} ws
  * @param {number} bytes
  * @returns {boolean} false when this connection has exhausted its window
  */
@@ -77,7 +77,7 @@ export const CONTROL_GONE = 2;
  * Control frames are never compressed: they are short, and deflating them costs
  * more than it saves.
  *
- * @param {any} ws the connection facade
+ * @param {import('uWebSockets.js').WebSocket<any>} ws
  * @param {string} payload
  * @returns {0 | 1 | 2} CONTROL_DELIVERED, CONTROL_REFUSED or CONTROL_GONE
  */
@@ -114,7 +114,7 @@ export function sendControl(ws, payload) {
  * inside one batch and the second must not close a closing connection or report
  * a second time.
  *
- * @param {any} ws the connection facade
+ * @param {import('uWebSockets.js').WebSocket<any>} ws
  */
 function refuseControlFlood(ws) {
 	try {

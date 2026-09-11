@@ -624,8 +624,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON envelopes rather than a binary frame. Those envelopes are the
   FALLBACK and are built only on the paths that send them, so a payload the
   codec carries and `JSON.stringify` cannot (a BigInt, a circular structure)
-  still reaches the wire as its binary frame. The `wire` argument is
-  required: a call without one throws rather than sending envelopes.
+  still reaches the wire as its binary frame.
 
 - Subscriptions per connection are capped at 65,536 (was 1,000,000): a landed
   subscription is a topic-registry entry as well as a Set entry, so one

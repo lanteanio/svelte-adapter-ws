@@ -1924,17 +1924,8 @@
 		"file": "src/runtime/handler/control-egress.js",
 		"adaptations": [
 			{
-				"lead": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,345 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.",
-				"ours": "// MEASURED at the worst legal shape: one 8,121-byte `subscribe-batch` carrying\n// 1,344 shortest-legal topics is answered with 97,484 bytes across 1,345\n// frames. Twelve times what it cost to ask, and repeatable - the frame is\n// legal, so nothing refuses the next one."
-			},
-			{
 				"lead": "import { bumpOut } from './pressure-metrics.js';",
 				"ours": "import { bumpOut } from './conn-stats.js';"
-			},
-			{
-				"lead": " * @param {import('uWebSockets.js').WebSocket<any>} ws",
-				"ours": " * @param {any} ws the connection facade",
-				"all": true
 			},
 			{
 				"lead": "\tbumpOut(ws, payload);",
