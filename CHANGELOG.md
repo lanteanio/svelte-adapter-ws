@@ -583,7 +583,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name one of its SNI hosts and leaves the server's own context on the boot
   certificate, so a client that sends no servername, or one the renewal does
   not name, keeps the boot certificate until a restart. This is the family's
-  reload contract; the default context is no longer replaced in place.
+  reload contract; the default context is no longer replaced in place. With
+  a single certificate, `SSL_SNI_HOSTS` names what its renewal is served
+  under, in place of SAN discovery, as it does across the family. The reload
+  log line names the hosts, the expiry and the generation.
 
 - A worker still alive when its exit grace expires takes the process down
   with a self-SIGKILL for the orchestrator to respawn, under

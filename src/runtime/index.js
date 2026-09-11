@@ -1317,7 +1317,7 @@ if (is_primary) {
 		// so this fires one exit grace LATER and only reaches a worker whose
 		// teardown machinery is itself wedged - a worker inside its budget must
 		// never lose the race to its own supervisor. Each request carries its
-		// own terminate fallback. The last worker's exit handler
+		// own SIGKILL fallback. The last worker's exit handler
 		// (workers.size === 0) performs the clean primary process.exit(0).
 		//
 		// SHUTDOWN_TIMEOUT=0 is the no-budget spelling, so there is no

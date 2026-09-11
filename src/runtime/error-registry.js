@@ -863,7 +863,8 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		nextAction: 'Read the failing worker crash output above this line: the restart limit is the symptom and the repeated worker crash is the fault. A loop this fast is usually a boot-time error, not load.',
 		sources: Object.freeze(['src/runtime/index.js']),
 		anchor: 'adapter-err-worker-restart-limit',
-		help: 'docs/errors.md#adapter-err-worker-restart-limit'
+		help: 'docs/errors.md#adapter-err-worker-restart-limit',
+		link: 'https://svti.me/worker-restart-limit'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.WORKER_EXIT_SIGKILL,
@@ -891,7 +892,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		emission: 'console',
 		problemPrefix: null,
 		messagePrefix: '[primary] relay spill quarantining ',
-		cause: "The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. The opposite direction, a worker that could not reach the primary, is ADAPTER-ERR-RELAY-SPILL-OVERFLOW.",
+		cause: "The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. This is the opposite direction from ADAPTER-ERR-RELAY-SPILL-OVERFLOW, which is a worker that could not reach the primary.",
 		consequence: "The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.",
 		automaticRecovery: "The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is resolved by killing the whole process for the orchestrator to respawn - the mechanism ADAPTER-ERR-WORKER-EXIT-SIGKILL documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.",
 		nextAction: "Read the reason on the line. An AGE spill means that worker stopped draining its ring - a blocked event loop is the usual cause, and it is the worker's own thread to profile, not the primary's. A BYTES spill can mean either: a peer merely behind on a ceiling sized too close to the largest relayed frame, where raising CLUSTER_RELAY_MAX_PENDING_KB to a few times that frame is the fix, or sustained fan-out the relay is undersized for, where a wider ceiling only delays the next spill. The droppedBytes on the line tells you which.",

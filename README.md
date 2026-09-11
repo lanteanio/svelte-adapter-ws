@@ -476,7 +476,7 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
 | `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |
-| `SSL_SNI_HOSTS` | - | Per-cert SNI name override, semicolon-grouped. |
+| `SSL_SNI_HOSTS` | - | SNI host override for the certificate's hot-reload; with extra certificates, semicolon-grouped per extra pair. |
 | `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
 | `CLUSTER_WORKERS` | - | In-process cluster: worker-thread count or `auto` (Linux; see Deployment). |
 | `CLUSTER_MODE` | `reuseport` | The one mode this runtime has; `acceptor` refuses with the reason. |

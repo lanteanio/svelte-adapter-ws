@@ -20,7 +20,7 @@ import { setTimer, clearTimer } from '../runtime.js';
 import { applyServerNames, parseSniHosts } from '../utils/tls-reload.js';
 import {
 	markTlsFailed, markTlsSwapped, markTlsWatchStopped, markTlsWatching,
-	recordBootCertExpiry, stopTlsReload, tlsWatchDegraded
+	recordBootCertExpiry, stopTlsReload, tlsReloadState, tlsWatchDegraded
 } from './tls-state.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 
@@ -125,8 +125,7 @@ export function createTlsServer(handleRequest) {
 	if (ssl_watch) {
 		// The expiry of what is being served right now, so a reload failure can
 		// be reported with the number that says how urgent it is. Only notAfter
-		// is taken from it, so no host list is passed: SSL_SNI_HOSTS groups
-		// belong to the EXTRA certificates here, never to pairs[0].
+		// is taken from it, so no host list is passed.
 		recordBootCertExpiry(pairs[0].cert);
 		const reload = buildReloader(pairs, sniPairs, overrideGroups, sniContexts);
 		reloadNow = reload;
@@ -206,8 +205,8 @@ export function armTlsWatch() {
  * Message-driven certificate reload: the worker half of the cluster's
  * hot-reload broadcast. The primary watches the cert directory (it already
  * debounced the change burst) and posts `tls-reload`; the runtime routes that
- * message here and this worker swaps its own secure context - the identical
- * fingerprint-gated swap the single-process watch drives. No-op when the
+ * message here and this worker registers the renewal under its SNI names -
+ * the identical fingerprint-gated reload the single-process watch drives. No-op when the
  * server is not TLS or SSL_WATCH=0 (every thread reads the same env, so an
  * opted-out worker ignores the broadcast the way an opted-out single-process
  * server never watches).
@@ -332,15 +331,22 @@ function buildReloader(pairs, sniPairs, overrideGroups, sniContexts) {
 			};
 			// The default pair first: read, fingerprint-gated, validated and
 			// BUILT before anything is taken, so a torn key throws here with
-			// nothing swapped yet. Its names are the certificate's own (SAN
-			// DNS names, then the subject CN); SSL_SNI_HOSTS groups belong to
-			// the extra pairs.
+			// nothing swapped yet. With one pair, SSL_SNI_HOSTS is the override
+			// for that certificate's renewal names, as it is for the family's
+			// single certificate; with extra pairs the groups belong to them and
+			// the default pair's names are the certificate's own (SAN DNS
+			// names, then the subject CN).
 			const appliedDefault = applyServerNames(
 				registry,
-				{ certPath: pairs[0].cert, keyPath: pairs[0].key },
+				{ certPath: pairs[0].cert, keyPath: pairs[0].key, hosts: pairs.length === 1 ? ssl_sni_hosts : [] },
 				defaultState
 			);
-			if (appliedDefault.changed) swapped = true;
+			/** @type {string[]} */
+			const swappedHosts = [];
+			if (appliedDefault.changed) {
+				swapped = true;
+				swappedHosts.push(...appliedDefault.hosts);
+			}
 			// Hosts come from the same discovery boot used (parseSniHosts: SAN
 			// DNS names, then the subject CN), so a reload selects a renewed
 			// certificate by exactly the names boot would have.
@@ -361,7 +367,10 @@ function buildReloader(pairs, sniPairs, overrideGroups, sniContexts) {
 					{ certPath: pair.cert, keyPath: pair.key, hosts },
 					sniState[i]
 				);
-				if (applied.changed) swapped = true;
+				if (applied.changed) {
+					swapped = true;
+					swappedHosts.push(...applied.hosts);
+				}
 				nextState.push(applied);
 			}
 			// Everything validated. Commit the map in pair order - the
@@ -381,7 +390,11 @@ function buildReloader(pairs, sniPairs, overrideGroups, sniContexts) {
 			pairContexts = nextPairContexts;
 			if (swapped) {
 				markTlsSwapped(pairs[0].cert);
-				console.log('[svelte-adapter-ws] [tls] certificate context reloaded');
+				const health = tlsReloadState();
+				console.log(
+					`[tls] renewed certificate now served (SNI: ${swappedHosts.join(', ')}; expires ${health.notAfterText ?? 'unknown'}; ` +
+					`generation ${health.generation})`
+				);
 			}
 		} catch (err) {
 			if (err && /** @type {any} */ (err).tlsAppTouched) {

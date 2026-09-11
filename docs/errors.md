@@ -802,6 +802,8 @@ Log line begins:
 
 **What to do.** Read the failing worker crash output above this line: the restart limit is the symptom and the repeated worker crash is the fault. A loop this fast is usually a boot-time error, not load.
 
+Further reading: https://svti.me/worker-restart-limit
+
 ## ADAPTER-ERR-WORKER-EXIT-SIGKILL
 
 Severity: error
@@ -830,7 +832,7 @@ Log line begins:
 [primary] relay spill quarantining 
 ```
 
-**Cause.** The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. The opposite direction, a worker that could not reach the primary, is ADAPTER-ERR-RELAY-SPILL-OVERFLOW.
+**Cause.** The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. This is the opposite direction from ADAPTER-ERR-RELAY-SPILL-OVERFLOW, which is a worker that could not reach the primary.
 
 **Consequence.** The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.
 
