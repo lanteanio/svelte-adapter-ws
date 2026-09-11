@@ -196,18 +196,28 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 		await client.open();
 		try {
 			const before = (await seenByResume(client, 'before')).length;
+			// Park the resume hook so the buffers can be read while the lane is
+			// inside it: that is the only moment "never opened" is distinguishable
+			// from "opened and swept at the end".
+			client.send({ type: 'park', nonce: 'p' });
+			await client.next((f) => f.json?.event === 'parked');
 			client.send({
 				type: 'subscribe-batch',
 				topics: [allowed, DENIED],
 				ref: 3,
 				recover: { [allowed]: { offset: 0 }, [DENIED]: { offset: 0 } }
 			});
+			expect(await until(() => state.resumeBuffers.size > 0, 5000), 'the lane reached its parked hook').toBe(true);
+			// The denial is decided BEFORE the recover set is built: the admitted
+			// topic holds a buffer, the denied one never got one.
+			expect(state.resumeBuffers.has(allowed)).toBe(true);
+			expect(state.resumeBuffers.has(DENIED), 'a denied topic opens no buffer').toBe(false);
+			expect(state.resumeBuffers.size).toBe(1);
+			client.send({ type: 'release' });
 			await client.next((f) => f.json?.type === 'subscribed' && f.json.topic === allowed && f.json.ref === 3);
 			const denied = await client.next((f) => f.json?.type === 'subscribe-denied' && f.json.topic === DENIED && f.json.ref === 3);
 			expect(denied.json.reason).toBe('FORBIDDEN');
-			// The denial is decided BEFORE the recover set is built, so the hook
-			// serves history for the admitted topic only and no buffer was ever
-			// opened for the denied one - not opened-then-swept, never opened.
+			// And the hook served history for the admitted topic only.
 			const seen = await seenByResume(client, 'after');
 			expect(seen.slice(before)).toEqual([[allowed]]);
 			expect(state.resumeBuffers.size).toBe(0);
@@ -234,15 +244,14 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 				ref: 4,
 				recover: { [first]: { offset: 0 }, [second]: { offset: 0 } }
 			});
-			// The batch is parked in its hook with both buffers open once the
-			// spill has been asked for and answered: the frames of one read are
-			// handled in order, and the spill's own reply proves it ran.
-			await until(() => state.resumeBuffers.size === 2, 5000);
-			expect(state.resumeBuffers.size, 'both recovered topics hold a buffer while the hook is parked').toBe(2);
+			// Both buffers are open once the lane has reached its parked hook;
+			// the spill sent after that lands in the first topic's buffer.
+			expect(await until(() => state.resumeBuffers.size === 2, 5000), 'both recovered topics hold a buffer while the hook is parked').toBe(true);
 			// Enough held bytes to bury a reader that stopped: the flush pushes
 			// all of them in one synchronous loop.
 			victim.send({ type: 'spill', topic: first, count: 160, bytes: 32 * 1024 });
 			await victim.next((f) => f.json?.event === 'spilled');
+			expect([...state.resumeBuffers.get(first)][0].frames.length, 'the spill was captured, not sent live').toBe(160);
 
 			// Stop reading, then release: the flush of the FIRST topic finds the
 			// socket past its ceiling, refuses the rest and the marker, and
@@ -252,7 +261,10 @@ describe('the subscribe lanes close every resume buffer they open', () => {
 			victim.send({ type: 'release' });
 			expect(await until(() => state.resumeBuffers.size === 0, 10000), 'the lane returned and swept').toBe(true);
 			victim.ws._socket.resume();
-			await until(() => victim.closes.length > 0, 10000);
+			expect(await until(() => victim.closes.length > 0, 10000), 'the victim saw its close').toBe(true);
+			// The close frame is queued behind the one refused frame, so on this
+			// transport the victim does read the flush's own code.
+			expect(victim.closes, 'the flush closed the connection, nothing else did').toEqual([1013]);
 
 			// The topic after the closing flush was never subscribed: nothing
 			// touched the dead socket, so nothing was charged for it either.
