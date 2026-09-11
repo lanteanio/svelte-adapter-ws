@@ -1254,11 +1254,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cluster primary; the watcher closes itself and the degraded state is
   reported, matching the single-process watch.
 - The primary's certificate identity record no longer misapplies
-  `SSL_SNI_HOSTS` to the first certificate; the override's semicolon groups
-  only ever name hosts for the extra certificates.
+  `SSL_SNI_HOSTS` to the first certificate when extra certificates are
+  configured; the override's semicolon groups then name hosts for the extra
+  certificates, and with a single certificate the override names its own
+  renewal hosts.
 - A malformed entry anywhere in a cross-worker batched relay frame now
   refuses the whole batch at the hard tier before anything reaches a
   subscriber, matching the single-frame relay lane.
 
-The package is not yet published to npm; this section becomes 0.1.0 at the
-first cut.
+This section becomes 0.1.0 at the first cut.

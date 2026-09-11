@@ -801,4 +801,76 @@ describe('sendWireBatch', () => {
 			conn.leave();
 		}
 	});
+
+	it('stamps the attached schema version into every entry frame of the declined walk', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.state = { onAttach: () => ({ schemaVersion: 7 }) };
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			const frames = conn.frames();
+			expect(frames).toHaveLength(2);
+			expect(frames.map((f) => header(f.binary).schemaVersion)).toEqual([7, 7]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('reports 1 when the last entry frame of the declined walk was shed', () => {
+		const conn = connect([CAP]);
+		try {
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
+			// The facade reads bufferedAmount twice per accepted send; the third
+			// read is the second entry frame's shed check.
+			let reads = 0;
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', {
+				configurable: true,
+				get() { return ++reads === 3 ? 2 * 1024 * 1024 : 0; }
+			});
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
+			const before = conn.frames().length;
+			// The shed frame is the walk's LAST: the fallback starts past the end
+			// and has nothing to send, so the walk reports the fallback's seed, 1,
+			// while the capability is poisoned all the same. That is the family's
+			// answer at this site; a reader pacing on the return sees 1 here.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			expect(conn.frames().slice(before).map((f) => (f.binary ? 'binary' : 'text'))).toEqual(['binary']);
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }], statefulCodec())).toBe(1);
+			expect(conn.frames().slice(before + 1).map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":3}`]);
+		} finally {
+			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
+			conn.leave();
+		}
+	});
+
+	it('treats an encode that returns undefined as a decline, on the batch and on an entry', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.encode = () => undefined;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			expect(conn.frames().map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`,
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('sends the per-entry JSON envelopes when the state factory returns undefined', () => {
+		const conn = connect([CAP]);
+		try {
+			const codec = statefulCodec();
+			codec.state = { onAttach: () => undefined };
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }], codec)).toBe(1);
+			expect(conn.frames().map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":1}`]);
+		} finally {
+			conn.leave();
+		}
+	});
 });
