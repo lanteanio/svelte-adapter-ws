@@ -4,9 +4,8 @@
 // other lane, and a flushed frame must not report UTF-16 code units instead.
 // The second case pins the PRIMITIVE the batch lane sweeps with: a flush
 // deregisters only its own topic, so closing the rest is discardResumeCapture's
-// job and not something the flush does on its way past. The lane-level call
-// that must make that sweep is not pinned here - driving it needs a batch
-// whose loop stops before a recovered topic reaches its flush.
+// job and not something the flush does on its way past. The lane driving that
+// sweep over a real socket is pinned in resume-batch-lane.test.js.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'node:path';
@@ -45,7 +44,7 @@ describe('the gap-fill flush accounts for what it sent', () => {
 		const conn = scriptedWs();
 		const topic = 'flush-accounting-bytes';
 		// Two-byte characters in the payload, so the two counts differ: any
-		// lane still measuring `.length` under-reports this frame by 3.
+		// lane still measuring `.length` under-reports this frame by 2.
 		const envelope = `{"topic":"${topic}","event":"update","data":"Grüße"}`;
 		expect(Buffer.byteLength(envelope), 'the payload must actually be multi-byte').toBeGreaterThan(envelope.length);
 		// Arm BOTH stats gates. They are wired to the same thing in the runtime

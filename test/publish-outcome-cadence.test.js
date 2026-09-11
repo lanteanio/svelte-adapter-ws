@@ -115,6 +115,11 @@ beforeAll(async () => {
 	// every send to it is shed.
 	const shed = await connect('shed', [], ['buried']);
 	shed.rawWs.bufferedAmount = 2 * 1024 * 1024;
+	// 'buried-batch' is the same shape one lane further on: its only holder is
+	// batch-capable, so the fast path stays eligible and its shared frame is
+	// shed rather than sent.
+	const shedBatch = await connect('shedBatch', ['batch'], ['buried-batch']);
+	shedBatch.rawWs.bufferedAmount = 2 * 1024 * 1024;
 }, 60000);
 
 afterAll(() => {
@@ -192,6 +197,19 @@ describe('the batched lane', () => {
 		]);
 		// uniform's subscribers hold uniform but not nobody: not all-see-all.
 		expect(take()).toEqual([true, false]);
+	});
+
+	it('reports a shed shared frame as reached: the subscriber was there to shed it', () => {
+		take();
+		platform.publishBatched([
+			{ topic: 'buried-batch', event: 'a', data: 1 },
+			{ topic: 'buried-batch', event: 'b', data: 2 }
+		]);
+		// A frame past the ceiling is REACHED and not SENT, the same answer the
+		// single-publish lane gives for its own buried topic. Counting the shed
+		// frame as no_subscribers would make the two lanes disagree about a
+		// connection that plainly exists.
+		expect(take()).toEqual([true]);
 	});
 
 	it('reports one no_subscribers outcome for a batch into an empty topic', () => {

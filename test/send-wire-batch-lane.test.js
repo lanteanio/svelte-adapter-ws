@@ -274,9 +274,51 @@ describe('sendWireBatch', () => {
 			const before = state.counters.closedWsAborts;
 			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }, { data: 3 }], codec)).toBe(2);
 			expect(state.counters.closedWsAborts - before).toBe(1);
-			expect(conn.announces()).toHaveLength(0);
 		} finally {
 			conn.rawWs.readyState = 1;
+			conn.leave();
+		}
+	});
+
+	it('never announces a wire id for a codec that declines every entry', () => {
+		const conn = connect([CAP]);
+		try {
+			// The socket stays OPEN, so an attempted announce WOULD be recorded.
+			// On a closed socket this proves nothing: the facade throws before
+			// the transport is touched, so nothing lands either way.
+			const codec = statefulCodec();
+			codec.encode = () => null;
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			expect(conn.announces()).toHaveLength(0);
+			expect(conn.frames().map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`,
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
+		} finally {
+			conn.leave();
+		}
+	});
+
+	it('builds the declined entry envelope from the payload the codec was handed', () => {
+		const conn = connect([CAP]);
+		try {
+			// A MIXED codec: the batch declines, entry 0 declines to its
+			// envelope, entry 1 encodes. That envelope is a third read site,
+			// and it is the shape an older codec actually has.
+			const codec = statefulCodec();
+			const perEntry = codec.encode;
+			codec.encode = (event, data) => {
+				if (event.endsWith('-batch')) return null;
+				return data === 1 ? null : perEntry(event, data);
+			};
+			let reads = 0;
+			const entries = [{ get data() { reads++; return 1; } }, { get data() { reads++; return 2; } }];
+			platform.sendWireBatch(conn.facade, TOPIC, 'update', entries, codec);
+			expect(reads, 'one read per entry, at the top of the walk').toBe(2);
+			expect(conn.frames().filter((f) => f.text).map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":1}`
+			]);
+		} finally {
 			conn.leave();
 		}
 	});
@@ -472,8 +514,13 @@ describe('sendWireBatch', () => {
 			const entries = [{ get data() { reads++; return 1; } }, { get data() { reads++; return 2; } }];
 			platform.sendWireBatch(conn.facade, TOPIC, 'update', entries, codec);
 			expect(reads).toBe(2);
-			const texts = conn.frames().filter((f) => f.text).map((f) => f.text);
-			expect(texts[texts.length - 1]).toBe(`{"topic":"${TOPIC}","event":"update","data":2}`);
+			// The WHOLE text slice, not just the last: a fallback that resumed
+			// from entry 0 instead of entry 1 would re-send the entry whose binary
+			// frame the codec already consumed, and a last-element check cannot
+			// see that.
+			expect(conn.frames().filter((f) => f.text).map((f) => f.text)).toEqual([
+				`{"topic":"${TOPIC}","event":"update","data":2}`
+			]);
 		} finally {
 			Object.defineProperty(conn.rawWs, 'bufferedAmount', { configurable: true, writable: true, value: 0 });
 			conn.leave();

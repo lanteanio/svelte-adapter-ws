@@ -16,9 +16,10 @@ export function statsAreEnabled() {
 }
 
 /**
- * The per-connection stats slot. Built in ONE place so a caller that seeds it
- * by hand cannot describe a connection this runtime never produces: a slot
- * missing a field reads as 0 + undefined rather than as the miscount it is.
+ * The per-connection stats slot for the handler runtime. Built in one place so
+ * a caller that seeds it by hand cannot describe a connection this runtime
+ * never produces: a slot missing a field reads as 0 + undefined rather than as
+ * the miscount it is. The test server and the dev server build their own.
  * @param {number} openedAt
  */
 export function createConnStats(openedAt) {
