@@ -1821,9 +1821,13 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 		} catch {
 			parsed = undefined;
 		}
-		if (parsed === null || typeof parsed !== 'object') {
+		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
 			// Not a JSON object envelope (parse failed, or parsed to
-			// null / primitive / array). Forward raw bytes only.
+			// null / a primitive / an array). Forward raw bytes only.
+			// The array needs naming because `typeof [] === 'object'`
+			// passes the check above it: `msg` is declared to carry a
+			// plain object envelope, so an array must not arrive as
+			// one. testing.js and vite.js exclude it the same way.
 			await runAdmittedMessageHook(messageAdmission, wsModule.message, facade, { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), isBinary, msg, platform: userData[WS_PLATFORM] }, rejectApplicationMessage);
 			return;
 		}

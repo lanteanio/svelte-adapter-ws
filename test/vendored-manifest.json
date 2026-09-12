@@ -988,7 +988,13 @@
 		"file": "test/fixture/src/hooks.ws.hookcrash.js"
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.js"
+		"file": "test/fixture/src/hooks.ws.js",
+		"adaptations": [
+			{
+				"lead": "\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (msg.type === 'echo') {\n\t\tplatform.send(ws, 'test-topic', 'echo', msg.payload);\n\t}\n",
+				"ours": "\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (Array.isArray(msg) || msg.type === 'envelope-shape-probe') {\n\t\t// What the runtime put in `ctx.msg`, reported back so a case can assert\n\t\t// it. Both shapes take this branch on purpose: an array must arrive\n\t\t// with no pre-parsed envelope (`typeof [] === 'object'`, so it reaches\n\t\t// the check that excludes it only if that check names arrays), and an\n\t\t// object envelope no control type claims must still arrive with one.\n\t\t// The nonce correlates the two answers on a single connection.\n\t\tplatform.send(ws, 'test-topic', 'envelope-shape', {\n\t\t\tnonce: Array.isArray(msg) ? msg[0]?.nonce : msg.nonce,\n\t\t\tpresent: ctx.msg !== undefined,\n\t\t\tisArray: Array.isArray(ctx.msg)\n\t\t});\n\t\treturn;\n\t}\n\tif (msg.type === 'echo') {\n\t\tplatform.send(ws, 'test-topic', 'echo', msg.payload);\n\t}\n"
+			}
+		]
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.park.js"
