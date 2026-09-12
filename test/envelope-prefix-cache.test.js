@@ -87,6 +87,24 @@ function inlinePrefix(topic, event) {
 	return '{"topic":' + JSON.stringify(topic) + ',"event":' + JSON.stringify(event) + ',"data":';
 }
 
+/**
+ * Poison the stored prefix for a pair, run `send`, and require the frame to
+ * carry the poison: only a lane that READS the cache can produce it. The entry
+ * is restored afterwards so a later case reads the real prefix.
+ * @param {{ frames: string[] }} conn
+ * @param {string} topic
+ * @param {string} event
+ * @param {() => unknown} send
+ */
+function expectServedFromCache(conn, topic, event, send) {
+	const poison = '{"poisoned":1,"data":';
+	state.envelopePrefixCache.set(keyOf(topic, event), poison);
+	conn.frames.length = 0;
+	send();
+	expect(conn.frames[0]?.startsWith(poison), topic + '/' + event + ' was served from the cache').toBe(true);
+	state.envelopePrefixCache.delete(keyOf(topic, event));
+}
+
 /** Run `fn` and return the cache keys it added. */
 function addedBy(fn) {
 	const before = new Set(state.envelopePrefixCache.keys());
@@ -127,19 +145,21 @@ describe('every envelope build goes through the prefix cache', () => {
 		expect(plain.frames[0].startsWith(inlinePrefix('room', 'p1'))).toBe(true);
 		expect(JSON.parse(plain.frames[0])).toMatchObject({ topic: 'room', event: 'p1', data: { n: 1 } });
 		// Adding no key is not the same as reading the entry: a build that
-		// writes the cache and never reads it adds nothing either. Poison the
-		// stored prefix and the next frame carries it, which only a read can do.
-		state.envelopePrefixCache.set(keyOf('room', 'p1'), '{"poisoned":1,"data":');
-		plain.frames.length = 0;
-		platform.publish('room', 'p1', { n: 3 });
-		expect(plain.frames[0].startsWith('{"poisoned":1,"data":'), 'the prefix came from the cache').toBe(true);
-		state.envelopePrefixCache.delete(keyOf('room', 'p1'));
+		// writes the cache and never reads it adds nothing either.
+		expectServedFromCache(plain, 'room', 'p1', () => platform.publish('room', 'p1', { n: 3 }));
 	});
 
 	it('send and sendTo', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		expect(addedBy(() => platform.send(plain.facade, 'room', 's1', { n: 1 }))).toEqual([keyOf('room', 's1')]);
 		expect(addedBy(() => platform.sendTo((ud) => ud === plain.userData, 'room', 's2', { n: 1 }))).toEqual([keyOf('room', 's2')]);
+		// Adding the key proves the lane CALLED the cache; being served a
+		// poisoned entry proves it used what came back. A lane that warmed the
+		// cache and then built inline satisfies the first and not the second,
+		// and no byte assertion can separate them, because the two builds are
+		// identical by construction.
+		expectServedFromCache(plain, 'room', 's1', () => platform.send(plain.facade, 'room', 's1', { n: 2 }));
+		expectServedFromCache(plain, 'room', 's2', () => platform.sendTo((ud) => ud === plain.userData, 'room', 's2', { n: 2 }));
 	});
 
 	it('publishWire on the JSON fast path, the stateful walk, and the JSON degrade of sendWire', () => {
@@ -182,6 +202,7 @@ describe('every envelope build goes through the prefix cache', () => {
 		// the call.
 		expect(addedBy(() => platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c1', data: { n: 1 } }))).toEqual([keyOf('room', 'c1')]);
 		expect(plain.frames[0].startsWith(inlinePrefix('room', 'c1'))).toBe(true);
+		expectServedFromCache(plain, 'room', 'c1', () => platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c1', data: { n: 2 } }));
 	});
 
 	it('the relayed batch arrives built, and publishBatched builds on both of its paths', () => {

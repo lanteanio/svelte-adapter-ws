@@ -792,8 +792,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Every envelope the publish and send lanes build takes its prefix from the
-  envelope prefix cache, as the family's native tier does. The growth
+- Every envelope the runtime's publish and send lanes build takes its prefix
+  from the envelope prefix cache, as the family's native tier does. The growth
   auditor's `envelopePrefixCache` probe, one of the `resource` values on
   `framework_resource_growth_suspected_total`, now reads the live size; on a
   worker with the auditor enabled it read 0 every time, because the module
