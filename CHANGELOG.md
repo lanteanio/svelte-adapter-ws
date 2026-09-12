@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, and a list keyed the other way round, by the event name a sink
   reports or by the printed prefix for the lines that never enter the
   diagnostic pipeline. Both are rendered from the registry, so an entry
-  cannot appear in one and be missing from the other.
+  cannot appear in one and be missing from the other. The page also names
+  the sibling packages that ship their own references, so a line from the
+  client or the extensions package leads somewhere instead of reading as
+  undocumented.
 
 - The README documents the observability contract in three tables the build
   now gates: the registry contract method by method with its signature and

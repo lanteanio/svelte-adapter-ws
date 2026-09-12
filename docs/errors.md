@@ -1,15 +1,22 @@
 # Adapter error reference
 
-Search this page with the exact stable ID, code, event, or the beginning of the
+Search this page with the exact stable ID, code, event, or beginning of the
 message you saw. Every operator-facing failure the runtime can emit is indexed
 here with its cause, what it means for traffic, whether anything recovers on its
-own, and what to do next: 41 entries for failures that enter the diagnostic
-pipeline, and 35 indexing consequential plain console lines that never do - each
-of those is printed through the registry and carries its stable ID tag, so the
-emitted text cannot drift from the prefix indexed here.
+own, and what to do next: 41 entries carrying a stable ID and operator
+guidance, plus 35 indexing consequential plain console lines that never enter
+the diagnostic pipeline - each of those is printed through the registry and
+carries its stable ID tag, so the emitted text cannot drift from the prefix
+indexed here.
 
 Generated from `src/runtime/error-registry.js` by
 `node scripts/render-error-docs.js`; edit the registry, not this file.
+
+This is the adapter-owned part of the ecosystem index. The sibling packages
+generate and ship their own runtime-owned references on the same release channel:
+
+- [svelte-realtime errors](https://github.com/lanteanio/svelte-realtime/blob/main/docs/errors.md)
+- [svelte-adapter-uws-extensions errors](https://github.com/lanteanio/svelte-adapter-uws-extensions/blob/main/ERRORS.md)
 
 | Stable ID | Code or event | Searchable message prefix |
 |---|---|---|

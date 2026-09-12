@@ -90,6 +90,33 @@ describe('error catalog', () => {
 		}
 	});
 
+	it('carries the structure both indexes are read through', () => {
+		// Every assertion below keys on one of these strings, and a document
+		// that lost one would make those assertions examine nothing rather
+		// than fail. The table's delimiter row is load-bearing for a different
+		// reason: without it the whole index renders as literal pipe text.
+		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
+		for (const marker of [
+			'| Stable ID | Code or event | Searchable message prefix |',
+			'|---|---|---|',
+			'## Indexed events and console lines',
+			'Indexed events:',
+			'Indexed console lines'
+		]) {
+			expect(docs.includes(marker), 'the rendered page lost: ' + marker).toBe(true);
+		}
+		// The counts the intro quotes are the emission split, not prose someone
+		// updated by hand and then stopped updating.
+		const diagnostic = ADAPTER_ERROR_REGISTRY.filter((e) => e.emission !== 'console').length;
+		const consoleLines = ADAPTER_ERROR_REGISTRY.length - diagnostic;
+		expect(docs).toContain(diagnostic + ' entries carrying a stable ID and operator');
+		expect(docs).toContain(consoleLines + ' indexing consequential plain console lines');
+		// A reader holding a line from a sibling package is told where that
+		// package's reference lives rather than concluding it is undocumented.
+		expect(docs).toContain('](https://github.com/lanteanio/svelte-realtime/blob/');
+		expect(docs).toContain('](https://github.com/lanteanio/svelte-adapter-uws-extensions/blob/');
+	});
+
 	it('opens with an index row per entry, carrying the code or event and the searchable prefix', () => {
 		// The row is what an operator scanning the top of the page reads: the
 		// id links to its section, the middle column is the key a sink reports
@@ -132,7 +159,12 @@ describe('error catalog', () => {
 		}
 		// The two halves are the emission split, not a hand-kept pair of lists.
 		const consoleIds = ADAPTER_ERROR_REGISTRY.filter((e) => e.emission === 'console').map((e) => e.id);
-		const eventsBlock = docs.slice(docs.indexOf('Indexed events:'), docs.indexOf('Indexed console lines'));
+		const start = docs.indexOf('Indexed events:');
+		const end = docs.indexOf('Indexed console lines');
+		expect(start, 'the events block has no start marker').toBeGreaterThan(-1);
+		expect(end, 'the console block has no start marker').toBeGreaterThan(start);
+		const eventsBlock = docs.slice(start, end);
+		expect(eventsBlock.length, 'an empty block would make the check below examine nothing').toBeGreaterThan(0);
 		for (const id of consoleIds) {
 			expect(eventsBlock.includes(id), id + ' prints a console line and must not be listed as an emitted event').toBe(false);
 		}
