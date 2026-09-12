@@ -22,8 +22,9 @@
 // consumer does not cost the worker.
 //
 // A NOTE ON WHAT THIS DOES NOT SHOW, because it was originally written to show
-// it. uWS keeps `getUserData` working after `end()` and only throws on `send`
-// (measured against the bundled 20.69.0), and both sites the subscribe lane
+// it. The facade keeps `getUserData` working after `end()` by design (it hands
+// back the stored userData unconditionally) and only throws on `send`, and both
+// sites the subscribe lane
 // touches afterwards - joinSharedCohort and sendSubscribed - already guard every
 // socket call. So the post-close continuation is wasted bookkeeping and a
 // misleading closed-socket abort, not a crash. The caller stops anyway because

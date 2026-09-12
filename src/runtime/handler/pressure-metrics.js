@@ -184,12 +184,12 @@ function samplePressure(thresholds) {
 	// walk is capped at BACKPRESSURE_SAMPLE_CAP so a worker holding tens of
 	// thousands of sockets pays a fixed per-tick cost. This is the ONLY
 	// per-connection iteration the sampler performs and it never runs on the
-	// publish path (uWS fans out in C++; this reads a coarse 1 Hz health
+	// publish path (the fan-out is its own walk; this reads a coarse 1 Hz health
 	// gauge). The fold is zero-alloc and unit-tested in isolation.
 	const { maxBufferedBytes, backpressuredConnections } = foldConnectionBackpressure(
 		wsConnections, BACKPRESSURE_SAMPLE_CAP, BACKPRESSURE_SAMPLE_THRESHOLD_BYTES
 	);
-	// uWS reports every frame it sheds through `dropped`. Close that exact event
+	// The facade reports every frame it sheds through `dropped`. Close that exact event
 	// window independently of the bounded queue-depth walk above: a queue can
 	// drain before this tick, and a dropping socket can sit beyond the walk cap.
 	const { droppedFrames, droppedBytes } = takeBackpressureDropWindow(counters);
@@ -271,7 +271,7 @@ function samplePressure(thresholds) {
 	pressureSnapshot.topPublishers = topPublishers;
 	// Aggregate outbound-queue telemetry from the bounded walk above. maxBufferedBytes
 	// is the worst per-connection queue depth seen this tick (compare against
-	// maxBackpressure, 1 MB default, to gauge headroom before uWS sheds);
+	// maxBackpressure, 1 MB default, to gauge headroom before the facade sheds);
 	// backpressuredConnections is how many sampled sockets are holding a
 	// notable queue. Both read 0 in the healthy steady state.
 	pressureSnapshot.maxBufferedBytes = maxBufferedBytes;

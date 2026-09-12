@@ -430,7 +430,21 @@
 		"file": "src/runtime/handler/metrics-snapshot.js"
 	},
 	{
-		"file": "src/runtime/handler/pressure-metrics.js"
+		"file": "src/runtime/handler/pressure-metrics.js",
+		"adaptations": [
+			{
+				"lead": "\t// publish path (uWS fans out in C++; this reads a coarse 1 Hz health\n",
+				"ours": "\t// publish path (the fan-out is its own walk; this reads a coarse 1 Hz health\n"
+			},
+			{
+				"lead": "\t// uWS reports every frame it sheds through `dropped`. Close that exact event\n",
+				"ours": "\t// The facade reports every frame it sheds through `dropped`. Close that exact event\n"
+			},
+			{
+				"lead": "\t// maxBackpressure, 1 MB default, to gauge headroom before uWS sheds);\n",
+				"ours": "\t// maxBackpressure, 1 MB default, to gauge headroom before the facade sheds);\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/handler/shared-wire-id.js"
@@ -1471,6 +1485,10 @@
 			{
 				"lead": "\t\texpectStatement(read('../src/runtime/handler.js'),\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);', 'handler.js');\n",
 				"ours": "\t\texpectStatement(read('../src/runtime/handler/realtime.js'),\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);', 'handler/realtime.js');\n"
+			},
+			{
+				"lead": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,345 frames - twelve times what it cost to ask, and repeatable,\n",
+				"ours": "// Measured on this runtime at the worst legal shape: one 8,109-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,216 bytes\n// across 1,344 frames - twelve times what it cost to ask, and repeatable,\n"
 			}
 		]
 	},
@@ -1934,6 +1952,10 @@
 			{
 				"lead": "\tbumpOut(ws, payload);",
 				"ours": "\tbumpOut(ws.getUserData(), payload);"
+			},
+			{
+				"lead": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,345 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n",
+				"ours": "// MEASURED, on this runtime, at the worst legal shape: one 8,109-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,216 bytes across 1,344 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n"
 			}
 		]
 	},
@@ -1946,6 +1968,10 @@
 			{
 				"lead": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });",
 				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back, so a\n\t\t// spill in the same read would run before the subscribe's gate await\n\t\t// resumes and the capture window opens. A round trip in between puts the\n\t\t// spill in a later read, after that await has settled.\n\t\texpect(await answers(victim, 'window'), 'the liveness probe never worked').toBe(true);\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
+			},
+			{
+				"lead": "// it. uWS keeps `getUserData` working after `end()` and only throws on `send`\n// (measured against the bundled 20.69.0), and both sites the subscribe lane\n",
+				"ours": "// it. The facade keeps `getUserData` working after `end()` by design (it hands\n// back the stored userData unconditionally) and only throws on `send`, and both\n// sites the subscribe lane\n"
 			}
 		]
 	},

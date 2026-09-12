@@ -1,9 +1,9 @@
 // The control/ack channel is an amplifier, and this is what bounds it.
 //
 // A client names a topic in a few bytes and is answered with a whole frame.
-// Measured on this runtime at the worst legal shape: one 8,121-byte
-// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes
-// across 1,345 frames - twelve times what it cost to ask, and repeatable,
+// Measured on this runtime at the worst legal shape: one 8,109-byte
+// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,216 bytes
+// across 1,344 frames - twelve times what it cost to ask, and repeatable,
 // because the frame is legal and nothing refuses the next one.
 //
 // The defences that do not cover it: the 8 KiB control-frame limit bounds one
