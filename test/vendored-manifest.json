@@ -530,8 +530,12 @@
 		"file": "src/runtime/utils/operational-diagnostic.js",
 		"adaptations": [
 			{
-				"lead": "new Error('uWebSockets.js returned no listen socket')",
-				"ours": "new Error('no listen socket was bound')"
+				"lead": "export function listenFailureDiagnostic(host, port) {",
+				"ours": "/**\n * The fatal record for a listen that never bound.\n *\n * `error` is optional because the transport decides whether there is one to\n * report. A transport that answers a failed listen with a falsy socket and\n * nothing else has only the placeholder below as the honest content of the\n * declared field; a transport that rejects with the real reason (EADDRINUSE\n * from `node:http`, say) passes it and the operator reads the cause in the\n * field that exists for it. The call site here passes the bind error.\n *\n * @param {string} host\n * @param {number | string} port\n * @param {unknown} [error] - the bind error the transport reported, if any\n */\nexport function listenFailureDiagnostic(host, port, error) {"
+			},
+			{
+				"lead": "\t\terror: Object.assign(new Error('uWebSockets.js returned no listen socket'), { code: 'LISTEN_FAILED' })",
+				"ours": "\t\terror: error === undefined\n\t\t\t? Object.assign(new Error('no listen socket was bound'), { code: 'LISTEN_FAILED' })\n\t\t\t: error"
 			}
 		]
 	},
