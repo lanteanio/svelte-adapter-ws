@@ -41,7 +41,7 @@ export function bumpIn(ws, message) {
  * Bump the per-connection outbound counters for a direct send to this
  * connection (welcome / resumed / subscribe-ack / reply / send /
  * sendCoalesced / sendTo). Topic `publish()` fan-out is not counted -
- * uWS does the dispatch in C++ and counting per-recipient would mean
+ * the fan-out walk is its own loop and counting per-recipient would mean
  * walking subscribers in JS on every publish, defeating the fast path.
  *
  * @param {import('uWebSockets.js').WebSocket<any>} ws
@@ -101,7 +101,7 @@ export function maybeWarnTopicRegistry(threshold = TOPIC_SEQS_WARN_THRESHOLD, ob
 }
 
 // Soft cap on a single batched WebSocket frame produced by
-// platform.publishBatched. Above this size, uWS per-message-deflate may
+// platform.publishBatched. Above this size, per-message-deflate may
 // kick in (depending on user config) and large frames can surprise
 // per-CPU-cycle budgets; we emit a throttled console.warn rather than
 // hard-rejecting so the call still delivers. Callers chunk via repeated
@@ -180,7 +180,7 @@ function samplePressure(thresholds) {
 	const subscriberRatio = connections > 0 ? counters.totalSubscriptions / connections : 0;
 
 	// Aggregate outbound backpressure across a bounded sample of the live
-	// connections. `getBufferedAmount()` is one C++ call per connection; the
+	// connections. `bufferedAmount` is one property read per connection; the
 	// walk is capped at BACKPRESSURE_SAMPLE_CAP so a worker holding tens of
 	// thousands of sockets pays a fixed per-tick cost. This is the ONLY
 	// per-connection iteration the sampler performs and it never runs on the
@@ -189,7 +189,7 @@ function samplePressure(thresholds) {
 	const { maxBufferedBytes, backpressuredConnections } = foldConnectionBackpressure(
 		wsConnections, BACKPRESSURE_SAMPLE_CAP, BACKPRESSURE_SAMPLE_THRESHOLD_BYTES
 	);
-	// The facade reports every frame it sheds through `dropped`. Close that exact event
+	// The facade reports every frame it sheds through `onDrop`. Close that exact event
 	// window independently of the bounded queue-depth walk above: a queue can
 	// drain before this tick, and a dropping socket can sit beyond the walk cap.
 	const { droppedFrames, droppedBytes } = takeBackpressureDropWindow(counters);

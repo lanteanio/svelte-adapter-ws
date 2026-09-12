@@ -438,11 +438,23 @@
 			},
 			{
 				"lead": "\t// uWS reports every frame it sheds through `dropped`. Close that exact event\n",
-				"ours": "\t// The facade reports every frame it sheds through `dropped`. Close that exact event\n"
+				"ours": "\t// The facade reports every frame it sheds through `onDrop`. Close that exact event\n"
 			},
 			{
 				"lead": "\t// maxBackpressure, 1 MB default, to gauge headroom before uWS sheds);\n",
 				"ours": "\t// maxBackpressure, 1 MB default, to gauge headroom before the facade sheds);\n"
+			},
+			{
+				"lead": " * uWS does the dispatch in C++ and counting per-recipient would mean\n",
+				"ours": " * the fan-out walk is its own loop and counting per-recipient would mean\n"
+			},
+			{
+				"lead": "// platform.publishBatched. Above this size, uWS per-message-deflate may\n",
+				"ours": "// platform.publishBatched. Above this size, per-message-deflate may\n"
+			},
+			{
+				"lead": "\t// connections. `getBufferedAmount()` is one C++ call per connection; the\n",
+				"ours": "\t// connections. `bufferedAmount` is one property read per connection; the\n"
 			}
 		]
 	},
@@ -1494,7 +1506,7 @@
 			},
 			{
 				"lead": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,345 frames - twelve times what it cost to ask, and repeatable,\n",
-				"ours": "// Measured on this runtime at the worst legal shape: one 8,109-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,216 bytes\n// across 1,344 frames - twelve times what it cost to ask, and repeatable,\n"
+				"ours": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,344 frames - twelve times what it cost to ask, and repeatable,\n"
 			}
 		]
 	},
@@ -1961,7 +1973,7 @@
 			},
 			{
 				"lead": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,345 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n",
-				"ours": "// MEASURED, on this runtime, at the worst legal shape: one 8,109-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,216 bytes across 1,344 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n"
+				"ours": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,344 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n"
 			}
 		]
 	},
@@ -1978,6 +1990,14 @@
 			{
 				"lead": "// it. uWS keeps `getUserData` working after `end()` and only throws on `send`\n// (measured against the bundled 20.69.0), and both sites the subscribe lane\n",
 				"ours": "// it. The facade keeps `getUserData` working after `end()` by design (it hands\n// back the stored userData unconditionally) and only throws on `send`, and both\n// sites the subscribe lane\n"
+			},
+			{
+				"lead": "// WHY THIS EXISTS. The flush reads uWS's DROPPED sentinel and, when even the\n",
+				"ours": "// WHY THIS EXISTS. The flush reads the facade's DROPPED sentinel and, when even the\n"
+			},
+			{
+				"lead": "// branch runs - not that a real uWS connection ever reaches it. Here the\n",
+				"ours": "// branch runs - not that a real connection ever reaches it. Here the\n"
 			}
 		]
 	},

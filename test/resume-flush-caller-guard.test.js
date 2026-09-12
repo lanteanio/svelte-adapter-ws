@@ -1,12 +1,12 @@
 // The resume gap-fill flush giving up on a buried connection, driven end to end
 // against the REAL built runtime with a real socket earning a real refusal.
 //
-// WHY THIS EXISTS. The flush reads uWS's DROPPED sentinel and, when even the
+// WHY THIS EXISTS. The flush reads the facade's DROPPED sentinel and, when even the
 // truncation marker is refused, closes the connection so the client reconnects
 // and resumes from what it actually received. Nothing covered that path against
 // a real socket: the unit suite beside this one scripts the refusal, which is
 // the only way to refuse on cue, but a scripted socket proves only that the
-// branch runs - not that a real uWS connection ever reaches it. Here the
+// branch runs - not that a real connection ever reaches it. Here the
 // backpressure is real (a client that stops reading, against a 4 KiB
 // maxBackpressure), so the whole chain is exercised: capture window, held
 // frames, refusal partway, refused marker, close.
