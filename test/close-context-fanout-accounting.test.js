@@ -182,6 +182,9 @@ beforeAll(async () => {
 	await connect('capable', [STATELESS_CAP, STATEFUL_CAP, SHARED_CAP], ['room', 'shared-room']);
 	await connect('plain', [], ['room', 'shared-room', 'plain-room']);
 	await connect('batchy', ['batch'], ['uniform']);
+	// gamer decodes the game lane's binary fan-out frame, which is the one
+	// per-viewer walk that still charges, and the only way into its binary arm.
+	await connect('gamer', ['game.fanout:1'], ['room']);
 }, 60000);
 
 afterAll(() => {
@@ -292,13 +295,33 @@ describe('direct lanes charge the one connection they address', () => {
 
 	it('publishGame charges each viewer it walks, as the family does', () => {
 		// The game lane is a per-viewer walk on every adapter, so it is the one
-		// fan-out that still charges: each JSON viewer takes one frame.
+		// fan-out that still charges: every viewer takes one frame, JSON or
+		// binary. The first walk announces a wire id to the capable viewer, so
+		// warm it and read the walk alone.
+		platform.publishGame(null, 'room', 'warm', { n: 0 });
 		resetOut();
 		const { delivered } = platform.publishGame(null, 'room', 'g', { n: 1 });
-		expect(delivered).toBe(2);
+		expect(delivered).toBe(3);
 		const out = outCounts();
 		expect(out.plain.messagesOut).toBe(1);
 		expect(out.capable.messagesOut).toBe(1);
-		expect(out.batchy.messagesOut).toBe(0);
+		expect(out.gamer.messagesOut).toBe(1);
+		expect(out.batchy.messagesOut, 'a socket that does not hold the topic').toBe(0);
+	});
+
+	it('a game-capable viewer is charged the binary frame, not the payload inside it', () => {
+		// The binary arm of the same walk. The charge has to be the frame on
+		// the socket: the payload alone leaves the header uncounted, which is
+		// what the family counts and what an operator compares against.
+		const gamer = connections.find((c) => c.name === 'gamer');
+		platform.publishGame(null, 'room', 'warm2', { n: 0 });
+		resetOut();
+		gamer.sent.length = 0;
+		platform.publishGame(null, 'room', 'g2', { n: 2 });
+		const frame = gamer.sent[gamer.sent.length - 1];
+		expect(frame instanceof Uint8Array, 'the game-capable viewer took a binary frame').toBe(true);
+		const out = outCounts();
+		expect(out.gamer.messagesOut).toBe(1);
+		expect(out.gamer.bytesOut, 'the frame on the socket, header included').toBe(frame.byteLength);
 	});
 });

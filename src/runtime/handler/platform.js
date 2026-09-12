@@ -183,9 +183,11 @@ function fanOutCohort(cohort, frame, binary, compress) {
 // tier's publish returns - the topic had a live subscriber - and is what the
 // outcome hook classifies; SENT is whether at least one send was accepted,
 // which is what a publish call returns. Both come off the one walk. A
-// broadcast charges no per-connection counter: `messagesOut` and `bytesOut`
-// count direct sends only, as the family declares, so the fan-out lanes read
-// the same on every adapter for the same traffic.
+// neither walk charges a per-connection counter: `messagesOut` and
+// `bytesOut` count direct sends only, as the family declares, so a
+// subscriber's close context reads the same on every adapter for the same
+// traffic. The game lane is the exception on both adapters, and charges
+// there for the same reason a direct send does: it walks viewer by viewer.
 // A subscriber whose send was shed past the backpressure ceiling was reached
 // and not sent; one whose send threw counts as neither and is charged a
 // closed-socket abort.
