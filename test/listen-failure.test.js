@@ -119,6 +119,10 @@ describe('a real bind failure tells the operator what failed', () => {
 		expect(code, `expected a failed bind to exit 1\n--- output ---\n${output}`).toBe(1);
 		expect(output).toContain(`127.0.0.1:${taken}`);
 		expect(output).toContain(ADAPTER_ERROR_IDS.LISTEN);
+		// The bind error the transport reported is on the line, in the record's
+		// own error field: this is what the call site passes, and a call site
+		// that stopped passing it would print the placeholder instead.
+		expect(output, 'the errno reaches the operator').toContain('EADDRINUSE');
 		// The exact symptom this file exists for: the record was thrown away and
 		// the operator was told about telemetry instead of about the port.
 		expect(output, 'the diagnostic must be built, not dropped').not.toContain('invalid record shape');

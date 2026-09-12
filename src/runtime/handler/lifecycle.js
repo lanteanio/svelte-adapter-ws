@@ -156,12 +156,10 @@ export async function start(server, host, port, opts = {}) {
 			// operator looks the ID up in are the same bytes. The previous emit
 			// built its own record with a dataClass the schema does not declare,
 			// which made every bind failure print an invalid-record-shape line
-			// instead of the address that could not be bound.
-			// The registry builds the record so the printed line and the catalog
-			// entry an operator looks the ID up in stay the same bytes. Node
-			// rejects with the real bind error, so it rides in the record's own
-			// `error` slot - EADDRINUSE is the whole answer on the failure an
-			// operator hits most.
+			// instead of the address that could not be bound. Node rejects with
+			// the real bind error, so it rides in the record's own `error`
+			// slot - EADDRINUSE is the whole answer on the failure an operator
+			// hits most.
 			emitOperationalDiagnostic(listenFailureDiagnostic(host, port, err));
 			process.exit(1);
 		});
