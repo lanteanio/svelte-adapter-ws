@@ -1,10 +1,11 @@
-// Every JSON envelope this runtime builds takes its prefix from the envelope
-// prefix cache, so the cache-size signal the observability manifest reports
-// for `envelopePrefixCache` is a real number and the family's native tier and
-// this runtime build the same bytes the same way. Pinned against the real
-// built platform over scripted sockets: each lane's first frame on a new
-// topic+event pair adds exactly that pair, the bytes on the wire equal the
-// inline build, and the cache evicts at its bound instead of growing.
+// Every envelope the publish and send lanes build takes its prefix from the
+// envelope prefix cache, so the growth auditor's `envelopePrefixCache` probe
+// reads a live size and the family's native tier and this runtime build the
+// same bytes the same way. Pinned against the real built platform over
+// scripted sockets: each lane's first frame on a new topic+event pair adds
+// exactly that pair, a second frame on the pair is served from the cache,
+// the bytes on the wire equal the inline build, and the cache evicts at its
+// bound instead of growing.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pathToFileURL } from 'node:url';
@@ -122,9 +123,17 @@ describe('every envelope build goes through the prefix cache', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		plain.frames.length = 0;
 		expect(addedBy(() => platform.publish('room', 'p1', { n: 1 }))).toEqual([keyOf('room', 'p1')]);
-		expect(addedBy(() => platform.publish('room', 'p1', { n: 2 })), 'the second publish reuses the entry').toEqual([]);
+		expect(addedBy(() => platform.publish('room', 'p1', { n: 2 })), 'the second publish adds no key').toEqual([]);
 		expect(plain.frames[0].startsWith(inlinePrefix('room', 'p1'))).toBe(true);
 		expect(JSON.parse(plain.frames[0])).toMatchObject({ topic: 'room', event: 'p1', data: { n: 1 } });
+		// Adding no key is not the same as reading the entry: a build that
+		// writes the cache and never reads it adds nothing either. Poison the
+		// stored prefix and the next frame carries it, which only a read can do.
+		state.envelopePrefixCache.set(keyOf('room', 'p1'), '{"poisoned":1,"data":');
+		plain.frames.length = 0;
+		platform.publish('room', 'p1', { n: 3 });
+		expect(plain.frames[0].startsWith('{"poisoned":1,"data":'), 'the prefix came from the cache').toBe(true);
+		state.envelopePrefixCache.delete(keyOf('room', 'p1'));
 	});
 
 	it('send and sendTo', () => {
@@ -169,8 +178,8 @@ describe('every envelope build goes through the prefix cache', () => {
 	it('the coalesced drain', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		plain.frames.length = 0;
-		// sendCoalesced drains synchronously on an unblocked socket, so the
-		// build happens inside the call.
+		// sendCoalesced drains before it returns, so the build happens inside
+		// the call.
 		expect(addedBy(() => platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c1', data: { n: 1 } }))).toEqual([keyOf('room', 'c1')]);
 		expect(plain.frames[0].startsWith(inlinePrefix('room', 'c1'))).toBe(true);
 	});
