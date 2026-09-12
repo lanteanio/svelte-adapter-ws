@@ -90,6 +90,54 @@ describe('error catalog', () => {
 		}
 	});
 
+	it('opens with an index row per entry, carrying the code or event and the searchable prefix', () => {
+		// The row is what an operator scanning the top of the page reads: the
+		// id links to its section, the middle column is the key a sink reports
+		// under, and the last is the start of the line as it is printed. A
+		// missing row leaves an entry reachable only by scrolling.
+		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
+		const rows = new Map(
+			[...docs.matchAll(/^\| \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\) \| `([^`]*)` \| `([\s\S]*?)` \|$/gm)]
+				.map((m) => [m[1], { anchor: m[2], key: m[3], prefix: m[4] }])
+		);
+		expect(rows.size, 'one index row per registry entry').toBe(ADAPTER_ERROR_REGISTRY.length);
+		for (const entry of ADAPTER_ERROR_REGISTRY) {
+			const row = rows.get(entry.id);
+			expect(row, entry.id + ' has no index row - run: node scripts/render-error-docs.js').toBeTruthy();
+			expect(row.anchor, entry.id + ' index row links elsewhere').toBe(entry.anchor);
+			expect(row.key, entry.id + ' index row names the wrong code or event').toBe(entry.code || entry.event);
+			expect(row.prefix, entry.id + ' index row carries the wrong searchable prefix')
+				.toBe(String(entry.messagePrefix).replace(/\|/g, '\\|').replace(/\r?\n/g, ' '));
+		}
+	});
+
+	it('lists every entry the other way round: by event, or by printed prefix for a console line', () => {
+		// The second index answers the question a sink asks: given this event
+		// name, which entry is it? A console-line entry has no event anyone
+		// sees, so it is listed under the prefix that is printed instead.
+		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
+		const listed = new Map(
+			[...docs.matchAll(/^- `([\s\S]*?)` - \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\)$/gm)]
+				.map((m) => [m[2], { key: m[1], anchor: m[3] }])
+		);
+		expect(listed.size, 'one list entry per registry entry').toBe(ADAPTER_ERROR_REGISTRY.length);
+		for (const entry of ADAPTER_ERROR_REGISTRY) {
+			const row = listed.get(entry.id);
+			expect(row, entry.id + ' is in no list - run: node scripts/render-error-docs.js').toBeTruthy();
+			expect(row.anchor, entry.id + ' list entry links elsewhere').toBe(entry.anchor);
+			const expected = entry.emission === 'console'
+				? String(entry.messagePrefix).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')
+				: entry.event;
+			expect(row.key, entry.id + ' is listed under the wrong key').toBe(expected);
+		}
+		// The two halves are the emission split, not a hand-kept pair of lists.
+		const consoleIds = ADAPTER_ERROR_REGISTRY.filter((e) => e.emission === 'console').map((e) => e.id);
+		const eventsBlock = docs.slice(docs.indexOf('Indexed events:'), docs.indexOf('Indexed console lines'));
+		for (const id of consoleIds) {
+			expect(eventsBlock.includes(id), id + ' prints a console line and must not be listed as an emitted event').toBe(false);
+		}
+	});
+
 	it('matches docs/errors.md entry for entry', () => {
 		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
 		const documented = new Set(

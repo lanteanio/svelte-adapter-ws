@@ -1,8 +1,179 @@
 # Adapter error reference
 
-Every operator-facing failure the runtime can emit, indexed by its stable
-`ADAPTER-ERR-*` id. Generated from `src/runtime/error-registry.js` by
+Search this page with the exact stable ID, code, event, or the beginning of the
+message you saw. Every operator-facing failure the runtime can emit is indexed
+here with its cause, what it means for traffic, whether anything recovers on its
+own, and what to do next: 41 entries for failures that enter the diagnostic
+pipeline, and 35 indexing consequential plain console lines that never do - each
+of those is printed through the registry and carries its stable ID tag, so the
+emitted text cannot drift from the prefix indexed here.
+
+Generated from `src/runtime/error-registry.js` by
 `node scripts/render-error-docs.js`; edit the registry, not this file.
+
+| Stable ID | Code or event | Searchable message prefix |
+|---|---|---|
+| [ADAPTER-ERR-LISTEN](#adapter-err-listen) | `LISTEN_FAILED` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.listener event=runtime.listen.failed severity=fatal] runtime.listen.failed: Could not bind the server listener on` |
+| [ADAPTER-ERR-VITE-LOAD](#adapter-err-vite-load) | `vite.handler.load-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.load-failed severity=error] vite.handler.load-failed: Initial loading of the WebSocket handler` |
+| [ADAPTER-ERR-VITE-RELOAD](#adapter-err-vite-reload) | `vite.handler.reload-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=vite.websocket event=vite.handler.reload-failed severity=error] vite.handler.reload-failed: Hot reloading of the WebSocket handler` |
+| [ADAPTER-ERR-REQUEST-TIMEOUT](#adapter-err-request-timeout) | `websocket.request.timeout` | `request timed out` |
+| [ADAPTER-ERR-REQUEST-CLOSED](#adapter-err-request-closed) | `websocket.request.connection-closed` | `connection closed` |
+| [ADAPTER-ERR-ADMIN-HANDLER](#adapter-err-admin-handler) | `admin.handler-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.admin event=admin.handler-failed severity=error] The admin handler failed; the request was answered 500.` |
+| [ADAPTER-ERR-INVARIANT](#adapter-err-invariant) | `invariant.violated` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.assertion event=invariant.violated severity=` |
+| [ADAPTER-ERR-METRICS-MERGE](#adapter-err-metrics-merge) | `metrics.merge-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.metrics event=metrics.merge-failed severity=error] The cluster metrics merge failed; this scrape answers with the local worker only.` |
+| [ADAPTER-ERR-METRICS-MIRROR-READ](#adapter-err-metrics-mirror-read) | `metrics.mirror-read-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.metrics event=metrics.mirror-read-failed severity=error] The metrics mirror read failed during cluster collection; this worker reports as a gap between expected and reporting.` |
+| [ADAPTER-ERR-WARMUP-RENDER](#adapter-err-warmup-render) | `runtime.warmup.render-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.warmup event=runtime.warmup.render-failed severity=warn] A boot warmup render failed; readiness proceeds without it.` |
+| [ADAPTER-ERR-METRICS-PRIMARY-UNREACHABLE](#adapter-err-metrics-primary-unreachable) | `metrics.primary-unreachable` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.metrics event=metrics.primary-unreachable severity=error] The metrics snapshot request could not reach the primary; this scrape answers degraded with the local worker only.` |
+| [ADAPTER-ERR-SINK-FAILED](#adapter-err-sink-failed) | `operational.sink.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.observability event=operational.sink.failed severity=error] The configured operational event sink failed; console fallback was restored for this event.` |
+| [ADAPTER-ERR-PRESSURE-LISTENER](#adapter-err-pressure-listener) | `pressure.listener-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.listener-failed severity=error] A pressure listener failed.` |
+| [ADAPTER-ERR-PRESSURE-RUNAWAY-PUBLISHER](#adapter-err-pressure-runaway-publisher) | `pressure.runaway-publisher` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.runaway-publisher severity=warn] A publisher crossed a configured per-topic pressure threshold.` |
+| [ADAPTER-ERR-PRESSURE-TOPIC-REGISTRY](#adapter-err-pressure-topic-registry) | `pressure.topic-registry-high` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.topic-registry-high severity=warn] The topic registry crossed its cardinality warning threshold.` |
+| [ADAPTER-ERR-PRESSURE-RATE-LISTENER](#adapter-err-pressure-rate-listener) | `pressure.publish-rate-listener-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.pressure event=pressure.publish-rate-listener-failed severity=error] A publish-rate listener failed.` |
+| [ADAPTER-ERR-EGRESS-REFUSED](#adapter-err-egress-refused) | `egress.publish-refused` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.publish-refused severity=warn] A publish crossed a configured egress ceiling and was refused.` |
+| [ADAPTER-ERR-EGRESS-EVICTED](#adapter-err-egress-evicted) | `egress.window-evicted` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.window-evicted severity=warn] The egress ledger dropped a usage window that was still counting, so that key is unmetered for the rest of it.` |
+| [ADAPTER-ERR-EGRESS-TENANT-RESOLVER](#adapter-err-egress-tenant-resolver) | `egress.tenant-resolver-invalid` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.egress event=egress.tenant-resolver-invalid severity=error] The egress tenant resolver returned an unusable id; publishes are charged unattributed.` |
+| [ADAPTER-ERR-RELAY-GAP](#adapter-err-relay-gap) | `runtime.relay-gap.detected` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.relay-gap event=runtime.relay-gap.detected severity=error] This worker is missing relayed state that sibling workers received.` |
+| [ADAPTER-ERR-DIVERGENCE](#adapter-err-divergence) | `divergence.detected` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.divergence event=divergence.detected severity=error] Cross-worker state divergence was detected; evidence is retained behind the authenticated diagnostic lookup.` |
+| [ADAPTER-ERR-DIVERGENCE-QUIET](#adapter-err-divergence-quiet) | `divergence.quiet-state` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.divergence event=divergence.quiet-state severity=warn] Workers disagree about quiet-topic history; this is expected after a worker restart and never triggers a restart.` |
+| [ADAPTER-ERR-RESUME-HOOK](#adapter-err-resume-hook) | `resume.hook-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.resume event=resume.hook-failed severity=error] The resume hook threw; the client falls back to a fresh subscribe.` |
+| [ADAPTER-ERR-RESUME-HOOK-READ](#adapter-err-resume-hook-read) | `resume.hook-read-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.resume event=resume.hook-read-failed severity=error] Reading the resume hook result threw for a topic; that topic is treated as covering nothing.` |
+| [ADAPTER-ERR-AUTHENTICATE](#adapter-err-authenticate) | `runtime.authenticate.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.authenticate event=runtime.authenticate.failed severity=error] The WebSocket authentication endpoint failed.` |
+| [ADAPTER-ERR-SSR](#adapter-err-ssr) | `runtime.ssr.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.ssr event=runtime.ssr.failed severity=error] SvelteKit request handling failed.` |
+| [ADAPTER-ERR-UPGRADE-HOOK](#adapter-err-upgrade-hook) | `runtime.websocket-upgrade.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-upgrade event=runtime.websocket-upgrade.failed severity=error] The WebSocket upgrade hook failed.` |
+| [ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED](#adapter-err-subscription-sink-displaced) | `runtime.subscription-accounting.sink-displaced` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscription-accounting event=runtime.subscription-accounting.sink-displaced severity=warn] A second adapter runtime in this worker took over the subscription accounting sink. One subscription total is now frozen and the other is charged releases it never matched.` |
+| [ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED](#adapter-err-control-egress-exhausted) | `control-egress.exhausted` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.control-egress event=control-egress.exhausted severity=warn] A connection exhausted its control-frame egress budget and was closed.` |
+| [ADAPTER-ERR-ATTRIBUTION](#adapter-err-attribution) | `runtime.websocket-attribution.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-attribution event=runtime.websocket-attribution.failed severity=error] The WebSocket attribution hook failed; the connection was refused at open.` |
+| [ADAPTER-ERR-SUBSCRIBE-BATCH-HOOK](#adapter-err-subscribe-batch-hook) | `subscribe.batch-hook-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.batch-hook-failed severity=error] The subscribeBatch hook threw; every topic in the batch was denied INTERNAL_ERROR.` |
+| [ADAPTER-ERR-SUBSCRIBE-BATCH-RESULT](#adapter-err-subscribe-batch-result) | `subscribe.batch-result-read-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.batch-result-read-failed severity=error] Reading the subscribeBatch result threw; every topic in the batch was denied INTERNAL_ERROR.` |
+| [ADAPTER-ERR-SUBSCRIBE-HOOK](#adapter-err-subscribe-hook) | `subscribe.hook-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscribe event=subscribe.hook-failed severity=error] The subscribe hook threw; the subscribe was denied INTERNAL_ERROR.` |
+| [ADAPTER-ERR-TLS-RELOAD-SKIPPED](#adapter-err-tls-reload-skipped) | `tls.reload-skipped` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.reload-skipped severity=warn] A certificate reload was skipped and the previous certificate was kept; the renewal on disk is not being served.` |
+| [ADAPTER-ERR-TLS-SWAP](#adapter-err-tls-swap) | `tls.swap-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.swap-failed severity=error] A certificate swap failed mid-apply; some SNI hosts may be unroutable until the retry succeeds.` |
+| [ADAPTER-ERR-TLS-WATCH](#adapter-err-tls-watch) | `tls.watch-failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.watch-failed severity=error] The certificate directory watch failed to start; hot reload is disabled and no renewal will be seen.` |
+| [ADAPTER-ERR-TLS-WATCH-LOST](#adapter-err-tls-watch-lost) | `tls.watch-lost` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.tls event=tls.watch-lost severity=error] The certificate directory watch stopped after running; hot reload is disabled and no further renewal will be seen.` |
+| [ADAPTER-ERR-CLUSTER-CONFIG-WORKERS](#adapter-err-cluster-config-workers) | `cluster.config.invalid-workers` | `[svelte-adapter-ws] Invalid CLUSTER_WORKERS value: '` |
+| [ADAPTER-ERR-CLUSTER-CONFIG-COMPUTE](#adapter-err-cluster-config-compute) | `cluster.config.invalid-compute-count` | `[svelte-adapter-ws] websocket.workers.compute (` |
+| [ADAPTER-ERR-CLUSTER-CONFIG-MODE](#adapter-err-cluster-config-mode) | `cluster.config.invalid-mode` | `[svelte-adapter-ws] Invalid CLUSTER_MODE: '` |
+| [ADAPTER-ERR-CLUSTER-CONFIG-PORT](#adapter-err-cluster-config-port) | `cluster.config.ephemeral-port` | `[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS (each worker would bind its own kernel-assigned port, so the workers do not share one: ` |
+| [ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT](#adapter-err-cluster-config-reuseport) | `cluster.config.reuseport-unsupported` | `[svelte-adapter-ws] CLUSTER_WORKERS requires Linux (SO_REUSEPORT accept distribution is not available on ` |
+| [ADAPTER-ERR-CLUSTER-WORKER-ERROR](#adapter-err-cluster-worker-error) | `cluster.worker-error` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster event=cluster.worker-error severity=error] A worker thread reported an error.` |
+| [ADAPTER-ERR-WORKER-RESTART-LIMIT](#adapter-err-worker-restart-limit) | `cluster.worker.restart-limit` | `[svelte-adapter-ws] Worker restart limit reached for ` |
+| [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill) | `cluster.worker-exit-sigkill` | `[primary] worker ` |
+| [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine) | `cluster-relay.spill-quarantine` | `[primary] relay spill quarantining ` |
+| [ADAPTER-ERR-RELAY-SPILL-OVERFLOW](#adapter-err-relay-spill-overflow) | `cluster-relay.up-spill-overflow` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.up-spill-overflow severity=error] This worker could not hand its relay backlog to the primary within its spill ceiling and is exiting to be replaced.` |
+| [ADAPTER-ERR-RELAY-FRAME-OVERSIZED](#adapter-err-relay-frame-oversized) | `cluster-relay.frame-oversized` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.frame-oversized severity=error] A worker sent a relay frame larger than this process will reassemble; its relay stream was stopped.` |
+| [ADAPTER-ERR-RELAY-FRAME-REFUSED](#adapter-err-relay-frame-refused) | `cluster-relay.frame-refused` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.cluster-relay event=cluster-relay.frame-refused severity=warn] A publish was too large for the cluster relay and was not sent to other workers. Local subscribers received it.` |
+| [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read) | `tls.primary.boot-read-failed` | `[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` |
+| [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read) | `tls.primary.reload-read-failed` | `[tls] renewed certificate unreadable on the primary (workers gate on their own reads)` |
+| [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch) | `tls.primary.watch-failed` | `[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` |
+| [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost) | `tls.primary.watch-lost` | `[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` |
+| [ADAPTER-ERR-TLS-DEGRADED-EXPIRY](#adapter-err-tls-degraded-expiry) | `tls.degraded-expiry-alert` | `[svelte-adapter-ws] [tls] certificate hot-reload is DEGRADED (` |
+| [ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED](#adapter-err-shutdown-listener-rejected) | `shutdown.listener-rejected` | `[svelte-adapter-ws] a sveltekit:shutdown listener rejected` |
+| [ADAPTER-ERR-SHUTDOWN-LISTENER-THREW](#adapter-err-shutdown-listener-threw) | `shutdown.listener-threw` | `[svelte-adapter-ws] a sveltekit:shutdown listener threw` |
+| [ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED](#adapter-err-shutdown-requests-dropped) | `shutdown.requests-dropped` | `[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget (` |
+| [ADAPTER-ERR-SHUTDOWN-LISTENERS-UNSETTLED](#adapter-err-shutdown-listeners-unsettled) | `shutdown.listeners-unsettled` | `[svelte-adapter-ws] sveltekit:shutdown listeners did not settle within the shutdown budget (` |
+| [ADAPTER-ERR-SHUTDOWN-FAILED](#adapter-err-shutdown-failed) | `shutdown.failed` | `[svelte-adapter-ws] graceful shutdown failed` |
+| [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter) | `ws.sendto.async-filter-refused` | `[ws] platform.sendTo filter returned a Promise; treating as fail-closed.` |
+| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw) | `ws.shutdown-hook.threw` | `[ws] the WebSocket shutdown hook threw` |
+| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled) | `ws.shutdown-hook.unsettled` | `[ws] the WebSocket shutdown hook has not settled after ` |
+| [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook) | `ws.message-hook.threw` | `[ws] the message hook threw` |
+| [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[ws] the recover-on-subscribe hook threw` |
+| [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape) | `ws.diagnostic.record-shape` | `[ws] operational event dropped, invalid record shape` |
+| [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[ws] diagnostic render failed: ` |
+| [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write) | `ws.diagnostic.console-write` | `[ws] diagnostic rendered but the console refused it: ` |
+| [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice) | `ws.diagnostic.sink-notice` | `[ws] operational sink failed and its failure notice could not be built: ` |
+| [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | `[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ` |
+| [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument) | `ws.metrics.instrument-threw` | `[ws] a metrics instrument threw; further errors from it are suppressed` |
+| [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled) | `ws.posture-export.disabled` | `[ws] posture export disabled: ` |
+| [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer) | `ws.posture-observer.threw` | `[ws] a posture transition handler threw` |
+| [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition) | `ws.protection-posture.transition` | `[ws] protection posture ` |
+| [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth) | `ws.resource-growth.trending` | `[ws] resource-growth auditor: ` |
+| [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred) | `ws.upgrade.deferred-failed` | `[ws] a deferred upgrade failed` |
+| [ADAPTER-ERR-WAITING-ROOM-FALLBACK](#adapter-err-waiting-room-fallback) | `ws.waiting-room.renderer-failed` | `[svelte-adapter-ws] the waiting-room renderer failed; serving the built-in English page instead` |
+
+## Indexed events and console lines
+
+Indexed events:
+
+- `runtime.listen.failed` - [ADAPTER-ERR-LISTEN](#adapter-err-listen)
+- `vite.handler.load-failed` - [ADAPTER-ERR-VITE-LOAD](#adapter-err-vite-load)
+- `vite.handler.reload-failed` - [ADAPTER-ERR-VITE-RELOAD](#adapter-err-vite-reload)
+- `websocket.request.timeout` - [ADAPTER-ERR-REQUEST-TIMEOUT](#adapter-err-request-timeout)
+- `websocket.request.connection-closed` - [ADAPTER-ERR-REQUEST-CLOSED](#adapter-err-request-closed)
+- `admin.handler-failed` - [ADAPTER-ERR-ADMIN-HANDLER](#adapter-err-admin-handler)
+- `invariant.violated` - [ADAPTER-ERR-INVARIANT](#adapter-err-invariant)
+- `metrics.merge-failed` - [ADAPTER-ERR-METRICS-MERGE](#adapter-err-metrics-merge)
+- `metrics.mirror-read-failed` - [ADAPTER-ERR-METRICS-MIRROR-READ](#adapter-err-metrics-mirror-read)
+- `runtime.warmup.render-failed` - [ADAPTER-ERR-WARMUP-RENDER](#adapter-err-warmup-render)
+- `metrics.primary-unreachable` - [ADAPTER-ERR-METRICS-PRIMARY-UNREACHABLE](#adapter-err-metrics-primary-unreachable)
+- `operational.sink.failed` - [ADAPTER-ERR-SINK-FAILED](#adapter-err-sink-failed)
+- `pressure.listener-failed` - [ADAPTER-ERR-PRESSURE-LISTENER](#adapter-err-pressure-listener)
+- `pressure.runaway-publisher` - [ADAPTER-ERR-PRESSURE-RUNAWAY-PUBLISHER](#adapter-err-pressure-runaway-publisher)
+- `pressure.topic-registry-high` - [ADAPTER-ERR-PRESSURE-TOPIC-REGISTRY](#adapter-err-pressure-topic-registry)
+- `pressure.publish-rate-listener-failed` - [ADAPTER-ERR-PRESSURE-RATE-LISTENER](#adapter-err-pressure-rate-listener)
+- `egress.publish-refused` - [ADAPTER-ERR-EGRESS-REFUSED](#adapter-err-egress-refused)
+- `egress.window-evicted` - [ADAPTER-ERR-EGRESS-EVICTED](#adapter-err-egress-evicted)
+- `egress.tenant-resolver-invalid` - [ADAPTER-ERR-EGRESS-TENANT-RESOLVER](#adapter-err-egress-tenant-resolver)
+- `runtime.relay-gap.detected` - [ADAPTER-ERR-RELAY-GAP](#adapter-err-relay-gap)
+- `divergence.detected` - [ADAPTER-ERR-DIVERGENCE](#adapter-err-divergence)
+- `divergence.quiet-state` - [ADAPTER-ERR-DIVERGENCE-QUIET](#adapter-err-divergence-quiet)
+- `resume.hook-failed` - [ADAPTER-ERR-RESUME-HOOK](#adapter-err-resume-hook)
+- `resume.hook-read-failed` - [ADAPTER-ERR-RESUME-HOOK-READ](#adapter-err-resume-hook-read)
+- `runtime.authenticate.failed` - [ADAPTER-ERR-AUTHENTICATE](#adapter-err-authenticate)
+- `runtime.ssr.failed` - [ADAPTER-ERR-SSR](#adapter-err-ssr)
+- `runtime.websocket-upgrade.failed` - [ADAPTER-ERR-UPGRADE-HOOK](#adapter-err-upgrade-hook)
+- `runtime.subscription-accounting.sink-displaced` - [ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED](#adapter-err-subscription-sink-displaced)
+- `control-egress.exhausted` - [ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED](#adapter-err-control-egress-exhausted)
+- `runtime.websocket-attribution.failed` - [ADAPTER-ERR-ATTRIBUTION](#adapter-err-attribution)
+- `subscribe.batch-hook-failed` - [ADAPTER-ERR-SUBSCRIBE-BATCH-HOOK](#adapter-err-subscribe-batch-hook)
+- `subscribe.batch-result-read-failed` - [ADAPTER-ERR-SUBSCRIBE-BATCH-RESULT](#adapter-err-subscribe-batch-result)
+- `subscribe.hook-failed` - [ADAPTER-ERR-SUBSCRIBE-HOOK](#adapter-err-subscribe-hook)
+- `tls.reload-skipped` - [ADAPTER-ERR-TLS-RELOAD-SKIPPED](#adapter-err-tls-reload-skipped)
+- `tls.swap-failed` - [ADAPTER-ERR-TLS-SWAP](#adapter-err-tls-swap)
+- `tls.watch-failed` - [ADAPTER-ERR-TLS-WATCH](#adapter-err-tls-watch)
+- `tls.watch-lost` - [ADAPTER-ERR-TLS-WATCH-LOST](#adapter-err-tls-watch-lost)
+- `cluster.worker-error` - [ADAPTER-ERR-CLUSTER-WORKER-ERROR](#adapter-err-cluster-worker-error)
+- `cluster-relay.up-spill-overflow` - [ADAPTER-ERR-RELAY-SPILL-OVERFLOW](#adapter-err-relay-spill-overflow)
+- `cluster-relay.frame-oversized` - [ADAPTER-ERR-RELAY-FRAME-OVERSIZED](#adapter-err-relay-frame-oversized)
+- `cluster-relay.frame-refused` - [ADAPTER-ERR-RELAY-FRAME-REFUSED](#adapter-err-relay-frame-refused)
+
+Indexed console lines (no diagnostic event; the searchable key is the printed prefix and
+the stable ID tag on the line):
+
+- `[svelte-adapter-ws] Invalid CLUSTER_WORKERS value: '` - [ADAPTER-ERR-CLUSTER-CONFIG-WORKERS](#adapter-err-cluster-config-workers)
+- `[svelte-adapter-ws] websocket.workers.compute (` - [ADAPTER-ERR-CLUSTER-CONFIG-COMPUTE](#adapter-err-cluster-config-compute)
+- `[svelte-adapter-ws] Invalid CLUSTER_MODE: '` - [ADAPTER-ERR-CLUSTER-CONFIG-MODE](#adapter-err-cluster-config-mode)
+- `[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS (each worker would bind its own kernel-assigned port, so the workers do not share one: ` - [ADAPTER-ERR-CLUSTER-CONFIG-PORT](#adapter-err-cluster-config-port)
+- `[svelte-adapter-ws] CLUSTER_WORKERS requires Linux (SO_REUSEPORT accept distribution is not available on ` - [ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT](#adapter-err-cluster-config-reuseport)
+- `[svelte-adapter-ws] Worker restart limit reached for ` - [ADAPTER-ERR-WORKER-RESTART-LIMIT](#adapter-err-worker-restart-limit)
+- `[primary] worker ` - [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill)
+- `[primary] relay spill quarantining ` - [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine)
+- `[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` - [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read)
+- `[tls] renewed certificate unreadable on the primary (workers gate on their own reads)` - [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read)
+- `[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch)
+- `[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost)
+- `[svelte-adapter-ws] [tls] certificate hot-reload is DEGRADED (` - [ADAPTER-ERR-TLS-DEGRADED-EXPIRY](#adapter-err-tls-degraded-expiry)
+- `[svelte-adapter-ws] a sveltekit:shutdown listener rejected` - [ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED](#adapter-err-shutdown-listener-rejected)
+- `[svelte-adapter-ws] a sveltekit:shutdown listener threw` - [ADAPTER-ERR-SHUTDOWN-LISTENER-THREW](#adapter-err-shutdown-listener-threw)
+- `[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget (` - [ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED](#adapter-err-shutdown-requests-dropped)
+- `[svelte-adapter-ws] sveltekit:shutdown listeners did not settle within the shutdown budget (` - [ADAPTER-ERR-SHUTDOWN-LISTENERS-UNSETTLED](#adapter-err-shutdown-listeners-unsettled)
+- `[svelte-adapter-ws] graceful shutdown failed` - [ADAPTER-ERR-SHUTDOWN-FAILED](#adapter-err-shutdown-failed)
+- `[ws] platform.sendTo filter returned a Promise; treating as fail-closed.` - [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter)
+- `[ws] the WebSocket shutdown hook threw` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw)
+- `[ws] the WebSocket shutdown hook has not settled after ` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled)
+- `[ws] the message hook threw` - [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook)
+- `[ws] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
+- `[ws] operational event dropped, invalid record shape` - [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape)
+- `[ws] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
+- `[ws] diagnostic rendered but the console refused it: ` - [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write)
+- `[ws] operational sink failed and its failure notice could not be built: ` - [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice)
+- `[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
+- `[ws] a metrics instrument threw; further errors from it are suppressed` - [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument)
+- `[ws] posture export disabled: ` - [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled)
+- `[ws] a posture transition handler threw` - [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer)
+- `[ws] protection posture ` - [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition)
+- `[ws] resource-growth auditor: ` - [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth)
+- `[ws] a deferred upgrade failed` - [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred)
+- `[svelte-adapter-ws] the waiting-room renderer failed; serving the built-in English page instead` - [ADAPTER-ERR-WAITING-ROOM-FALLBACK](#adapter-err-waiting-room-fallback)
 
 ## ADAPTER-ERR-LISTEN
 
