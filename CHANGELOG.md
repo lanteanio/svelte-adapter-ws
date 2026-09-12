@@ -774,6 +774,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ws_publish_outcomes_total` classifies every fan-out from the walk that
+  delivered it. `publish`, a declined wire frame with no exclusion, and each
+  entry of a wire batch on its JSON fast path read the registry's subscriber
+  count before their walk, so a registered socket with no facade, a socket
+  whose send threw, and a socket closed between the count and the walk were
+  reported as reached on those three lanes and as reaching nobody on every
+  other. The declined frame with no exclusion now runs the same fan-out
+  primitive `publish` runs, on the relay path too, and reports whether a
+  send was accepted, as `publish` does.
+
 - The single subscribe lane consults its post-await gates in the batch lane's
   order. The subscription cap answers before the wire authorization landing,
   so a connection that is both full and unauthorized hears `RATE_LIMITED` on

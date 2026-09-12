@@ -90,6 +90,50 @@ function envelope(topic, event, data) {
 	return JSON.stringify({ topic, event, data });
 }
 
+/**
+ * A socket registered and subscribed to `topic` with no facade: the registry
+ * counts it as a live subscriber, and no walk can reach it. Returns the
+ * function that takes it back out.
+ * @param {string} topic
+ */
+function orphanOn(topic) {
+	/** @type {any} */
+	const orphan = {
+		readyState: 1,
+		bufferedAmount: 0,
+		send(_payloadOut, _opts, cb) { cb?.(); },
+		terminate() { this.readyState = 3; },
+		close() { this.readyState = 3; },
+		_socket: { remoteAddress: '10.0.0.2' }
+	};
+	registry.registerSocket(orphan);
+	registry.subscribeSocket(orphan, topic);
+	return () => {
+		registry.unsubscribeSocket(orphan, topic);
+		registry.unregisterSocket(orphan);
+	};
+}
+
+/**
+ * A live connection whose transport throws on every send, the shape of a
+ * socket freed under a walk. Returns the function that takes it back out of
+ * every set it entered.
+ * @param {string} name
+ * @param {string} topic
+ */
+async function doomedOn(name, topic) {
+	const doomed = await connect(name, [], [topic]);
+	doomed.rawWs.send = () => { throw new Error('gone'); };
+	return () => {
+		state.wsConnections.delete(doomed.facade);
+		state.wsWrappers.delete(doomed.rawWs);
+		registry.unsubscribeSocket(doomed.rawWs, topic);
+		registry.unregisterSocket(doomed.rawWs);
+		state.capCounts.adjust(doomed.userData[symbols.WS_CAPS], null);
+		connections.splice(connections.indexOf(doomed), 1);
+	};
+}
+
 beforeAll(async () => {
 	payload = buildRuntime();
 	const dir = pathToFileURL(payload.dir).href;
@@ -155,6 +199,38 @@ describe('the single-publish lane', () => {
 		// And the single-publish lane's return value says not sent.
 		expect(platform.publish('buried', 'e', 1)).toBe(false);
 		take();
+	});
+
+	it('classifies from the walk, not the registry: a registered socket with no facade reaches nobody', () => {
+		// The registry counts the orphan as a live subscriber and the walk
+		// cannot reach it. The batched lane already answers from its walk, so
+		// this is what keeps the two lanes of one adapter reading alike for
+		// the same socket population, and both reading as the family does.
+		const remove = orphanOn('orphan-only');
+		try {
+			take();
+			expect(platform.publish('orphan-only', 'e', 1)).toBe(false);
+			platform.publishBatched([
+				{ topic: 'orphan-only', event: 'a', data: 1 },
+				{ topic: 'orphan-only', event: 'b', data: 2 }
+			]);
+			expect(take(), 'one publish and one shared frame, neither reached anyone').toEqual([false, false]);
+		} finally {
+			remove();
+		}
+	});
+
+	it('does not count a subscriber whose send threw as reached', async () => {
+		const remove = await doomedOn('doomedPublish', 'doomed-publish');
+		const before = state.counters.closedWsAborts;
+		try {
+			take();
+			expect(platform.publish('doomed-publish', 'e', 1)).toBe(false);
+			expect(take(), 'the registry counted one subscriber; the walk reached nobody').toEqual([false]);
+			expect(state.counters.closedWsAborts - before).toBe(1);
+		} finally {
+			remove();
+		}
 	});
 
 	it('reports one outcome per message of a batch(), which is N publishes', () => {
@@ -255,17 +331,7 @@ describe('the batched lane', () => {
 		// un-wrapped one is not a live connection. Judging it would make the
 		// batch ineligible for the fast path, and the same traffic would then
 		// report one outcome per event instead of one for the shared frame.
-		/** @type {any} */
-		const orphan = {
-			readyState: 1,
-			bufferedAmount: 0,
-			send(_payloadOut, _opts, cb) { cb?.(); },
-			terminate() { this.readyState = 3; },
-			close() { this.readyState = 3; },
-			_socket: { remoteAddress: '10.0.0.2' }
-		};
-		registry.registerSocket(orphan);
-		registry.subscribeSocket(orphan, 'uniform');
+		const remove = orphanOn('uniform');
 		try {
 			take();
 			platform.publishBatched([
@@ -274,8 +340,7 @@ describe('the batched lane', () => {
 			]);
 			expect(take()).toEqual([true]);
 		} finally {
-			registry.unsubscribeSocket(orphan, 'uniform');
-			registry.unregisterSocket(orphan);
+			remove();
 		}
 	});
 
@@ -346,6 +411,39 @@ describe('the wire lane', () => {
 		platform.publishWire('wired', 'pos', { x: 1 }, declining);
 		platform.publishWire('nobody', 'pos', { x: 1 }, declining);
 		expect(take()).toEqual([true, false]);
+	});
+
+	it('classifies a declined frame with no exclusion from its walk, not the admission count', () => {
+		// The declined exit is the one fan-out this lane hands to the same
+		// primitive platform.publish uses; its outcome is that walk's answer.
+		// An orphan holds the topic in the registry and nothing else does.
+		const declining = {
+			capability: STATELESS_CAP,
+			schemaVersion: 1,
+			encode() { return null; }
+		};
+		const remove = orphanOn('orphan-only');
+		try {
+			take();
+			expect(platform.publishWire('orphan-only', 'pos', { x: 1 }, declining)).toBe(false);
+			expect(take()).toEqual([false]);
+		} finally {
+			remove();
+		}
+	});
+
+	it('reports a shed declined frame as reached, while the publish itself reports no send', () => {
+		// The one holder of 'buried' sits past its ceiling: the walk reached
+		// it and it shed the envelope. Reached is the outcome, as on the
+		// native tier; the call answers whether a send was accepted.
+		const declining = {
+			capability: STATELESS_CAP,
+			schemaVersion: 1,
+			encode() { return null; }
+		};
+		take();
+		expect(platform.publishWire('buried', 'pos', { x: 1 }, declining)).toBe(false);
+		expect(take()).toEqual([true]);
 	});
 
 	it('reports nothing for a stateful walk', () => {
@@ -456,6 +554,30 @@ describe('the wire batch lane', () => {
 		expect(take()).toEqual([false, false]);
 	});
 
+	it('classifies each fast-path entry from its own walk, not the admission count', async () => {
+		// One orphan in the registry, no facade: N fan-outs that reached
+		// nobody, and the batch reports no send. Then one live connection
+		// whose transport throws: reached nobody again, one abort per entry.
+		const removeOrphan = orphanOn('orphan-only');
+		try {
+			take();
+			expect(platform.publishWireBatch('orphan-only', 'pos', [{ data: 1 }, { data: 2 }], stateful)).toBe(false);
+			expect(take()).toEqual([false, false]);
+		} finally {
+			removeOrphan();
+		}
+		const removeDoomed = await doomedOn('doomedBatch', 'doomed-batch');
+		const before = state.counters.closedWsAborts;
+		try {
+			take();
+			expect(platform.publishWireBatch('doomed-batch', 'pos', [{ data: 1 }, { data: 2 }], stateful)).toBe(false);
+			expect(take()).toEqual([false, false]);
+			expect(state.counters.closedWsAborts - before).toBe(2);
+		} finally {
+			removeDoomed();
+		}
+	});
+
 	it('reports nothing once any entry excludes a socket', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		take();
@@ -540,19 +662,25 @@ describe('the relay receive half', () => {
 		expect(take()).toEqual([true, true]);
 	});
 
-	it('classifies a declined relayed frame by the topic\'s subscriber count', () => {
-		// The relay half computes no recipient count of its own, so this arm
-		// reads the registry instead. Reading the local count here reports a
-		// fan-out that reached two subscribers as reaching nobody.
+	it('classifies a declined relayed frame by the receiving worker\'s walk', () => {
+		// The relay half takes no admission read, so the walk is the only
+		// answer it has: a fan-out that reached two subscribers reports so,
+		// and a topic whose one registry entry has no facade reports nobody.
 		// The registration below is PERMANENT - the codec registry has no
 		// unregister - so this case and the one after it, which relies on the
 		// registration, stay last in the file, and the file has to keep running
 		// in declaration order.
 		platform.registerWireCodec({ capability: SHARED_CAP, schemaVersion: 1, encode() { return null; } });
-		take();
-		expect(relay.relayPublishWire('shared', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
-		expect(relay.relayPublishWire('nobody', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
-		expect(take()).toEqual([true, false]);
+		const remove = orphanOn('orphan-only');
+		try {
+			take();
+			expect(relay.relayPublishWire('shared', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
+			expect(relay.relayPublishWire('nobody', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
+			expect(relay.relayPublishWire('orphan-only', 'pos', { x: 1 }, SHARED_CAP, null, false)).toBe(true);
+			expect(take()).toEqual([true, false, false]);
+		} finally {
+			remove();
+		}
 	});
 
 	it('fans a relayed frame with a registered codec out once, through the codec re-encode alone', () => {

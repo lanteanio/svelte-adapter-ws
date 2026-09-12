@@ -420,7 +420,6 @@ function publish(topic, event, data, options) {
 	// stats, worker window counters, and the ceiling account. Wire bytes are
 	// the envelope's UTF-8 encoding times the local recipients.
 	counters.publishCountWindow++;
-	counters.publishOutcomeHook?.(recipients > 0);
 	chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, chargeableBytes(envelope, recipients));
 
 	const compress = WS_COMPRESSION_ON && compressOption !== false;
@@ -429,7 +428,12 @@ function publish(topic, event, data, options) {
 	// it subscribes - otherwise a publish landing inside the async resume window
 	// is lost. Empty in the common case: one size check guards the hot path.
 	if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, envelope, compress);
-	const sent = (fanOut(topic, envelope, null, compress) & FANOUT_SENT) !== 0;
+	// The outcome is the walk's answer, as the family's native tier reports
+	// its publish: reached when a live subscriber took the frame or shed it,
+	// not the registry count the admission read.
+	const walked = fanOut(topic, envelope, null, compress);
+	counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
+	const sent = (walked & FANOUT_SENT) !== 0;
 	// Relay to sibling workers via the primary; a no-op in single-process
 	// mode (no parentPort). `{ relay: false }` is for a message that arrives
 	// through an external pub/sub source (Redis, Postgres) that already fans
@@ -1007,14 +1011,17 @@ export const platform = {
 					: chargeableBytes(envelope, recipients);
 				chargePublishEgress(topic, egressTenant, 1, recipients, envelope.length, wireBytes);
 			}
-			// A declined frame with no exclusion is the envelope to everyone -
-			// one fan-out on the family's native tier, so one outcome. Every
-			// other exit of this lane is a per-connection walk, which the
-			// family does not count.
-			// `recipients` is the admission read of this topic's live count and,
-			// with no exclusion, what the walk below reaches; only the relay
-			// path, which took no admission, reads the registry here.
-			if (payload == null && excludeWs === null) counters.publishOutcomeHook?.((isRelay ? numSubscribers(topic) : recipients) > 0);
+			// A declined frame with no exclusion is the envelope to everyone:
+			// the fan-out platform.publish runs, on the same primitive, with
+			// one outcome read off its walk - on the relay path too, which took
+			// no admission read. Every other exit of this lane is a
+			// per-connection walk, which the family does not count.
+			if (payload == null && excludeWs === null) {
+				const walked = fanOut(topic, envelope, null, compress);
+				counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
+				if (relayed) batchRelay(topic, envelope, compressIntent, seq);
+				return (walked & FANOUT_SENT) !== 0 || relayed;
+			}
 			if (relayed) {
 				// A declined frame (null payload) declines identically on every
 				// worker, so the codec carry would be dead IPC weight: relay the
@@ -1333,14 +1340,6 @@ export const platform = {
 		// serialised, so an aborted batch never creates the topic's stats.
 		chargePublishEgress(topic, egressTenant, count, deliveries, batchBytes, batchWireBytes);
 		counters.publishCountWindow += count;
-		// Outcomes on the JSON fast path only - no capable subscriber and no
-		// exclusion - where the family's native tier runs one fan-out per
-		// entry; the per-connection walk below reports none, as its walk
-		// reports none. Counted before the subscriber check: a batch into an
-		// empty topic is N fan-outs that reached nobody.
-		if (!anyExclude && !capCounts.has(wire?.capability) && counters.publishOutcomeHook !== null) {
-			for (let i = 0; i < count; i++) counters.publishOutcomeHook(recipients > 0);
-		}
 		// Cross-worker relay: one relay envelope per entry, exactly as N
 		// publishWire calls would send - the receive path re-encodes each
 		// entry through publishWire on its own worker, so batching stays a
@@ -1361,6 +1360,21 @@ export const platform = {
 		// resuming subscriber would receive from this stateful batch.
 		if (resumeBuffers.size > 0) {
 			for (let i = 0; i < count; i++) captureResumeFrame(topic, seqs[i] === 0 ? null : seqs[i], envelopes[i], compress);
+		}
+		// JSON fast path: no live connection wants binary for this codec and
+		// no entry excludes a socket - N fan-outs, byte-identical to N
+		// publishWire calls, each reporting its own outcome off its walk. A
+		// batch into an empty topic is N fan-outs that reached nobody. The
+		// per-connection walk below reports none, as the family's walk
+		// reports none.
+		if (!anyExclude && !capCounts.has(wire?.capability)) {
+			let sent = false;
+			for (let i = 0; i < count; i++) {
+				const walked = fanOut(topic, envelopes[i], null, compress);
+				counters.publishOutcomeHook?.((walked & FANOUT_REACHED) !== 0);
+				if ((walked & FANOUT_SENT) !== 0) sent = true;
+			}
+			return sent || relayed;
 		}
 		const subscribers = subscribersOf(topic);
 		if (!subscribers) return relayed;
