@@ -1014,7 +1014,7 @@ export const platform = {
 			// A declined frame with no exclusion is the envelope to everyone:
 			// the fan-out platform.publish runs, on the same primitive, with
 			// one outcome read off its walk - on the relay path too, which took
-			// no admission read. Every other exit of this lane is a
+			// no admission read. Every other exit of this section is a
 			// per-connection walk, which the family does not count.
 			if (payload == null && excludeWs === null) {
 				const walked = fanOut(topic, envelope, null, compress);

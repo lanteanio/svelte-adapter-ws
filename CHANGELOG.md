@@ -790,7 +790,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as reached on those three lanes and as reaching nobody on every
   other. The declined frame with no exclusion now runs the same fan-out
   primitive `publish` runs, on the relay path too, and reports whether a
-  send was accepted, as `publish` does.
+  send was accepted, as `publish` does; its accepted sends count in the
+  connection's `messagesOut` and `bytesOut` as `publish`'s do. On the
+  wire batch's JSON fast path a connection whose transport throws is charged
+  one closed-socket abort per entry, as N `publishWire` calls would be.
 
 - The single subscribe lane consults its post-await gates in the batch lane's
   order. The subscription cap answers before the wire authorization landing,

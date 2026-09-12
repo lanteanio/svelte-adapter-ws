@@ -198,7 +198,7 @@ describe('the single-publish lane', () => {
 		expect(take()).toEqual([true, true]);
 		// And the single-publish lane's return value says not sent.
 		expect(platform.publish('buried', 'e', 1)).toBe(false);
-		take();
+		expect(take(), 'publish reports the shed subscriber as reached').toEqual([true]);
 	});
 
 	it('classifies from the walk, not the registry: a registered socket with no facade reaches nobody', () => {
@@ -544,7 +544,7 @@ describe('the wire batch lane', () => {
 
 	it('reports one outcome per entry on the JSON fast path', () => {
 		take();
-		platform.publishWireBatch('mixed', 'pos', [{ data: 1 }, { data: 2 }, { data: 3 }], stateful);
+		expect(platform.publishWireBatch('mixed', 'pos', [{ data: 1 }, { data: 2 }, { data: 3 }], stateful), 'a send was accepted').toBe(true);
 		expect(take()).toEqual([true, true, true]);
 	});
 
