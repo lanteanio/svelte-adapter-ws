@@ -158,13 +158,11 @@ export async function start(server, host, port, opts = {}) {
 			// which made every bind failure print an invalid-record-shape line
 			// instead of the address that could not be bound.
 			// The registry builds the record so the printed line and the catalog
-			// entry an operator looks the ID up in stay the same bytes. Its own
-			// `error` slot carries a placeholder, because the lead's transport
-			// reports a bind failure as a falsy token with no error to pass;
-			// node rejects with the real one, so it goes in the same declared
-			// field rather than a new one - EADDRINUSE is the whole answer on
-			// the failure an operator hits most.
-			emitOperationalDiagnostic({ ...listenFailureDiagnostic(host, port), error: err });
+			// entry an operator looks the ID up in stay the same bytes. Node
+			// rejects with the real bind error, so it rides in the record's own
+			// `error` slot - EADDRINUSE is the whole answer on the failure an
+			// operator hits most.
+			emitOperationalDiagnostic(listenFailureDiagnostic(host, port, err));
 			process.exit(1);
 		});
 		const address = /** @type {import('node:net').AddressInfo} */ (server.address());
