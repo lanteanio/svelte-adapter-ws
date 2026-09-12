@@ -44,11 +44,13 @@ const connections = [];
 async function connect(name, caps, topics) {
 	const dir = pathToFileURL(payload.dir).href;
 	const { wrapWebSocket } = await import(`${dir}/handler/ws-facade.js`);
+	/** @type {any[]} */
+	const sent = [];
 	/** @type {any} */
 	const rawWs = {
 		readyState: 1,
 		bufferedAmount: 0,
-		send(_payload, _opts, cb) { cb?.(); },
+		send(payload, _opts, cb) { sent.push(payload); cb?.(); },
 		terminate() { this.readyState = 3; },
 		close() { this.readyState = 3; },
 		_socket: { remoteAddress: '10.0.0.1' }
@@ -72,7 +74,7 @@ async function connect(name, caps, topics) {
 		facade.subscribe(topic);
 		userData[symbols.WS_SUBSCRIPTIONS].add(topic);
 	}
-	const conn = { name, facade, rawWs, userData };
+	const conn = { name, facade, rawWs, userData, sent };
 	connections.push(conn);
 	return conn;
 }
@@ -101,14 +103,25 @@ function resetOut() {
  * Run a broadcast twice and assert the second charged nobody. The first run
  * may announce a wire id to a capable subscriber, a control frame the family
  * counts as direct on every adapter; the second run has nothing to announce.
+ * Returns the first run's counters so a case can pin that announce.
  * @param {string} why
  * @param {() => unknown} broadcast
  */
 function expectBroadcastFree(why, broadcast) {
+	resetOut();
 	broadcast();
+	const first = outCounts();
 	resetOut();
 	broadcast();
 	expectNothingCharged(why);
+	return first;
+}
+
+/** The first run charged exactly the announce to `name`, and nobody else. */
+function expectOnlyAnnounce(first, name, why) {
+	for (const [n, s] of Object.entries(first)) {
+		expect(s.messagesOut, `${why}: first run, ${n}`).toBe(n === name ? 1 : 0);
+	}
 }
 
 /** Every connection reports zero direct traffic. */
@@ -197,9 +210,12 @@ describe('broadcast lanes charge no per-connection counter', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		const declining = { capability: STATELESS_CAP, schemaVersion: 1, encode() { return null; } };
 		expectBroadcastFree('publishWire JSON fast path', () => expect(platform.publishWire('room', 'pos', { x: 1 }, nobody)).toBe(true));
-		expectBroadcastFree('publishWire stateless walk', () => expect(platform.publishWire('room', 'pos', { x: 1 }, stateless)).toBe(true));
+		// The first stateless frame on a topic announces the wire id to the
+		// capable subscriber: one control frame, charged as the family charges
+		// it. The shared cohorts announce the shared id the same way.
+		expectOnlyAnnounce(expectBroadcastFree('publishWire stateless walk', () => expect(platform.publishWire('room', 'pos', { x: 1 }, stateless)).toBe(true)), 'capable', 'stateless walk');
 		expectBroadcastFree('publishWire stateful walk', () => expect(platform.publishWire('room', 'pos', { x: 1 }, stateful)).toBe(true));
-		expectBroadcastFree('publishWire shared cohorts', () => expect(platform.publishWire('shared-room', 'pos', { x: 1 }, shared)).toBe(true));
+		expectOnlyAnnounce(expectBroadcastFree('publishWire shared cohorts', () => expect(platform.publishWire('shared-room', 'pos', { x: 1 }, shared)).toBe(true)), 'capable', 'shared cohorts');
 		expectBroadcastFree('publishWire declined frame', () => expect(platform.publishWire('room', 'pos', { x: 1 }, declining)).toBe(true));
 		expectBroadcastFree('publishWire excluding walk', () => expect(platform.publishWire('room', 'pos', { x: 1 }, stateless, { excludeWs: plain.facade })).toBe(true));
 	});
@@ -236,19 +252,53 @@ describe('direct lanes charge the one connection they address', () => {
 		expect(out.plain.bytesOut).toBe(Buffer.byteLength(envelope('room', 'hello', { n: 1 })));
 		expect(out.capable.messagesOut, 'the other connection is untouched').toBe(0);
 
+		// The first binary send on a topic announces the wire id, a control
+		// frame that counts on every adapter; warm it so the case reads the
+		// send alone whatever ran before it.
+		platform.sendWire(capable.facade, 'direct-room', 'pos', { x: 0 }, stateless);
 		resetOut();
-		platform.sendWire(plain.facade, 'room', 'pos', { x: 1 }, stateless);
-		platform.sendWire(capable.facade, 'room', 'pos', { x: 1 }, stateless);
+		platform.sendWire(plain.facade, 'direct-room', 'pos', { x: 1 }, stateless);
+		platform.sendWire(capable.facade, 'direct-room', 'pos', { x: 1 }, stateless);
 		out = outCounts();
 		expect(out.plain.messagesOut, 'a JSON-degraded direct wire send counts').toBe(1);
-		expect(out.plain.bytesOut).toBe(Buffer.byteLength(envelope('room', 'pos', { x: 1 })));
+		expect(out.plain.bytesOut).toBe(Buffer.byteLength(envelope('direct-room', 'pos', { x: 1 })));
 		expect(out.capable.messagesOut, 'a binary direct wire send counts').toBe(1);
-		expect(out.capable.bytesOut, 'in the bytes of the encoded payload').toBe(stateless.encode('pos', { x: 1 }).byteLength);
+		const lastFrame = capable.sent[capable.sent.length - 1];
+		expect(lastFrame instanceof Uint8Array, 'the capable socket took a binary frame').toBe(true);
+		expect(out.capable.bytesOut, 'in the bytes of the frame on the socket, header included').toBe(lastFrame.byteLength);
+		expect(lastFrame.byteLength, 'which is more than the codec payload alone').toBeGreaterThan(stateless.encode('pos', { x: 1 }).byteLength);
 
 		resetOut();
 		platform.sendTo((ud) => ud === plain.userData, 'room', 'e', { n: 2 });
 		out = outCounts();
 		expect(out.plain.messagesOut).toBe(1);
 		expect(out.capable.messagesOut).toBe(0);
+	});
+
+	it('the coalesced drain charges an accepted send and not a shed one', () => {
+		const plain = connections.find((c) => c.name === 'plain');
+		resetOut();
+		// Past the ceiling the drain sheds the entry, keeps it for the next
+		// drain, and charges nothing; once the socket drains, the retry that
+		// delivers is charged once.
+		plain.rawWs.bufferedAmount = 2 * 1024 * 1024;
+		platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c', data: { n: 1 } });
+		relay.flushCoalescedFor(plain.facade, plain.userData);
+		expect(outCounts().plain.messagesOut, 'a shed coalesced send is not charged').toBe(0);
+		plain.rawWs.bufferedAmount = 0;
+		relay.flushCoalescedFor(plain.facade, plain.userData);
+		expect(outCounts().plain.messagesOut, 'the retry that delivered is charged once').toBe(1);
+	});
+
+	it('publishGame charges each viewer it walks, as the family does', () => {
+		// The game lane is a per-viewer walk on every adapter, so it is the one
+		// fan-out that still charges: each JSON viewer takes one frame.
+		resetOut();
+		const { delivered } = platform.publishGame(null, 'room', 'g', { n: 1 });
+		expect(delivered).toBe(2);
+		const out = outCounts();
+		expect(out.plain.messagesOut).toBe(1);
+		expect(out.capable.messagesOut).toBe(1);
+		expect(out.batchy.messagesOut).toBe(0);
 	});
 });

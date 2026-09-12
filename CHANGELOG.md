@@ -804,8 +804,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   charge every subscriber they reach, so an app reading its close context
   gets the same figures on this adapter as on the family's native tier,
   where the fan-out has no per-connection hook. `send`, `sendWire`,
-  `sendWireBatch`, `sendTo`, coalesced sends, request replies, the resume
-  gap-fill and its marker still count.
+  `sendWireBatch`, `sendTo`, `adviseReconnect`, the request lane's outbound
+  frame, coalesced sends once accepted, control frames (the welcome, acks,
+  wire-id announces), `publishGame`'s per-viewer walk, the resume gap-fill
+  and its marker still count. A direct binary wire send counts the frame
+  on the socket, not the codec payload inside it.
 
 - `ws_publish_outcomes_total` classifies every fan-out from the walk that
   delivered it. `publish`, a declined wire frame with no exclusion, and each

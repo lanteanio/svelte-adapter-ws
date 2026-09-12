@@ -184,8 +184,8 @@ function fanOutCohort(cohort, frame, binary, compress) {
 // outcome hook classifies; SENT is whether at least one send was accepted,
 // which is what a publish call returns. Both come off the one walk. A
 // broadcast charges no per-connection counter: `messagesOut` and `bytesOut`
-// count direct sends only, as the family declares, so a subscriber's close
-// context reads the same on every adapter for the same traffic.
+// count direct sends only, as the family declares, so the fan-out lanes read
+// the same on every adapter for the same traffic.
 // A subscriber whose send was shed past the backpressure ceiling was reached
 // and not sent; one whose send threw counts as neither and is charged a
 // closed-socket abort.
@@ -283,8 +283,9 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
 		: wire.schemaVersion;
 	let result;
 	try {
-		result = /** @type {any} */ (facade).send(buildBinaryFrame(schemaVersion, id, seq, payload), true, compress);
-		if (direct) bumpOut(ud, payload);
+		const frame = buildBinaryFrame(schemaVersion, id, seq, payload);
+		result = /** @type {any} */ (facade).send(frame, true, compress);
+		if (direct) bumpOut(ud, frame);
 	} catch {
 		counters.closedWsAborts++;
 		return 3;
@@ -2020,8 +2021,9 @@ export const platform = {
 						if (fanoutPayload === null) fanoutPayload = encodeGameFanoutPayload(event, data, id);
 						const wid = ensureWireId(facade, ud, topic);
 						if (wid !== -1) {
-							/** @type {any} */ (facade).send(buildBinaryFrame(GAME_FANOUT_SCHEMA_VERSION, wid, seq ?? 0, fanoutPayload), true, false);
-							bumpOut(ud, fanoutPayload);
+							const frame = buildBinaryFrame(GAME_FANOUT_SCHEMA_VERSION, wid, seq ?? 0, fanoutPayload);
+							/** @type {any} */ (facade).send(frame, true, false);
+							bumpOut(ud, frame);
 							delivered++;
 							continue;
 						}
@@ -2175,7 +2177,7 @@ export function flushCoalescedFor(facade, userData) {
 		const payload = envelopePrefix(value.topic, value.event) + JSON.stringify(value.data ?? null) + '}';
 		try {
 			const result = /** @type {any} */ (facade).send(payload, false, false);
-			bumpOut(ud, payload);
+			if (result !== 2) bumpOut(ud, payload);
 			return result;
 		} catch {
 			counters.closedWsAborts++;
