@@ -1,7 +1,8 @@
 // The subscribe lanes' post-await gates, driven over real sockets against the
 // built runtime. Every gate a lane consults after its hook or resume await
-// reads whether wire authorization is ARMED fresh, and the gates answer in
-// one fixed order on both production lanes.
+// reads whether wire authorization is ARMED fresh, and each lane answers its
+// gates in the order the family's lane of the same shape does: the single
+// lane caps before it lands, the batch lane lands before it caps.
 //
 // The wire authorization gate is runtime-mutable: platform.authorizeWireSubscribe()
 // latches it on, and an app arms it while connections are live. A subscribe
@@ -10,7 +11,8 @@
 //
 // - single lane, socket full AND gate armed while the hook was parked: the
 //   subscription cap answers first, so the client hears RATE_LIMITED, the
-//   code its backoff branches on. FORBIDDEN would tell it to give up.
+//   code its backoff branches on. FORBIDDEN would tell it to give up. (The
+//   batch lane answers FORBIDDEN for the same socket, on both adapters.)
 // - single lane, gate armed while the RESUME was parked: the landing gate
 //   reads it fresh and refuses the install, and the resume buffer the lane
 //   opened is discarded on that exit, frames captured in the window included.
@@ -197,7 +199,7 @@ describe('single lane: a full socket whose gate was armed mid-hook hears RATE_LI
 	beforeAll(async () => { b = await boot(); }, 60000);
 	afterAll(async () => { await b?.close(); });
 
-	it('answers the cap before the landing gate, as the batch lane does', async () => {
+	it('answers the cap before the landing gate, as the single lane of the lead does', async () => {
 		const max = b.caps.MAX_SUBSCRIPTIONS_PER_CONNECTION;
 		const gated = 'gate-order-parked';
 		const client = connect(b.rt.port);
@@ -219,7 +221,7 @@ describe('single lane: a full socket whose gate was armed mid-hook hears RATE_LI
 			const answer = await client.next((f) => f.json?.ref === 1 && f.json.topic === gated);
 			expect(answer.json.type).toBe('subscribe-denied');
 			// The socket is both full and unauthorized. The cap is the answer
-			// on every lane: RATE_LIMITED tells the client to back off and
+			// on this lane: RATE_LIMITED tells the client to back off and
 			// retry, FORBIDDEN would tell it the topic is closed to it.
 			expect(answer.json.reason).toBe('RATE_LIMITED');
 		} finally {
@@ -249,6 +251,8 @@ describe('single lane: a gate armed during the resume await refuses the install'
 			// A publish landing inside the window is captured into the buffer.
 			// The refused exit must discard it with the buffer: flushing it
 			// would deliver a frame to a socket that was just told FORBIDDEN.
+			// `{ seq: false }` stamps null, which a flush's watermark floor
+			// never skips, so a flushed frame would reach the socket.
 			client.send({ type: 'publish', topic, n: 0, nonce: 'inwindow' });
 			await client.next((f) => f.json?.event === 'published' && f.json.data?.nonce === 'inwindow');
 			expect([...b.state.resumeBuffers.get(topic)][0].frames.length, 'the window captured the frame').toBe(1);
