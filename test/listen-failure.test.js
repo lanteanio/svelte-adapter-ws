@@ -123,6 +123,7 @@ describe('a real bind failure tells the operator what failed', () => {
 		// own error field: this is what the call site passes, and a call site
 		// that stopped passing it would print the placeholder instead.
 		expect(output, 'the errno reaches the operator').toContain('EADDRINUSE');
+		expect(output, 'in the code slot, not only in the message').toContain('"code":"EADDRINUSE"');
 		// The exact symptom this file exists for: the record was thrown away and
 		// the operator was told about telemetry instead of about the port.
 		expect(output, 'the diagnostic must be built, not dropped').not.toContain('invalid record shape');
