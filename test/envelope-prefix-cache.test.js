@@ -108,6 +108,9 @@ beforeAll(async () => {
 	state.envelopePrefixCache.clear();
 	await connect('plain', [], ['room']);
 	await connect('capable', [STATELESS_CAP, STATEFUL_CAP], ['room']);
+	// batchy decodes the batch frame and is the only holder of 'uniform', so
+	// a batch into it takes the fast path and builds its envelopes there.
+	await connect('batchy', ['batch'], ['uniform']);
 }, 60000);
 
 afterAll(() => {
@@ -147,23 +150,47 @@ describe('every envelope build goes through the prefix cache', () => {
 		expect(addedBy(() => platform.publishWireBatch('room', 'b2', [{ data: 1 }, { data: 2 }], stateful))).toEqual([keyOf('room', 'b2')]);
 		expect(addedBy(() => platform.sendWireBatch(plain.facade, 'room', 'b3', [{ data: 1 }, { data: 2 }], nobody))).toEqual([keyOf('room', 'b3')]);
 		expect(addedBy(() => platform.sendWireBatch(plain.facade, 'room', 'b4', [{ data: 1 }, { data: 2 }], stateful))).toEqual([keyOf('room', 'b4')]);
+		// A capable target whose stateful codec declines both the batch form
+		// and every entry is served the per-entry JSON degrade.
+		const capable = connections.find((c) => c.name === 'capable');
+		const declining = { capability: STATEFUL_CAP, schemaVersion: 1, state: { onAttach: () => ({ schemaVersion: 1 }) }, encode() { return null; } };
+		capable.frames.length = 0;
+		expect(addedBy(() => platform.sendWireBatch(capable.facade, 'room', 'b5', [{ data: 1 }, { data: 2 }], declining))).toEqual([keyOf('room', 'b5')]);
+		expect(capable.frames.filter((f) => f.startsWith(inlinePrefix('room', 'b5'))).length, 'two JSON entries reached the target').toBe(2);
+	});
+
+	it('publishGame', () => {
+		const plain = connections.find((c) => c.name === 'plain');
+		plain.frames.length = 0;
+		expect(addedBy(() => platform.publishGame(null, 'room', 'g1', { n: 1 }))).toEqual([keyOf('room', 'g1')]);
+		expect(plain.frames[0].startsWith(inlinePrefix('room', 'g1'))).toBe(true);
 	});
 
 	it('the coalesced drain', () => {
 		const plain = connections.find((c) => c.name === 'plain');
 		plain.frames.length = 0;
-		expect(addedBy(() => {
-			platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c1', data: { n: 1 } });
-			relay.flushCoalescedFor(plain.facade, plain.userData);
-		})).toEqual([keyOf('room', 'c1')]);
+		// sendCoalesced drains synchronously on an unblocked socket, so the
+		// build happens inside the call.
+		expect(addedBy(() => platform.sendCoalesced(plain.facade, { key: 'k', topic: 'room', event: 'c1', data: { n: 1 } }))).toEqual([keyOf('room', 'c1')]);
+		expect(plain.frames[0].startsWith(inlinePrefix('room', 'c1'))).toBe(true);
 	});
 
-	it('the relayed batch', () => {
-		expect(addedBy(() => relay.relayPublishBatched([
-			{ topic: 'room', env: '{"topic":"room","event":"r0","data":1}', seq: null }
-		], false)), 'a relayed envelope arrives built').toEqual([]);
+	it('the relayed batch arrives built, and publishBatched builds on both of its paths', () => {
+		const plain = connections.find((c) => c.name === 'plain');
+		const batchy = connections.find((c) => c.name === 'batchy');
+		plain.frames.length = 0;
+		const env = '{"topic":"room","event":"r0","data":1}';
+		expect(addedBy(() => relay.relayPublishBatched([{ topic: 'room', env, seq: null }], false)), 'a relayed envelope is delivered as it came').toEqual([]);
+		expect(plain.frames).toContain(env);
+		// The slow path publishes per event; the fast path builds the envelopes
+		// itself for the one shared batch frame.
 		expect(addedBy(() => platform.publishBatched([{ topic: 'room', event: 'r1', data: 1 }, { topic: 'room', event: 'r2', data: 2 }])))
 			.toEqual([keyOf('room', 'r1'), keyOf('room', 'r2')]);
+		batchy.frames.length = 0;
+		expect(addedBy(() => platform.publishBatched([{ topic: 'uniform', event: 'u1', data: 1 }, { topic: 'uniform', event: 'u2', data: 2 }])))
+			.toEqual([keyOf('uniform', 'u1'), keyOf('uniform', 'u2')]);
+		expect(batchy.frames.length, 'one shared batch frame').toBe(1);
+		expect(batchy.frames[0]).toContain(inlinePrefix('uniform', 'u1'));
 	});
 
 	it('evicts at the bound rather than growing', () => {

@@ -783,10 +783,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Every JSON envelope the runtime builds takes its prefix from the envelope
-  prefix cache, as the family's native tier does, so the `envelopePrefixCache`
-  size the observability manifest reports is a real number. It read 0 for
-  the life of every worker because the module that fills it was never
-  called; the bytes on the wire are unchanged.
+  prefix cache, as the family's native tier does. The growth auditor's
+  `envelopePrefixCache` probe, the `resource` label of
+  `framework_resource_growth_suspected_total`, now reads the live size; it
+  read 0 for the life of every worker because the module that fills the
+  cache was never called. The bytes on the wire are unchanged.
 
 - **A JSON array no longer reaches the app hook as a pre-parsed envelope.**
   `MessageContext.msg` is declared to carry a plain object envelope and to be
