@@ -2046,14 +2046,12 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
-	// Landing re-check: the pre-gate stands aside for a plugin-owned topic so
-	// the plugin's hook can run; the landing confirms the hook actually
-	// admitted this socket.
-	if (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic), topic: msg.topic })) {
-		settlePendingSubscribe(userData, msg.topic, pendingToken);
-		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
-		return;
-	}
+	// Scoped to a topic the socket does NOT already hold. The recover
+	// fall-through above can reach this line with the topic already a
+	// membership, and refusing that would answer RATE_LIMITED to a
+	// connection that is not growing at all. The cap is answered before the
+	// landing gate below, so a socket that is both full and unauthorized
+	// hears RATE_LIMITED on every lane.
 	if (exceedsSubscriptionCap({ held: subs.has(msg.topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
 		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
@@ -2097,6 +2095,20 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 			return;
 		}
+	}
+	// Landing re-check, AFTER the resume await: the pre-gate stands aside for
+	// a plugin-owned topic so the plugin's hook can run, and the landing
+	// confirms the hook actually admitted this socket. It also reads the gate
+	// fresh, so a gate armed while this subscribe was parked in its hook or
+	// its resume refuses the install instead of missing it. Checked BEFORE
+	// the grant is marked: stamping this attempt as post-revocation authority
+	// and then refusing the install left a revoked sibling's landing reading
+	// that mark as current. The batch lane checks first as well.
+	if (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic), topic: msg.topic })) {
+		settlePendingSubscribe(userData, msg.topic, pendingToken);
+		if (capture) discardResumeCapture(capture);
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
+		return;
 	}
 	// Landing settle: a revocation that bumped this subscribe's epoch while
 	// the hook was parked means the grant is discarded, not installed.
@@ -2247,8 +2259,19 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		for (let i = 0; i < valid.length; i++) {
 			const t = valid[i];
 			const held = udSubs instanceof Set && udSubs.has(t);
+			// The revocation check reads the gate FRESH, not from the pre-await
+			// `_wireAuthz` snapshot. `subscribeAuth.enabled` is runtime-mutable
+			// via platform.authorizeWireSubscribe() and latches false->true, so
+			// a gate armed while this batch was parked in its hook leaves the
+			// snapshot reading "off" - and this call serves REPLAY HISTORY. The
+			// landing below reads it fresh too; a stale snapshot here disclosed
+			// a topic's history and then denied the subscription in the same
+			// frame. Both halves read the way the landing reads them: `armed`
+			// fresh, `hasUserHook` the frame's single reading, because an app
+			// hook appearing or vanishing mid-await must not split one batch
+			// across two authorization models.
 			const denial = (authzDenied !== null && authzDenied[i] ? 'FORBIDDEN' : null)
-				?? (recoverIsRevoked({ held, wireAuthz: _wireAuthz, cancelled: isPendingSubscribeCancelled(userData, t, batchTokens[i]), topic: t }) ? 'FORBIDDEN' : null)
+				?? (recoverIsRevoked({ held, wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !_hasUserHook), cancelled: isPendingSubscribeCancelled(userData, t, batchTokens[i]), topic: t }) ? 'FORBIDDEN' : null)
 				?? (batchDenials !== null ? (batchDenials[t] ?? null) : (perTopicDenials !== null ? perTopicDenials[i] : null));
 			if (denial !== null) continue;
 			const rec = msg.recover[t];

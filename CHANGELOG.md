@@ -774,6 +774,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The single subscribe lane consults its post-await gates in the batch lane's
+  order. The subscription cap answers before the wire authorization landing,
+  so a connection that is both full and unauthorized hears `RATE_LIMITED` on
+  every lane, and the landing runs after the resume await, so a gate armed
+  while the subscribe was parked in its hook or its resume refuses the
+  install and closes the resume buffer the lane opened. The batch lane's
+  revocation check in front of the resume hook reads the gate fresh rather
+  than from its pre-await snapshot, so a gate armed while the batch was
+  parked no longer serves the denied topic's replay history in the same
+  frame that denies the subscription.
+
 - `publishWireBatch` on the stateful lane resolves the exclusion per entry:
   the call-level `excludeWs` is the default and an entry carrying its own
   overrides it, so the author hears the entry that names someone else. The
