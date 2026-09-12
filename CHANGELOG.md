@@ -782,6 +782,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A connection's `messagesOut` and `bytesOut` count direct sends only, as
+  the `CloseContext` declaration says: `publish`, `batch`, `publishBatched`,
+  `publishWire`, `publishWireBatch` and the relay receive half no longer
+  charge every subscriber they reach, so an app reading its close context
+  gets the same figures on this adapter as on the family's native tier,
+  where the fan-out has no per-connection hook. `send`, `sendWire`,
+  `sendWireBatch`, `sendTo`, coalesced sends, request replies, the resume
+  gap-fill and its marker still count.
+
 - `ws_publish_outcomes_total` classifies every fan-out from the walk that
   delivered it. `publish`, a declined wire frame with no exclusion, and each
   entry of a wire batch on its JSON fast path read the registry's subscriber
@@ -790,10 +799,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as reached on those three lanes and as reaching nobody on every
   other. The declined frame with no exclusion now runs the same fan-out
   primitive `publish` runs, on the relay path too, and reports whether a
-  send was accepted, as `publish` does; its accepted sends count in the
-  connection's `messagesOut` and `bytesOut` as `publish`'s do. On the
-  wire batch's JSON fast path a connection whose transport throws is charged
-  one closed-socket abort per entry, as N `publishWire` calls would be.
+  send was accepted, as `publish` does. On the wire batch's JSON fast path
+  a connection whose transport throws is charged one closed-socket abort per
+  entry, as N `publishWire` calls would be.
 
 - The single subscribe lane consults its post-await gates in the order the
   lead's single lane uses. The subscription cap answers before the wire

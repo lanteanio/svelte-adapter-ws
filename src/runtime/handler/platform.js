@@ -169,12 +169,8 @@ function fanOutCohort(cohort, frame, binary, compress) {
 		const facade = wsWrappers.get(rawWs);
 		if (!facade) continue;
 		try {
-			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) {
-				sent = true;
-				bumpOut(/** @type {any} */ (facade).getUserData(), frame);
-			} else {
-				refused = true;
-			}
+			if (/** @type {any} */ (facade).send(frame, binary, compress) !== 2) sent = true;
+			else refused = true;
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -185,8 +181,10 @@ function fanOutCohort(cohort, frame, binary, compress) {
 // What a fan-out walk reports, as bits. REACHED is what the family's native
 // tier's publish returns - the topic had a live subscriber - and is what the
 // outcome hook classifies; SENT is whether at least one send was accepted,
-// which is what a publish call returns. Both come off the one walk, and the
-// walk's common path pays what it always paid: one store per accepted send.
+// which is what a publish call returns. Both come off the one walk. A
+// broadcast charges no per-connection counter: `messagesOut` and `bytesOut`
+// count direct sends only, as the family declares, so a subscriber's close
+// context reads the same on every adapter for the same traffic.
 // A subscriber whose send was shed past the backpressure ceiling was reached
 // and not sent; one whose send threw counts as neither and is charged a
 // closed-socket abort.
@@ -215,13 +213,8 @@ function fanOut(topic, envelope, excludeWs, compress) {
 		if (excludeWs !== null && (rawWs === excludeWs || facade === excludeWs)) continue;
 		if (!facade) continue;
 		try {
-			const result = /** @type {any} */ (facade).send(envelope, false, compress);
-			if (result !== 2) {
-				sent = true;
-				bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
-			} else {
-				refused = true;
-			}
+			if (/** @type {any} */ (facade).send(envelope, false, compress) !== 2) sent = true;
+			else refused = true;
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -243,9 +236,12 @@ function fanOut(topic, envelope, excludeWs, compress) {
  * @param {string} jsonEnvelope
  * @param {number} seq
  * @param {boolean} compress
+ * @param {boolean} direct - a direct send charges the connection's
+ *   `messagesOut`/`bytesOut`; a publish walk does not, as on the family's
+ *   native tier where the fan-out has no per-connection hook
  * @returns {number}
  */
-function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, compress) {
+function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, compress, direct) {
 	let ud;
 	try {
 		ud = /** @type {any} */ (facade).getUserData();
@@ -256,7 +252,7 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
 	const sendJson = () => {
 		try {
 			const r = /** @type {any} */ (facade).send(jsonEnvelope, false, compress);
-			bumpOut(ud, jsonEnvelope);
+			if (direct) bumpOut(ud, jsonEnvelope);
 			return r;
 		} catch {
 			counters.closedWsAborts++;
@@ -287,7 +283,7 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
 	let result;
 	try {
 		result = /** @type {any} */ (facade).send(buildBinaryFrame(schemaVersion, id, seq, payload), true, compress);
-		bumpOut(ud, payload);
+		if (direct) bumpOut(ud, payload);
 	} catch {
 		counters.closedWsAborts++;
 		return 3;
@@ -618,7 +614,6 @@ function deliverBatchedEnvelopes(events, firstTopic, batchTopics, compress) {
 		try {
 			/** @type {any} */ (facade).send(sharedBatchEnv, false, compress);
 			reached = true;
-			bumpOut(/** @type {any} */ (facade).getUserData(), sharedBatchEnv);
 		} catch {
 			counters.closedWsAborts++;
 		}
@@ -1065,7 +1060,7 @@ export const platform = {
 			if (rawWs.readyState !== 1) continue;
 			const facade = wsWrappers.get(rawWs);
 			if (!facade || facade === excludeWs || rawWs === excludeWs) continue;
-			const result = deliverWireToOne(facade, topic, event, data, wire, envelope, seq ?? 0, compress);
+			const result = deliverWireToOne(facade, topic, event, data, wire, envelope, seq ?? 0, compress, false);
 			if (result !== 3) delivered = true;
 		}
 		return delivered || relayed;
@@ -1094,7 +1089,7 @@ export const platform = {
 		const payload = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
 		// The frame slot carries 0 for "no seq", which is the wire's own
 		// spelling for absent - not a stamped zero.
-		const result = deliverWireToOne(ws, topic, event, data, wire, payload, seq == null ? 0 : seq, compress);
+		const result = deliverWireToOne(ws, topic, event, data, wire, payload, seq == null ? 0 : seq, compress, true);
 		return result === 3 ? 2 : result;
 	},
 
@@ -1414,7 +1409,6 @@ export const platform = {
 				try {
 					for (const env of connEnvelopes) {
 						if (/** @type {any} */ (facade).send(env, false, compress) !== 2) ok = true;
-						bumpOut(ud, env);
 					}
 				} catch { counters.closedWsAborts++; continue; }
 				if (ok) delivered = true;
