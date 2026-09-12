@@ -579,6 +579,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED` next-action names what the window
+  holds, about 4 MiB of control frames in ten seconds with a subscribe ack
+  costing roughly sixty bytes plus the topic name once per topic, and says
+  that batching the subscribes changes nothing. The legitimate shape that
+  reaches it is a reconnect whose acks add up to more than the window, and
+  the remedy is fewer topics per connection or a restore sliced across
+  windows.
+
 - A certificate hot-reload serves the renewed certificate to handshakes that
   name one of its SNI hosts and leaves the server's own context on the boot
   certificate, so a client that sends no servername, or one the renewal does
