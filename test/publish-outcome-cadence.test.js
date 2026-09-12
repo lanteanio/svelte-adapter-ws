@@ -554,6 +554,15 @@ describe('the wire batch lane', () => {
 		expect(take()).toEqual([false, false]);
 	});
 
+	it('reports a shed fast-path entry as reached, while the batch reports no send', () => {
+		// The one holder of 'buried' sits past its ceiling: each entry's walk
+		// reached it and it shed the envelope. Reached is the outcome, as on
+		// the native tier; the call answers whether any send was accepted.
+		take();
+		expect(platform.publishWireBatch('buried', 'pos', [{ data: 1 }, { data: 2 }], stateful)).toBe(false);
+		expect(take()).toEqual([true, true]);
+	});
+
 	it('classifies each fast-path entry from its own walk, not the admission count', async () => {
 		// One orphan in the registry, no facade: N fan-outs that reached
 		// nobody, and the batch reports no send. Then one live connection
