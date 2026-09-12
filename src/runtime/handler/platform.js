@@ -182,12 +182,11 @@ function fanOutCohort(cohort, frame, binary, compress) {
 // What a fan-out walk reports, as bits. REACHED is what the family's native
 // tier's publish returns - the topic had a live subscriber - and is what the
 // outcome hook classifies; SENT is whether at least one send was accepted,
-// which is what a publish call returns. Both come off the one walk. A
+// which is what a publish call returns. Both come off the one walk, and
 // neither walk charges a per-connection counter: `messagesOut` and
 // `bytesOut` count direct sends only, as the family declares, so a
 // subscriber's close context reads the same on every adapter for the same
-// traffic. The game lane is the exception on both adapters, and charges
-// there for the same reason a direct send does: it walks viewer by viewer.
+// traffic.
 // A subscriber whose send was shed past the backpressure ceiling was reached
 // and not sent; one whose send threw counts as neither and is charged a
 // closed-socket abort.
@@ -1997,7 +1996,9 @@ export const platform = {
 		}
 		// Counted as a publish, never as an outcome: this lane is a
 		// per-connection walk on the family's native tier, which the outcome
-		// family does not see.
+		// family does not see. It is also the one fan-out that charges a
+		// per-connection counter, on both adapters, for the reason a direct
+		// send does: it walks viewer by viewer and hands each its own frame.
 		counters.publishCountWindow++;
 		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
 		if (seq !== null) recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
