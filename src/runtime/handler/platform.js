@@ -22,7 +22,7 @@ import {
 import {
 	deniesUngrantedObserve, exceedsPendingSubscribeCap, exceedsSubscriptionCap
 } from '../utils/subscribe-policy.js';
-import { esc, isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
+import { isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
 	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
 	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
@@ -39,6 +39,7 @@ import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
 import { buildBinaryFrame } from '../wire.js';
 import { capCounts, captureResumeFrame, counters, divergenceDiagnostics, maxSeenSeq, originStreams, pressureListeners, pressureSnapshot, publishRateListeners, recordOriginStream, recordSeen, recordStampedSeen, relayAttach, resumeBuffers, sharedTopics, streamTracking, subscribeAuth, topicSeqs, wsConnections, wsWrappers } from './state.js';
+import { envelopePrefix } from './envelope-cache.js';
 import { cohortTopics, joinSharedCohort, leaveSharedCohort } from './cohort.js';
 import { getSharedWireId, sharedWireIdRefs } from './shared-wire-id.js';
 import { seqBound } from './seq-bound.js';
@@ -410,7 +411,7 @@ function publish(topic, event, data, options) {
 	// the window). The window is carried verbatim - NOT a server-rolled offset,
 	// which would defer every subscriber of this one frame identically.
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
-	const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, jitterMs);
+	const envelope = completeEnvelope(envelopePrefix(topic, event), data, seq, jitterMs);
 	fatal(envelope.length > 0, 'envelope.empty', null);
 	// The one egress charge for this logical publish: per-topic runaway
 	// stats, worker window counters, and the ceiling account. Wire bytes are
@@ -472,7 +473,7 @@ function send(facade, topic, event, data, options) {
 	// caller regardless of socket state rather than being collapsed into the
 	// DROPPED sentinel by the catch.
 	const seq = resolveSendSeq(options != null ? options.seq : undefined);
-	const payload = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+	const payload = completeEnvelope(envelopePrefix(topic, event), data, seq, null);
 	assert(payload.length > 0, 'envelope.send-empty', null);
 	const compress = WS_COMPRESSION_ON && (!options || options.compress !== false);
 	try {
@@ -733,7 +734,7 @@ export const platform = {
 			}
 			events[i] = {
 				topic: m.topic,
-				env: completeEnvelope('{"topic":' + esc(m.topic) + ',"event":' + esc(m.event) + ',"data":', m.data, seq, null),
+				env: completeEnvelope(envelopePrefix(m.topic, m.event), m.data, seq, null),
 				seq
 			};
 			// One egress charge per logical publish: each batched event is one,
@@ -891,7 +892,7 @@ export const platform = {
 			if (typeof seqOption === 'number' || typeof seqOption === 'bigint') recordSeen(maxSeenSeq, topic, seq, seqBound);
 			else recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
 		}
-		const envelope = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+		const envelope = completeEnvelope(envelopePrefix(topic, event), data, seq, null);
 		if (!isRelay) counters.publishCountWindow++;
 		const compressIntent = compressOption === true;
 		const compress = WS_COMPRESSION_ON && compressIntent;
@@ -1086,7 +1087,7 @@ export const platform = {
 	sendWire(ws, topic, event, data, wire, options) {
 		const seq = resolveSendSeq(options != null ? options.seq : undefined);
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
-		const payload = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, null);
+		const payload = completeEnvelope(envelopePrefix(topic, event), data, seq, null);
 		// The frame slot carries 0 for "no seq", which is the wire's own
 		// spelling for absent - not a stamped zero.
 		const result = deliverWireToOne(ws, topic, event, data, wire, payload, seq == null ? 0 : seq, compress, true);
@@ -1308,7 +1309,7 @@ export const platform = {
 						? stampSeqValue(true, topicSeqs, topic, seqBound)
 						: resolvedEntry;
 			seqs[i] = seq == null ? 0 : seq;
-			envelopes[i] = completeEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', datas[i], seqs[i] || null, null);
+			envelopes[i] = completeEnvelope(envelopePrefix(topic, event), datas[i], seqs[i] || null, null);
 			if (seqs[i] !== 0 && (highestSeq === null || seqs[i] > highestSeq)) highestSeq = seqs[i];
 			batchBytes += envelopes[i].length;
 			// Per-entry wire bytes: the envelope's UTF-8 encoding times the
@@ -1472,7 +1473,7 @@ export const platform = {
 			let result = 1;
 			for (; i < count; i++) {
 				const d = source === null ? entries[i].data : source[i];
-				const json = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(d ?? null) + '}';
+				const json = envelopePrefix(topic, event) + JSON.stringify(d ?? null) + '}';
 				try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
 				bumpOut(ud, json);
 			}
@@ -1502,7 +1503,7 @@ export const platform = {
 			for (let i = 0; i < count; i++) {
 				const p = wire.encode(event, datas[i], state);
 				if (p == null) {
-					const json = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(datas[i] ?? null) + '}';
+					const json = envelopePrefix(topic, event) + JSON.stringify(datas[i] ?? null) + '}';
 					try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
 					bumpOut(ud, json);
 					continue;
@@ -1550,7 +1551,7 @@ export const platform = {
 	 * @returns {number}
 	 */
 	sendTo(filter, topic, event, data, options) {
-		const envelope = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":' + JSON.stringify(data ?? null) + '}';
+		const envelope = envelopePrefix(topic, event) + JSON.stringify(data ?? null) + '}';
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		const targets = [];
 		for (const facade of wsConnections) {
@@ -1997,7 +1998,7 @@ export const platform = {
 		counters.publishCountWindow++;
 		const seq = stampSeqValue(undefined, topicSeqs, topic, seqBound);
 		if (seq !== null) recordStampedSeen(maxSeenSeq, topic, seq, seqBound);
-		const env = completeGameEnvelope('{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":', data, seq, id);
+		const env = completeGameEnvelope(envelopePrefix(topic, event), data, seq, id);
 		chargePublishEgress(topic, egressTenant, 1, recipients, env.length, chargeableBytes(env, recipients));
 		if (resumeBuffers.size > 0) captureResumeFrame(topic, seq, env, false);
 		const subscribers = subscribersOf(topic);
@@ -2171,7 +2172,7 @@ export function flushCoalescedFor(facade, userData) {
 	const pending = ud?.[WS_COALESCED];
 	if (!pending || pending.size === 0) return;
 	drainCoalesced(pending, (value) => {
-		const payload = '{"topic":' + esc(value.topic) + ',"event":' + esc(value.event) + ',"data":' + JSON.stringify(value.data ?? null) + '}';
+		const payload = envelopePrefix(value.topic, value.event) + JSON.stringify(value.data ?? null) + '}';
 		try {
 			const result = /** @type {any} */ (facade).send(payload, false, false);
 			bumpOut(ud, payload);
