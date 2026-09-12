@@ -2050,8 +2050,8 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// fall-through above can reach this line with the topic already a
 	// membership, and refusing that would answer RATE_LIMITED to a
 	// connection that is not growing at all. The cap is answered before the
-	// landing gate below, so a socket that is both full and unauthorized
-	// hears RATE_LIMITED on every lane.
+	// landing gate below, as on the batch lane, so a socket that is both
+	// full and unauthorized hears RATE_LIMITED on both production lanes.
 	if (exceedsSubscriptionCap({ held: subs.has(msg.topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) {
 		settlePendingSubscribe(userData, msg.topic, pendingToken);
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');

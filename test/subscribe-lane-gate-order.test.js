@@ -1,22 +1,26 @@
 // The subscribe lanes' post-await gates, driven over real sockets against the
-// built runtime. Every gate a lane consults after its hook or resume await is
-// read fresh, and the gates answer in one fixed order on both lanes.
+// built runtime. Every gate a lane consults after its hook or resume await
+// reads whether wire authorization is ARMED fresh, and the gates answer in
+// one fixed order on both production lanes.
 //
 // The wire authorization gate is runtime-mutable: platform.authorizeWireSubscribe()
 // latches it on, and an app arms it while connections are live. A subscribe
 // that is parked in its hook or its resume when that happens must land the
-// way a subscribe sent after the arming would. Three exits are pinned here:
+// way a subscribe sent after the arming would. Four exits are pinned here:
 //
 // - single lane, socket full AND gate armed while the hook was parked: the
 //   subscription cap answers first, so the client hears RATE_LIMITED, the
 //   code its backoff branches on. FORBIDDEN would tell it to give up.
 // - single lane, gate armed while the RESUME was parked: the landing gate
 //   reads it fresh and refuses the install, and the resume buffer the lane
-//   opened is closed on that exit.
-// - batch lane, gate armed while the hook was parked: the revocation check
-//   in front of the resume hook reads the gate fresh, so the denied topic is
-//   never handed to the hook. A stale reading served the topic's replay
-//   history and then denied the subscription in the same frame.
+//   opened is discarded on that exit, frames captured in the window included.
+// - single lane, gate armed while the HOOK was parked, with a recover offset:
+//   the revocation check in front of the resume hook reads the gate fresh,
+//   so the hook is never asked for the topic's history.
+// - batch lane, the same arming during the hook await: the batch's revocation
+//   check reads the gate fresh too, so the denied topic is never handed to
+//   the hook. A stale reading served the topic's replay history and then
+//   denied the subscription in the same frame.
 //
 // Arming latches for the life of the runtime, so each case boots its own.
 
@@ -164,8 +168,9 @@ function subscriptionsOf(b) {
 
 /**
  * Grow the connection's membership to `target` topics over the wire. The
- * frames are ref-less, so they are silent: acked fills would exhaust the
- * control-frame egress budget long before the cap. Each wave stays under the
+ * frames are ref-less, so they are silent: the acks of an acked fill come
+ * to a few hundred KiB short of the 4 MiB control-frame egress window, and
+ * one late wave trips it and closes the socket. Each wave stays under the
  * in-flight subscribe budget and is confirmed by the membership count before
  * the next, since frames dispatch concurrently.
  */
@@ -241,6 +246,12 @@ describe('single lane: a gate armed during the resume await refuses the install'
 			// The lane opened its buffer and is parked in the resume hook.
 			expect(await until(() => b.state.resumeBuffers.has(topic), 5000), 'the lane reached its parked resume').toBe(true);
 			expect(await parked(client)).toBe(true);
+			// A publish landing inside the window is captured into the buffer.
+			// The refused exit must discard it with the buffer: flushing it
+			// would deliver a frame to a socket that was just told FORBIDDEN.
+			client.send({ type: 'publish', topic, n: 0, nonce: 'inwindow' });
+			await client.next((f) => f.json?.event === 'published' && f.json.data?.nonce === 'inwindow');
+			expect([...b.state.resumeBuffers.get(topic)][0].frames.length, 'the window captured the frame').toBe(1);
 
 			client.send({ type: 'arm', mode: 'strict', nonce: 'a' });
 			await client.next((f) => f.json?.event === 'armed');
@@ -254,11 +265,55 @@ describe('single lane: a gate armed during the resume await refuses the install'
 
 			// And no membership was installed: a publish on the topic reaches
 			// nobody on this socket. The probe after it bounds the wait, since
-			// sends to one socket stay in order.
+			// sends to one socket stay in order. The filter also catches the
+			// captured frame, had the exit flushed instead of discarded.
 			client.send({ type: 'publish', topic, n: 1, nonce: 'pub' });
-			await client.next((f) => f.json?.event === 'published');
+			await client.next((f) => f.json?.event === 'published' && f.json.data?.nonce === 'pub');
 			const leaked = client.frames.filter((f) => f.json?.topic === topic && f.json?.event === 'tick');
 			expect(leaked, 'the refused topic must not deliver').toEqual([]);
+		} finally {
+			try { client.send({ type: 'release' }); } catch { /* already gone */ }
+			client.close();
+		}
+	}, 30000);
+});
+
+describe('single lane: a gate armed during the hook await keeps the resume hook from the denied topic', () => {
+	/** @type {Awaited<ReturnType<typeof boot>>} */
+	let b;
+	beforeAll(async () => { b = await boot(); }, 60000);
+	afterAll(async () => { await b?.close(); });
+
+	it('reads the gate fresh in front of the resume hook, so no history is served for the denied topic', async () => {
+		const control = 'gate-order-single-control';
+		const topic = 'gate-order-single-fresh';
+		const client = connect(b.rt.port);
+		await client.open();
+		try {
+			// The control proves the recover lane engages for this frame shape:
+			// with the gate off, the resume hook is handed the topic.
+			client.send({ type: 'subscribe', topic: control, ref: 1, recover: { offset: 0 } });
+			expect((await client.next((f) => f.json?.ref === 1)).json.type).toBe('subscribed');
+			const seenBefore = await seenByResume(client, 'before');
+			expect(seenBefore[seenBefore.length - 1]).toEqual([control]);
+
+			client.send({ type: 'park-subscribe', topic, nonce: 'p' });
+			await client.next((f) => f.json?.event === 'parked');
+			client.send({ type: 'subscribe', topic, ref: 2, recover: { offset: 0 } });
+			expect(await parked(client), 'the subscribe reached its parked hook').toBe(true);
+
+			client.send({ type: 'arm', mode: 'strict', nonce: 'a' });
+			await client.next((f) => f.json?.event === 'armed');
+			client.send({ type: 'release' });
+
+			const answer = await client.next((f) => f.json?.ref === 2 && f.json.topic === topic);
+			expect(answer.json.type).toBe('subscribe-denied');
+			expect(answer.json.reason).toBe('FORBIDDEN');
+			// The resume hook was never asked about the denied topic: a stale
+			// reading of the gate would have served its history first.
+			const seen = await seenByResume(client, 'after');
+			expect(seen.slice(seenBefore.length)).toEqual([]);
+			expect(b.state.resumeBuffers.size).toBe(0);
 		} finally {
 			try { client.send({ type: 'release' }); } catch { /* already gone */ }
 			client.close();
