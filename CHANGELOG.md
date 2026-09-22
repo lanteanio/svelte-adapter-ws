@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-09-22
+
 ### Added
 
 - `docs/errors.md` opens with the two indexes an operator reads it for: a
@@ -1335,5 +1337,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A malformed entry anywhere in a cross-worker batched relay frame now
   refuses the whole batch at the hard tier before anything reaches a
   subscriber, matching the single-frame relay lane.
-
-This section becomes 0.1.0 at the first cut.

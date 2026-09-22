@@ -1,7 +1,6 @@
 {
 	"name": "svelte-adapter-ws",
-	"version": "0.0.0",
-	"private": true,
+	"version": "0.0.1",
 	"description": "SvelteKit adapter on node:http and ws - the svelte-adapter-uws realtime DX with no native addon",
 	"author": "Kevin Radziszewski",
 	"license": "MIT",
@@ -159,7 +158,9 @@
 		"test-vectors",
 		"LICENSE",
 		"README.md",
-		"CHANGELOG.md"
+		"CHANGELOG.md",
+		"PROTOCOL.md",
+		"docs"
 	],
 	"scripts": {
 		"probe": "node probe/ws-api-facts.mjs",
