@@ -20,8 +20,8 @@
  * weight is acceptable at 1, the highest weight there is, and brotli wins a
  * tie, so finding `br` spelled that way settles the decision with one native
  * substring search and a delimiter check on each side. Every other shape (a
- * weight anywhere on brotli,
- * a capitalised spelling, no brotli at all) takes one allocation-free pass over
+ * weight anywhere on brotli, a capitalised spelling, no brotli at all) takes
+ * one allocation-free pass over
  * the header. Weights are kept in thousandths (the grammar allows at most three
  * decimals), a coding that is not listed is -1, the first listing of a coding
  * is the one that counts, and a weight that does not parse leaves the coding

@@ -1,8 +1,9 @@
 // The Location value of a prerendered trailing-slash redirect
 // (src/runtime/utils/location-target.js).
 //
-// The prerendered lookup matches the DECODED path, so the target it redirects
-// to is decoded too. The function spells the target the way a client
+// The prerendered lookup matches the DECODED path and used to redirect to it
+// verbatim, so a route with a non-ASCII name answered with a raw Latin-1 byte
+// in the header, or threw. The function spells the target the way a client
 // spells a request target. The on-the-wire half is pinned against the built
 // runtime in test/http-request-lanes.test.js.
 

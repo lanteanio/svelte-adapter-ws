@@ -541,8 +541,8 @@
 		"file": "src/runtime/utils/content-coding.js",
 		"adaptations": [
 			{
-				"lead": " * substring search and a delimiter check on each side - a few nanoseconds\n * over the substring test it replaces. Every other shape (a weight anywhere on brotli,\n",
-				"ours": " * substring search and a delimiter check on each side. Every other shape (a\n * weight anywhere on brotli,\n"
+				"lead": " * substring search and a delimiter check on each side - a few nanoseconds\n * over the substring test it replaces. Every other shape (a weight anywhere on brotli,\n * a capitalised spelling, no brotli at all) takes one allocation-free pass over\n",
+				"ours": " * substring search and a delimiter check on each side. Every other shape (a\n * weight anywhere on brotli, a capitalised spelling, no brotli at all) takes\n * one allocation-free pass over\n"
 			}
 		]
 	},
@@ -560,7 +560,7 @@
 		"adaptations": [
 			{
 				"lead": " * it redirects to is a decoded string too, and a header value is written to the\n * wire as the UTF-8 bytes of the string it was given. A route named with a\n * non-ASCII character therefore redirected with raw bytes in Location, which\n * RFC 9110 5.5 does not allow and which every client parses by its own rules.\n",
-				"ours": " * it redirects to is a decoded string too, and a header value cannot carry\n * it: node writes a header as Latin-1 and refuses a character past it. A\n * route named with a non-ASCII character therefore redirected with a raw byte\n * in Location, which RFC 9110 5.5 does not allow, or threw.\n"
+				"ours": " * it redirects to is a decoded string too, and node writes a header value as\n * Latin-1 and refuses a character past it. A route named with a non-ASCII\n * character therefore redirected with raw bytes in Location, which RFC 9110\n * 5.5 does not allow and which every client parses by its own rules, or threw.\n"
 			}
 		]
 	},
@@ -1219,8 +1219,8 @@
 		"file": "test/http-request-lanes.test.js",
 		"adaptations": [
 			{
-				"lead": "//     the lookup matches the DECODED path and used to write it verbatim, so a\n//     route with a non-ASCII name redirected with raw UTF-8 bytes in the header;\n",
-				"ours": "//     the lookup matches the DECODED path, and a request target is ASCII;\n"
+				"lead": "//     route with a non-ASCII name redirected with raw UTF-8 bytes in the header;\n",
+				"ours": "//     route with a non-ASCII name redirected with a raw Latin-1 byte in the\n//     header, or threw;\n"
 			},
 			{
 				"lead": "\tit('encodes a raw-byte target the same way, and the redirect lands where the lookup matched', async () => {\n\t\t// A client that sends the name's UTF-8 bytes raw in the request line.\n\t\t// uWS hands them to the runtime as the decoded characters, and the header\n\t\t// used to carry those characters' bytes back out unencoded.\n\t\tconst target = Buffer.concat([Buffer.from('/prerendered/caf'), E_ACUTE, Buffer.from('/?x='), E_ACUTE]);\n\t\tconst redirect = await exchange(port, request('GET', target));\n\t\texpect(redirect.status).toBe(308);\n\t\texpect(redirect.headers.location).toBe('/prerendered/caf%C3%A9?x=%C3%A9');\n\t\texpect(/[^\\x00-\\x7f]/.test(redirect.head)).toBe(false);\n\n\t\tconst landed = await exchange(port, request('GET', redirect.headers.location.split('?')[0]));\n\t\texpect(landed.status).toBe(200);\n\t\texpect(landed.body.toString()).toContain('data-testid=\"prerendered-non-ascii\"');\n\t}, 30000);\n\n",
@@ -1241,8 +1241,8 @@
 		"file": "test/location-target.test.js",
 		"adaptations": [
 			{
-				"lead": "// The prerendered lookup matches the DECODED path and used to redirect to it\n// verbatim, so a route with a non-ASCII name answered with the raw UTF-8 bytes\n// of that name in the header. The function spells",
-				"ours": "// The prerendered lookup matches the DECODED path, so the target it redirects\n// to is decoded too. The function spells"
+				"lead": "// verbatim, so a route with a non-ASCII name answered with the raw UTF-8 bytes\n// of that name in the header. The function spells",
+				"ours": "// verbatim, so a route with a non-ASCII name answered with a raw Latin-1 byte\n// in the header, or threw. The function spells"
 			}
 		]
 	},
