@@ -46,13 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   weight wins and brotli breaks a tie; identity stays the fallback even under
   `identity;q=0`. The decision is faster than the one it replaces on every
   header shape measured, the browser lists included.
-- **A prerendered trailing-slash redirect is percent-encoded.** The lookup
-  matches the DECODED path and wrote it verbatim into `Location`, and node
-  writes a header value as Latin-1, so a prerendered route named `café`
-  redirected with the single byte `0xE9` in the header, which no client reads
-  as the UTF-8 the route is named in. The target is now spelled as a request
-  target (`utils/location-target.js`, the family's own), path segments and
-  query alike, so the redirect lands on the lookup that issued it.
+- **A prerendered trailing-slash redirect is percent-encoded, and a route
+  named past Latin-1 no longer takes the process down.** The lookup matches
+  the DECODED path and wrote it verbatim into `Location`. node writes a header
+  value as Latin-1, so a route named `café` redirected with the raw byte
+  `0xE9` in the header rather than a request target, and it refuses a
+  character past Latin-1 outright, so a trailing-slash request to a route
+  named `łódź` threw `ERR_INVALID_CHAR` out of the request listener, where
+  nothing caught it. The target is now spelled as a request target
+  (`utils/location-target.js`, the family's own), path segments and query
+  alike, so the redirect lands on the lookup that issued it.
 - The static lane's empty answers - the 412, the 416 and both prerendered
   trailing-slash 308s - carry `Content-Length: 0`. node builds the header
   block at `writeHead`, so without the length they went out

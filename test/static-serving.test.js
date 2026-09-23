@@ -27,11 +27,12 @@ beforeAll(async () => {
 			'prerendered/about.html': '<html>about page</html>',
 			'prerendered/docs/index.html': '<html>docs index</html>',
 			'prerendered/café.html': '<html>café page</html>',
-			'prerendered/über/index.html': '<html>über index</html>'
+			'prerendered/über/index.html': '<html>über index</html>',
+			'prerendered/łódź.html': '<html>łódź page</html>'
 		},
 		manifestSource: [
 			"export const manifest = { appPath: '_app' };",
-			"export const prerendered = new Set(['/about', '/docs', '/café', '/über']);",
+			"export const prerendered = new Set(['/about', '/docs', '/café', '/über', '/łódź']);",
 			"export const base = '';"
 		].join('\n')
 	});
@@ -234,6 +235,13 @@ describe('prerendered pages', () => {
 		const dirStyle = await get('/%C3%BCber?y=1');
 		expect(dirStyle.status).toBe(308);
 		expect(dirStyle.headers.get('location')).toBe('/%C3%BCber/?y=1');
+
+		// Past Latin-1 the decoded name cannot be written into a header at all:
+		// node refuses it with ERR_INVALID_CHAR, thrown out of the request
+		// listener.
+		const pastLatin1 = await get('/%C5%82%C3%B3d%C5%BA/');
+		expect(pastLatin1.status).toBe(308);
+		expect(pastLatin1.headers.get('location')).toBe('/%C5%82%C3%B3d%C5%BA');
 
 		const landed = await get('/%C3%BCber/');
 		expect(landed.status).toBe(200);
