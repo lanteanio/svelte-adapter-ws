@@ -65,9 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alike, so the redirect lands on the lookup that issued it.
 - The static lane's empty answers - the 412, the 416 and both prerendered
   trailing-slash 308s - carry `Content-Length: 0`. node builds the header
-  block at `writeHead`, so without the length they went out
-  `Transfer-Encoding: chunked` with a terminating empty chunk, where the
-  family's native tier writes the zero length.
+  block at `writeHead`, so without the length a GET got them
+  `Transfer-Encoding: chunked` with a terminating empty chunk and a HEAD got
+  no length at all, where the family's native tier writes the zero length.
 
 ## [0.0.1] - 2026-09-22
 

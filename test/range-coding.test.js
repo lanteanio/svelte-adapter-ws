@@ -192,8 +192,9 @@ describe('ranges over coded representations', () => {
 });
 
 // node builds the header block at writeHead, so an empty fixed answer written
-// without a length goes out chunked; uWS writes Content-Length: 0 for a bare
-// end(). The static lane's 308, 412 and 416 carry the length themselves.
+// without a length goes out chunked on GET and with no length at all on HEAD;
+// uWS writes Content-Length: 0 for a bare end(). The static lane's 308, 412
+// and 416 carry the length themselves.
 describe('empty fixed answers are length-framed', () => {
 	/**
 	 * @param {Awaited<ReturnType<typeof raw>>} res
