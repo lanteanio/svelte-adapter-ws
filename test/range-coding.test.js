@@ -23,7 +23,9 @@ beforeAll(async () => {
 			'client/logo.svg': IDENTITY,
 			'client/logo.svg.br': BR,
 			'client/logo.svg.gz': GZ,
-			'client/empty.txt': ''
+			'client/empty.txt': '',
+			'prerendered/about.html': '<html>about page</html>',
+			'prerendered/docs/index.html': '<html>docs index</html>'
 		}
 	});
 	rt = await bootRuntime(payload);
@@ -186,5 +188,44 @@ describe('ranges over coded representations', () => {
 		const first = await raw('/logo.svg', { 'accept-encoding': 'identity' });
 		const res = await raw('/logo.svg', { 'accept-encoding': 'identity', 'if-none-match': /** @type {string} */ (first.headers.etag) }, 'HEAD');
 		expect(res.status).toBe(304);
+	});
+});
+
+// node builds the header block at writeHead, so an empty fixed answer written
+// without a length goes out chunked; uWS writes Content-Length: 0 for a bare
+// end(). The static lane's 308, 412 and 416 carry the length themselves.
+describe('empty fixed answers are length-framed', () => {
+	/**
+	 * @param {Awaited<ReturnType<typeof raw>>} res
+	 * @param {string} label
+	 */
+	function expectFramed(res, label) {
+		expect(res.headers['content-length'], label).toBe('0');
+		expect(res.headers['transfer-encoding'], label).toBeUndefined();
+		expect(res.body.byteLength, label).toBe(0);
+	}
+
+	it('frames the 416, the 412 and both trailing-slash 308s, on GET and HEAD', async () => {
+		const first = await raw('/logo.svg', { 'accept-encoding': 'identity' });
+		expect(first.headers.etag).toBeTruthy();
+		for (const method of ['GET', 'HEAD']) {
+			const unsatisfiable = await raw('/logo.svg', { 'accept-encoding': 'identity', range: 'bytes=-0' }, method);
+			expect(unsatisfiable.status).toBe(416);
+			expectFramed(unsatisfiable, `${method} 416`);
+
+			const failed = await raw('/logo.svg', { 'accept-encoding': 'identity', 'if-match': 'W/"not-this-one"' }, method);
+			expect(failed.status).toBe(412);
+			expectFramed(failed, `${method} 412`);
+
+			const redirected = await raw('/about/', {}, method);
+			expect(redirected.status).toBe(308);
+			expect(redirected.headers.location).toBe('/about');
+			expectFramed(redirected, `${method} 308`);
+
+			const toSlash = await raw('/docs', {}, method);
+			expect(toSlash.status).toBe(308);
+			expect(toSlash.headers.location).toBe('/docs/');
+			expectFramed(toSlash, `${method} directory 308`);
+		}
 	});
 });

@@ -467,8 +467,11 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 		const verdict = staticPreconditions(entry, repEtag, ifMatch, ifUnmodifiedSince, ifNoneMatch, ifModifiedSince);
 		if (verdict === 412) {
 			// The precondition the caller staked the request on does not hold.
-			// Minimal on purpose: a 412 updates no stored response.
-			res.writeHead(412);
+			// Minimal on purpose: a 412 updates no stored response. The zero
+			// length is written because node builds the header block at
+			// writeHead and would frame an empty answer chunked; uWS writes
+			// the length for a bare end(), as every fixed answer here does.
+			res.writeHead(412, { 'content-length': '0' });
 			res.end();
 			return;
 		}
@@ -496,7 +499,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 		// Syntactically valid but unsatisfiable against the representation this
 		// request selected - a start past its end, or a zero-length suffix - so
 		// that is the length to quote.
-		res.writeHead(416, { 'content-range': `bytes */${body.byteLength}` });
+		res.writeHead(416, { 'content-range': `bytes */${body.byteLength}`, 'content-length': '0' });
 		res.end();
 		return;
 	}
@@ -600,7 +603,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 	if (prerendered.has(decoded)) {
 		// Directory-style page: bare path is not canonical, redirect to trailing slash
 		if (prerenderedDirStyle.has(decoded)) {
-			res.writeHead(308, { location: locationTarget(decoded + '/', search) });
+			res.writeHead(308, { location: locationTarget(decoded + '/', search), 'content-length': '0' });
 			res.end();
 			return true;
 		}
@@ -626,7 +629,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 		// Otherwise redirect to the prerendered path (the canonical form),
 		// percent-encoded: the lookup matched on the decoded spelling, and a
 		// header carries the string's raw UTF-8 bytes.
-		res.writeHead(308, { location: locationTarget(alt, search) });
+		res.writeHead(308, { location: locationTarget(alt, search), 'content-length': '0' });
 		res.end();
 		return true;
 	}

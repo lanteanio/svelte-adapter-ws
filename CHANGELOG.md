@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the UTF-8 the route is named in. The target is now spelled as a request
   target (`utils/location-target.js`, the family's own), path segments and
   query alike, so the redirect lands on the lookup that issued it.
+- The static lane's empty answers - the 412, the 416 and both prerendered
+  trailing-slash 308s - carry `Content-Length: 0`. node builds the header
+  block at `writeHead`, so without the length they went out
+  `Transfer-Encoding: chunked` with a terminating empty chunk, where the
+  family's native tier writes the zero length.
 
 ## [0.0.1] - 2026-09-22
 
