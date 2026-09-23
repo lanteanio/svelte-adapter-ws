@@ -104,12 +104,11 @@ export function handleRequest(req, res) {
 		// The probes are length-framed like every other fixed-shape answer:
 		// uWS derives a length from the body it is handed, and a balancer
 		// probing with HEAD gets no size at all when the header is absent.
+		// The length is the only header written: the family's probes carry no
+		// content-type.
 		if (HEALTH_CHECK_PATH !== false && pathname === HEALTH_CHECK_PATH) {
 			const body = 'OK';
-			res.writeHead(200, {
-				'content-type': 'text/plain',
-				'content-length': String(Buffer.byteLength(body))
-			});
+			res.writeHead(200, { 'content-length': String(Buffer.byteLength(body)) });
 			res.end(body);
 			return;
 		}
@@ -118,7 +117,6 @@ export function handleRequest(req, res) {
 			// `draining` or `closed` behind a 503.
 			const lifecycle = lifecycleState();
 			res.writeHead(lifecycle === 'ready' ? 200 : 503, {
-				'content-type': 'text/plain',
 				'content-length': String(Buffer.byteLength(lifecycle))
 			});
 			res.end(lifecycle);

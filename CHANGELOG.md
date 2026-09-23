@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app's router and was answered by its 404, which a balancer reads as an
   unhealthy instance. Both probes now answer HEAD with the GET status, the
   body's length and no body; `createTestServer` registers the same pair.
+- The runtime's probe answers no longer carry `content-type: text/plain`.
+  The length is their only header, as on the family's native tier and in
+  `createTestServer`.
 
 ## [0.0.1] - 2026-09-22
 

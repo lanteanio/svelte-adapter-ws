@@ -78,6 +78,9 @@ describe('probe routes', () => {
 				// length that is a numeric extension of the true one.
 				expect(answer.lines, `${label} declared no length, or the wrong one`)
 					.toContain(`content-length: ${Buffer.byteLength(body)}`);
+				// The family's probes carry no content-type; uWS writes none
+				// for a bare end(), and createTestServer writes none either.
+				expect(answer.lines.filter((l) => l.startsWith('content-type:')), label).toEqual([]);
 				expect(answer.body, label).toBe(method === 'HEAD' ? '' : body);
 			}
 		}
