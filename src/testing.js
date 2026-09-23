@@ -617,6 +617,7 @@ function createNodeApp() {
 			return app;
 		},
 		get(path, handler) { return route('GET', path, handler); },
+		head(path, handler) { return route('HEAD', path, handler); },
 		post(path, handler) { return route('POST', path, handler); },
 		options(path, handler) { return route('OPTIONS', path, handler); },
 		any(path, handler) { return route('ANY', path, handler); },
@@ -4244,26 +4245,46 @@ export async function createTestServer(options = {}) {
 	// Liveness route, mirroring handler.js: always 200 while the process is up,
 	// INCLUDING during a drain (a liveness probe must never restart a draining
 	// instance mid-shutdown), so it does NOT consult the lifecycle state.
+	// GET and HEAD, as production registers them: a HEAD-probing balancer reads
+	// the same status with no body.
 	if (healthCheckPath !== false) {
-		app.get(healthCheckPath, (res) => {
+		const liveness = (res, req) => {
+			const headOnly = req.getMethod() === 'head';
 			res.onAborted(() => {});
-			res.cork(() => { res.writeStatus('200 OK').end('OK'); });
-		});
+			res.cork(() => {
+				res.writeStatus('200 OK');
+				if (headOnly) res.endWithoutBody(2);
+				else res.end('OK');
+			});
+		};
+		app.get(healthCheckPath, liveness);
+		app.head(healthCheckPath, liveness);
 	}
 
 	// Readiness route, mirroring handler.js: 200 'ready' in the one ready state,
 	// 503 in every other one with the state's name as the body - `starting`
 	// during boot, `draining` from the start of close(), `closed` afterwards.
 	if (readinessCheckPath !== false) {
-		app.get(readinessCheckPath, (res) => {
+		const readiness = (res, req) => {
+			const headOnly = req.getMethod() === 'head';
 			res.onAborted(() => {});
 			if (lifecycleT !== 'ready') {
 				const state = lifecycleT;
-				res.cork(() => { res.writeStatus('503 Service Unavailable').end(state); });
+				res.cork(() => {
+					res.writeStatus('503 Service Unavailable');
+					if (headOnly) res.endWithoutBody(state.length);
+					else res.end(state);
+				});
 			} else {
-				res.cork(() => { res.writeStatus('200 OK').end('ready'); });
+				res.cork(() => {
+					res.writeStatus('200 OK');
+					if (headOnly) res.endWithoutBody(5);
+					else res.end('ready');
+				});
 			}
-		});
+		};
+		app.get(readinessCheckPath, readiness);
+		app.head(readinessCheckPath, readiness);
 	}
 
 	return new Promise((resolve, reject) => {

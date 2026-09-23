@@ -751,9 +751,9 @@ export interface AdapterOptions {
 	precompress?: boolean;
 	/** Environment variable prefix (default ''). */
 	envPrefix?: string;
-	/** Liveness probe path or false (default '/healthz'). */
+	/** Liveness probe path or false (default '/healthz'). Answers GET and HEAD. */
 	healthCheckPath?: string | false;
-	/** Readiness probe path or false (default '/readyz'). */
+	/** Readiness probe path or false (default '/readyz'). Answers GET and HEAD with the same status. */
 	readinessCheckPath?: string | false;
 	/** Readiness-gated SSR warmup: true (default, warms '/'), false, or { paths }. */
 	warmup?: boolean | { paths: string[] };

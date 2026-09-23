@@ -95,7 +95,12 @@ export function handleRequest(req, res) {
 	// never be shadowed by a static asset of the same name. Liveness answers OK
 	// even during drain (the process lives); readiness reports the lifecycle
 	// state so a balancer routes away the moment drain begins.
-	if (method === 'GET') {
+	//
+	// GET and HEAD both: HAProxy's `httpchk` and most uptime monitors probe with
+	// HEAD by default, and a HEAD that fell through to the catch-all was
+	// answered by the app's own 404. HEAD gets the GET status and the body's
+	// length; node drops the body of a HEAD reply itself.
+	if (isGetLike) {
 		// The probes are length-framed like every other fixed-shape answer:
 		// uWS derives a length from the body it is handed, and a balancer
 		// probing with HEAD gets no size at all when the header is absent.
@@ -109,21 +114,14 @@ export function handleRequest(req, res) {
 			return;
 		}
 		if (READINESS_CHECK_PATH !== false && pathname === READINESS_CHECK_PATH) {
+			// The body is the state's own name: `ready`, or `starting`,
+			// `draining` or `closed` behind a 503.
 			const lifecycle = lifecycleState();
-			if (lifecycle === 'ready') {
-				const body = 'ready';
-				res.writeHead(200, {
-					'content-type': 'text/plain',
-					'content-length': String(Buffer.byteLength(body))
-				});
-				res.end(body);
-			} else {
-				res.writeHead(503, {
-					'content-type': 'text/plain',
-					'content-length': String(Buffer.byteLength(lifecycle))
-				});
-				res.end(lifecycle);
-			}
+			res.writeHead(lifecycle === 'ready' ? 200 : 503, {
+				'content-type': 'text/plain',
+				'content-length': String(Buffer.byteLength(lifecycle))
+			});
+			res.end(lifecycle);
 			return;
 		}
 	}
@@ -148,9 +146,10 @@ export function handleRequest(req, res) {
 		// path, the authenticate endpoint, both waiting-room paths, and the two
 		// probes for the methods each answers - and it beats the static and SSR
 		// catch-all, so a same-named asset cannot shadow an admin path. Note the
-		// probes are GET-only, so a HEAD on a probe path nested under the admin
-		// prefix reaches the admin handler; uWS routes the same way, because a
-		// method-scoped route does not claim the other methods either.
+		// probes answer GET and HEAD only, so any other method on a probe path
+		// nested under the admin prefix reaches the admin handler; uWS routes the
+		// same way, because a method-scoped route does not claim the other
+		// methods either.
 		if (realtimeRoutes.tryAdminRoute(req, res, pathname, state)) return;
 	}
 

@@ -1245,6 +1245,23 @@
 		"file": "test/ratelimit.test.js"
 	},
 	{
+		"file": "test/readiness.test.js",
+		"adaptations": [
+			{
+				"lead": "// The liveness (`/healthz`) and readiness (`/readyz`) probes over a real uWS\n// server. The point of the split: during a graceful drain, readiness must flip\n// to 503 (so a load balancer stops routing) while liveness stays 200 (so a\n// liveness probe never restarts the pod mid-shutdown).\nlet uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n\nlet server;\n\ndescribeUWS('liveness / readiness probes', () => {",
+				"ours": "// The liveness (`/healthz`) and readiness (`/readyz`) probes over the node:http\n// server createTestServer builds. The point of the split: during a graceful\n// drain, readiness must flip to 503 (so a load balancer stops routing) while\n// liveness stays 200 (so a liveness probe never restarts the pod mid-shutdown).\n\nlet server;\n\ndescribe('liveness / readiness probes', () => {"
+			},
+			{
+				"lead": "// Not at the default (uWS built-in 404 - route absent there).",
+				"ours": "// Not at the default (the test server's 404 - route absent there)."
+			},
+			{
+				"lead": "\t\texpect(await live.text()).toBe('OK');\n\t});\n\n\tit('flips readiness to 503",
+				"ours": "\t\texpect(await live.text()).toBe('OK');\n\t});\n\n\tit('answers HEAD on both probes with the GET status and no body', async () => {\n\t\t// HAProxy's httpchk and most uptime monitors probe with HEAD by default.\n\t\t// The harness registers HEAD beside GET exactly as production does, so a\n\t\t// deployment rehearsed against createTestServer sees the same answer.\n\t\tconst { createTestServer } = await import('../src/testing.js');\n\t\tserver = await createTestServer();\n\n\t\tconst ready = await fetch(`${server.url}/readyz`, { method: 'HEAD' });\n\t\texpect(ready.status).toBe(200);\n\t\texpect(ready.headers.get('content-length')).toBe('5');\n\t\texpect(await ready.text()).toBe('');\n\n\t\tconst live = await fetch(`${server.url}/healthz`, { method: 'HEAD' });\n\t\texpect(live.status).toBe(200);\n\t\texpect(live.headers.get('content-length')).toBe('2');\n\t\texpect(await live.text()).toBe('');\n\n\t\tserver.platform.__setDraining(true);\n\t\tconst draining = await fetch(`${server.url}/readyz`, { method: 'HEAD' });\n\t\texpect(draining.status).toBe(503);\n\t\texpect(draining.headers.get('content-length')).toBe(String('draining'.length));\n\t\texpect(await draining.text()).toBe('');\n\t\texpect((await fetch(`${server.url}/healthz`, { method: 'HEAD' })).status).toBe(200);\n\t\tserver.platform.__setDraining(false);\n\t});\n\n\tit('flips readiness to 503"
+			}
+		]
+	},
+	{
 		"file": "test/relay-gap.test.js",
 		"adaptations": [
 			{

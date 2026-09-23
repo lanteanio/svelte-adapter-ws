@@ -54,28 +54,74 @@ describe('probe routes', () => {
 	// handed to end(), so leaving it off frames the same answer differently
 	// from the rest of the family.
 	//
-	// GET only, deliberately: the probe routes are registered for GET alone,
-	// here and in the family, so a HEAD falls through to the static and SSR
-	// lanes and is not this writer's answer to frame.
+	// HEAD as well as GET: HAProxy's `httpchk` and most uptime monitors probe
+	// with HEAD by default, and the answer is the GET status and the GET
+	// body's length with no body. A HEAD that missed the probe route would
+	// reach the app's router and come back as its 404.
 	//
 	// Raw sockets rather than fetch: undici does not surface the framing
-	// headers reliably, and the framing is the whole subject.
-	it('length-frames both probes rather than answering chunked', async () => {
-		for (const [path, body] of [['/healthz', 'OK'], ['/readyz', 'ready']]) {
-			const raw = await rawRequest(
-				rt.port,
-				`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`
-			);
-			const head = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase();
-			expect(head, `${path} answered chunked`).not.toContain('transfer-encoding: chunked');
-			// A WHOLE header line: `content-length: 20` contains
-			// `content-length: 2`, so a substring match would accept a declared
-			// length that is a numeric extension of the true one.
-			expect(head.split('\r\n'), `${path} declared no length, or the wrong one`)
-				.toContain(`content-length: ${Buffer.byteLength(body)}`);
+	// headers reliably, and the framing is the whole subject. Reading to the
+	// close also shows any byte written after the head, which fetch would
+	// discard for a HEAD.
+	it('length-frames both probes on GET and HEAD, with no body on HEAD', async () => {
+		for (const method of ['GET', 'HEAD']) {
+			for (const [path, body] of [['/healthz', 'OK'], ['/readyz', 'ready']]) {
+				const answer = parseRaw(await rawRequest(
+					rt.port,
+					`${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`
+				));
+				const label = `${method} ${path}`;
+				expect(answer.status, label).toBe(200);
+				expect(answer.lines, `${label} answered chunked`).not.toContain('transfer-encoding: chunked');
+				// A WHOLE header line: `content-length: 20` contains
+				// `content-length: 2`, so a substring match would accept a declared
+				// length that is a numeric extension of the true one.
+				expect(answer.lines, `${label} declared no length, or the wrong one`)
+					.toContain(`content-length: ${Buffer.byteLength(body)}`);
+				expect(answer.body, label).toBe(method === 'HEAD' ? '' : body);
+			}
+		}
+	});
+
+	it('answers a HEAD on readiness with the draining 503 while liveness stays 200', async () => {
+		const ownPayload = buildRuntime();
+		const own = await bootRuntime(ownPayload);
+		try {
+			own.handler.beginDrain();
+			const head = (/** @type {string} */ path) => rawRequest(
+				own.port,
+				`HEAD ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`
+			).then(parseRaw);
+			const readiness = await head('/readyz');
+			expect(readiness.status).toBe(503);
+			expect(readiness.lines).toContain(`content-length: ${'draining'.length}`);
+			expect(readiness.body).toBe('');
+			const liveness = await head('/healthz');
+			expect(liveness.status).toBe(200);
+			expect(liveness.lines).toContain('content-length: 2');
+			expect(liveness.body).toBe('');
+			await own.handler.shutdown({ timeoutMs: 1000 });
+		} finally {
+			ownPayload.cleanup();
 		}
 	});
 });
+
+/**
+ * Split a raw HTTP/1.1 response into its status code, its lowercased header
+ * lines and everything after the blank line.
+ *
+ * @param {string} raw
+ */
+function parseRaw(raw) {
+	const split = raw.indexOf('\r\n\r\n');
+	const [statusLine, ...lines] = raw.slice(0, split).toLowerCase().split('\r\n');
+	return {
+		status: Number(statusLine.split(' ')[1]),
+		lines,
+		body: raw.slice(split + 4)
+	};
+}
 
 describe('edge policy', () => {
 	it('refuses a duplicated Host header with 400', async () => {

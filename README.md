@@ -558,8 +558,8 @@ HTTP/2 and the entire observability ecosystem
    single-chunk dynamic compression with the BREACH-defense credential skip, a
    default `x-content-type-options: nosniff` fill, and the family
    duplicate-header policy (repeated singleton headers are refused, proxy
-   identity headers keep their last line). Health and readiness probes,
-   readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
+   identity headers keep their last line). Health and readiness probes
+   answering GET and HEAD, readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
    resolution and a managed drain of in-flight requests are in.
    `PROXY_PROTOCOL` refuses the boot loudly rather than half-working.
 
