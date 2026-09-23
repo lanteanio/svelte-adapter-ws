@@ -16,8 +16,10 @@ import { lifecycleState, requestDone } from './lifecycle.js';
 import { monotonicNow } from '../runtime.js';
 import { ADMIN_PATH } from './config.js';
 import { adminMounted } from './admin.js';
+import { windowsReservedPath } from '../utils/windows-path.js';
 
-const IS_WIN32 = process.platform === 'win32';
+// Read once: the platform does not change under a running process.
+const WINDOWS = process.platform === 'win32';
 
 // Characters through which a raw path can reach a DIFFERENT path than the one
 // spelled: dot segments in either spelling, the backslash a special scheme
@@ -189,27 +191,12 @@ export function handleRequest(req, res) {
 		}
 	}
 
-	// Windows filesystem hardening: NTFS alternate data streams (':') and 8.3
-	// short names ('~') can alias an indexed file under a different spelling.
-	// The in-memory cache is immune, but SvelteKit's own read() lane and app
-	// routes may touch disk, so the platform-specific spellings are refused at
-	// the edge on the platform where they exist. Checked on the DECODED form
-	// too - the lanes this protects operate on decoded paths, so an encoded
-	// `%3A` must not slip past a gate that only reads the raw spelling.
-	if (IS_WIN32) {
-		let decoded = pathname;
-		if (pathname.includes('%')) {
-			try {
-				decoded = decodeURIComponent(pathname);
-			} catch {
-				send400(res);
-				return;
-			}
-		}
-		if (pathname.includes(':') || pathname.includes('~') || decoded.includes(':') || decoded.includes('~')) {
-			send400(res);
-			return;
-		}
+	// Windows: refuse a path naming an alternate data stream (`:`) or an 8.3
+	// short name (`~`), in the raw spelling and the decoded one - every lane
+	// below decodes before it opens anything.
+	if (WINDOWS && windowsReservedPath(pathname)) {
+		send400(res);
+		return;
 	}
 
 	// The fetch specification forbids CONNECT/TRACE/TRACK outright, so

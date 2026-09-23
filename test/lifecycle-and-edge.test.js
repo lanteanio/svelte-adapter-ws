@@ -152,6 +152,25 @@ describe('edge policy', () => {
 		expect(ads).toMatch(/^HTTP\/1\.1 400 /);
 	});
 
+	// Every lane behind the gate decodes before it opens anything, so the
+	// encoded spellings are refused as well; with the gate off each of these
+	// reaches the app's router and is answered 200.
+	it.runIf(process.platform === 'win32')('refuses the encoded ADS and 8.3 spellings on win32', async () => {
+		for (const target of ['/x%3Ay', '/x%3ay', '/LONGFI%7E1.TXT', '/caf%C3%A9%3Ax']) {
+			const response = await rawRequest(
+				rt.port,
+				`GET ${target} HTTP/1.1\r\nHost: a.test\r\nConnection: close\r\n\r\n`
+			);
+			expect(response, target).toMatch(/^HTTP\/1\.1 400 /);
+		}
+		// An ordinary encoded path is untouched by the gate.
+		const ordinary = await rawRequest(
+			rt.port,
+			'GET /caf%C3%A9 HTTP/1.1\r\nHost: a.test\r\nConnection: close\r\n\r\n'
+		);
+		expect(ordinary).toMatch(/^HTTP\/1\.1 200 /);
+	});
+
 	it('comma-joins repeated list headers in arrival order for the app', async () => {
 		const response = await rawRequest(
 			rt.port,
