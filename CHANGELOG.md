@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Content-Encoding`, `Content-Disposition`; RFC 9110 15.4.5), baked per
   representation at index time so the revalidation path stays one
   `writeHead`.
+- **Accept-Encoding is negotiated by its weights.** The static lane and the
+  single-chunk SSR lane honoured a `q=0` refusal but did not rank the rest,
+  so `gzip;q=1, br;q=0.5` got brotli, and a header without weights was
+  matched by substring, so `BR` got identity and `x-gzip` got gzip.
+  `utils/content-coding.js`, the family's own, reads the list as RFC 9110
+  12.5.3 does: coding names are whole tokens compared case-insensitively, an
+  unlisted coding is acceptable only through `*`, `q=0` refuses, the highest
+  weight wins and brotli breaks a tie; identity stays the fallback even under
+  `identity;q=0`. The decision is faster than the one it replaces on every
+  header shape measured, the browser lists included.
 
 ## [0.0.1] - 2026-09-22
 

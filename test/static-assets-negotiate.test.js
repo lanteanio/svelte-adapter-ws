@@ -335,6 +335,26 @@ describeMaybe('static assets: per-encoding representations', () => {
 		expect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);
 	});
 
+	it('selects by the weights in Accept-Encoding, not by substring', () => {
+		// `br;q=0` is a refusal; the substring test read it as an acceptance.
+		const refused = serve(entry, { acceptEncoding: 'br;q=0, gzip' });
+		expect(refused.status).toBe('200 OK');
+		expect(header(refused, 'content-encoding')).toBe('gzip');
+		expect(header(refused, 'etag')).toBe(entry.gzEtag);
+		expect(refused.body.equals(gzBytes)).toBe(true);
+
+		const preferred = serve(entry, { acceptEncoding: 'gzip;q=1.0, br;q=0.5' });
+		expect(header(preferred, 'content-encoding')).toBe('gzip');
+
+		const none = serve(entry, { acceptEncoding: 'br;q=0, gzip;q=0' });
+		expect(header(none, 'content-encoding')).toBeUndefined();
+		expect(header(none, 'etag')).toBe(entry.etag);
+		expect(none.body.equals(Buffer.from(IDENTITY))).toBe(true);
+
+		// The shapes browsers send still select brotli.
+		expect(header(serve(entry, { acceptEncoding: 'gzip, deflate, br, zstd' }), 'content-encoding')).toBe('br');
+	});
+
 	it('keeps compression when a Range header cannot be honoured', () => {
 		// Malformed, multi-range and stale-If-Range requests fall through to a
 		// normal response - which must still be the negotiated one, or a junk
@@ -709,5 +729,14 @@ describeMaybe('static assets: resume over a real connection', () => {
 		expect(res.status).toBe(416);
 		expect(res.headers['content-range']).toBe(`bytes */${IDENTITY.length}`);
 		expect(res.body.byteLength).toBe(0);
+	});
+
+	it('serves identity to a client that refuses brotli by weight', async () => {
+		// Only a brotli sibling is indexed here, so a refusal of brotli leaves
+		// identity - and the substring test would have served brotli anyway.
+		const res = await rawGet(port, '/wire-probe/asset.txt', { 'accept-encoding': 'br;q=0, gzip' });
+		expect(res.status).toBe(200);
+		expect(res.headers['content-encoding']).toBeUndefined();
+		expect(res.body.equals(Buffer.from(IDENTITY))).toBe(true);
 	});
 });

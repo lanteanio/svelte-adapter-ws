@@ -7,7 +7,7 @@ import { PayloadTooLargeError, send400, send413, send500 } from './http-helpers.
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
-import { acceptsCoding } from './static-assets.js';
+import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
 /* global ENV_PREFIX */
@@ -196,9 +196,10 @@ async function maybeCompress(response, acceptEncoding) {
 	const semi = ctRaw.indexOf(';');
 	const ct = semi === -1 ? ctRaw : ctRaw.slice(0, semi).trimEnd();
 	if (!COMPRESSIBLE_TYPES.has(ct)) return response;
-	const useBr = acceptsCoding(acceptEncoding, 'br');
-	const useGz = !useBr && acceptsCoding(acceptEncoding, 'gzip');
-	if (!useBr && !useGz) return response;
+	// The header's weights decide, not a substring: `br;q=0` is a refusal, and
+	// `gzip;q=1, br;q=0.5` prefers gzip.
+	const chosen = negotiateEncoding(acceptEncoding, true, true);
+	if (chosen === '') return response;
 
 	// Read ahead one chunk to see whether this is a single-chunk body. A body
 	// that keeps streaming is reassembled around the chunks already read and
@@ -251,14 +252,14 @@ async function maybeCompress(response, acceptEncoding) {
 	if (body.byteLength < COMPRESS_MIN_SIZE) {
 		return new Response(body, response);
 	}
-	const compressed = useBr
+	const compressed = chosen === 'br'
 		? brotliCompressSync(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
 		: gzipSync(body, { level: 6 });
 	if (compressed.byteLength >= body.byteLength) {
 		return new Response(body, response);
 	}
 	const headers = new Headers(response.headers);
-	headers.set('content-encoding', useBr ? 'br' : 'gzip');
+	headers.set('content-encoding', chosen);
 	headers.set('content-length', String(compressed.byteLength));
 	headers.append('vary', 'Accept-Encoding');
 	return new Response(compressed, {

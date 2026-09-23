@@ -384,6 +384,20 @@ describe('Accept-Encoding q-values', () => {
 		expect(await identityOnly.text()).toBe(IDENTITY);
 	});
 
+	it('ranks codings by weight and matches names as whole tokens in any case', async () => {
+		const preferred = await get('/logo.svg', { 'accept-encoding': 'gzip;q=1.0, br;q=0.5' });
+		expect(preferred.headers.get('content-encoding')).toBe('gzip');
+		await preferred.arrayBuffer();
+
+		const upper = await get('/logo.svg', { 'accept-encoding': 'BR' });
+		expect(upper.headers.get('content-encoding')).toBe('br');
+		await upper.arrayBuffer();
+
+		const lookalike = await get('/logo.svg', { 'accept-encoding': 'x-gzip, xbr' });
+		expect(lookalike.headers.get('content-encoding')).toBeNull();
+		expect(await lookalike.text()).toBe(IDENTITY);
+	});
+
 	it('accepts a coding through the wildcard member', async () => {
 		const res = await get('/logo.svg', { 'accept-encoding': '*' });
 		expect(res.headers.get('content-encoding')).toBe('br');

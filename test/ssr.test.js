@@ -108,6 +108,23 @@ describe('dynamic compression', () => {
 		expect(await res.text()).toBe('<html>' + 'c'.repeat(4096) + '</html>');
 	});
 
+	// The weights decide, as on the static lane: the heavier coding wins, a
+	// q=0 refusal is honoured, and a coding name matches as a whole token in
+	// any case.
+	it('negotiates the coding by the weights in Accept-Encoding', async () => {
+		for (const [acceptEncoding, expected] of [
+			['gzip;q=1.0, br;q=0.5', 'gzip'],
+			['br;q=0, gzip', 'gzip'],
+			['BR', 'br'],
+			['x-gzip, xbr', null],
+			['br;q=0, gzip;q=0', null]
+		]) {
+			const res = await req('/api/big', { headers: { 'accept-encoding': acceptEncoding } });
+			expect(res.headers.get('content-encoding'), acceptEncoding).toBe(expected);
+			await res.arrayBuffer();
+		}
+	});
+
 	it('streams a multi-chunk body uncompressed and complete', async () => {
 		// POST so the exchange bypasses dedup (which buffers anonymous GETs
 		// into single-chunk responses); the read-ahead must reassemble the

@@ -550,7 +550,8 @@ HTTP/2 and the entire observability ecosystem
    `@sveltejs/kit/node` primitives - `getRequest`, `setResponse`,
    `createReadableStream` - bundled into the build output so a production
    install needs no devDependencies. The in-memory static cache answers with
-   negotiated precompressed representations (per-representation weak ETags),
+   precompressed representations negotiated by the weights in
+   `Accept-Encoding` (RFC 9110 12.5.3; per-representation weak ETags),
    single byte ranges cut in the negotiated representation's coordinates
    (an unsatisfiable one, a zero-length suffix `bytes=-0` included, is a 416
    quoting that representation's length),
@@ -560,7 +561,8 @@ HTTP/2 and the entire observability ecosystem
    `Content-Disposition`), the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
-   single-chunk dynamic compression with the BREACH-defense credential skip, a
+   single-chunk dynamic compression negotiated the same way, with the
+   BREACH-defense credential skip, a
    default `x-content-type-options: nosniff` fill, and the family
    duplicate-header policy (repeated singleton headers are refused, proxy
    identity headers keep their last line). Health and readiness probes

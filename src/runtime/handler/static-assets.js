@@ -9,6 +9,7 @@ import { excludedDotPath } from '../utils/dot-path.js';
 import { mimeLookup } from '../utils/mime.js';
 import { contentDispositionValue, mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
 import { parseRange } from '../utils/byte-range.js';
+import { negotiateEncoding } from '../utils/content-coding.js';
 import { revalidationHeaders } from '../utils/revalidation-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
@@ -290,52 +291,6 @@ export const prerenderedDir = path.join(__dirname, 'prerendered');
 export const _t_static = monotonicNow();
 
 /**
- * Whether a content-coding is acceptable under the request's Accept-Encoding.
- *
- * The common header carries no q-values at all ("gzip, deflate, br, zstd"),
- * and that case stays two substring probes with zero allocation. Only when a
- * q-value is present does the member list get parsed, so an explicit
- * `br;q=0` refusal is honored instead of being read as an offer. An absent
- * coding is acceptable only through a `*` member.
- *
- * @param {string} acceptEncoding
- * @param {'br' | 'gzip'} coding
- * @returns {boolean}
- */
-export function acceptsCoding(acceptEncoding, coding) {
-	if (acceptEncoding === '') return false;
-	if (!acceptEncoding.includes('q=')) {
-		return acceptEncoding.includes(coding) || acceptEncoding.includes('*');
-	}
-	let quality = -1;
-	let wildcard = -1;
-	let start = 0;
-	const len = acceptEncoding.length;
-	while (start < len) {
-		let end = acceptEncoding.indexOf(',', start);
-		if (end === -1) end = len;
-		const member = acceptEncoding.slice(start, end).trim();
-		start = end + 1;
-		if (member === '') continue;
-		const semi = member.indexOf(';');
-		const name = (semi === -1 ? member : member.slice(0, semi)).trimEnd().toLowerCase();
-		let q = 1;
-		if (semi !== -1) {
-			const match = /;\s*q\s*=\s*([0-9.]+)/i.exec(member.slice(semi));
-			if (match) {
-				q = parseFloat(match[1]);
-				if (!Number.isFinite(q)) q = 0;
-			}
-		}
-		if (name === coding && quality < 0) quality = q;
-		else if (name === '*' && wildcard < 0) wildcard = q;
-	}
-	if (quality >= 0) return quality > 0;
-	if (wildcard >= 0) return wildcard > 0;
-	return false;
-}
-
-/**
  * The 304 response for a validated representation. A 304 repeats the header
  * set the 200 would have carried, less the fields that describe the body it
  * does not have (RFC 9110 15.4.5), baked per representation at index time.
@@ -479,23 +434,25 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	// what a resuming download manager asks for, usually without If-Range -
 	// hands back a slice of a representation the client never held: no status
 	// code reports it and nothing on the wire catches it, the saved file is just
-	// wrong.
+	// wrong. The choice honours the header's weights (negotiateEncoding), so a
+	// coding the client refused with `q=0` is never the one selected.
 	let headers = entry.headers;
 	let headersFlat = entry.headersFlat;
 	let revalidation = entry.revalidationHeadersFlat;
 	let body = entry.buffer;
 	let repEtag = entry.etag;
-	if (entry.brBuffer && acceptsCoding(acceptEncoding, 'br')) {
+	const encoding = negotiateEncoding(acceptEncoding, entry.brBuffer !== undefined, entry.gzBuffer !== undefined);
+	if (encoding === 'br') {
 		headers = /** @type {[string, string][]} */ (entry.brHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.brHeadersFlat);
 		revalidation = /** @type {string[]} */ (entry.brRevalidationHeadersFlat);
-		body = entry.brBuffer;
+		body = /** @type {Buffer} */ (entry.brBuffer);
 		repEtag = /** @type {string} */ (entry.brEtag);
-	} else if (entry.gzBuffer && acceptsCoding(acceptEncoding, 'gzip')) {
+	} else if (encoding === 'gzip') {
 		headers = /** @type {[string, string][]} */ (entry.gzHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.gzHeadersFlat);
 		revalidation = /** @type {string[]} */ (entry.gzRevalidationHeadersFlat);
-		body = entry.gzBuffer;
+		body = /** @type {Buffer} */ (entry.gzBuffer);
 		repEtag = /** @type {string} */ (entry.gzEtag);
 	}
 
