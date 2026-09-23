@@ -109,6 +109,19 @@ describe('static serving', () => {
 		expect(await cross.text()).toBe(IDENTITY);
 	});
 
+	it('answers 304 for the gzip representation with its own validator', async () => {
+		const first = await get('/logo.svg', { 'accept-encoding': 'gzip' });
+		const gzEtag = /** @type {string} */ (first.headers.get('etag'));
+		await first.arrayBuffer();
+		expect(gzEtag.endsWith('-gzip"')).toBe(true);
+
+		const revalidated = await get('/logo.svg', { 'accept-encoding': 'gzip', 'if-none-match': gzEtag });
+		expect(revalidated.status).toBe(304);
+		expect(revalidated.headers.get('etag')).toBe(gzEtag);
+		expect(revalidated.headers.get('vary')).toBe('Accept-Encoding');
+		expect(revalidated.headers.get('content-encoding')).toBeNull();
+	});
+
 	it('serves single byte ranges in the negotiated representation coordinates', async () => {
 		const res = await get('/logo.svg', { 'accept-encoding': 'identity', range: 'bytes=0-4' });
 		expect(res.status).toBe(206);
@@ -428,6 +441,18 @@ describe('Accept-Encoding q-values', () => {
 		const lookalike = await get('/logo.svg', { 'accept-encoding': 'x-gzip, xbr' });
 		expect(lookalike.headers.get('content-encoding')).toBeNull();
 		expect(await lookalike.text()).toBe(IDENTITY);
+	});
+
+	it('accepts gzip through the wildcard alone, and reads a weight above 1 as no weight', async () => {
+		const wildcard = await get('/logo.svg', { 'accept-encoding': 'br;q=0, *' });
+		expect(wildcard.headers.get('content-encoding')).toBe('gzip');
+		await wildcard.arrayBuffer();
+
+		// Not a qvalue, so gzip keeps the default 1 and brotli wins the tie. The
+		// weight on br keeps the header off the weightless-brotli fast path.
+		const outOfRange = await get('/logo.svg', { 'accept-encoding': 'gzip;q=1.5, br;q=1' });
+		expect(outOfRange.headers.get('content-encoding')).toBe('br');
+		await outOfRange.arrayBuffer();
 	});
 
 	it('accepts a coding through the wildcard member', async () => {
