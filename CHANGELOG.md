@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The runtime's probe answers no longer carry `content-type: text/plain`.
   The length is their only header, as on the family's native tier and in
   `createTestServer`.
+- **`bytes=-0` is answered 416, not with the whole body.** The range parser
+  read a zero-length suffix as malformed, and a malformed Range is ignored, so
+  a request for the last zero bytes got a 200 with everything. RFC 9110 14.2
+  makes a suffix range satisfiable only with a non-zero length; the parser
+  (`utils/byte-range.js`, the family's own) now reports it unsatisfiable, and
+  the static lane answers `416` with `Content-Range: bytes */N` against the
+  negotiated representation's length. `bytes=-` stays malformed and ignored.
 
 ## [0.0.1] - 2026-09-22
 

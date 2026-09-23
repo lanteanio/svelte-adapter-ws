@@ -551,7 +551,9 @@ HTTP/2 and the entire observability ecosystem
    `createReadableStream` - bundled into the build output so a production
    install needs no devDependencies. The in-memory static cache answers with
    negotiated precompressed representations (per-representation weak ETags),
-   single byte ranges cut in the negotiated representation's coordinates,
+   single byte ranges cut in the negotiated representation's coordinates
+   (an unsatisfiable one, a zero-length suffix `bytes=-0` included, is a 416
+   quoting that representation's length),
    If-Match/If-Unmodified-Since/If-None-Match/If-Modified-Since/If-Range preconditions, the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,

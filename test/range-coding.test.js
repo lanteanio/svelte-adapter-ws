@@ -145,13 +145,28 @@ describe('ranges over coded representations', () => {
 		expect(overSuffix.headers['content-range']).toBe(`bytes 0-${size - 1}/${size}`);
 	});
 
-	it('treats a zero suffix and a dash-less spec as ignorable (full 200)', async () => {
-		for (const range of ['bytes=-0', 'bytes=']) {
+	it('treats a dash-less spec and a bare dash as ignorable (full 200)', async () => {
+		for (const range of ['bytes=', 'bytes=-']) {
 			const res = await raw('/logo.svg', { 'accept-encoding': 'identity', range });
 			expect(res.status, range).toBe(200);
 			expect(res.body.toString(), range).toBe(IDENTITY);
 			expect(res.headers['content-range'], range).toBeUndefined();
 		}
+	});
+
+	// RFC 9110 14.2: a suffix range is satisfiable only with a non-zero length,
+	// so `bytes=-0` asks for nothing and the whole body is the one answer it
+	// must not get. The length quoted is the negotiated representation's.
+	it('answers a zero suffix with 416 against the negotiated representation', async () => {
+		const identity = await raw('/logo.svg', { 'accept-encoding': 'identity', range: 'bytes=-0' });
+		expect(identity.status).toBe(416);
+		expect(identity.headers['content-range']).toBe(`bytes */${Buffer.byteLength(IDENTITY)}`);
+		expect(identity.body.byteLength).toBe(0);
+
+		const br = await raw('/logo.svg', { 'accept-encoding': 'br', range: 'bytes=-0' });
+		expect(br.status).toBe(416);
+		expect(br.headers['content-range']).toBe(`bytes */${BR.byteLength}`);
+		expect(br.body.byteLength).toBe(0);
 	});
 
 	it('answers 416 with bytes */0 for a range into an empty file', async () => {

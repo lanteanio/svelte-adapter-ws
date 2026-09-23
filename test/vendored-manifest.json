@@ -1891,6 +1891,14 @@
 			{
 				"lead": "\t\t\ttry { uWS.us_listen_socket_close(listenSocket); } catch { /* already closed */ }",
 				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
+			},
+			{
+				"lead": "\t\tconst identity = serve(entry, { range: `bytes=${IDENTITY.length}-` });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('keeps compression when a Range header cannot be honoured', () => {",
+				"ours": "\t\tconst identity = serve(entry, { range: `bytes=${IDENTITY.length}-` });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('a zero-length suffix is unsatisfiable against the selected representation', () => {\n\t\t// RFC 9110 14.2: a suffix range is satisfiable only with a non-zero\n\t\t// length. `bytes=-0` used to be read as malformed and answered with the\n\t\t// whole body - the one answer the RFC rules out for it.\n\t\tconst br = serve(entry, { acceptEncoding: 'br', range: 'bytes=-0' });\n\t\texpect(br.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(br, 'content-range')).toBe(`bytes */${brBytes.byteLength}`);\n\t\texpect(br.body).toBeNull();\n\n\t\tconst identity = serve(entry, { range: 'bytes=-0' });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('keeps compression when a Range header cannot be honoured', () => {"
+			},
+			{
+				"lead": "\t\texpect(res.headers['content-range']).toBe(`bytes */${brBytes.byteLength}`);\n\t});\n});\n",
+				"ours": "\t\texpect(res.headers['content-range']).toBe(`bytes */${brBytes.byteLength}`);\n\t});\n\n\tit('answers a zero-length suffix with 416 on the wire', async () => {\n\t\tconst res = await rawGet(port, '/wire-probe/asset.txt', { range: 'bytes=-0' });\n\t\texpect(res.status).toBe(416);\n\t\texpect(res.headers['content-range']).toBe(`bytes */${IDENTITY.length}`);\n\t\texpect(res.body.byteLength).toBe(0);\n\t});\n});\n"
 			}
 		]
 	},

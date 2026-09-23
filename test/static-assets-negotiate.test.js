@@ -313,6 +313,20 @@ describeMaybe('static assets: per-encoding representations', () => {
 		expect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);
 	});
 
+	it('a zero-length suffix is unsatisfiable against the selected representation', () => {
+		// RFC 9110 14.2: a suffix range is satisfiable only with a non-zero
+		// length. `bytes=-0` used to be read as malformed and answered with the
+		// whole body - the one answer the RFC rules out for it.
+		const br = serve(entry, { acceptEncoding: 'br', range: 'bytes=-0' });
+		expect(br.status).toBe('416 Range Not Satisfiable');
+		expect(header(br, 'content-range')).toBe(`bytes */${brBytes.byteLength}`);
+		expect(br.body).toBeNull();
+
+		const identity = serve(entry, { range: 'bytes=-0' });
+		expect(identity.status).toBe('416 Range Not Satisfiable');
+		expect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);
+	});
+
 	it('keeps compression when a Range header cannot be honoured', () => {
 		// Malformed, multi-range and stale-If-Range requests fall through to a
 		// normal response - which must still be the negotiated one, or a junk
@@ -642,5 +656,12 @@ describeMaybe('static assets: resume over a real connection', () => {
 		});
 		expect(res.status).toBe(416);
 		expect(res.headers['content-range']).toBe(`bytes */${brBytes.byteLength}`);
+	});
+
+	it('answers a zero-length suffix with 416 on the wire', async () => {
+		const res = await rawGet(port, '/wire-probe/asset.txt', { range: 'bytes=-0' });
+		expect(res.status).toBe(416);
+		expect(res.headers['content-range']).toBe(`bytes */${IDENTITY.length}`);
+		expect(res.body.byteLength).toBe(0);
 	});
 });
