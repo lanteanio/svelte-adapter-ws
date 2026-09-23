@@ -25,8 +25,15 @@ beforeAll(async () => {
 			'client/.well-known/security.txt': 'Contact: mailto:security@example.com',
 			'client/hello.txt': 'hello from read()',
 			'prerendered/about.html': '<html>about page</html>',
-			'prerendered/docs/index.html': '<html>docs index</html>'
-		}
+			'prerendered/docs/index.html': '<html>docs index</html>',
+			'prerendered/café.html': '<html>café page</html>',
+			'prerendered/über/index.html': '<html>über index</html>'
+		},
+		manifestSource: [
+			"export const manifest = { appPath: '_app' };",
+			"export const prerendered = new Set(['/about', '/docs', '/café', '/über']);",
+			"export const base = '';"
+		].join('\n')
 	});
 	rt = await bootRuntime(payload);
 });
@@ -214,6 +221,23 @@ describe('prerendered pages', () => {
 		const redirected = await get('/ab%6Fut/');
 		expect(redirected.status).toBe(308);
 		expect(redirected.headers.get('location')).toBe('/about');
+	});
+
+	// The lookup matches the DECODED path, so the canonical spelling it
+	// redirects to is decoded too; the Location carries it percent-encoded,
+	// the bytes a browser sends for that route, never the raw characters.
+	it('percent-encodes the Location of a redirect to a non-ASCII page', async () => {
+		const fileStyle = await get('/caf%C3%A9/?x=%C3%A9');
+		expect(fileStyle.status).toBe(308);
+		expect(fileStyle.headers.get('location')).toBe('/caf%C3%A9?x=%C3%A9');
+
+		const dirStyle = await get('/%C3%BCber?y=1');
+		expect(dirStyle.status).toBe(308);
+		expect(dirStyle.headers.get('location')).toBe('/%C3%BCber/?y=1');
+
+		const landed = await get('/%C3%BCber/');
+		expect(landed.status).toBe(200);
+		expect(await landed.text()).toBe('<html>über index</html>');
 	});
 
 	it('refuses malformed percent-encoding with 400', async () => {

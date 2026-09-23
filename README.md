@@ -560,7 +560,12 @@ HTTP/2 and the entire observability ecosystem
    configured `staticHeaders` entry included, less `Content-Encoding` and
    `Content-Disposition`), the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
-   rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
+   rules, the Location percent-encoded so a route with a non-ASCII name
+   redirects to the bytes a browser sends for it. A request line carrying raw
+   non-ASCII bytes is refused 400 by node's own parser before any lane reads
+   it: a request target is ASCII (RFC 9112 3.2) and no `node:http` option,
+   the insecure parser included, admits one, where the native tier hands the
+   decoded characters to the lookup. SSR gets concurrent-request dedup for anonymous GET/HEAD,
    single-chunk dynamic compression negotiated the same way, with the
    BREACH-defense credential skip, a
    default `x-content-type-options: nosniff` fill, and the family

@@ -10,6 +10,7 @@ import { mimeLookup } from '../utils/mime.js';
 import { contentDispositionValue, mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
 import { parseRange } from '../utils/byte-range.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
+import { locationTarget } from '../utils/location-target.js';
 import { revalidationHeaders } from '../utils/revalidation-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
@@ -599,7 +600,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 	if (prerendered.has(decoded)) {
 		// Directory-style page: bare path is not canonical, redirect to trailing slash
 		if (prerenderedDirStyle.has(decoded)) {
-			res.writeHead(308, { location: decoded + '/' + search });
+			res.writeHead(308, { location: locationTarget(decoded + '/', search) });
 			res.end();
 			return true;
 		}
@@ -622,8 +623,10 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 				return true;
 			}
 		}
-		// Otherwise redirect to the prerendered path (the canonical form)
-		res.writeHead(308, { location: alt + search });
+		// Otherwise redirect to the prerendered path (the canonical form),
+		// percent-encoded: the lookup matched on the decoded spelling, and a
+		// header carries the string's raw UTF-8 bytes.
+		res.writeHead(308, { location: locationTarget(alt, search) });
 		res.end();
 		return true;
 	}
