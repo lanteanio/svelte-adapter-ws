@@ -39,8 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   referrer policy - was absent on every revalidation, and a client that
   revalidates on each navigation saw its security policy once. The 304 now
   writes the representation's 200 header tuples - validators, caching
-  directives and every configured entry; `Content-Type` is written only
-  beside a body - less the fields that describe the body it does not carry
+  directives and every configured entry; `Content-Type` and `Content-Length`
+  are written only beside a body - less the fields that describe the body it
+  does not carry
   (`Content-Encoding`, `Content-Disposition`; RFC 9110 15.4.5), baked per
   representation at index time so the revalidation path stays one
   `writeHead`.
@@ -59,8 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value as Latin-1, so a route named `café` redirected with the raw byte
   `0xE9` in the header rather than a request target, and it refuses a
   character past Latin-1 outright, so a trailing-slash request to a route
-  named `łódź` threw `ERR_INVALID_CHAR` out of the request listener, where
-  nothing caught it. The target is now spelled as a request target
+  named `łódź`, or a bare request to a directory-style route named `żółw`,
+  threw `ERR_INVALID_CHAR` out of the request listener, where nothing caught
+  it. The target is now spelled as a request target
   (`utils/location-target.js`, the family's own), path segments and query
   alike, so the redirect lands on the lookup that issued it.
 - The static lane's empty answers - the 412, the 416 and both prerendered

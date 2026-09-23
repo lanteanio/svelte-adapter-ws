@@ -541,8 +541,8 @@
 		"file": "src/runtime/utils/content-coding.js",
 		"adaptations": [
 			{
-				"lead": " * substring search and a delimiter check on each side - a few nanoseconds\n * over the substring test it replaces. Every other shape (a weight anywhere on brotli,\n * a capitalised spelling, no brotli at all) takes one allocation-free pass over\n",
-				"ours": " * substring search and a delimiter check on each side. Every other shape (a\n * weight anywhere on brotli, a capitalised spelling, no brotli at all) takes\n * one allocation-free pass over\n"
+				"lead": " * substring search and a delimiter check on each side - a few nanoseconds\n * over the substring test it replaces. Every other shape (a weight anywhere on brotli,\n * a capitalised spelling, no brotli at all) takes one allocation-free pass over\n * the header. Weights are kept in thousandths (the grammar allows at most three\n * decimals), a coding that is not listed is -1, the first listing of a coding\n * is the one that counts, and a weight that does not parse leaves the coding\n * at its default of 1.\n",
+				"ours": " * substring search and a delimiter check on each side. Every other shape (a\n * weight anywhere on brotli, a capitalised spelling, no brotli at all) takes\n * one allocation-free pass over the header. Weights are kept in thousandths\n * (the grammar allows at most three decimals), a coding that is not listed is\n * -1, the first listing of a coding is the one that counts, and a weight that\n * does not parse leaves the coding at its default of 1.\n"
 			}
 		]
 	},
@@ -560,7 +560,7 @@
 		"adaptations": [
 			{
 				"lead": " * it redirects to is a decoded string too, and a header value is written to the\n * wire as the UTF-8 bytes of the string it was given. A route named with a\n * non-ASCII character therefore redirected with raw bytes in Location, which\n * RFC 9110 5.5 does not allow and which every client parses by its own rules.\n",
-				"ours": " * it redirects to is a decoded string too, and node writes a header value as\n * Latin-1 and refuses a character past it. A route named with a non-ASCII\n * character therefore redirected with raw bytes in Location, which RFC 9110\n * 5.5 does not allow and which every client parses by its own rules, or threw.\n"
+				"ours": " * it redirects to is a decoded string too, and node writes a header value as\n * Latin-1 and refuses a character past it. A route named with a non-ASCII\n * character therefore threw past Latin-1 and otherwise redirected with raw\n * bytes in Location, which RFC 9110 5.5 does not allow and which every client\n * parses by its own rules.\n"
 			}
 		]
 	},

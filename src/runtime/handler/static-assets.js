@@ -522,8 +522,8 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 			flat.push(headers[i][0], headers[i][1]);
 		}
 		res.writeHead(206, flat);
-		// node suppresses the body for HEAD requests on its own, but skipping
-		// the write avoids copying the slice into the socket buffers at all.
+		// node drops the body of a HEAD reply on its own; not handing it the
+		// slice keeps the HEAD answer from depending on that.
 		if (headOnly) res.end();
 		else res.end(slice);
 		return;
