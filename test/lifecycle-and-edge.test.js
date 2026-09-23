@@ -171,6 +171,31 @@ describe('edge policy', () => {
 		expect(ordinary).toMatch(/^HTTP\/1\.1 200 /);
 	});
 
+	// A path that does not decode is not the reserved-character check's to
+	// refuse: GET and HEAD get the static lookup's 400, and any other method
+	// reaches the app's router, as on every other platform.
+	it.runIf(process.platform === 'win32')('leaves an undecodable path to the lanes behind the gate on win32', async () => {
+		for (const method of ['GET', 'HEAD']) {
+			const response = await rawRequest(
+				rt.port,
+				`${method} /x%ZZ HTTP/1.1\r\nHost: a.test\r\nConnection: close\r\n\r\n`
+			);
+			expect(response, method).toMatch(/^HTTP\/1\.1 400 /);
+		}
+		const post = await rawRequest(
+			rt.port,
+			'POST /x%ZZ HTTP/1.1\r\nHost: a.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+		);
+		expect(post).toMatch(/^HTTP\/1\.1 200 /);
+		expect(post).toContain('SSR:/x%ZZ');
+		// A reserved spelling is still refused whatever the method.
+		const reserved = await rawRequest(
+			rt.port,
+			'POST /x%3Ay HTTP/1.1\r\nHost: a.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+		);
+		expect(reserved).toMatch(/^HTTP\/1\.1 400 /);
+	});
+
 	it('comma-joins repeated list headers in arrival order for the app', async () => {
 		const response = await rawRequest(
 			rt.port,

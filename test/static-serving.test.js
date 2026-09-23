@@ -28,11 +28,12 @@ beforeAll(async () => {
 			'prerendered/docs/index.html': '<html>docs index</html>',
 			'prerendered/café.html': '<html>café page</html>',
 			'prerendered/über/index.html': '<html>über index</html>',
-			'prerendered/łódź.html': '<html>łódź page</html>'
+			'prerendered/łódź.html': '<html>łódź page</html>',
+			'prerendered/żółw/index.html': '<html>żółw index</html>'
 		},
 		manifestSource: [
 			"export const manifest = { appPath: '_app' };",
-			"export const prerendered = new Set(['/about', '/docs', '/café', '/über', '/łódź']);",
+			"export const prerendered = new Set(['/about', '/docs', '/café', '/über', '/łódź', '/żółw']);",
 			"export const base = '';"
 		].join('\n')
 	});
@@ -256,6 +257,10 @@ describe('prerendered pages', () => {
 		expect(pastLatin1.status).toBe(308);
 		expect(pastLatin1.headers.get('location')).toBe('/%C5%82%C3%B3d%C5%BA');
 
+		const pastLatin1Dir = await get('/%C5%BC%C3%B3%C5%82w?q=%C5%82');
+		expect(pastLatin1Dir.status).toBe(308);
+		expect(pastLatin1Dir.headers.get('location')).toBe('/%C5%BC%C3%B3%C5%82w/?q=%C5%82');
+
 		const landed = await get('/%C3%BCber/');
 		expect(landed.status).toBe(200);
 		expect(await landed.text()).toBe('<html>über index</html>');
@@ -448,11 +453,15 @@ describe('Accept-Encoding q-values', () => {
 		expect(wildcard.headers.get('content-encoding')).toBe('gzip');
 		await wildcard.arrayBuffer();
 
-		// Not a qvalue, so gzip keeps the default 1 and brotli wins the tie. The
+		// Not a qvalue, so gzip keeps the default 1: brotli wins a tie at 1 and
+		// loses to gzip at 0.5, where a refusal would have handed it the win. The
 		// weight on br keeps the header off the weightless-brotli fast path.
 		const outOfRange = await get('/logo.svg', { 'accept-encoding': 'gzip;q=1.5, br;q=1' });
 		expect(outOfRange.headers.get('content-encoding')).toBe('br');
 		await outOfRange.arrayBuffer();
+		const notARefusal = await get('/logo.svg', { 'accept-encoding': 'gzip;q=1.5, br;q=0.5' });
+		expect(notARefusal.headers.get('content-encoding')).toBe('gzip');
+		await notARefusal.arrayBuffer();
 	});
 
 	it('accepts a coding through the wildcard member', async () => {
