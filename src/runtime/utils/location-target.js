@@ -11,10 +11,10 @@ const QUERY_UNSAFE = /[^!$-~]+/g;
  * request target: percent-encoded.
  *
  * The prerendered lookup matches on the DECODED path, so the canonical spelling
- * it redirects to is a decoded string too, and a header value is written to the
- * wire as the UTF-8 bytes of the string it was given. A route named with a
- * non-ASCII character therefore redirected with raw bytes in Location, which
- * RFC 9110 5.5 does not allow and which every client parses by its own rules.
+ * it redirects to is a decoded string too, and a header value cannot carry
+ * it: node writes a header as Latin-1 and refuses a character past it. A
+ * route named with a non-ASCII character therefore redirected with a raw byte
+ * in Location, which RFC 9110 5.5 does not allow, or threw.
  * Encoding the segments here gives the same bytes a browser would have sent
  * for that route in the first place, so the redirect lands on the lookup that
  * issued it.

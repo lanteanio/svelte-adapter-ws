@@ -8,8 +8,8 @@
  * Read on the DECODED spelling as well as the raw one, because every lane
  * behind this gate decodes before it touches the filesystem: the prerendered
  * lookup, SvelteKit's router and its `read()` all see `%3A` as `:`. A gate
- * that read only the raw bytes refused `/x:y` and passed `/x%3Ay` to the same
- * `open()`.
+ * reading only the raw bytes would refuse `/x:y` and pass `/x%3Ay` to the
+ * same `open()`.
  *
  * A path that does not decode is left to those lanes, which refuse it
  * themselves; the only decision made here is the reserved-character one.

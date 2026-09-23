@@ -1,10 +1,8 @@
 // Accept-Encoding negotiation (src/runtime/utils/content-coding.js), the
 // function both the static lane and the single-chunk SSR lane call.
 //
-// The defect this replaces was substring matching: `acceptEncoding.includes('br')`
-// read `br;q=0` - a refusal - as an acceptance, and read no preference at all,
-// so `gzip;q=1, br;q=0.5` got brotli. The cases below are RFC 9110 12.5.3 read
-// literally, each one a header shape a real client sends.
+// The cases below are RFC 9110 12.5.3 read literally, each one a header shape
+// a real client sends.
 
 import { describe, it, expect } from 'vitest';
 import { negotiateEncoding } from '../src/runtime/utils/content-coding.js';

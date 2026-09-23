@@ -336,7 +336,7 @@ describeMaybe('static assets: per-encoding representations', () => {
 	});
 
 	it('selects by the weights in Accept-Encoding, not by substring', () => {
-		// `br;q=0` is a refusal; the substring test read it as an acceptance.
+		// `br;q=0` is a refusal.
 		const refused = serve(entry, { acceptEncoding: 'br;q=0, gzip' });
 		expect(refused.status).toBe('200 OK');
 		expect(header(refused, 'content-encoding')).toBe('gzip');
@@ -733,7 +733,7 @@ describeMaybe('static assets: resume over a real connection', () => {
 
 	it('serves identity to a client that refuses brotli by weight', async () => {
 		// Only a brotli sibling is indexed here, so a refusal of brotli leaves
-		// identity - and the substring test would have served brotli anyway.
+		// identity.
 		const res = await rawGet(port, '/wire-probe/asset.txt', { 'accept-encoding': 'br;q=0, gzip' });
 		expect(res.status).toBe(200);
 		expect(res.headers['content-encoding']).toBeUndefined();

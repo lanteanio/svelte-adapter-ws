@@ -529,10 +529,22 @@
 		]
 	},
 	{
+		"file": "src/runtime/utils/byte-range.js"
+	},
+	{
 		"file": "src/runtime/utils/chaos.js"
 	},
 	{
 		"file": "src/runtime/utils/connection-permit.js"
+	},
+	{
+		"file": "src/runtime/utils/content-coding.js",
+		"adaptations": [
+			{
+				"lead": " * substring search and a delimiter check on each side - a few nanoseconds\n * over the substring test it replaces. Every other shape (a weight anywhere on brotli,\n",
+				"ours": " * substring search and a delimiter check on each side. Every other shape (a\n * weight anywhere on brotli,\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/cookies-string.js"
@@ -542,6 +554,15 @@
 	},
 	{
 		"file": "src/runtime/utils/epoch.js"
+	},
+	{
+		"file": "src/runtime/utils/location-target.js",
+		"adaptations": [
+			{
+				"lead": " * it redirects to is a decoded string too, and a header value is written to the\n * wire as the UTF-8 bytes of the string it was given. A route named with a\n * non-ASCII character therefore redirected with raw bytes in Location, which\n * RFC 9110 5.5 does not allow and which every client parses by its own rules.\n",
+				"ours": " * it redirects to is a decoded string too, and a header value cannot carry\n * it: node writes a header as Latin-1 and refuses a character past it. A\n * route named with a non-ASCII character therefore redirected with a raw byte\n * in Location, which RFC 9110 5.5 does not allow, or threw.\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/metrics-merge.js"
@@ -572,6 +593,9 @@
 		"file": "src/runtime/utils/pressure.js"
 	},
 	{
+		"file": "src/runtime/utils/revalidation-headers.js"
+	},
+	{
 		"file": "src/runtime/utils/static-headers.js"
 	},
 	{
@@ -582,6 +606,15 @@
 	},
 	{
 		"file": "src/runtime/utils/waiting-room-template.js"
+	},
+	{
+		"file": "src/runtime/utils/windows-path.js",
+		"adaptations": [
+			{
+				"lead": " * lookup, SvelteKit's router and its `read()` all see `%3A` as `:`. A gate\n * that read only the raw bytes refused `/x:y` and passed `/x%3Ay` to the same\n * `open()`.\n",
+				"ours": " * lookup, SvelteKit's router and its `read()` all see `%3A` as `:`. A gate\n * reading only the raw bytes would refuse `/x:y` and pass `/x%3Ay` to the\n * same `open()`.\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/waiting-room-renderer-bridge.js"
@@ -882,6 +915,15 @@
 		"file": "test/connection-permit-carrier.test.js"
 	},
 	{
+		"file": "test/content-coding.test.js",
+		"adaptations": [
+			{
+				"lead": "// The defect this replaces was substring matching: `acceptEncoding.includes('br')`\n// read `br;q=0` - a refusal - as an acceptance, and read no preference at all,\n// so `gzip;q=1, br;q=0.5` got brotli. The cases below are RFC 9110 12.5.3 read\n// literally, each one a header shape a real client sends.\n",
+				"ours": "// The cases below are RFC 9110 12.5.3 read literally, each one a header shape\n// a real client sends.\n"
+			}
+		]
+	},
+	{
 		"file": "test/crdt-channel.test.js"
 	},
 	{
@@ -1057,6 +1099,9 @@
 		"file": "test/fixture/src/routes/__leak/+server.js"
 	},
 	{
+		"file": "test/fixture/src/routes/compressible/+page.svelte"
+	},
+	{
 		"file": "test/fixture/src/routes/cursors/+page.svelte"
 	},
 	{
@@ -1064,6 +1109,12 @@
 	},
 	{
 		"file": "test/fixture/src/routes/metrics/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/prerendered/[slug]/+page.js"
+	},
+	{
+		"file": "test/fixture/src/routes/prerendered/[slug]/+page.svelte"
 	},
 	{
 		"file": "test/fixture/src/routes/slow-hold/+server.js"
@@ -1165,6 +1216,19 @@
 		"file": "test/helpers/stop-leaked-runtimes.js"
 	},
 	{
+		"file": "test/http-request-lanes.test.js",
+		"adaptations": [
+			{
+				"lead": "//     the lookup matches the DECODED path and used to write it verbatim, so a\n//     route with a non-ASCII name redirected with raw UTF-8 bytes in the header;\n",
+				"ours": "//     the lookup matches the DECODED path, and a request target is ASCII;\n"
+			},
+			{
+				"lead": "\tit('encodes a raw-byte target the same way, and the redirect lands where the lookup matched', async () => {\n\t\t// A client that sends the name's UTF-8 bytes raw in the request line.\n\t\t// uWS hands them to the runtime as the decoded characters, and the header\n\t\t// used to carry those characters' bytes back out unencoded.\n\t\tconst target = Buffer.concat([Buffer.from('/prerendered/caf'), E_ACUTE, Buffer.from('/?x='), E_ACUTE]);\n\t\tconst redirect = await exchange(port, request('GET', target));\n\t\texpect(redirect.status).toBe(308);\n\t\texpect(redirect.headers.location).toBe('/prerendered/caf%C3%A9?x=%C3%A9');\n\t\texpect(/[^\\x00-\\x7f]/.test(redirect.head)).toBe(false);\n\n\t\tconst landed = await exchange(port, request('GET', redirect.headers.location.split('?')[0]));\n\t\texpect(landed.status).toBe(200);\n\t\texpect(landed.body.toString()).toContain('data-testid=\"prerendered-non-ascii\"');\n\t}, 30000);\n\n",
+				"ours": "\tit('refuses a raw-byte target at the parser, and the encoded spelling redirects where the lookup matched', async () => {\n\t\t// A client that sends the name's UTF-8 bytes raw in the request line.\n\t\t// node's HTTP parser answers 400 before any lane reads it - a request\n\t\t// target is ASCII (RFC 9112 3.2), and no node:http option, the insecure\n\t\t// parser included, admits the bytes - where uWS hands the runtime the\n\t\t// decoded characters.\n\t\tconst target = Buffer.concat([Buffer.from('/prerendered/caf'), E_ACUTE, Buffer.from('/?x='), E_ACUTE]);\n\t\tconst refused = await exchange(port, request('GET', target));\n\t\texpect(refused.status).toBe(400);\n\n\t\tconst redirect = await exchange(port, request('GET', '/prerendered/caf%C3%A9/?x=%C3%A9'));\n\t\texpect(redirect.status).toBe(308);\n\t\texpect(redirect.headers.location).toBe('/prerendered/caf%C3%A9?x=%C3%A9');\n\t\texpect(/[^\\x00-\\x7f]/.test(redirect.head)).toBe(false);\n\n\t\tconst landed = await exchange(port, request('GET', redirect.headers.location.split('?')[0]));\n\t\texpect(landed.status).toBe(200);\n\t\texpect(landed.body.toString()).toContain('data-testid=\"prerendered-non-ascii\"');\n\t}, 30000);\n\n"
+			}
+		]
+	},
+	{
 		"file": "test/invariants.test.js"
 	},
 	{
@@ -1172,6 +1236,15 @@
 	},
 	{
 		"file": "test/leak-detect.test.js"
+	},
+	{
+		"file": "test/location-target.test.js",
+		"adaptations": [
+			{
+				"lead": "// The prerendered lookup matches the DECODED path and used to redirect to it\n// verbatim, so a route with a non-ASCII name answered with the raw UTF-8 bytes\n// of that name in the header. The function spells",
+				"ours": "// The prerendered lookup matches the DECODED path, so the target it redirects\n// to is decoded too. The function spells"
+			}
+		]
 	},
 	{
 		"file": "test/lock.test.js"
@@ -1254,10 +1327,6 @@
 			{
 				"lead": "// Not at the default (uWS built-in 404 - route absent there).",
 				"ours": "// Not at the default (the test server's 404 - route absent there)."
-			},
-			{
-				"lead": "\t\texpect(await live.text()).toBe('OK');\n\t});\n\n\tit('flips readiness to 503",
-				"ours": "\t\texpect(await live.text()).toBe('OK');\n\t});\n\n\tit('answers HEAD on both probes with the GET status and no body', async () => {\n\t\t// HAProxy's httpchk and most uptime monitors probe with HEAD by default.\n\t\t// The harness registers HEAD beside GET exactly as production does, so a\n\t\t// deployment rehearsed against createTestServer sees the same answer.\n\t\tconst { createTestServer } = await import('../src/testing.js');\n\t\tserver = await createTestServer();\n\n\t\tconst ready = await fetch(`${server.url}/readyz`, { method: 'HEAD' });\n\t\texpect(ready.status).toBe(200);\n\t\texpect(ready.headers.get('content-length')).toBe('5');\n\t\texpect(await ready.text()).toBe('');\n\n\t\tconst live = await fetch(`${server.url}/healthz`, { method: 'HEAD' });\n\t\texpect(live.status).toBe(200);\n\t\texpect(live.headers.get('content-length')).toBe('2');\n\t\texpect(await live.text()).toBe('');\n\n\t\tserver.platform.__setDraining(true);\n\t\tconst draining = await fetch(`${server.url}/readyz`, { method: 'HEAD' });\n\t\texpect(draining.status).toBe(503);\n\t\texpect(draining.headers.get('content-length')).toBe(String('draining'.length));\n\t\texpect(await draining.text()).toBe('');\n\t\texpect((await fetch(`${server.url}/healthz`, { method: 'HEAD' })).status).toBe(200);\n\t\tserver.platform.__setDraining(false);\n\t});\n\n\tit('flips readiness to 503"
 			}
 		]
 	},
@@ -1286,6 +1355,9 @@
 	},
 	{
 		"file": "test/replay.test.js"
+	},
+	{
+		"file": "test/revalidation-headers.test.js"
 	},
 	{
 		"file": "test/safe-url.test.js"
@@ -1480,6 +1552,15 @@
 	},
 	{
 		"file": "test/websocket-option-contract.test.js"
+	},
+	{
+		"file": "test/windows-reserved-path.test.js",
+		"adaptations": [
+			{
+				"lead": "// The refusal used to read the RAW pathname only, so `/x%3Ay` passed a gate\n// that refused `/x:y`, and reached the prerendered lookup, SvelteKit's router\n// and `read()` - all of which decode first - as the same alternate-data-stream\n// path. The predicate is pure",
+				"ours": "// The prerendered lookup, SvelteKit's router and `read()` all decode first,\n// so `/x%3Ay` names the same alternate-data-stream path as `/x:y` and is\n// refused with it. The predicate is pure"
+			}
+		]
 	},
 	{
 		"file": "test/ws-handler-resolution.test.js",
@@ -1893,28 +1974,12 @@
 				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
 			},
 			{
-				"lead": "\t\tconst identity = serve(entry, { range: `bytes=${IDENTITY.length}-` });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('keeps compression when a Range header cannot be honoured', () => {",
-				"ours": "\t\tconst identity = serve(entry, { range: `bytes=${IDENTITY.length}-` });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('a zero-length suffix is unsatisfiable against the selected representation', () => {\n\t\t// RFC 9110 14.2: a suffix range is satisfiable only with a non-zero\n\t\t// length. `bytes=-0` used to be read as malformed and answered with the\n\t\t// whole body - the one answer the RFC rules out for it.\n\t\tconst br = serve(entry, { acceptEncoding: 'br', range: 'bytes=-0' });\n\t\texpect(br.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(br, 'content-range')).toBe(`bytes */${brBytes.byteLength}`);\n\t\texpect(br.body).toBeNull();\n\n\t\tconst identity = serve(entry, { range: 'bytes=-0' });\n\t\texpect(identity.status).toBe('416 Range Not Satisfiable');\n\t\texpect(header(identity, 'content-range')).toBe(`bytes */${IDENTITY.length}`);\n\t});\n\n\tit('selects by the weights in Accept-Encoding, not by substring', () => {\n\t\t// `br;q=0` is a refusal; the substring test read it as an acceptance.\n\t\tconst refused = serve(entry, { acceptEncoding: 'br;q=0, gzip' });\n\t\texpect(refused.status).toBe('200 OK');\n\t\texpect(header(refused, 'content-encoding')).toBe('gzip');\n\t\texpect(header(refused, 'etag')).toBe(entry.gzEtag);\n\t\texpect(refused.body.equals(gzBytes)).toBe(true);\n\n\t\tconst preferred = serve(entry, { acceptEncoding: 'gzip;q=1.0, br;q=0.5' });\n\t\texpect(header(preferred, 'content-encoding')).toBe('gzip');\n\n\t\tconst none = serve(entry, { acceptEncoding: 'br;q=0, gzip;q=0' });\n\t\texpect(header(none, 'content-encoding')).toBeUndefined();\n\t\texpect(header(none, 'etag')).toBe(entry.etag);\n\t\texpect(none.body.equals(Buffer.from(IDENTITY))).toBe(true);\n\n\t\t// The shapes browsers send still select brotli.\n\t\texpect(header(serve(entry, { acceptEncoding: 'gzip, deflate, br, zstd' }), 'content-encoding')).toBe('br');\n\t});\n\n\tit('keeps compression when a Range header cannot be honoured', () => {"
+				"lead": "\t\t// `br;q=0` is a refusal; the substring test read it as an acceptance.\n",
+				"ours": "\t\t// `br;q=0` is a refusal.\n"
 			},
 			{
-				"lead": "\t\texpect(res.headers['content-range']).toBe(`bytes */${brBytes.byteLength}`);\n\t});\n});\n",
-				"ours": "\t\texpect(res.headers['content-range']).toBe(`bytes */${brBytes.byteLength}`);\n\t});\n\n\tit('answers a zero-length suffix with 416 on the wire', async () => {\n\t\tconst res = await rawGet(port, '/wire-probe/asset.txt', { range: 'bytes=-0' });\n\t\texpect(res.status).toBe(416);\n\t\texpect(res.headers['content-range']).toBe(`bytes */${IDENTITY.length}`);\n\t\texpect(res.body.byteLength).toBe(0);\n\t});\n\n\tit('serves identity to a client that refuses brotli by weight', async () => {\n\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity - and the substring test would have served brotli anyway.\n\t\tconst res = await rawGet(port, '/wire-probe/asset.txt', { 'accept-encoding': 'br;q=0, gzip' });\n\t\texpect(res.status).toBe(200);\n\t\texpect(res.headers['content-encoding']).toBeUndefined();\n\t\texpect(res.body.equals(Buffer.from(IDENTITY))).toBe(true);\n\t});\n});\n"
-			},
-			{
-				"lead": "\tlet customCacheEntry;\n\t/** @type {Buffer} */\n\tlet brBytes;",
-				"ours": "\tlet customCacheEntry;\n\t/** @type {any} */\n\tlet downloadEntry;\n\t/** @type {Buffer} */\n\tlet brBytes;"
-			},
-			{
-				"lead": "\t\tfs.writeFileSync(assetPath + '.gz', gzBytes);\n\n\t\tconst immutableRel",
-				"ours": "\t\tfs.writeFileSync(assetPath + '.gz', gzBytes);\n\t\t// A download extension, so one entry carries Content-Disposition.\n\t\tfs.writeFileSync(path.join(tmpDir, 'bundle.zip'), IDENTITY);\n\t\tfs.writeFileSync(path.join(tmpDir, 'bundle.zip.br'), brBytes);\n\n\t\tconst immutableRel"
-			},
-			{
-				"lead": "\t\tcustomCacheEntry = staticCache.get('/negotiate-custom-cache/asset.txt');\n\n\t\tserve = (target, opts = {}) => {",
-				"ours": "\t\tcustomCacheEntry = staticCache.get('/negotiate-custom-cache/asset.txt');\n\t\tdownloadEntry = staticCache.get('/negotiate-configured/bundle.zip');\n\n\t\tserve = (target, opts = {}) => {"
-			},
-			{
-				"lead": "\t\texpect(header(serve(configuredEntry, { acceptEncoding: 'gzip' }), 'x-frame-options')).toBe('DENY');\n\t});\n\n\tit('carries a matching custom cache policy across representations and 304', () => {",
-				"ours": "\t\texpect(header(serve(configuredEntry, { acceptEncoding: 'gzip' }), 'x-frame-options')).toBe('DENY');\n\t});\n\n\tit('carries app-configured headers on a 304, and leaves out what describes the body', () => {\n\t\t// A client that revalidates on every navigation used to see the app's\n\t\t// security headers only on the first fetch: the 304 was assembled from\n\t\t// four named fields. RFC 9110 15.4.5 wants the 200's header set, less\n\t\t// representation metadata that only makes sense beside the octets.\n\t\tconst identity = serve(configuredEntry, { ifNoneMatch: configuredEntry.etag });\n\t\texpect(identity.status).toBe('304 Not Modified');\n\t\texpect(header(identity, 'x-frame-options')).toBe('DENY');\n\n\t\tconst full = serve(configuredEntry, { acceptEncoding: 'br' });\n\t\tconst brEtag = header(full, 'etag');\n\t\tconst br = serve(configuredEntry, { acceptEncoding: 'br', ifNoneMatch: brEtag });\n\t\texpect(br.status).toBe('304 Not Modified');\n\t\texpect(header(br, 'x-frame-options')).toBe('DENY');\n\t\texpect(header(br, 'x-content-type-options')).toBe('nosniff');\n\t\texpect(header(br, 'etag')).toBe(brEtag);\n\t\texpect(header(br, 'vary')).toBe('Accept-Encoding');\n\t\texpect(header(br, 'cache-control')).toBe('no-cache');\n\t\texpect(header(br, 'last-modified')).toBe(header(full, 'last-modified'));\n\t\texpect(header(br, 'date')).toBeTruthy();\n\t\texpect(header(br, 'content-encoding')).toBeUndefined();\n\t\texpect(header(br, 'content-type')).toBeUndefined();\n\t\texpect(br.body).toBeNull();\n\n\t\t// The download's disposition describes a body the 304 does not carry.\n\t\texpect(downloadEntry, 'the download probe asset must be in the static cache').toBeTruthy();\n\t\texpect(header(serve(downloadEntry), 'content-disposition')).toBe('attachment; filename=\"bundle.zip\"');\n\t\tconst revalidated = serve(downloadEntry, { ifNoneMatch: downloadEntry.etag });\n\t\texpect(revalidated.status).toBe('304 Not Modified');\n\t\texpect(header(revalidated, 'content-disposition')).toBeUndefined();\n\t\texpect(header(revalidated, 'x-frame-options')).toBe('DENY');\n\t\tconst codedEtag = header(serve(downloadEntry, { acceptEncoding: 'br' }), 'etag');\n\t\tconst coded = serve(downloadEntry, { acceptEncoding: 'br', ifNoneMatch: codedEtag });\n\t\texpect(coded.status).toBe('304 Not Modified');\n\t\texpect(header(coded, 'content-disposition')).toBeUndefined();\n\t\texpect(header(coded, 'content-encoding')).toBeUndefined();\n\t});\n\n\tit('carries a matching custom cache policy across representations and 304', () => {"
+				"lead": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity - and the substring test would have served brotli anyway.\n",
+				"ours": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity.\n"
 			}
 		]
 	},

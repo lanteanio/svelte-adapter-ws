@@ -1,10 +1,9 @@
 // The Windows reserved-character gate (src/runtime/utils/windows-path.js)
 // that handler/request.js applies ahead of every decoding lane on win32.
 //
-// The refusal used to read the RAW pathname only, so `/x%3Ay` passed a gate
-// that refused `/x:y`, and reached the prerendered lookup, SvelteKit's router
-// and `read()` - all of which decode first - as the same alternate-data-stream
-// path. The predicate is pure so it runs on every platform; the win32-only
+// The prerendered lookup, SvelteKit's router and `read()` all decode first,
+// so `/x%3Ay` names the same alternate-data-stream path as `/x:y` and is
+// refused with it. The predicate is pure so it runs on every platform; the win32-only
 // wiring is driven against the built runtime in test/http-request-lanes.test.js.
 
 import { describe, it, expect } from 'vitest';

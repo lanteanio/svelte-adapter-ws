@@ -5,8 +5,7 @@
 //     and most uptime monitors send by default; a HEAD used to fall through to
 //     the catch-all and be answered by the app's 404;
 //   - a prerendered trailing-slash redirect spells its Location percent-encoded;
-//     the lookup matches the DECODED path and used to write it verbatim, so a
-//     route with a non-ASCII name redirected with raw UTF-8 bytes in the header;
+//     the lookup matches the DECODED path, and a request target is ASCII;
 //   - the single-chunk SSR lane compresses by the weights in Accept-Encoding;
 //   - on Windows, the reserved-character refusal reads the decoded spelling as
 //     well as the raw one, since every lane behind it decodes before opening.
