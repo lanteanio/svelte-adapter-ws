@@ -556,9 +556,10 @@ HTTP/2 and the entire observability ecosystem
    (an unsatisfiable one, a zero-length suffix `bytes=-0` included, is a 416
    quoting that representation's length),
    If-Match/If-Unmodified-Since/If-None-Match/If-Modified-Since/If-Range
-   preconditions (a 304 repeats the representation's 200 headers, every
-   configured `staticHeaders` entry included, less `Content-Encoding` and
-   `Content-Disposition`), the dotfile refusal with its
+   preconditions (a 304 repeats the representation's validators, caching
+   directives and every configured `staticHeaders` entry, and leaves out
+   what describes the body: `Content-Type`, `Content-Length`,
+   `Content-Encoding` and `Content-Disposition`), the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules, the Location percent-encoded so a route with a non-ASCII name
    redirects to the bytes a browser sends for it. A request line carrying raw

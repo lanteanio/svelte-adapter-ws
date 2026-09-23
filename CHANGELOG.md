@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, a request path that does not percent-decode is no longer
+  refused by the reserved-character check, which now reads the decoded
+  spelling only when there is one. GET and HEAD still get `400` from the
+  static lookup; other methods reach the app's router, as they do on every
+  other platform and on the family's native tier.
+
 ### Fixed
 
 - **The liveness and readiness probes answer HEAD.** `healthCheckPath` and
@@ -44,8 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   12.5.3 does: coding names are whole tokens compared case-insensitively, an
   unlisted coding is acceptable only through `*`, `q=0` refuses, the highest
   weight wins and brotli breaks a tie; identity stays the fallback even under
-  `identity;q=0`. The decision is faster than the one it replaces on every
-  header shape measured, the browser lists included.
+  `identity;q=0`.
 - **A prerendered trailing-slash redirect is percent-encoded, and a route
   named past Latin-1 no longer takes the process down.** The lookup matches
   the DECODED path and wrote it verbatim into `Location`. node writes a header
