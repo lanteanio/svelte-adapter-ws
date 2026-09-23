@@ -9,6 +9,7 @@ import { excludedDotPath } from '../utils/dot-path.js';
 import { mimeLookup } from '../utils/mime.js';
 import { contentDispositionValue, mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
 import { parseRange } from '../utils/byte-range.js';
+import { revalidationHeaders } from '../utils/revalidation-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
 import { send400 } from './http-helpers.js';
@@ -114,19 +115,21 @@ function variantHeaders(base, variantEtag, encoding) {
 }
 
 /**
- * Read one header value out of a representation's baked tuples. Used on the
- * 304 path only, where the response is assembled field by field rather than by
- * replaying the whole tuple loop.
+ * The flat [k1, v1, k2, v2, ...] array node's writeHead accepts for a 304:
+ * the representation's revalidation tuples and nothing else. Baked once per
+ * representation at index time, as the 200 arrays are.
  *
- * @param {[string, string][]} tuples
- * @param {string} name - lowercase field name
- * @returns {string}
+ * @param {[string, string][]} tuples - the representation's 200 tuples
+ * @returns {string[]}
  */
-function headerValue(tuples, name) {
-	for (let i = 0; i < tuples.length; i++) {
-		if (tuples[i][0] === name) return tuples[i][1];
+function flattenRevalidation(tuples) {
+	const kept = revalidationHeaders(tuples);
+	/** @type {string[]} */
+	const flat = [];
+	for (let i = 0; i < kept.length; i++) {
+		flat.push(kept[i][0], kept[i][1]);
 	}
-	return '';
+	return flat;
 }
 
 /**
@@ -211,7 +214,8 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 			etag,
 			lastModifiedMs,
 			headers: merged,
-			headersFlat: flattenHeaders(merged, contentType, buffer.byteLength)
+			headersFlat: flattenHeaders(merged, contentType, buffer.byteLength),
+			revalidationHeadersFlat: flattenRevalidation(merged)
 		};
 
 		if (PRECOMPRESS) {
@@ -233,11 +237,13 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 				entry.brEtag = representationEtag(etag, 'br');
 				entry.brHeaders = variantHeaders(entry.headers, entry.brEtag, 'br');
 				entry.brHeadersFlat = flattenHeaders(entry.brHeaders, contentType, entry.brBuffer.byteLength);
+				entry.brRevalidationHeadersFlat = flattenRevalidation(entry.brHeaders);
 			}
 			if (entry.gzBuffer) {
 				entry.gzEtag = representationEtag(etag, 'gzip');
 				entry.gzHeaders = variantHeaders(entry.headers, entry.gzEtag, 'gzip');
 				entry.gzHeadersFlat = flattenHeaders(entry.gzHeaders, contentType, entry.gzBuffer.byteLength);
+				entry.gzRevalidationHeadersFlat = flattenRevalidation(entry.gzHeaders);
 			}
 		}
 
@@ -330,25 +336,22 @@ export function acceptsCoding(acceptEncoding, coding) {
 }
 
 /**
- * The 304 response for a validated representation. A 304 updates a stored
- * response, so it names WHICH stored representation was validated (its ETag),
- * what that entry varies on, the freshness policy it is stored under, and its
- * date validator. Without them a shared cache can attach it to the wrong
- * variant and hand a coded body to a client that asked for identity.
+ * The 304 response for a validated representation. A 304 repeats the header
+ * set the 200 would have carried, less the fields that describe the body it
+ * does not have (RFC 9110 15.4.5), baked per representation at index time.
+ * The validator and Vary name WHICH stored representation was validated -
+ * without them a shared cache can attach the 304 to the wrong variant and hand
+ * a coded body to a client that asked for identity - Cache-Control names the
+ * policy it is stored under, and the app-configured headers ride along, since
+ * a client that revalidates on every navigation would otherwise see its
+ * transport-security and content-security policy only once. Node writes the
+ * Date itself.
  *
  * @param {import('node:http').ServerResponse} res
- * @param {string} repEtag
- * @param {[string, string][]} headers - the representation's baked tuples
+ * @param {string[]} revalidation - the representation's baked 304 array
  */
-function sendNotModified(res, repEtag, headers) {
-	/** @type {Record<string, string>} */
-	const notModified = { vary: VARY_ON };
-	if (repEtag) notModified.etag = repEtag;
-	const cacheControl = headerValue(headers, 'cache-control');
-	if (cacheControl) notModified['cache-control'] = cacheControl;
-	const lastModified = headerValue(headers, 'last-modified');
-	if (lastModified) notModified['last-modified'] = lastModified;
-	res.writeHead(304, notModified);
+function sendNotModified(res, revalidation) {
+	res.writeHead(304, revalidation);
 	res.end();
 }
 
@@ -479,16 +482,19 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	// wrong.
 	let headers = entry.headers;
 	let headersFlat = entry.headersFlat;
+	let revalidation = entry.revalidationHeadersFlat;
 	let body = entry.buffer;
 	let repEtag = entry.etag;
 	if (entry.brBuffer && acceptsCoding(acceptEncoding, 'br')) {
 		headers = /** @type {[string, string][]} */ (entry.brHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.brHeadersFlat);
+		revalidation = /** @type {string[]} */ (entry.brRevalidationHeadersFlat);
 		body = entry.brBuffer;
 		repEtag = /** @type {string} */ (entry.brEtag);
 	} else if (entry.gzBuffer && acceptsCoding(acceptEncoding, 'gzip')) {
 		headers = /** @type {[string, string][]} */ (entry.gzHeaders);
 		headersFlat = /** @type {(string | number)[]} */ (entry.gzHeadersFlat);
+		revalidation = /** @type {string[]} */ (entry.gzRevalidationHeadersFlat);
 		body = entry.gzBuffer;
 		repEtag = /** @type {string} */ (entry.gzEtag);
 	}
@@ -509,7 +515,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 			return;
 		}
 		if (verdict === 304) {
-			sendNotModified(res, repEtag, headers);
+			sendNotModified(res, revalidation);
 			return;
 		}
 	}

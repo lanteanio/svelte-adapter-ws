@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`utils/byte-range.js`, the family's own) now reports it unsatisfiable, and
   the static lane answers `416` with `Content-Range: bytes */N` against the
   negotiated representation's length. `bytes=-` stays malformed and ignored.
+- **A 304 carries the app's configured headers.** The revalidation response
+  was assembled from four named fields (`ETag`, `Vary`, `Cache-Control`,
+  `Last-Modified`), so every `staticHeaders` entry - HSTS, CSP, frame and
+  referrer policy - was absent on every revalidation, and a client that
+  revalidates on each navigation saw its security policy once. The 304 now
+  writes the representation's 200 header tuples - validators, caching
+  directives and every configured entry; `Content-Type` is written only
+  beside a body - less the fields that describe the body it does not carry
+  (`Content-Encoding`, `Content-Disposition`; RFC 9110 15.4.5), baked per
+  representation at index time so the revalidation path stays one
+  `writeHead`.
 
 ## [0.0.1] - 2026-09-22
 

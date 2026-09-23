@@ -69,6 +69,8 @@ function recorder() {
 			} else if (headers) {
 				for (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);
 			}
+			// node's ServerResponse writes Date on every response itself.
+			if (!rec.headers.some((h) => h[0] === 'date')) rec.headers.push(['date', new Date().toUTCString()]);
 			return res;
 		},
 		end(/** @type {Buffer | undefined} */ body) {
@@ -103,6 +105,8 @@ describeMaybe('static assets: per-encoding representations', () => {
 	let configuredEntry;
 	/** @type {any} */
 	let customCacheEntry;
+	/** @type {any} */
+	let downloadEntry;
 	/** @type {Buffer} */
 	let brBytes;
 	/** @type {Buffer} */
@@ -128,6 +132,9 @@ describeMaybe('static assets: per-encoding representations', () => {
 		fs.writeFileSync(assetPath, IDENTITY);
 		fs.writeFileSync(assetPath + '.br', brBytes);
 		fs.writeFileSync(assetPath + '.gz', gzBytes);
+		// A download extension, so one entry carries Content-Disposition.
+		fs.writeFileSync(path.join(tmpDir, 'bundle.zip'), IDENTITY);
+		fs.writeFileSync(path.join(tmpDir, 'bundle.zip.br'), brBytes);
 
 		const immutableRel = path.join(manifest.appPath, 'immutable', 'chunk.js');
 		fs.mkdirSync(path.dirname(path.join(tmpDir, immutableRel)), { recursive: true });
@@ -149,6 +156,7 @@ describeMaybe('static assets: per-encoding representations', () => {
 		immutableEntry = staticCache.get(`/negotiate-immutable/${manifest.appPath}/immutable/chunk.js`);
 		configuredEntry = staticCache.get('/negotiate-configured/asset.txt');
 		customCacheEntry = staticCache.get('/negotiate-custom-cache/asset.txt');
+		downloadEntry = staticCache.get('/negotiate-configured/bundle.zip');
 
 		serve = (target, opts = {}) => {
 			const rec = recorder();
@@ -404,6 +412,44 @@ describeMaybe('static assets: per-encoding representations', () => {
 		expect(header(serve(configuredEntry), 'x-frame-options')).toBe('DENY');
 		expect(header(serve(configuredEntry, { acceptEncoding: 'br' }), 'x-frame-options')).toBe('DENY');
 		expect(header(serve(configuredEntry, { acceptEncoding: 'gzip' }), 'x-frame-options')).toBe('DENY');
+	});
+
+	it('carries app-configured headers on a 304, and leaves out what describes the body', () => {
+		// A client that revalidates on every navigation used to see the app's
+		// security headers only on the first fetch: the 304 was assembled from
+		// four named fields. RFC 9110 15.4.5 wants the 200's header set, less
+		// representation metadata that only makes sense beside the octets.
+		const identity = serve(configuredEntry, { ifNoneMatch: configuredEntry.etag });
+		expect(identity.status).toBe('304 Not Modified');
+		expect(header(identity, 'x-frame-options')).toBe('DENY');
+
+		const full = serve(configuredEntry, { acceptEncoding: 'br' });
+		const brEtag = header(full, 'etag');
+		const br = serve(configuredEntry, { acceptEncoding: 'br', ifNoneMatch: brEtag });
+		expect(br.status).toBe('304 Not Modified');
+		expect(header(br, 'x-frame-options')).toBe('DENY');
+		expect(header(br, 'x-content-type-options')).toBe('nosniff');
+		expect(header(br, 'etag')).toBe(brEtag);
+		expect(header(br, 'vary')).toBe('Accept-Encoding');
+		expect(header(br, 'cache-control')).toBe('no-cache');
+		expect(header(br, 'last-modified')).toBe(header(full, 'last-modified'));
+		expect(header(br, 'date')).toBeTruthy();
+		expect(header(br, 'content-encoding')).toBeUndefined();
+		expect(header(br, 'content-type')).toBeUndefined();
+		expect(br.body).toBeNull();
+
+		// The download's disposition describes a body the 304 does not carry.
+		expect(downloadEntry, 'the download probe asset must be in the static cache').toBeTruthy();
+		expect(header(serve(downloadEntry), 'content-disposition')).toBe('attachment; filename="bundle.zip"');
+		const revalidated = serve(downloadEntry, { ifNoneMatch: downloadEntry.etag });
+		expect(revalidated.status).toBe('304 Not Modified');
+		expect(header(revalidated, 'content-disposition')).toBeUndefined();
+		expect(header(revalidated, 'x-frame-options')).toBe('DENY');
+		const codedEtag = header(serve(downloadEntry, { acceptEncoding: 'br' }), 'etag');
+		const coded = serve(downloadEntry, { acceptEncoding: 'br', ifNoneMatch: codedEtag });
+		expect(coded.status).toBe('304 Not Modified');
+		expect(header(coded, 'content-disposition')).toBeUndefined();
+		expect(header(coded, 'content-encoding')).toBeUndefined();
 	});
 
 	it('carries a matching custom cache policy across representations and 304', () => {

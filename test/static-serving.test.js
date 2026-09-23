@@ -306,6 +306,73 @@ describe('If-Modified-Since', () => {
 	});
 });
 
+// A 304 repeats the 200's header set less the fields that describe the body
+// (RFC 9110 15.4.5): a configured header reaches a client that only ever
+// revalidates, and a download's disposition does not ride a bodiless answer.
+describe('304 revalidation headers', () => {
+	/** @type {ReturnType<typeof buildRuntime>} */
+	let configured;
+	/** @type {Awaited<ReturnType<typeof bootRuntime>>} */
+	let configuredRt;
+
+	beforeAll(async () => {
+		configured = buildRuntime({
+			files: {
+				'client/logo.svg': IDENTITY,
+				'client/logo.svg.br': BR,
+				'client/download.zip': 'PK-fake-zip-bytes'
+			},
+			replace: {
+				STATIC_HEADERS: JSON.stringify({
+					'x-frame-options': 'DENY',
+					'strict-transport-security': 'max-age=63072000'
+				})
+			}
+		});
+		configuredRt = await bootRuntime(configured);
+	});
+
+	afterAll(async () => {
+		await configuredRt.close();
+		configured.cleanup();
+	});
+
+	/** @param {string} path @param {Record<string, string>} headers */
+	const fetchConfigured = (path, headers) => fetch(configuredRt.origin + path, { headers });
+
+	it('repeats the configured headers and the validator set on a coded 304', async () => {
+		const first = await fetchConfigured('/logo.svg', { 'accept-encoding': 'br' });
+		const etag = /** @type {string} */ (first.headers.get('etag'));
+		await first.arrayBuffer();
+		expect(first.headers.get('x-frame-options')).toBe('DENY');
+
+		const res = await fetchConfigured('/logo.svg', { 'accept-encoding': 'br', 'if-none-match': etag });
+		expect(res.status).toBe(304);
+		expect(res.headers.get('x-frame-options')).toBe('DENY');
+		expect(res.headers.get('strict-transport-security')).toBe('max-age=63072000');
+		expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+		expect(res.headers.get('etag')).toBe(etag);
+		expect(res.headers.get('vary')).toBe('Accept-Encoding');
+		expect(res.headers.get('cache-control')).toBe('no-cache');
+		expect(res.headers.get('last-modified')).toBe(first.headers.get('last-modified'));
+		expect(res.headers.get('date')).toBeTruthy();
+		expect(res.headers.get('content-encoding')).toBeNull();
+		expect(res.headers.get('content-type')).toBeNull();
+	});
+
+	it('leaves the download disposition off the 304', async () => {
+		const first = await fetchConfigured('/download.zip', { 'accept-encoding': 'identity' });
+		const etag = /** @type {string} */ (first.headers.get('etag'));
+		await first.arrayBuffer();
+		expect(first.headers.get('content-disposition')).toBe('attachment; filename="download.zip"');
+
+		const res = await fetchConfigured('/download.zip', { 'accept-encoding': 'identity', 'if-none-match': etag });
+		expect(res.status).toBe(304);
+		expect(res.headers.get('content-disposition')).toBeNull();
+		expect(res.headers.get('x-frame-options')).toBe('DENY');
+	});
+});
+
 describe('Accept-Encoding q-values', () => {
 	it('honors an explicit q=0 refusal of a coding', async () => {
 		const res = await get('/logo.svg', { 'accept-encoding': 'gzip, br;q=0' });

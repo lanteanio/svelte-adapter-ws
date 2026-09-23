@@ -554,7 +554,10 @@ HTTP/2 and the entire observability ecosystem
    single byte ranges cut in the negotiated representation's coordinates
    (an unsatisfiable one, a zero-length suffix `bytes=-0` included, is a 416
    quoting that representation's length),
-   If-Match/If-Unmodified-Since/If-None-Match/If-Modified-Since/If-Range preconditions, the dotfile refusal with its
+   If-Match/If-Unmodified-Since/If-None-Match/If-Modified-Since/If-Range
+   preconditions (a 304 repeats the representation's 200 headers, every
+   configured `staticHeaders` entry included, less `Content-Encoding` and
+   `Content-Disposition`), the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules. SSR gets concurrent-request dedup for anonymous GET/HEAD,
    single-chunk dynamic compression with the BREACH-defense credential skip, a

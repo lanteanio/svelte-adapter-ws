@@ -13,6 +13,7 @@ import { createDivergenceDiagnosticStore } from '../divergence-diagnostics.js';
  *   lastModifiedMs?: number,
  *   headers: [string, string][],
  *   headersFlat: (string | number)[],
+ *   revalidationHeadersFlat: string[],
  *   brBuffer?: Buffer,
  *   gzBuffer?: Buffer,
  *   brEtag?: string,
@@ -20,7 +21,9 @@ import { createDivergenceDiagnosticStore } from '../divergence-diagnostics.js';
  *   brHeaders?: [string, string][],
  *   gzHeaders?: [string, string][],
  *   brHeadersFlat?: (string | number)[],
- *   gzHeadersFlat?: (string | number)[]
+ *   gzHeadersFlat?: (string | number)[],
+ *   brRevalidationHeadersFlat?: string[],
+ *   gzRevalidationHeadersFlat?: string[]
  * }} StaticEntry
  */
 
