@@ -132,6 +132,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   push threw inside the request's event listener, where nothing catches it.
   The rest of the body is now discarded and the connection reaches its next
   request. SSR routes and the authenticate hook share this stream.
+- A WebSocket handshake refused before its header set is read - under
+  siege, at a full handshake gate or connection ceiling - opens its
+  `adapter.websocket.admission` span under the trace context the client
+  sent, where it opened a root span; a deferred-overflow refusal is
+  parented on the collected headers.
 
 ## [0.0.1] - 2026-09-22
 

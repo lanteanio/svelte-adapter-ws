@@ -201,7 +201,7 @@ describe('the production upgrade path counts each refusal on the right accumulat
 			'\n\t}'
 		);
 		expect(siege).toContain('recordCapacityReject()');
-		expect(siege).toContain("noteUpgradeRejection(null, 'siege')");
+		expect(siege).toContain("noteUpgradeRejection(undefined, 'siege', req)");
 		expect(siege).toContain('serveUpgradeRefusal()');
 		expect(siege).not.toContain('tryAcquire');
 		// Placement is the whole point: a short-circuit that ran after the gate
@@ -213,8 +213,12 @@ describe('the production upgrade path counts each refusal on the right accumulat
 	it('counts the handshake ceiling, the deferred overflow and the connection permit as capacity', () => {
 		expect(block(realtimeSource, 'if (!handshakeAcquired) {', '\n\t}'))
 			.toContain('recordCapacityReject()');
-		expect(block(realtimeSource, 'function rejectDeferredOverflow() {', '\n\t}'))
-			.toContain('recordCapacityReject()');
+		const deferred = block(realtimeSource, 'function rejectDeferredOverflow(collected) {', '\n\t}');
+		expect(deferred).toContain('recordCapacityReject()');
+		// Refused after the header set is collected, so its span is parented on
+		// that set; the one caller hands it over.
+		expect(deferred).toContain("noteUpgradeRejection(collected, 'deferred_overflow')");
+		expect(realtimeSource).toContain('if (admission.admit(acceptUpgrade) === null) rejectDeferredOverflow(headers);');
 		expect(block(realtimeSource, 'if (!admission.tryAcquireConnection()) {', '\n\t}'))
 			.toContain('recordCapacityReject()');
 	});

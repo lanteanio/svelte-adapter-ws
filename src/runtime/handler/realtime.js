@@ -1323,7 +1323,7 @@ export async function handleUpgrade(req, socket, head) {
 	// escalated.
 	if (postureLevel() === 'siege') {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		noteUpgradeRejection(null, 'siege');
+		noteUpgradeRejection(undefined, 'siege', req);
 		serveUpgradeRefusal();
 		return;
 	}
@@ -1340,7 +1340,7 @@ export async function handleUpgrade(req, socket, head) {
 		// Count the over-capacity reject (and only this one) so the posture's
 		// rolling reject rate reflects true gate pressure.
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		noteUpgradeRejection(null, isCursor ? 'cursor_lane' : 'over_capacity');
+		noteUpgradeRejection(undefined, isCursor ? 'cursor_lane' : 'over_capacity', req);
 		serveUpgradeRefusal();
 		return;
 	}
@@ -1365,9 +1365,10 @@ export async function handleUpgrade(req, socket, head) {
 		// closure - request, header bag and handshake head - for its lifetime.
 		if (ADMISSION_ARMED) socket.removeListener('close', releaseInFlight);
 	}
-	function rejectDeferredOverflow() {
+	/** @param {Record<string, string>} collected the handshake's header set */
+	function rejectDeferredOverflow(collected) {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		noteUpgradeRejection(null, 'deferred_overflow');
+		noteUpgradeRejection(collected, 'deferred_overflow');
 		mUpgradeDeferredRejected?.inc();
 		releaseInFlight();
 		serveUpgradeRefusal();
@@ -1377,7 +1378,7 @@ export async function handleUpgrade(req, socket, head) {
 	// too, so concurrent upgrades cannot overshoot the live-connection ceiling.
 	if (!admission.tryAcquireConnection()) {
 		if (counters.activePosture !== null) counters.activePosture.recordCapacityReject();
-		noteUpgradeRejection(null, 'connection_capacity');
+		noteUpgradeRejection(undefined, 'connection_capacity', req);
 		releaseInFlight();
 		serveUpgradeRefusal();
 		return;
@@ -1627,7 +1628,7 @@ export async function handleUpgrade(req, socket, head) {
 	// Bounded deferral: the per-tick budget paces how many handshakes complete
 	// in one turn, and the queue behind it is finite. A full queue sheds rather
 	// than growing without bound.
-	if (admission.admit(acceptUpgrade) === null) rejectDeferredOverflow();
+	if (admission.admit(acceptUpgrade) === null) rejectDeferredOverflow(headers);
 }
 
 /**
