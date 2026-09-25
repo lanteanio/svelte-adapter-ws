@@ -235,6 +235,13 @@ if (WS_ENABLED) {
 		tryWaitingRoomRoute: realtime.tryWaitingRoomRoute,
 		tryAdminRoute: admin.tryAdminRoute
 	});
+	if (realtime.AUTH_ENDPOINT !== null) {
+		console.log(`[svelte-adapter-ws] WebSocket auth endpoint registered at ${realtime.AUTH_ENDPOINT}`);
+	}
+	console.log(`[svelte-adapter-ws] WebSocket endpoint registered at ${realtime.wsPath()}`);
+	if (realtime.wsPath() !== '/ws') {
+		console.log(`[svelte-adapter-ws] Client must match: connect({ path: '${realtime.wsPath()}' })`);
+	}
 	if (admin.adminMounted) {
 		console.log(`[svelte-adapter-ws] Admin route registered at ${ADMIN_PATH}/*`);
 		// The adapter cannot see whether the app's admin() handler gates its own

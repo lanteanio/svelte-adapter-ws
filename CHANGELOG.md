@@ -104,6 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   past the cap. A rate-limited preflight says `Too many authentication
   requests`, and the `adapter.http.websocket-authenticate` span opens when
   the hook runs rather than for every request to the path.
+- A realtime build prints the family's endpoint lines at boot, ahead of the
+  admin route's: `WebSocket auth endpoint registered at <authPath>` when the
+  app exports `authenticate`, `WebSocket endpoint registered at <path>`, and
+  `Client must match: connect({ path: '<path>' })` when the path is not
+  `/ws`.
 
 ## [0.0.1] - 2026-09-22
 

@@ -2518,6 +2518,9 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 // malicious payload cheap to refuse.
 const AUTH_BODY_LIMIT = 64 * 1024;
 
+/** The authenticate endpoint's path, or null when the app exports no hook. */
+export const AUTH_ENDPOINT = typeof wsModule.authenticate === 'function' ? WS_AUTH_PATH : null;
+
 /**
  * Handle the authenticate POST at WS_AUTH_PATH as a normal HTTP exchange so
  * session cookies refresh via a standard Set-Cookie. Returns true when the
@@ -2530,8 +2533,7 @@ const AUTH_BODY_LIMIT = 64 * 1024;
  * @returns {boolean}
  */
 export function tryAuthenticateRoute(req, res, pathname, state) {
-	if (pathname !== WS_AUTH_PATH) return false;
-	if (typeof wsModule.authenticate !== 'function') return false;
+	if (AUTH_ENDPOINT === null || pathname !== AUTH_ENDPOINT) return false;
 	if (req.method !== 'POST') {
 		// Its own 405 rather than send405, because the Allow value here is POST
 		// alone. HEAD lands here too; node drops the payload.
