@@ -14,7 +14,7 @@
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
 import { FORBIDDEN_METHODS, send405, endText, bodylessLength } from './http-helpers.js';
 import { buildRequest } from './ssr.js';
-import { collectRequestHeaders } from '../utils/request-headers.js';
+import { collectRequestHeaders, isFramingHeader } from '../utils/request-headers.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
@@ -45,14 +45,19 @@ export const adminMounted = MOUNT_PREFIX !== null;
  * @param {import('node:http').ServerResponse} res
  * @param {number} status
  * @param {string} message
+ * @param {boolean} [closeConnection] for a refusal that leaves the
+ *   connection's remaining bytes untrustworthy
  */
-function sendAdminError(res, status, message) {
+function sendAdminError(res, status, message, closeConnection = false) {
 	if (res.headersSent) return;
-	endText(res, status, {
+	/** @type {Record<string, string>} */
+	const headers = {
 		'content-type': 'application/json',
 		'cache-control': 'no-store',
 		'x-content-type-options': 'nosniff'
-	}, JSON.stringify({ error: message }));
+	};
+	if (closeConnection) headers.connection = 'close';
+	endText(res, status, headers, JSON.stringify({ error: message }));
 }
 
 /**
@@ -202,8 +207,9 @@ export function tryAdminRoute(req, res, pathname, state) {
 	// than handed on as whichever line happened to arrive last.
 	/** @type {Record<string, string>} */
 	const headers = {};
-	if (collectRequestHeaders(req.rawHeaders, headers) !== null) {
-		sendAdminError(res, 400, 'bad request');
+	const ambiguousHeader = collectRequestHeaders(req.rawHeaders, headers);
+	if (ambiguousHeader !== null) {
+		sendAdminError(res, 400, 'bad request', isFramingHeader(ambiguousHeader));
 		return true;
 	}
 

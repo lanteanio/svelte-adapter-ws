@@ -1,6 +1,6 @@
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
-import { collectRequestHeaders } from './runtime/utils/request-headers.js';
+import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -44,6 +44,31 @@ import { createDivergenceDiagnosticStore } from './runtime/divergence-diagnostic
 // Symbol-keyed platform clone, then deletes the string slot - so it never
 // appears in userData while an app hook is running.
 const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';
+
+/**
+ * The production runtime refuses a request whose Transfer-Encoding names
+ * anything but chunked, in front of every route, and ends the connection with
+ * the 400. This harness answers the same way on the routes it mirrors, because
+ * an app that verifies its own handling against this server must not be shown
+ * a request the real one would never have delivered.
+ *
+ * One lookup, the same one production asks; the doors here that build a whole
+ * header set ask the whole rule of it, as they do there.
+ *
+ * @param {(res: any, req: any) => void} handler
+ */
+const guardFramingMirror = (handler) => (res, req) => {
+	if (framingRefusal(req.getHeader('transfer-encoding') || undefined, undefined) !== null) {
+		res.cork(() => {
+			res.writeStatus('400 Bad Request');
+			res.writeHeader('content-type', 'text/plain');
+			res.writeHeader('connection', 'close');
+			res.end('Bad Request');
+		});
+		return;
+	}
+	handler(res, req);
+};
 
 // Curated re-exports for downstream test code (extensions, app-side
 // integration tests, custom transport bridges that need to assert on
@@ -582,8 +607,11 @@ function createNodeApp() {
 	// - The app surface -------------------------------------------------------
 
 	function route(method, path, handler) {
-		if (path.endsWith('/*')) wildcards.push({ method, prefix: path.slice(0, -1), handler });
-		else routes.set(method + ' ' + path, handler);
+		// Every mirrored HTTP route answers the framing question first, as
+		// production's request edge does in front of all of its lanes.
+		const guarded = guardFramingMirror(handler);
+		if (path.endsWith('/*')) wildcards.push({ method, prefix: path.slice(0, -1), handler: guarded });
+		else routes.set(method + ' ' + path, guarded);
 		return app;
 	}
 
@@ -2981,6 +3009,19 @@ export async function createTestServer(options = {}) {
 		sendPingsAutomatically: true,
 
 		upgrade(res, req, context) {
+			// Ahead of every capacity answer below, as production does it: a
+			// handshake whose Transfer-Encoding names anything but chunked is
+			// refused under its own reason before any other door is consulted.
+			if (framingRefusal(req.getHeader('transfer-encoding') || undefined, undefined) !== null) {
+				mUpgradeRejectedT?.inc({ reason: 'ambiguous_framing' });
+				res.cork(() => {
+					res.writeStatus('400 Bad Request');
+					res.writeHeader('content-type', 'text/plain');
+					res.end('Bad Request');
+				});
+				return;
+			}
+
 			// Cursor-only upgrade lane (the worker's second WebSocket).
 			// Mirrors the production handler: route through the reserved
 			// cursor sub-budget only when a lane is configured.
@@ -3122,8 +3163,13 @@ export async function createTestServer(options = {}) {
 			// mirror must not see an ambiguity the real server rejects.
 			/** @type {Record<string, string>} */
 			const headers = {};
-			if (collectRequestHeaders(req.rawHeaders, headers) !== null) {
-				mUpgradeRejectedT?.inc({ reason: 'duplicate_header' });
+			const ambiguousUpgradeHeader = collectRequestHeaders(req.rawHeaders, headers);
+			if (ambiguousUpgradeHeader !== null) {
+				// A repeated header, or a framing header sent empty or twice,
+				// which only the whole header set shows; the reason tells them
+				// apart as production's does.
+				if (isFramingHeader(ambiguousUpgradeHeader)) mUpgradeRejectedT?.inc({ reason: 'ambiguous_framing' });
+				else mUpgradeRejectedT?.inc({ reason: 'duplicate_header' });
 				res.cork(() => {
 					res.writeStatus('400 Bad Request');
 					res.writeHeader('content-type', 'text/plain');
@@ -4160,19 +4206,20 @@ export async function createTestServer(options = {}) {
 			let adminAborted = false;
 			res.onAborted(() => { adminAborted = true; });
 
-			const failAdmin = (status) => {
+			const failAdmin = (status, closeConnection = false) => {
 				if (adminAborted) return;
 				res.cork(() => {
 					res.writeStatus(String(status));
 					res.writeHeader('content-type', 'application/json');
 					res.writeHeader('cache-control', 'no-store');
 					res.writeHeader('x-content-type-options', 'nosniff');
+					if (closeConnection) res.writeHeader('connection', 'close');
 					res.end(status === 400 ? '{"error":"bad request"}' : '{"error":"internal error"}');
 				});
 			};
 
 			if (ambiguousAdminHeader !== null) {
-				failAdmin(400);
+				failAdmin(400, isFramingHeader(ambiguousAdminHeader));
 				return;
 			}
 

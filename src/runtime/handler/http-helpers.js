@@ -80,10 +80,17 @@ export function send405(res) {
 	endText(res, 405, { allow: ALLOW_HEADER, 'content-type': 'text/plain' }, 'Method Not Allowed');
 }
 
-/** @param {import('node:http').ServerResponse} res */
-export function send400(res) {
+/**
+ * @param {import('node:http').ServerResponse} res
+ * @param {boolean} [closeConnection] end the TCP connection with the response,
+ *   for a refusal that leaves the connection's remaining bytes untrustworthy;
+ *   node writes `connection: close` and closes once the answer is flushed
+ */
+export function send400(res, closeConnection = false) {
 	if (res.headersSent) return;
-	endText(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
+	endText(res, 400, closeConnection
+		? { 'content-type': 'text/plain', connection: 'close' }
+		: { 'content-type': 'text/plain' }, 'Bad Request');
 }
 
 /** @param {import('node:http').ServerResponse} res */

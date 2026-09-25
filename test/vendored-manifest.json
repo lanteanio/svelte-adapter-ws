@@ -483,7 +483,13 @@
 		"file": "src/runtime/metrics-collector.js"
 	},
 	{
-		"file": "src/runtime/observability-manifest.js"
+		"file": "src/runtime/observability-manifest.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\t'auth_rate_limit', 'siege', 'cursor_lane', 'over_capacity', 'connection_capacity', 'duplicate_header',\n\t\t\t'ip_rate_limit', 'bad_origin', 'deferred_overflow', 'auth_timeout', 'auth_rejected', 'hook_error'\n\t\t]) })\n",
+				"ours": "\t\t\t'auth_rate_limit', 'siege', 'cursor_lane', 'over_capacity', 'connection_capacity', 'duplicate_header',\n\t\t\t'ambiguous_framing', 'ip_rate_limit', 'bad_origin', 'deferred_overflow', 'auth_timeout', 'auth_rejected',\n\t\t\t'hook_error'\n\t\t]) })\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/posture-collector.js"
@@ -681,6 +687,10 @@
 			{
 				"lead": "export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';\n",
 				"ours": "export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';\n"
+			},
+			{
+				"lead": "\t * `siege`, `over_capacity`, `connection_capacity`, `cursor_lane`, `auth_rejected`,\n\t * `hook_error`, `duplicate_header` and `deferred_overflow`, plus the\n",
+				"ours": "\t * `siege`, `over_capacity`, `connection_capacity`, `cursor_lane`, `auth_rejected`,\n\t * `hook_error`, `duplicate_header`, `ambiguous_framing` and `deferred_overflow`, plus the\n"
 			}
 		]
 	},
@@ -1166,7 +1176,13 @@
 		"file": "test/fixture/svelte.config.js"
 	},
 	{
-		"file": "test/fixture/variants.js"
+		"file": "test/fixture/variants.js",
+		"adaptations": [
+			{
+				"lead": "\t// zero-config defaults, because the default page IS the surface under\n\t// test. Its rest, update, and failure states are browser-rendered\n\t// behavior no string-level test can observe.\n\twaitingdefault: {\n\t\tout: 'build-waiting-default',\n\t\te2eOnly: true,\n\t\thandler: null,\n",
+				"ours": "\t// zero-config defaults, because the default page IS the surface under\n\t// test. Its rest, update, and failure states are browser-rendered\n\t// behavior no string-level test can observe.\n\t//\n\t// Not e2e-only any more: its live-connection ceiling is the one gate a\n\t// raw-socket suite can genuinely FILL, which is what the request-framing\n\t// ordering needs - a refusal written while the gate is shut keeps its\n\t// connection, so a framing answer has to come before it. Building it here\n\t// rather than lazily inside a worker keeps that build on the serial path\n\t// ahead of the workers instead of under the shared lock.\n\twaitingdefault: {\n\t\tout: 'build-waiting-default',\n\t\thandler: null,\n"
+			}
+		]
 	},
 	{
 		"file": "test/fixture/vite.config.js"
@@ -1814,7 +1830,13 @@
 		]
 	},
 	{
-		"file": "test/request-headers.test.js"
+		"file": "test/request-headers.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t'origin'\n\t];\n\n\tfor (const name of REFUSED) {\n\t\tit(`reports a repeated ${name}`, () => {\n\t\t\tconst { ambiguous } = collect([[name, 'first'], [name, 'second']]);\n\t\t\texpect(ambiguous).toBe(name);\n\t\t});\n\t}\n\n\tit('accepts every one of them when it arrives once', () => {\n\t\tconst { ambiguous } = collect(REFUSED.map((name) => /** @type {[string, string]} */ ([name, 'only'])));\n\t\texpect(ambiguous).toBe(null);\n\t});\n\n\tit('names the first offender and still finishes the walk', () => {\n\t\t// uWS offers no way to stop the iteration, so the caller must get a\n\t\t// complete object rather than a half-filled one - a caller that ignores\n\t\t// the finding must not also get truncated headers.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['content-length', '1'],\n\t\t\t['content-length', '2'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('host');\n\t\texpect(headers.accept).toBe('text/html');\n\t\texpect(headers.host).toBe('a.test');\n\t});\n\n\tit('keeps merging every other class after an offender is seen', () => {\n",
+				"ours": "\t\t'origin'\n\t];\n\n\t// The two framing names carry a value the VALUE rule accepts, so the repeat\n\t// is the only thing left that can answer for them. Give them `first` and\n\t// `second` like the rest and they are refused for naming an unreadable\n\t// coding and a length that is not a count, and the repeat tracking could be\n\t// deleted without either case noticing.\n\tconst REPEATABLE = { 'content-length': ['1', '2'], 'transfer-encoding': ['chunked', 'chunked'] };\n\tfor (const name of REFUSED) {\n\t\tit(`reports a repeated ${name}`, () => {\n\t\t\tconst [first, second] = REPEATABLE[name] || ['first', 'second'];\n\t\t\tconst { ambiguous } = collect([[name, first], [name, second]]);\n\t\t\texpect(ambiguous).toBe(name);\n\t\t});\n\t}\n\n\tit('accepts every one of them when it arrives once', () => {\n\t\t// Two things this case cannot do any more, both of them rules rather\n\t\t// than accidents: a framing header carries a usable value, because one\n\t\t// naming a coding this server cannot read is refused unrepeated; and\n\t\t// the two framing headers never appear together, because a request\n\t\t// carrying both frames its body twice and is refused for that alone.\n\t\t// Each of those is its own case below. So the identity headers are\n\t\t// walked together, and each framing header joins them on its own.\n\t\tconst IDENTITY = REFUSED.filter((name) => name !== 'content-length' && name !== 'transfer-encoding');\n\t\tconst pairs = (extra) => /** @type {[string, string][]} */ (\n\t\t\tIDENTITY.map((name) => [name, 'only']).concat(extra)\n\t\t);\n\t\texpect(collect(pairs([])).ambiguous).toBe(null);\n\t\texpect(collect(pairs([['content-length', '0']])).ambiguous).toBe(null);\n\t\texpect(collect(pairs([['transfer-encoding', 'chunked']])).ambiguous).toBe(null);\n\t});\n\n\tdescribe('a header that frames the body, arriving once', () => {\n\t\t// The walk cannot see these - nothing is repeated - so they are the rule\n\t\t// asked of the finished header set, and the caller reads the same answer\n\t\t// it reads for a repeat: a framing header it must refuse.\n\t\tit('refuses a Transfer-Encoding naming anything but chunked', () => {\n\t\t\tfor (const value of ['xchunked', 'chunkedX', 'gzip', 'chunked, chunked', 'gzip, chunked', 'chunked, gzip', '']) {\n\t\t\t\tconst { ambiguous } = collect([['transfer-encoding', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe('transfer-encoding');\n\t\t\t}\n\t\t});\n\n\t\tit('accepts chunked in any capitalisation', () => {\n\t\t\tfor (const value of ['chunked', 'Chunked', 'CHUNKED']) {\n\t\t\t\tconst { ambiguous } = collect([['transfer-encoding', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe(null);\n\t\t\t}\n\t\t});\n\n\t\tit('refuses a Content-Length that is not a bare count', () => {\n\t\t\tfor (const value of ['', ' ', '12abc', '0x6', '+6', '-1', '1.5']) {\n\t\t\t\tconst { ambiguous } = collect([['content-length', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe('content-length');\n\t\t\t}\n\t\t});\n\n\t\tit('accepts a count, leading zeros and all', () => {\n\t\t\tfor (const value of ['0', '2', '000002', '9007199254740993']) {\n\t\t\t\tconst { ambiguous } = collect([['content-length', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe(null);\n\t\t\t}\n\t\t});\n\n\t\tit('refuses a request that carries both framing headers', () => {\n\t\t\tconst { ambiguous } = collect([['transfer-encoding', 'chunked'], ['content-length', '2']]);\n\t\t\texpect(ambiguous).toBe('transfer-encoding');\n\t\t});\n\n\t\tit('answers the framing header even when another single-valued one repeats', () => {\n\t\t\t// The ordering that decides whether the caller closes the connection.\n\t\t\t// Two Authorization lines are refused too, but on their own they\n\t\t\t// leave the connection readable; the unusable Transfer-Encoding does\n\t\t\t// not, and naming the Authorization instead would keep a connection\n\t\t\t// whose remaining bytes are the ones in dispute.\n\t\t\tconst { ambiguous } = collect([\n\t\t\t\t['authorization', 'Bearer one'],\n\t\t\t\t['authorization', 'Bearer two'],\n\t\t\t\t['transfer-encoding', 'xchunked']\n\t\t\t]);\n\t\t\texpect(ambiguous).toBe('transfer-encoding');\n\t\t});\n\t});\n\n\tit('names the first offender and still finishes the walk', () => {\n\t\t// uWS offers no way to stop the iteration, so the caller must get a\n\t\t// complete object rather than a half-filled one - a caller that ignores\n\t\t// the finding must not also get truncated headers.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['origin', 'https://a.test'],\n\t\t\t['origin', 'https://b.test'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('host');\n\t\texpect(headers.accept).toBe('text/html');\n\t\texpect(headers.host).toBe('a.test');\n\t});\n\n\tit('names a repeated framing header ahead of any other repeat', () => {\n\t\t// Which name comes back decides whether the caller keeps the connection,\n\t\t// and the first offender is whichever line the SENDER put first. Two\n\t\t// Host lines make the request ambiguous; two Content-Length lines say\n\t\t// the sender and this server may disagree about where the request ENDS,\n\t\t// so the bytes after the response are not ones to keep reading.\n\t\t//\n\t\t// The value question cannot answer this one: the walk keeps the FIRST\n\t\t// value of a repeated header, and `1` is a perfectly good count, so\n\t\t// reading the collected object finds nothing wrong.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['content-length', '1'],\n\t\t\t['content-length', '2'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('content-length');\n\t\texpect(headers.accept, 'the walk still finishes').toBe('text/html');\n\t\texpect(headers['content-length'], 'and still keeps the first value').toBe('1');\n\t});\n\n\tit('names a repeated Transfer-Encoding the same way', () => {\n\t\tconst { ambiguous } = collect([\n\t\t\t['origin', 'https://a.test'],\n\t\t\t['origin', 'https://b.test'],\n\t\t\t['transfer-encoding', 'chunked'],\n\t\t\t['transfer-encoding', 'chunked']\n\t\t]);\n\t\texpect(ambiguous).toBe('transfer-encoding');\n\t});\n\n\tit('keeps merging every other class after an offender is seen', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/subscribe-pending-cap.test.js"

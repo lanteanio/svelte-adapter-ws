@@ -109,6 +109,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app exports `authenticate`, `WebSocket endpoint registered at <path>`, and
   `Client must match: connect({ path: '<path>' })` when the path is not
   `/ws`.
+- **A request that frames its body two ways is refused, and its connection
+  ends.** node's parser refuses most ambiguous framing itself, but it
+  decodes a Transfer-Encoding list that ends in chunked (`gzip, chunked`)
+  as chunked and hands a request with an empty Transfer-Encoding to the app
+  as a bodyless one, where a conformant proxy in front reads both
+  differently - the disagreement request smuggling is made of. A
+  Transfer-Encoding other than exactly `chunked` is now refused `400` in
+  front of every lane, the probes, built assets and realtime routes
+  included, and every lane that builds a header set (SSR, the authenticate
+  endpoint, the admin lane, the WebSocket handshake, and `createTestServer`'s
+  mirrors of them) refuses an empty one. These refusals write
+  `connection: close` and end the connection; a repeated `Authorization` or
+  `Origin` is still refused `400` on a connection that stays open. The
+  handshake counts them as `upgrade_rejected_total{reason="ambiguous_framing"}`,
+  ahead of every capacity answer.
 
 ## [0.0.1] - 2026-09-22
 

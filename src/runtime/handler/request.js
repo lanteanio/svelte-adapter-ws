@@ -9,7 +9,7 @@
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered } from './static-assets.js';
 import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500 } from './http-helpers.js';
-import { collectRequestHeaders } from '../utils/request-headers.js';
+import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { lifecycleState, requestDone } from './lifecycle.js';
@@ -85,6 +85,28 @@ export function handleRequest(req, res) {
 			metricsHook(req.method || '', res.statusCode, state.aborted, (monotonicNow() - startedAt) / 1000);
 		}
 	});
+
+	// A Transfer-Encoding naming anything but chunked is refused ahead of every
+	// lane, the probes and the realtime routes included. The lanes that answer
+	// before acting on a header set - a built asset, a prerendered page, the
+	// probes, the waiting room, the non-upgrade answer on the WebSocket path -
+	// would each have to remember, and the one that forgot would be the one a
+	// fronting proxy polls. What the refusal protects is the CONNECTION, so it
+	// does not matter which lane would have answered, and the connection ends
+	// with the 400. Below the accounting hook, so it is counted like any other
+	// answer.
+	//
+	// ONE lookup, the question the family's native tier can afford in front of
+	// every route: an absent header and one sent empty read the same there,
+	// and a repeat reads as its first line, so neither shape is refused here.
+	// Both are refused where the whole header set is read, which the lanes
+	// below that build one do. node's own parser already refuses a repeated
+	// Transfer-Encoding and most spellings; what reaches this line is a coding
+	// list that ends in chunked.
+	if (framingRefusal(firstHeaderValue(req.rawHeaders, 'transfer-encoding') || undefined, undefined) !== null) {
+		send400(res, true);
+		return;
+	}
 
 	const url = req.url || '/';
 	const q = url.indexOf('?');
@@ -322,7 +344,9 @@ export function handleRequest(req, res) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
-		send400(res);
+		// A framing refusal also ends the connection: its remaining bytes are
+		// whatever the sender's own reading of the framing put there.
+		send400(res, isFramingHeader(ambiguous));
 		return;
 	}
 	// SvelteKit reads request headers off the node request object; install the

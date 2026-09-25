@@ -38,7 +38,7 @@ import { parentPort, threadId, workerData } from 'node:worker_threads';
 import { isOriginAllowed, isAuthOriginAccepted, describeUnsafeSameOriginConfig } from '../utils/origin.js';
 import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
-import { collectRequestHeaders } from '../utils/request-headers.js';
+import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { createSlidingWindowLimiter } from '../utils/rate-limiter.js';
 import { activeTraceContext, extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { resolveRequestId } from '../utils/request-id.js';
@@ -1047,15 +1047,21 @@ wss.on('headers', (headers, req) => {
  * trace and not to the registry is the shape that leaves an operator's
  * dashboard short of a rejection the trace can see.
  *
- * @param {Record<string, string> | null} headers
+ * @param {Record<string, string> | null | undefined} headers the collected
+ *   header set; `null` opens the span with no parent, and `undefined` reads
+ *   the trace context off `req` for a refusal written before any collection
  * @param {string} reason
+ * @param {import('node:http').IncomingMessage} [req]
  */
-function noteUpgradeRejection(headers, reason) {
+function noteUpgradeRejection(headers, reason, req) {
 	mUpgradeRejected?.inc({ reason });
 	if (!tracingEnabled) return;
 	traceOperation('adapter.websocket.admission', {
 		kind: 'server',
-		parent: headers === null ? null : extractTraceContext(headers),
+		parent: headers === null ? null : extractTraceContext(headers ?? {
+			traceparent: req ? headerValue(req, 'traceparent') : '',
+			tracestate: req ? headerValue(req, 'tracestate') : ''
+		}),
 		attributes: {
 			'network.protocol.name': 'websocket',
 			'admission.outcome': 'rejected',
@@ -1243,6 +1249,19 @@ export async function handleUpgrade(req, socket, head) {
 	// The decision clock starts once the path is known to be the WebSocket path,
 	// so a 404 on some other path never seats a series here.
 	if (hUpgradeDuration !== undefined) upgradeTimings.set(socket, { started: monotonicNow() });
+
+	// AHEAD of every capacity answer below, and of the drain refusal: a
+	// handshake whose Transfer-Encoding names anything but chunked says the
+	// sender and a server in front may disagree about where the request even
+	// ends, and it is refused under its own reason before any other door is
+	// consulted. The same one lookup the request edge asks; the whole rule is
+	// asked further down, where the header set is built.
+	if (framingRefusal(firstHeaderValue(req.rawHeaders, 'transfer-encoding') || undefined, undefined) !== null) {
+		noteUpgradeRejection(undefined, 'ambiguous_framing', req);
+		refuseUpgrade(socket, 400, 'Bad Request');
+		return;
+	}
+
 	if (isDraining()) {
 		refuseUpgrade(socket, 503, 'Service Unavailable');
 		return;
@@ -1382,7 +1401,16 @@ export async function handleUpgrade(req, socket, head) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
-		noteUpgradeRejection(null, 'duplicate_header');
+		// Two ways to arrive: the same header twice, or one header whose value
+		// frames the body two ways. A handshake carries no body at all, so the
+		// second says the sender and this server disagree about where the
+		// request even ends. Every refusal here closes the connection anyway;
+		// the reason is what tells them apart.
+		// A literal per branch, not one variable read twice: the label
+		// contract is checked by reading these call sites, and a name it
+		// cannot fold to a string leaves this door unchecked.
+		if (isFramingHeader(ambiguous)) noteUpgradeRejection(null, 'ambiguous_framing');
+		else noteUpgradeRejection(null, 'duplicate_header');
 		refuseUpgrade(socket, 400, 'Bad Request');
 		releaseInFlight();
 		return;
@@ -2547,8 +2575,9 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 	// of two possible readings.
 	/** @type {Record<string, string>} */
 	const headers = {};
-	if (collectRequestHeaders(req.rawHeaders, headers) !== null) {
-		send400(res);
+	const ambiguousAuthHeader = collectRequestHeaders(req.rawHeaders, headers);
+	if (ambiguousAuthHeader !== null) {
+		send400(res, isFramingHeader(ambiguousAuthHeader));
 		return true;
 	}
 
