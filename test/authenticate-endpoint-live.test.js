@@ -141,6 +141,7 @@ const authSpans = () => (/** @type {any} */ (globalThis).__authSpans ?? [])
 /** @type {any} */ let plain;
 /** @type {any} */ let limited;
 /** @type {any} */ let ordered;
+/** @type {any} */ let hostless;
 /** @type {any} */ let proxied;
 /** @type {any} */ let pinned;
 /** @type {any} */ let traced;
@@ -149,13 +150,14 @@ beforeAll(async () => {
 	plain = await boot({});
 	limited = await boot({ authPathRateLimit: 1 });
 	ordered = await boot({ authPathRateLimit: 1 });
+	hostless = await boot({ authPathRateLimit: 1 });
 	proxied = await boot({}, { PROTOCOL_HEADER: 'x-forwarded-proto' });
 	pinned = await boot({}, { ORIGIN: 'https://app.example' });
 	traced = await boot({}, {}, { 'tracing-provider.js': RECORDING_PROVIDER });
 }, 60000);
 
 afterAll(async () => {
-	for (const built of [plain, limited, ordered, proxied, pinned, traced]) {
+	for (const built of [plain, limited, ordered, hostless, proxied, pinned, traced]) {
 		await built?.rt.close();
 		built?.payload.cleanup();
 	}
@@ -259,6 +261,17 @@ describe('the authenticate endpoint', () => {
 		expect((await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`]))).status).toContain('429');
 	});
 
+	it('counts a request before asking for its origin', async () => {
+		// An HTTP/1.0 request with no Host is one get_origin cannot make an
+		// origin of. The budget is one: the first is counted and then refused
+		// 400, and every later one - a usable request included - is the 429.
+		const port = hostless.rt.port;
+		const bare = 'POST /__ws/auth HTTP/1.0\r\nx-requested-with: XMLHttpRequest\r\nContent-Length: 0\r\n\r\n';
+		expect((await exchange(port, bare)).status).toContain('400');
+		expect((await exchange(port, bare)).status).toContain('429');
+		expect((await exchange(port, post(port, ['Content-Length: 0']))).status).toContain('429');
+	});
+
 	it('hands the hook no bare trailing question mark, and keeps a query', async () => {
 		const port = plain.rt.port;
 		const bare = await exchange(port, post(port, ['x-mode: url', 'Content-Length: 0'], { target: '/__ws/auth?' }));
@@ -274,6 +287,10 @@ describe('the authenticate endpoint', () => {
 
 		const refused = await exchange(port, post(port, [`traceparent: ${traceparent}`, 'Origin: http://foreign.example', 'Content-Length: 0'], { xhr: false }));
 		expect(refused.status).toContain('403');
+		const oversized = await exchange(port, post(port, [`traceparent: ${traceparent}`, `Content-Length: ${64 * 1024 + 1}`]));
+		expect(oversized.status).toContain('413');
+		const unbuildable = await exchange(port, post(port, [`traceparent: ${traceparent}`, 'Content-Length: 0'], { host: 'a b' }));
+		expect(unbuildable.status).toContain('400');
 		expect(authSpans().length, 'a request refused before the hook opens no span').toBe(before);
 
 		const admitted = await exchange(port, post(port, [`traceparent: ${traceparent}`, 'Content-Length: 0']));

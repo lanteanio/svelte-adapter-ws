@@ -38,6 +38,7 @@ async function letGo(mode, body) {
 	if (mode === 'cancel') await body.cancel();
 	else if (mode === 'break') { for await (const chunk of body) break; }
 	else if (mode === 'read-cancel') { const reader = body.getReader(); await reader.read(); await reader.cancel(); }
+	else if (mode === 'late-cancel') { await new Promise((r) => setTimeout(r, 20)); await body.cancel(); }
 }
 `;
 
@@ -147,4 +148,54 @@ describe('a body the app lets go of is discarded, and the server stays up', () =
 			}
 		}
 	}
+});
+
+/**
+ * A request with a body and a pipelined follower on ONE keep-alive connection;
+ * resolves with both status lines, or rejects when the follower is never
+ * answered. The follower is what shows that the rest of a let-go body was
+ * drained off the socket rather than left in front of the next request.
+ *
+ * @param {number} port
+ * @param {string} head request line and headers, no terminator
+ * @param {string} body
+ * @param {{ chunked?: boolean }} [opts] send the body undeclared, as one chunk
+ */
+function withFollower(port, head, body, { chunked = false } = {}) {
+	return new Promise((resolve, reject) => {
+		const socket = net.connect(port, '127.0.0.1', () => {
+			const framed = chunked
+				? 'Transfer-Encoding: chunked\r\n\r\n' + body.length.toString(16) + '\r\n' + body + '\r\n0\r\n\r\n'
+				: `Content-Length: ${body.length}\r\n\r\n` + body;
+			socket.write(
+				head + `\r\nHost: 127.0.0.1:${port}\r\n` + framed +
+				`POST /alive HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`
+			);
+		});
+		let raw = '';
+		const timer = setTimeout(() => { socket.destroy(); reject(new Error('the follower was not answered within 5 s: ' + JSON.stringify(raw.slice(0, 120)))); }, 5000);
+		socket.on('data', (chunk) => { raw += chunk.toString('latin1'); });
+		socket.on('close', () => { clearTimeout(timer); resolve([...raw.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])); });
+		socket.on('error', () => {});
+	});
+}
+
+describe('a body let go of after an await is drained, and the connection reaches its next request', () => {
+	const big = 'y'.repeat(200000);
+
+	it('on an SSR route', async () => {
+		expect(await withFollower(built.rt.port, 'POST /?mode=late-cancel HTTP/1.1', big)).toEqual(['200', '200']);
+		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
+	});
+
+	it('on the authenticate hook', async () => {
+		expect(await withFollower(
+			built.rt.port,
+			'POST /__ws/auth HTTP/1.1\r\nx-requested-with: XMLHttpRequest\r\nx-mode: late-cancel',
+			big,
+			// Undeclared: a declared length past the cap is refused before any read.
+			{ chunked: true }
+		)).toEqual(['204', '200']);
+		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
+	});
 });
