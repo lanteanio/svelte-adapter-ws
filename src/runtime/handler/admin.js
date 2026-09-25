@@ -12,7 +12,7 @@
 // throws or rejects yields a generic 500 with no detail leaked to the client.
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
-import { FORBIDDEN_METHODS, send405 } from './http-helpers.js';
+import { FORBIDDEN_METHODS, send405, endText, bodylessLength } from './http-helpers.js';
 import { buildRequest } from './ssr.js';
 import { collectRequestHeaders } from '../utils/request-headers.js';
 import { wsModule } from '../ws-handler-bridge.js';
@@ -48,19 +48,11 @@ export const adminMounted = MOUNT_PREFIX !== null;
  */
 function sendAdminError(res, status, message) {
 	if (res.headersSent) return;
-	// Length-framed for the same reason the success writer below gives: uWS
-	// derives the length from the body it is handed, so leaving it off answers
-	// chunked where the family answers with a length, and leaves a HEAD
-	// refusal - whose body node strips - with no size at all. Every status
-	// this writer is used for carries a body.
-	const body = JSON.stringify({ error: message });
-	res.writeHead(status, {
+	endText(res, status, {
 		'content-type': 'application/json',
 		'cache-control': 'no-store',
-		'x-content-type-options': 'nosniff',
-		'content-length': String(Buffer.byteLength(body))
-	});
-	res.end(body);
+		'x-content-type-options': 'nosniff'
+	}, JSON.stringify({ error: message }));
 }
 
 /**
@@ -70,11 +62,16 @@ function sendAdminError(res, status, message) {
  * `x-content-type-options: nosniff` is filled in when the handler did not set
  * one, matching the SSR response writer.
  *
+ * A HEAD takes the handler's headers and the body's length; node drops the
+ * bytes. What a response with no content says about its length is
+ * bodylessLength's rule.
+ *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
  * @param {{ aborted: boolean }} state
+ * @param {boolean} headOnly the request was a HEAD
  */
-async function writeAdminResponse(res, response, state) {
+async function writeAdminResponse(res, response, state, headOnly) {
 	/** @type {Buffer | null} */
 	let body = null;
 	try {
@@ -97,18 +94,18 @@ async function writeAdminResponse(res, response, state) {
 	if (!hasContentTypeOptions) headers['x-content-type-options'] = 'nosniff';
 	const cookies = response.headers.getSetCookie();
 	if (cookies.length) headers['set-cookie'] = cookies;
-	// The handler's own content-length was dropped above; write the one the
-	// buffered body actually has. uWS derives it from the body it is handed, so
-	// omitting it here would answer chunked where the family answers with a
-	// length - and leave a HEAD reply, whose body node strips, with no size at
-	// all. Statuses defined to carry no body must not carry the header.
-	const bodiless = response.status === 204 || response.status === 304 || response.status < 200;
-	if (!bodiless) headers['content-length'] = String(body ? body.byteLength : 0);
+	// The handler's own content-length was dropped above; a body writes the
+	// length it actually has, as uWS derives it from the body it is handed.
+	if (body && body.byteLength) {
+		headers['content-length'] = String(body.byteLength);
+		res.writeHead(response.status, headers);
+		res.end(body);
+		return;
+	}
+	const length = bodylessLength(response.status, response.headers.get('content-length'), headOnly);
+	if (length !== null) headers['content-length'] = String(length);
 	res.writeHead(response.status, headers);
-	// node strips the body of a HEAD (and of a bodiless status) itself, so the
-	// empty reply is a plain end() rather than a dedicated call.
-	if (body && body.byteLength) res.end(body);
-	else res.end();
+	res.end();
 }
 
 /**
@@ -130,7 +127,7 @@ function runAdminHandler(request, res, state, span) {
 				sendAdminError(res, 500, 'internal error');
 				return;
 			}
-			return writeAdminResponse(res, response, state);
+			return writeAdminResponse(res, response, state, request.method === 'HEAD');
 		})
 		.catch((err) => {
 			try { span?.recordException?.(err); } catch { /* provider gone */ }

@@ -94,6 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
+import { endText, bodylessLength } from './http-helpers.js';
 
 const OPEN = 1;
 
@@ -2525,10 +2526,7 @@ export function tryAuthenticateRoute(req, res, pathname) {
 	if (pathname !== WS_AUTH_PATH) return false;
 	if (!wsModule.authenticate) return false;
 	const authenticate = () => runAuthenticateRoute(req, res).catch(() => {
-		if (!res.headersSent) {
-			res.writeHead(500, { 'content-type': 'text/plain' });
-			res.end('Internal Server Error');
-		}
+		if (!res.headersSent) endText(res, 500, { 'content-type': 'text/plain' }, 'Internal Server Error');
 	});
 	if (tracingEnabled) {
 		void traceOperation('adapter.http.websocket-authenticate', {
@@ -2554,16 +2552,9 @@ export function tryAuthenticateRoute(req, res, pathname) {
  */
 async function runAuthenticateRoute(req, res) {
 	if (req.method !== 'POST') {
-		// Length-framed like the shared writers in http-helpers.js. This route
-		// keeps its own copies because its Allow value is POST alone, but one
-		// status with one body must not be framed two ways by one server.
-		const body = 'Method Not Allowed';
-		res.writeHead(405, {
-			allow: 'POST',
-			'content-type': 'text/plain',
-			'content-length': String(Buffer.byteLength(body))
-		});
-		res.end(body);
+		// Its own 405 rather than send405, because the Allow value here is POST
+		// alone. HEAD lands here too; node drops the payload.
+		endText(res, 405, { allow: 'POST', 'content-type': 'text/plain' }, 'Method Not Allowed');
 		return;
 	}
 
@@ -2571,12 +2562,7 @@ async function runAuthenticateRoute(req, res) {
 	const headers = {};
 	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
 	if (ambiguous !== null) {
-		const body = 'Bad Request';
-		res.writeHead(400, {
-			'content-type': 'text/plain',
-			'content-length': String(Buffer.byteLength(body))
-		});
-		res.end(body);
+		endText(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
 		return;
 	}
 
@@ -2592,8 +2578,7 @@ async function runAuthenticateRoute(req, res) {
 		isTls: is_tls,
 		hasUpgradeHook: false
 	})) {
-		res.writeHead(403, { 'content-type': 'text/plain' });
-		res.end('Origin not allowed');
+		endText(res, 403, { 'content-type': 'text/plain' }, 'Origin not allowed');
 		return;
 	}
 
@@ -2604,8 +2589,7 @@ async function runAuthenticateRoute(req, res) {
 		// upgrade gate, and folding it into ip_rate_limit would hide which door
 		// an attack is hitting.
 		mUpgradeRejected?.inc({ reason: 'auth_rate_limit' });
-		res.writeHead(429, { 'content-type': 'text/plain' });
-		res.end('Too Many Requests');
+		endText(res, 429, { 'content-type': 'text/plain' }, 'Too Many Requests');
 		return;
 	}
 
@@ -2621,8 +2605,7 @@ async function runAuthenticateRoute(req, res) {
 		chunks.push(chunk);
 	}
 	if (oversized) {
-		res.writeHead(413, { 'content-type': 'text/plain' });
-		res.end('Content Too Large');
+		endText(res, 413, { 'content-type': 'text/plain' }, 'Content Too Large');
 		return;
 	}
 	const bodyBuf = Buffer.concat(chunks);
@@ -2655,12 +2638,14 @@ async function runAuthenticateRoute(req, res) {
 		const result = await Promise.resolve(wsModule.authenticate(event));
 
 		if (result === false) {
-			res.writeHead(401, { 'content-type': 'text/plain' });
-			res.end('Unauthorized');
+			endText(res, 401, { 'content-type': 'text/plain' }, 'Unauthorized');
 			return;
 		}
 
 		if (result instanceof Response) {
+			// A body writes the length it has, as uWS derives it from the body
+			// it is handed; a bodyless answer follows bodylessLength's rule.
+			const buf = result.body ? Buffer.from(await result.arrayBuffer()) : null;
 			/** @type {Record<string, string | string[]>} */
 			const outHeaders = {};
 			for (const [hk, hv] of result.headers) {
@@ -2672,12 +2657,11 @@ async function runAuthenticateRoute(req, res) {
 				...cookies._serialize()
 			];
 			if (outCookies.length > 0) outHeaders['set-cookie'] = outCookies;
+			const length = buf ? buf.byteLength : bodylessLength(result.status, result.headers.get('content-length'), false);
+			if (length !== null) outHeaders['content-length'] = String(length);
 			res.writeHead(result.status, outHeaders);
-			if (result.body) {
-				res.end(Buffer.from(await result.arrayBuffer()));
-			} else {
-				res.end();
-			}
+			if (buf) res.end(buf);
+			else res.end();
 			return;
 		}
 
@@ -2696,8 +2680,7 @@ async function runAuthenticateRoute(req, res) {
 			attributes: { requestId: authRequestId, error: diagnosticError(err) }
 		});
 		if (!res.headersSent) {
-			res.writeHead(500, { 'content-type': 'text/plain', 'x-request-id': authRequestId });
-			res.end('Internal Server Error');
+			endText(res, 500, { 'content-type': 'text/plain', 'x-request-id': authRequestId }, 'Internal Server Error');
 		}
 	}
 }
@@ -2797,13 +2780,7 @@ export function serveWsPathGet(req, res, pathname, search) {
 	// mismatch above for a deployment that pins `protection: 'siege'` and
 	// configures no `upgradeAdmission` at all.
 	if (postureLevel() !== 'siege' && (!ADMISSION_ARMED || admission.hasCapacity())) {
-		const body = 'WebSocket upgrade required';
-		res.writeHead(426, {
-			'content-type': 'text/plain',
-			upgrade: 'websocket',
-			'content-length': String(Buffer.byteLength(body))
-		});
-		res.end(body);
+		endText(res, 426, { 'content-type': 'text/plain', upgrade: 'websocket' }, 'WebSocket upgrade required');
 		return;
 	}
 	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {
@@ -2825,8 +2802,7 @@ export function serveWsPathGet(req, res, pathname, search) {
 		}, '503 Service Unavailable');
 		return;
 	}
-	res.writeHead(503, { 'content-type': 'text/plain', 'retry-after': String(refusalRetryAfter()) });
-	res.end('Server is at upgrade capacity, please retry');
+	endText(res, 503, { 'content-type': 'text/plain', 'retry-after': String(refusalRetryAfter()) }, 'Server is at upgrade capacity, please retry');
 }
 
 /**
@@ -2851,8 +2827,7 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 		// the siege always-202 gate - it never admits a client the real gate
 		// would reject.
 		if (postureLevel() !== 'siege' && admission.hasCapacity()) {
-			res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-			res.end('{"admit":true}');
+			endText(res, 200, { 'content-type': 'application/json', 'cache-control': 'no-store' }, '{"admit":true}');
 			return true;
 		}
 		const queueDepth = pollCounter.depth(now());
@@ -2866,8 +2841,7 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 		// 202 rather than 503 so the poll itself is never read as a failed or
 		// rate-limited upgrade: it holds no socket and stays distinguishable
 		// in logs.
-		res.writeHead(202, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-		res.end(
+		endText(res, 202, { 'content-type': 'application/json', 'cache-control': 'no-store' },
 			'{"admit":false,"queueDepth":' + queueDepth +
 			',"estimatedSeconds":' + estimatedSeconds +
 			',"pollAfterMs":' + pollAfterMs + '}'

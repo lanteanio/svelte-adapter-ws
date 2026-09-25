@@ -3,7 +3,7 @@ import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import { randomUuid, setTimer, clearTimer } from '../runtime.js';
-import { PayloadTooLargeError, send400, send413, send500 } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
@@ -53,24 +53,6 @@ const COMPRESSIBLE_TYPES = new Set([
 	'image/svg+xml'
 ]);
 
-/**
- * Default-fill `x-content-type-options: nosniff` when the response did not
- * already set one - the header is safe in every legitimate scenario (it tells
- * the browser not to MIME-sniff away the server's declared content-type) and
- * closes a known MIME-confusion vector for any SSR response whose author
- * forgets to set the header explicitly. Apps that want a different policy
- * just include their own header on the Response - the default-fill only fires
- * when the response is silent on the matter.
- *
- * Other header defaults (Referrer-Policy, X-Frame-Options, CSP) are
- * intentionally NOT defaulted here. CSP needs app-specific care for
- * inline-hydration / iframe shapes; X-Frame-Options breaks legitimate embeds;
- * Referrer-Policy choices vary by app. Those are app-level decisions and the
- * right tier is `hooks.server.js`.
- *
- * @param {Response} response
- * @returns {Response}
- */
 /**
  * The request body as a ReadableStream over node's incoming message, read for
  * ANY method that is not GET or HEAD: a body needs no content-type to be a
@@ -160,126 +142,60 @@ export function buildRequest(req, baseOrigin, headers, state) {
 	});
 }
 
-function ensureNosniff(response) {
-	if (response.headers.has('x-content-type-options')) return response;
-	try {
-		response.headers.set('x-content-type-options', 'nosniff');
-		return response;
-	} catch {
-		// Immutable headers (a Response passed through fetch) - rebuild.
-		const headers = new Headers(response.headers);
-		headers.set('x-content-type-options', 'nosniff');
-		return new Response(response.body, {
-			status: response.status,
-			statusText: response.statusText,
-			headers
-		});
-	}
-}
-
 /**
- * Compress a small, finite SSR response body when the client negotiated a
- * coding, mirroring the family policy: only single-chunk bodies (the common
- * SSR shape) are compressed, so a streaming response is never buffered and an
- * SSE stream is never parked. Returns a Response ready for setResponse - the
- * input Response's body is consumed either way.
+ * Pick the coding a single-chunk body is sent with, or '' to send it as is:
+ * compressible types past the size floor, when the client negotiated a coding
+ * and the app set none, and only when the coded body is actually smaller.
  *
  * @param {Response} response
+ * @param {Uint8Array} body
  * @param {string} acceptEncoding - '' suppresses compression (BREACH defense)
- * @returns {Promise<Response>}
+ * @returns {{ body: Uint8Array, encoding: string }}
  */
-async function maybeCompress(response, acceptEncoding) {
-	if (!response.body || !acceptEncoding || response.headers.has('content-encoding')) {
-		return response;
+function compressWhole(response, body, acceptEncoding) {
+	if (!acceptEncoding || body.byteLength < COMPRESS_MIN_SIZE || response.headers.has('content-encoding')) {
+		return { body, encoding: '' };
 	}
 	const ctRaw = response.headers.get('content-type') || '';
 	const semi = ctRaw.indexOf(';');
 	const ct = semi === -1 ? ctRaw : ctRaw.slice(0, semi).trimEnd();
-	if (!COMPRESSIBLE_TYPES.has(ct)) return response;
+	if (!COMPRESSIBLE_TYPES.has(ct)) return { body, encoding: '' };
 	// The header's weights decide, not a substring: `br;q=0` is a refusal, and
 	// `gzip;q=1, br;q=0.5` prefers gzip.
 	const chosen = negotiateEncoding(acceptEncoding, true, true);
-	if (chosen === '') return response;
-
-	// Read ahead one chunk to see whether this is a single-chunk body. A body
-	// that keeps streaming is reassembled around the chunks already read and
-	// passed through untouched - compression never buffers an unbounded body.
-	const reader = response.body.getReader();
-	const first = await reader.read();
-	if (first.done) {
-		return new Response(null, response);
-	}
-	// The second read decides single-chunk vs streaming, but it must never
-	// WITHHOLD a streaming shell: a page whose next chunk arrives seconds
-	// later (a load() streaming a promise) would otherwise ship its first
-	// byte only when its second exists. A buffered body settles its second
-	// read within a few microtasks; anything parked on real I/O loses the
-	// race and streams uncompressed from the first chunk on.
-	const STREAMING = Symbol('streaming');
-	let microtasks = Promise.resolve();
-	for (let i = 0; i < 8; i++) microtasks = microtasks.then(() => {});
-	/** @type {Promise<ReadableStreamReadResult<Uint8Array>> | null} */
-	let pendingRead = reader.read();
-	const second = await Promise.race([pendingRead, microtasks.then(() => STREAMING)]);
-	if (second !== STREAMING && !(/** @type {ReadableStreamReadResult<Uint8Array>} */ (second).done)) {
-		// Second chunk already exists: replay both and pipe the rest.
-		pendingRead = null;
-	}
-	if (second === STREAMING || pendingRead === null) {
-		const secondValue = second === STREAMING
-			? null
-			: /** @type {ReadableStreamReadResult<Uint8Array>} */ (second).value;
-		const replay = new ReadableStream({
-			start(controller) {
-				controller.enqueue(first.value);
-				if (secondValue) controller.enqueue(secondValue);
-			},
-			async pull(controller) {
-				const read = pendingRead ?? reader.read();
-				pendingRead = null;
-				const { done, value } = await read;
-				if (done) controller.close();
-				else controller.enqueue(value);
-			},
-			cancel(reason) {
-				return reader.cancel(reason);
-			}
-		});
-		return new Response(replay, response);
-	}
-
-	let body = first.value;
-	if (body.byteLength < COMPRESS_MIN_SIZE) {
-		return new Response(body, response);
-	}
+	if (chosen === '') return { body, encoding: '' };
 	const compressed = chosen === 'br'
 		? brotliCompressSync(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
 		: gzipSync(body, { level: 6 });
-	if (compressed.byteLength >= body.byteLength) {
-		return new Response(body, response);
-	}
-	const headers = new Headers(response.headers);
-	headers.set('content-encoding', chosen);
-	headers.set('content-length', String(compressed.byteLength));
-	headers.append('vary', 'Accept-Encoding');
-	return new Response(compressed, {
-		status: response.status,
-		statusText: response.statusText,
-		headers
-	});
+	if (compressed.byteLength >= body.byteLength) return { body, encoding: '' };
+	return { body: compressed, encoding: chosen };
 }
 
 /**
- * Write a Response onto the node response, with the default-nosniff fill and
- * the single-chunk compression pass applied first. The whole write is
- * awaited, so a body that fails mid-stream surfaces here as a throw.
+ * Write a Response onto the node response, framed the way uWS frames what it
+ * is handed: a body that turns out to be one chunk (the common SSR shape) goes
+ * out whole with its length, compressed first when the client negotiated a
+ * coding; a body that keeps streaming goes out chunked from its first byte and
+ * is never buffered or compressed, so an SSE stream is never parked; a
+ * bodyless answer says what bodylessLength allows. The Response's own
+ * Content-Length never passes through. The whole write is awaited, so a body
+ * that fails mid-stream surfaces here as a throw.
+ *
+ * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
+ * without `streamDone`, and the exchange is then closed abruptly rather than
+ * ended: a clean EOF on a partial body would read as a successful but
+ * truncated response. The failure is rethrown so the caller reports it; the
+ * close it caused is marked as the server's, so that report is not mistaken
+ * for a client abort.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
  * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean }} state
- * @param {string} [acceptEncoding]
+ * @param {string} [acceptEncoding] '' suppresses compression (BREACH defense)
+ * @param {boolean} [headOnly] the request was a HEAD: headers go out, the
+ *   body never does
  */
-async function writeResponse(res, response, state, acceptEncoding) {
+async function writeResponse(res, response, state, acceptEncoding, headOnly = false) {
 	if (state.aborted) {
 		// Nothing will consume this body; cancel it so the render's upstream
 		// (a fetch response, a DB cursor held by the stream source) is
@@ -287,38 +203,158 @@ async function writeResponse(res, response, state, acceptEncoding) {
 		await response.body?.cancel().catch(() => {});
 		return;
 	}
-	const finalResponse = await maybeCompress(ensureNosniff(response), acceptEncoding || '');
-	if (state.aborted) {
-		await finalResponse.body?.cancel().catch(() => {});
+	if (!response.body) {
+		state.responseStarted = true;
+		const length = bodylessLength(response.status, response.headers.get('content-length'), headOnly);
+		if (writeHeaders(res, response, length)) res.end();
 		return;
 	}
-	await streamResponse(res, finalResponse, state);
+	if (response.body.locked) {
+		state.responseStarted = true;
+		endText(res, 500, { 'content-type': 'text/plain' },
+			'Fatal error: Response body is locked. ' +
+				"This can happen when the response was already read (for example through 'response.json()' or 'response.text()')."
+		);
+		return;
+	}
+
+	// HEAD: SvelteKit renders it as the GET - its endpoint lane routes HEAD to
+	// the GET handler and hands that Response back unchanged, and pages render
+	// in full - and leaves dropping the body to the server. node would drop the
+	// bytes, but reading them would still cost the whole render, so the body is
+	// never read: the declared Content-Length is reported or none. No encoding
+	// is negotiated for it either: the length named is the identity one and no
+	// Content-Encoding or Vary of the adapter's own accompanies it, so a HEAD
+	// sent with Accept-Encoding sees a consistent identity header set rather
+	// than the coded length the GET would carry (RFC 9110 9.3.2 lets a HEAD
+	// omit fields settled only while generating the content; the GET's coded
+	// length is one).
+	if (headOnly) {
+		state.responseStarted = true;
+		const length = bodylessLength(response.status, response.headers.get('content-length'), true);
+		if (writeHeaders(res, response, length)) res.end();
+		response.body.cancel().catch(() => {});
+		return;
+	}
+
+	const reader = response.body.getReader();
+	let streaming = false;
+	let streamDone = false;
+	try {
+		const first = await reader.read();
+		if (state.aborted) return;
+		if (first.done) {
+			state.responseStarted = true;
+			if (writeHeaders(res, response, 0)) res.end();
+			return;
+		}
+		// The second read decides single-chunk vs streaming, but it must never
+		// WITHHOLD a streaming shell: a page whose next chunk arrives seconds
+		// later (a load() streaming a promise) would otherwise ship its first
+		// byte only when its second exists. A buffered body settles its second
+		// read within a few microtasks; anything parked on real I/O loses the
+		// race and streams chunked from the first chunk on.
+		const STREAMING = Symbol('streaming');
+		let microtasks = Promise.resolve();
+		for (let i = 0; i < 8; i++) microtasks = microtasks.then(() => {});
+		/** @type {Promise<ReadableStreamReadResult<Uint8Array>> | null} */
+		let pendingRead = reader.read();
+		const raced = await Promise.race([pendingRead, microtasks.then(() => STREAMING)]);
+		if (state.aborted) return;
+		const second = raced === STREAMING ? null : /** @type {ReadableStreamReadResult<Uint8Array>} */ (raced);
+		if (second !== null && second.done) {
+			const whole = compressWhole(response, first.value, acceptEncoding || '');
+			state.responseStarted = true;
+			if (writeHeaders(res, response, whole.body.byteLength, whole.encoding)) res.end(whole.body);
+			return;
+		}
+
+		state.responseStarted = true;
+		if (!writeHeaders(res, response, null)) return;
+		streaming = true;
+		/** @type {Uint8Array[]} */
+		const ready = [first.value];
+		if (second !== null) {
+			ready.push(second.value);
+			pendingRead = null;
+		}
+		for (;;) {
+			let value;
+			if (ready.length > 0) {
+				value = /** @type {Uint8Array} */ (ready.shift());
+			} else {
+				const read = await (pendingRead ?? reader.read());
+				pendingRead = null;
+				if (read.done) { streamDone = true; break; }
+				value = read.value;
+			}
+			if (state.aborted) break;
+			if (!res.write(value)) {
+				const drained = await waitForDrain(res, 30000);
+				if (!drained) break;
+				if (state.aborted) break;
+			}
+		}
+	} finally {
+		if (streaming && !state.aborted) {
+			if (streamDone) {
+				res.end();
+			} else {
+				state.closedByServer = true;
+				res.destroy();
+			}
+		}
+		reader.cancel().catch(() => {});
+	}
 }
 
 /**
- * Write the response headers. A header the transport refuses (a name or
- * value with characters node will not put on the wire) turns the whole
- * response into a 500 before any byte starts, the same answer Kit's own node
- * writer gives.
+ * Write the response headers, with the Content-Length this writer settled on
+ * in place of any the Response declared.
+ *
+ * `x-content-type-options: nosniff` is filled in when the response did not set
+ * one - the header is safe in every legitimate scenario (it tells the browser
+ * not to MIME-sniff away the server's declared content-type) and closes a
+ * known MIME-confusion vector for any SSR response whose author forgets to
+ * set it. Apps that want a different policy include their own header on the
+ * Response. Other header defaults (Referrer-Policy, X-Frame-Options, CSP) are
+ * intentionally NOT defaulted here: CSP needs app-specific care for
+ * inline-hydration / iframe shapes, X-Frame-Options breaks legitimate embeds,
+ * and Referrer-Policy choices vary by app. Those are app-level decisions and
+ * the right tier is `hooks.server.js`.
+ *
+ * A header the transport refuses (a name or value with characters node will
+ * not put on the wire) turns the whole response into a 500 before any byte
+ * starts, the same answer Kit's own node writer gives.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
+ * @param {number | null} length the Content-Length to write, or null for none
+ * @param {string} [encoding] the content coding the body was sent with
  * @returns {boolean} false when a header was refused and the 500 was written
  */
-function writeHeaders(res, response) {
+function writeHeaders(res, response, length, encoding = '') {
+	let hasContentTypeOptions = false;
 	for (const [key, value] of response.headers) {
-		if (key === 'set-cookie') continue;
+		if (key === 'set-cookie' || key === 'content-length') continue;
+		if (key === 'x-content-type-options') hasContentTypeOptions = true;
 		try {
 			res.setHeader(key, value);
 		} catch (error) {
 			for (const name of res.getHeaderNames()) res.removeHeader(name);
-			res.writeHead(500);
-			res.end(String(error));
+			endText(res, 500, {}, String(error));
 			return false;
 		}
 	}
+	if (!hasContentTypeOptions) res.setHeader('x-content-type-options', 'nosniff');
+	if (encoding) {
+		res.setHeader('content-encoding', encoding);
+		const vary = res.getHeader('vary');
+		res.setHeader('vary', vary ? vary + ', Accept-Encoding' : 'Accept-Encoding');
+	}
 	const cookies = response.headers.getSetCookie();
 	if (cookies.length > 0) res.setHeader('set-cookie', cookies);
+	if (length !== null) res.setHeader('content-length', String(length));
 	res.writeHead(response.status);
 	return true;
 }
@@ -347,68 +383,6 @@ function waitForDrain(res, timeoutMs) {
 		res.once('drain', onDrain);
 		res.once('close', onClose);
 	});
-}
-
-/**
- * Stream a Response body onto the node response, awaiting the whole write.
- *
- * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
- * without `streamDone`, and the exchange is then closed abruptly rather than
- * ended: a clean EOF on a partial body would read as a successful but
- * truncated response. The failure is rethrown so the caller reports it; the
- * close it caused is marked as the server's, so that report is not mistaken
- * for a client abort.
- *
- * @param {import('node:http').ServerResponse} res
- * @param {Response} response
- * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean }} state
- */
-async function streamResponse(res, response, state) {
-	if (!response.body) {
-		if (state.aborted) return;
-		state.responseStarted = true;
-		if (writeHeaders(res, response)) res.end();
-		return;
-	}
-	if (response.body.locked) {
-		if (state.aborted) return;
-		state.responseStarted = true;
-		res.writeHead(500, { 'content-type': 'text/plain' });
-		res.end(
-			'Fatal error: Response body is locked. ' +
-				"This can happen when the response was already read (for example through 'response.json()' or 'response.text()')."
-		);
-		return;
-	}
-	const reader = response.body.getReader();
-	let streaming = false;
-	let streamDone = false;
-	try {
-		if (state.aborted) return;
-		state.responseStarted = true;
-		if (!writeHeaders(res, response)) return;
-		streaming = true;
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) { streamDone = true; break; }
-			if (state.aborted) break;
-			if (!res.write(value)) {
-				const drained = await waitForDrain(res, 30000);
-				if (!drained) break;
-				if (state.aborted) break;
-			}
-		}
-	} finally {
-		if (streaming && !state.aborted) {
-			if (streamDone) {
-				res.end();
-			} else {
-				state.closedByServer = true;
-				res.destroy();
-			}
-		}
-		reader.cancel().catch(() => {});
-	}
 }
 
 /**
@@ -501,6 +475,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 		requestPlatform.requestId = requestId;
 
 		const method = request.method;
+		const headOnly = method === 'HEAD';
 
 		// Dedup: for anonymous GET/HEAD requests that arrive concurrently for the
 		// same URL, only the first (the leader) calls server.respond(). Subsequent
@@ -518,10 +493,8 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 			!isCredentialedRequest &&
 			ssrInflight.size < MAX_SSR_DEDUP;
 		// BREACH defense: suppress the accept-encoding signal for credentialed
-		// requests so writeResponse() leaves the body uncompressed. HEAD gets
-		// the same suppression - node discards the body anyway, so compressing
-		// it would be pure event-loop cost an anonymous client can mint.
-		const respAcceptEncoding = ((isCredentialedRequest && !COMPRESS_CREDENTIALED) || method === 'HEAD')
+		// requests so writeResponse() leaves the body uncompressed.
+		const respAcceptEncoding = (isCredentialedRequest && !COMPRESS_CREDENTIALED)
 			? ''
 			: headers['accept-encoding'];
 
@@ -549,7 +522,8 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: shared.headers
 						}),
 						state,
-						respAcceptEncoding
+						respAcceptEncoding,
+						headOnly
 					);
 					return;
 				}
@@ -579,7 +553,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 					// leader's content to waiters that may legitimately differ.
 					if (response.headers.has('set-cookie') || !response.body) {
 						resolveShared(null);
-						await writeResponse(res, response, state, respAcceptEncoding);
+						await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 						return;
 					}
 					const varyHeader = response.headers.get('vary');
@@ -589,7 +563,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 						);
 						if (personalized) {
 							resolveShared(null);
-							await writeResponse(res, response, state, respAcceptEncoding);
+							await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 							return;
 						}
 					}
@@ -601,7 +575,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 					// render is buffered and shared below.
 					if (!isDedupBufferable(response)) {
 						resolveShared(null);
-						await writeResponse(res, response, state, respAcceptEncoding);
+						await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 						return;
 					}
 
@@ -614,7 +588,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 					// which is what the cap exists to prevent.
 					if (declaresBodyPastCap(response, MAX_SSR_DEDUP_BODY)) {
 						resolveShared(null);
-						await writeResponse(res, response, state, respAcceptEncoding);
+						await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 						return;
 					}
 					const read = await readBodyUpTo(/** @type {ReadableStream<Uint8Array>} */ (response.body), MAX_SSR_DEDUP_BODY);
@@ -633,7 +607,8 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 								headers: response.headers
 							}),
 							state,
-							respAcceptEncoding
+							respAcceptEncoding,
+							headOnly
 						);
 						return;
 					}
@@ -654,7 +629,8 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: response.headers
 						}),
 						state,
-						respAcceptEncoding
+						respAcceptEncoding,
+						headOnly
 					);
 				} catch (err) {
 					resolveShared(null);
@@ -670,7 +646,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 			await response.body?.cancel().catch(() => {});
 			return;
 		}
-		await writeResponse(res, response, state, respAcceptEncoding);
+		await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 	} catch (err) {
 		try { span?.recordException?.(err); } catch {}
 		if (state.aborted && !state.closedByServer) return;

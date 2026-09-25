@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelling only when there is one. GET and HEAD still get `400` from the
   static lookup; other methods reach the app's router, as they do on every
   other platform and on the family's native tier.
+- The SSR lane frames what it writes rather than what the Response declares,
+  as the family's native tier does. A body that arrives as one chunk goes
+  out whole with its real length, and a body that keeps streaming goes out
+  `Transfer-Encoding: chunked` even when the app declared a
+  `Content-Length`, which was written through before.
 
 ### Fixed
 
@@ -70,6 +75,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block at `writeHead`, so without the length a GET got them
   `Transfer-Encoding: chunked` with a terminating empty chunk and a HEAD got
   no length at all, where the family's native tier writes the zero length.
+- **Every generated answer is length-framed.** The authenticate endpoint's
+  401, 403, 413, 429 and 500, a Response its hook returns, the socket path's
+  capacity 503, the waiting room's poll answers, the SSR lane's two
+  generated 500s (a header node refuses to write, a body already read) and a
+  single-chunk SSR body with no declared length (most endpoint Responses)
+  went out `Transfer-Encoding: chunked`, since node frames a `writeHead`
+  that names no length that way. Each now carries its length, as the
+  family's native tier derives it from the body.
+- **A 204, 304 or HEAD says only what it may about its length.** RFC 9110
+  8.6 forbids `Content-Length` on a 204 and allows it on a 304 only when it
+  names the 200's content length, and a HEAD's may only name the GET's. The
+  SSR lane, the admin lane, the authenticate endpoint and `createTestServer`'s
+  admin mirror now apply one rule: a 204 reports none (an app's own
+  `content-length: 0` was written through), a 304 or a HEAD reports the
+  length the app declared or none (the admin lane answered a HEAD with `0`
+  and dropped a 304's declared length), and every other bodyless answer
+  reports zero. A HEAD to a page or endpoint no longer reads the body
+  SvelteKit renders for it: the headers go out with the declared length and
+  the body is cancelled unread.
 
 ## [0.0.1] - 2026-09-22
 

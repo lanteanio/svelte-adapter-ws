@@ -290,13 +290,15 @@ describe('the harness refuses the same targets', () => {
 		expect(seen).toEqual(['/__realtime/introspect', '/__realtime']);
 	});
 
-	it('length-frames an EMPTY-bodied admin answer, which takes the other terminal call', async () => {
+	it('frames an EMPTY-bodied admin answer, which takes the other terminal call', async () => {
 		// An answer with no body does not go through the facade's end(); the
-		// admin lane routes it to endWithoutBody(0) instead. Framing the one
-		// and not the other is how the harness kept answering chunked for a
+		// admin lane routes it to endWithoutBody instead. Framing the one and
+		// not the other is how the harness kept answering chunked for a
 		// `new Response(null, { status: 200 })` while the runtime it emulates
-		// declared a length of 0 - and on a HEAD, node strips the body itself,
-		// so the reply carried no framing at all rather than a wrong one.
+		// declared a length of 0. A HEAD of the same answer declares none: its
+		// Content-Length may only name the GET's size, and a handler that
+		// declared nothing stated none, so the reply carries no framing header
+		// at all and node writes no chunked terminator for a HEAD.
 		//
 		// 200 rather than 204 deliberately: 204 is defined to carry no body and
 		// must NOT get the header, so it cannot exercise this path.
@@ -309,14 +311,16 @@ describe('the harness refuses the same targets', () => {
 		});
 		try {
 			const port = Number(new URL(empty.url).port);
-			for (const method of ['GET', 'HEAD']) {
-				const res = await rawGet(port, '/__realtime/anything', method);
-				expect(res.status, `${method} on an empty-bodied answer`).toBe(200);
-				expect(res.head, `${method} empty-bodied answer went chunked`)
-					.not.toContain('transfer-encoding: chunked');
-				expect(headerLines(res), `${method} empty-bodied answer declared no length`)
-					.toContain('content-length: 0');
-			}
+			const get = await rawGet(port, '/__realtime/anything', 'GET');
+			expect(get.status).toBe(200);
+			expect(headerLines(get), 'GET empty-bodied answer went chunked').not.toContain('transfer-encoding: chunked');
+			expect(headerLines(get), 'GET empty-bodied answer declared no length').toContain('content-length: 0');
+
+			const head = await rawGet(port, '/__realtime/anything', 'HEAD');
+			expect(head.status).toBe(200);
+			const lines = headerLines(head);
+			expect(lines.filter((line) => line.startsWith('content-length:')), 'HEAD declared a length nobody stated').toEqual([]);
+			expect(lines.filter((line) => line.startsWith('transfer-encoding:')), 'HEAD went chunked').toEqual([]);
 		} finally {
 			await empty.close();
 		}

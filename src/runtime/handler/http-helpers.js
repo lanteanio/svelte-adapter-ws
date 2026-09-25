@@ -21,44 +21,75 @@ export const FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK']);
 // methods ALLOWED_METHODS carries, which is what this adapter can deliver.
 export const ALLOW_HEADER = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
 
-// Every one of these is length-framed. uWS derives a content-length from the
-// body handed to `res.end()`, so leaving it off answers chunked where the
-// family answers with a length, and leaves a HEAD reply - whose body node
-// strips - carrying no size at all. The bodies here are fixed, so the length
-// is exact rather than an estimate.
+/**
+ * Finish a generated response whose payload is a fixed text, length-framed.
+ * uWS derives a content-length from the body handed to `res.end()`, while node
+ * frames a `writeHead()` that names no length as chunked, so the length is
+ * written here. A HEAD needs nothing more: node drops the payload of a HEAD
+ * itself, and the header still names the size the GET would carry.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} status
+ * @param {Record<string, string>} headers
+ * @param {string} text
+ */
+export function endText(res, status, headers, text) {
+	res.writeHead(status, { ...headers, 'content-length': String(Buffer.byteLength(text)) });
+	res.end(text);
+}
+
+/**
+ * The Content-Length a response that carries no content reports, or null for
+ * none. A 204 never reports one: RFC 9110 8.6 forbids Content-Length there. A
+ * 304 reports one only when the app declared it, because the header is
+ * permitted on a 304 only when it names the length of the 200's content, and
+ * a zero on a 304 for a rendered page is never that. A HEAD is the same case:
+ * the header may only name the GET's content length, and the Response carries
+ * that only when whoever built it declared it - SvelteKit does for a rendered
+ * page, an app answering HEAD itself does by hand - so a HEAD reports the
+ * declared length or none. Every other bodyless response names zero, whatever
+ * it declared: a length with no bytes behind it would leave the client
+ * waiting for them.
+ *
+ * node writes whatever length it is handed, a 204 included, and frames a
+ * GET that names none as chunked, so every writer of a bodyless answer asks
+ * here rather than passing the Response's own header through.
+ *
+ * @param {number} status
+ * @param {string | null | undefined} declaredLength the response's own
+ *   Content-Length header, when it carries one
+ * @param {boolean} headOnly the request was a HEAD
+ * @returns {number | null}
+ */
+export function bodylessLength(status, declaredLength, headOnly) {
+	if (status === 204) return null;
+	if (status === 304 || headOnly) {
+		if (!declaredLength) return null;
+		const length = parseInt(declaredLength, 10);
+		return length >= 0 ? length : null;
+	}
+	return 0;
+}
+
+// Every one of these is length-framed through endText. The bodies are fixed,
+// so the length is exact rather than an estimate.
 
 /** @param {import('node:http').ServerResponse} res */
 export function send405(res) {
 	if (res.headersSent) return;
-	const body = 'Method Not Allowed';
-	res.writeHead(405, {
-		allow: ALLOW_HEADER,
-		'content-type': 'text/plain',
-		'content-length': String(Buffer.byteLength(body))
-	});
-	res.end(body);
+	endText(res, 405, { allow: ALLOW_HEADER, 'content-type': 'text/plain' }, 'Method Not Allowed');
 }
 
 /** @param {import('node:http').ServerResponse} res */
 export function send400(res) {
 	if (res.headersSent) return;
-	const body = 'Bad Request';
-	res.writeHead(400, {
-		'content-type': 'text/plain',
-		'content-length': String(Buffer.byteLength(body))
-	});
-	res.end(body);
+	endText(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
 }
 
 /** @param {import('node:http').ServerResponse} res */
 export function send413(res) {
 	if (res.headersSent) return;
-	const body = 'Content Too Large';
-	res.writeHead(413, {
-		'content-type': 'text/plain',
-		'content-length': String(Buffer.byteLength(body))
-	});
-	res.end(body);
+	endText(res, 413, { 'content-type': 'text/plain' }, 'Content Too Large');
 }
 
 /**
@@ -67,15 +98,10 @@ export function send413(res) {
  */
 export function send500(res, requestId) {
 	if (res.headersSent) return;
-	const body = 'Internal Server Error';
 	/** @type {Record<string, string>} */
-	const headers = {
-		'content-type': 'text/plain',
-		'content-length': String(Buffer.byteLength(body))
-	};
+	const headers = { 'content-type': 'text/plain' };
 	if (requestId) headers['x-request-id'] = requestId;
-	res.writeHead(500, headers);
-	res.end(body);
+	endText(res, 500, headers, 'Internal Server Error');
 }
 
 const FORBIDDEN_405_RAW =
