@@ -94,6 +94,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports zero. A HEAD to a page or endpoint no longer reads the body
   SvelteKit renders for it: the headers go out with the declared length and
   the body is cancelled unread.
+- **The authenticate endpoint answers as the family's does.** The URL handed
+  to the hook is built on `ORIGIN`, or on the configured `PROTOCOL_HEADER`,
+  `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host; a header value
+  no origin can be made of, or a Host the URL parser cannot read, is refused
+  400 where the second was a 500. A declared body past the 64 KiB cap is
+  refused 413 before any of it is read, and the body now streams into the
+  Request, so an undeclared oversized one is refused only when the hook reads
+  past the cap. A rate-limited preflight says `Too many authentication
+  requests`, and the `adapter.http.websocket-authenticate` span opens when
+  the hook runs rather than for every request to the path.
 
 ## [0.0.1] - 2026-09-22
 

@@ -92,9 +92,10 @@ import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
-import { origin as pinnedOrigin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
+import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { endText, bodylessLength } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
+import { readBody } from './ssr.js';
 
 const OPEN = 1;
 
@@ -2512,6 +2513,11 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 
 // - Authenticate preflight endpoint ------------------------------------------
 
+// Body size cap for the authenticate endpoint. Most requests have no body at
+// all - the hook reads cookies from the Cookie header - so a small cap makes a
+// malicious payload cheap to refuse.
+const AUTH_BODY_LIMIT = 64 * 1024;
+
 /**
  * Handle the authenticate POST at WS_AUTH_PATH as a normal HTTP exchange so
  * session cookies refresh via a standard Set-Cookie. Returns true when the
@@ -2520,50 +2526,28 @@ function closeConnection(rawWs, facade, userData, code, reason) {
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {string} pathname
+ * @param {{ aborted: boolean }} state the request edge's own abort flag
  * @returns {boolean}
  */
-export function tryAuthenticateRoute(req, res, pathname) {
+export function tryAuthenticateRoute(req, res, pathname, state) {
 	if (pathname !== WS_AUTH_PATH) return false;
-	if (!wsModule.authenticate) return false;
-	const authenticate = () => runAuthenticateRoute(req, res).catch(() => {
-		if (!res.headersSent) endText(res, 500, { 'content-type': 'text/plain' }, 'Internal Server Error');
-	});
-	if (tracingEnabled) {
-		void traceOperation('adapter.http.websocket-authenticate', {
-			kind: 'server',
-			parent: extractTraceContext({
-				traceparent: /** @type {string} */ (req.headers['traceparent']),
-				tracestate: /** @type {string} */ (req.headers['tracestate'])
-			}),
-			attributes: {
-				'http.request.method': req.method || 'POST',
-				'network.protocol.name': 'http'
-			}
-		}, authenticate);
-	} else {
-		void authenticate();
-	}
-	return true;
-}
-
-/**
- * @param {import('node:http').IncomingMessage} req
- * @param {import('node:http').ServerResponse} res
- */
-async function runAuthenticateRoute(req, res) {
+	if (typeof wsModule.authenticate !== 'function') return false;
 	if (req.method !== 'POST') {
 		// Its own 405 rather than send405, because the Allow value here is POST
 		// alone. HEAD lands here too; node drops the payload.
 		endText(res, 405, { allow: 'POST', 'content-type': 'text/plain' }, 'Method Not Allowed');
-		return;
+		return true;
 	}
 
+	// Repeated header lines are merged per header class. A repeated framing /
+	// identity header is refused outright: this door reads the Origin and hands
+	// the whole header set to a credential check, and neither can be given one
+	// of two possible readings.
 	/** @type {Record<string, string>} */
 	const headers = {};
-	const ambiguous = collectRequestHeaders(req.rawHeaders, headers);
-	if (ambiguous !== null) {
-		endText(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
-		return;
+	if (collectRequestHeaders(req.rawHeaders, headers) !== null) {
+		send400(res);
+		return true;
 	}
 
 	// CSRF defense FIRST, the limiter after: metering rejected origins would
@@ -2579,7 +2563,7 @@ async function runAuthenticateRoute(req, res) {
 		hasUpgradeHook: false
 	})) {
 		endText(res, 403, { 'content-type': 'text/plain' }, 'Origin not allowed');
-		return;
+		return true;
 	}
 
 	const direct = req.socket?.remoteAddress || '';
@@ -2589,38 +2573,57 @@ async function runAuthenticateRoute(req, res) {
 		// upgrade gate, and folding it into ip_rate_limit would hide which door
 		// an attack is hitting.
 		mUpgradeRejected?.inc({ reason: 'auth_rate_limit' });
-		endText(res, 429, { 'content-type': 'text/plain' }, 'Too Many Requests');
-		return;
+		endText(res, 429, { 'content-type': 'text/plain' }, 'Too many authentication requests');
+		return true;
 	}
 
-	// Read the body, capped at 64 KB - the hook rarely needs one.
-	const AUTH_BODY_LIMIT = 64 * 1024;
-	/** @type {Buffer[]} */
-	const chunks = [];
-	let total = 0;
-	let oversized = false;
-	for await (const chunk of req) {
-		total += chunk.length;
-		if (total > AUTH_BODY_LIMIT) { oversized = true; break; }
-		chunks.push(chunk);
+	// `get_origin` derives the base origin from the Host (and the configured
+	// PROTOCOL / HOST / PORT headers) when ORIGIN is unset, and THROWS on a
+	// value it cannot make an origin out of - a client-supplied PROTOCOL_HEADER
+	// or PORT_HEADER value on a deployment configured for one. Refused before
+	// any body is read, as the admin route refuses it.
+	let baseOrigin;
+	try {
+		baseOrigin = pinnedOrigin || get_origin(headers);
+	} catch {
+		send400(res);
+		return true;
 	}
-	if (oversized) {
-		endText(res, 413, { 'content-type': 'text/plain' }, 'Content Too Large');
-		return;
-	}
-	const bodyBuf = Buffer.concat(chunks);
 
-	const requestOrigin = (is_tls ? 'https://' : 'http://') + (headers['host'] || 'localhost');
+	const contentLength = parseInt(headers['content-length'], 10);
+	if (!isNaN(contentLength) && contentLength > AUTH_BODY_LIMIT) {
+		send413(res);
+		return true;
+	}
+
+	// The body streams into the Request under the cap: a hook that never reads
+	// it never pays for it, and one that reads past the cap rejects with
+	// PayloadTooLargeError, answered 413 below.
+	const body = readBody(req, AUTH_BODY_LIMIT, state);
 	const url = req.url || WS_AUTH_PATH;
-	const request = new Request(requestOrigin + url, {
-		method: 'POST',
-		headers,
-		body: bodyBuf.length > 0 ? bodyBuf : undefined,
-		// @ts-expect-error node accepts half-duplex request bodies
-		duplex: 'half'
-	});
 
-	const cookies = createCookies(headers['cookie'], request.url);
+	// A base origin that satisfied the protocol and port checks can still build
+	// a URL the WHATWG parser refuses (a Host carrying a space), and a header
+	// value the Headers constructor rejects throws here too; createCookies
+	// throws when handed no usable URL. All of them are the client's to fix.
+	/** @type {Request} */
+	let request;
+	/** @type {ReturnType<typeof createCookies>} */
+	let cookies;
+	try {
+		request = new Request(baseOrigin + url, {
+			method: 'POST',
+			headers,
+			body,
+			// @ts-expect-error node accepts half-duplex request bodies
+			duplex: 'half'
+		});
+		cookies = createCookies(headers['cookie'], request.url);
+	} catch {
+		send400(res);
+		return true;
+	}
+
 	const authRequestId = resolveRequestId(headers['x-request-id']) || randomUuid();
 	const authPlatform = Object.create(platform);
 	authPlatform.requestId = authRequestId;
@@ -2634,55 +2637,80 @@ async function runAuthenticateRoute(req, res) {
 		platform: authPlatform
 	};
 
-	try {
-		const result = await Promise.resolve(wsModule.authenticate(event));
+	/** @param {any} [span] the active tracing span, or null without a provider */
+	const authenticate = (span = null) => Promise.resolve()
+		.then(() => wsModule.authenticate(event))
+		.then(async (result) => {
+			if (state.aborted) return;
 
-		if (result === false) {
-			endText(res, 401, { 'content-type': 'text/plain' }, 'Unauthorized');
-			return;
-		}
-
-		if (result instanceof Response) {
-			// A body writes the length it has, as uWS derives it from the body
-			// it is handed; a bodyless answer follows bodylessLength's rule.
-			const buf = result.body ? Buffer.from(await result.arrayBuffer()) : null;
-			/** @type {Record<string, string | string[]>} */
-			const outHeaders = {};
-			for (const [hk, hv] of result.headers) {
-				if (hk === 'set-cookie' || hk === 'content-length') continue;
-				outHeaders[hk] = hv;
+			if (result === false) {
+				endText(res, 401, { 'content-type': 'text/plain' }, 'Unauthorized');
+				return;
 			}
-			const outCookies = [
-				...result.headers.getSetCookie(),
-				...cookies._serialize()
-			];
-			if (outCookies.length > 0) outHeaders['set-cookie'] = outCookies;
-			const length = buf ? buf.byteLength : bodylessLength(result.status, result.headers.get('content-length'), false);
-			if (length !== null) outHeaders['content-length'] = String(length);
-			res.writeHead(result.status, outHeaders);
-			if (buf) res.end(buf);
-			else res.end();
-			return;
-		}
 
-		const outCookies = cookies._serialize();
-		if (outCookies.length > 0) res.writeHead(204, { 'set-cookie': outCookies });
-		else res.writeHead(204);
-		res.end();
-	} catch (err) {
-		emitOperationalEvent({
-			source: 'svelte-adapter-ws',
-			component: 'runtime.authenticate',
-			event: 'runtime.authenticate.failed',
-			severity: 'error',
-			dataClass: 'pseudonymous',
-			message: 'The WebSocket authentication endpoint failed.',
-			attributes: { requestId: authRequestId, error: diagnosticError(err) }
+			if (result instanceof Response) {
+				// A body writes the length it has, as uWS derives it from the
+				// body it is handed; a bodyless answer follows bodylessLength's
+				// rule. Cookies set through `cookies.set()` are merged in, so
+				// both APIs work together.
+				const buf = result.body ? Buffer.from(await result.arrayBuffer()) : null;
+				if (state.aborted) return;
+				/** @type {Record<string, string | string[]>} */
+				const outHeaders = {};
+				for (const [hk, hv] of result.headers) {
+					if (hk === 'set-cookie' || hk === 'content-length') continue;
+					outHeaders[hk] = hv;
+				}
+				const outCookies = [
+					...result.headers.getSetCookie(),
+					...cookies._serialize()
+				];
+				if (outCookies.length > 0) outHeaders['set-cookie'] = outCookies;
+				const length = buf ? buf.byteLength : bodylessLength(result.status, result.headers.get('content-length'), false);
+				if (length !== null) outHeaders['content-length'] = String(length);
+				res.writeHead(result.status, outHeaders);
+				if (buf) res.end(buf);
+				else res.end();
+				return;
+			}
+
+			// Implicit success: 204 No Content with any Set-Cookie headers.
+			const outCookies = cookies._serialize();
+			if (outCookies.length > 0) res.writeHead(204, { 'set-cookie': outCookies });
+			else res.writeHead(204);
+			res.end();
+		})
+		.catch((err) => {
+			try { span?.recordException?.(err); } catch { /* provider gone */ }
+			if (state.aborted) return;
+			if (err instanceof PayloadTooLargeError) {
+				send413(res);
+				return;
+			}
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.authenticate',
+				event: 'runtime.authenticate.failed',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'The WebSocket authentication endpoint failed.',
+				attributes: { requestId: authRequestId, error: diagnosticError(err) }
+			});
+			send500(res, authRequestId);
 		});
-		if (!res.headersSent) {
-			endText(res, 500, { 'content-type': 'text/plain', 'x-request-id': authRequestId }, 'Internal Server Error');
-		}
+	if (tracingEnabled) {
+		void traceOperation('adapter.http.websocket-authenticate', {
+			kind: 'server',
+			parent: extractTraceContext(headers),
+			attributes: {
+				'http.request.method': 'POST',
+				'network.protocol.name': 'http'
+			}
+		}, authenticate);
+	} else {
+		void authenticate(null);
 	}
+	return true;
 }
 
 /**

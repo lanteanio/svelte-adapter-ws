@@ -43,7 +43,7 @@ const ADMIN_PREFIX = ADMIN_PATH === false ? null : ADMIN_PATH + '/';
  * the checks then cost one comparison.
  * @type {{
  *   wsPath: string,
- *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) => boolean,
+ *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean,
  *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => void,
  *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
  *   tryAdminRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean
@@ -140,7 +140,7 @@ export function handleRequest(req, res) {
 		// answer before the static index so a same-named asset can never
 		// shadow the queue a browser is sitting in.
 		if (isGetLike && realtimeRoutes.tryWaitingRoomRoute(req, res, pathname, search)) return;
-		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname)) return;
+		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname, state)) return;
 		// The reserved admin prefix, last of the realtime routes and above the
 		// static lane. The exact realtime routes above beat it - the WebSocket
 		// path, the authenticate endpoint, both waiting-room paths, and the two
