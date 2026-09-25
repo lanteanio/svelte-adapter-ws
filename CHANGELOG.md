@@ -96,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the body is cancelled unread.
 - **The authenticate endpoint answers as the family's does.** The URL handed
   to the hook is built on `ORIGIN`, or on the configured `PROTOCOL_HEADER`,
-  `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host; a header value
+  `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host, and carries a
+  query only when there is one (a bare trailing `?` is dropped); a header value
   no origin can be made of, or a Host the URL parser cannot read, is refused
   400 where the second was a 500. A declared body past the 64 KiB cap is
   refused 413 before any of it is read, and the body now streams into the

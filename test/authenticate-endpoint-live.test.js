@@ -83,12 +83,13 @@ function exchange(port, wire) {
 /**
  * @param {number} port
  * @param {string[]} extra header lines
- * @param {{ host?: string, body?: string }} [opts]
+ * @param {{ host?: string, body?: string, target?: string, xhr?: boolean }} [opts]
+ *   `xhr: false` leaves out the header that passes the origin check
  */
-const post = (port, extra, { host = `127.0.0.1:${port}`, body = '' } = {}) => [
-	'POST /__ws/auth HTTP/1.1',
+const post = (port, extra, { host = `127.0.0.1:${port}`, body = '', target = '/__ws/auth', xhr = true } = {}) => [
+	`POST ${target} HTTP/1.1`,
 	`Host: ${host}`,
-	'x-requested-with: XMLHttpRequest',
+	...(xhr ? ['x-requested-with: XMLHttpRequest'] : []),
 	...extra,
 	'', ''
 ].join('\r\n') + body;
@@ -97,14 +98,17 @@ const post = (port, extra, { host = `127.0.0.1:${port}`, body = '' } = {}) => [
  * @param {Record<string, unknown>} wsOptions
  * @param {Record<string, string>} [env] set only while the payload's modules
  *   evaluate, which is when config.js reads it
+ * @param {Record<string, string>} [files] written into the payload after its
+ *   stubs, so one can replace the tracing provider
  */
-async function boot(wsOptions, env = {}) {
+async function boot(wsOptions, env = {}, files = undefined) {
 	const payload = buildRuntime({
 		replace: {
 			WS_ENABLED: JSON.stringify(true),
 			WS_OPTIONS: JSON.stringify({ ...WS_OPTS, ...wsOptions })
 		},
-		wsHandlerSource: WS_HANDLER
+		wsHandlerSource: WS_HANDLER,
+		files
 	});
 	const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
 	Object.assign(process.env, env);
@@ -118,20 +122,40 @@ async function boot(wsOptions, env = {}) {
 	}
 }
 
+// A tracing provider that only records what it was asked to open. The payload
+// evaluates it in this process, so the list is shared with the test.
+const RECORDING_PROVIDER = `
+const spans = globalThis.__authSpans ??= [];
+export default {
+	startSpan(name, options) {
+		spans.push({ name, parent: options.parent, attributes: options.attributes });
+		return { end() {} };
+	}
+};
+`;
+
+/** @returns {Array<{ name: string, parent: any, attributes: Record<string, unknown> }>} */
+const authSpans = () => (/** @type {any} */ (globalThis).__authSpans ?? [])
+	.filter((/** @type {any} */ s) => s.name === 'adapter.http.websocket-authenticate');
+
 /** @type {any} */ let plain;
 /** @type {any} */ let limited;
+/** @type {any} */ let ordered;
 /** @type {any} */ let proxied;
 /** @type {any} */ let pinned;
+/** @type {any} */ let traced;
 
 beforeAll(async () => {
 	plain = await boot({});
 	limited = await boot({ authPathRateLimit: 1 });
+	ordered = await boot({ authPathRateLimit: 1 });
 	proxied = await boot({}, { PROTOCOL_HEADER: 'x-forwarded-proto' });
 	pinned = await boot({}, { ORIGIN: 'https://app.example' });
+	traced = await boot({}, {}, { 'tracing-provider.js': RECORDING_PROVIDER });
 }, 60000);
 
 afterAll(async () => {
-	for (const built of [plain, limited, proxied, pinned]) {
+	for (const built of [plain, limited, ordered, proxied, pinned, traced]) {
 		await built?.rt.close();
 		built?.payload.cleanup();
 	}
@@ -202,5 +226,61 @@ describe('the authenticate endpoint', () => {
 		const within = await exchange(port, post(port, ['x-mode: read', `Content-Length: ${small.length}`], { body: small }));
 		expect(within.status).toContain('200');
 		expect(within.body).toBe('1000');
+	});
+
+	it('reads a body of exactly the cap, declared or chunked', async () => {
+		const port = plain.rt.port;
+		const cap = 'z'.repeat(64 * 1024);
+		const declared = await exchange(port, post(port, ['x-mode: read', `Content-Length: ${cap.length}`], { body: cap }));
+		expect(declared.status).toContain('200');
+		expect(declared.body).toBe(String(cap.length));
+
+		const chunked = cap.length.toString(16) + '\r\n' + cap + '\r\n0\r\n\r\n';
+		const streamed = await exchange(port, post(port, ['x-mode: read', 'Transfer-Encoding: chunked', 'Connection: close'], { body: chunked }));
+		expect(streamed.status).toContain('200');
+		expect(streamed.body).toBe(String(cap.length));
+	});
+
+	it('refuses the origin before counting, and counts before any other refusal', async () => {
+		// The budget is one request. Refused origins must not spend it - the
+		// CSRF check comes first so hostile cross-site traffic behind a shared
+		// address cannot use up the real clients' allowance - and the 403 comes
+		// ahead of the declared-length 413. Once the budget is spent, every
+		// later refusal is the 429: the limiter sits ahead of the Request-build
+		// 400 and the declared-length 413.
+		const port = ordered.rt.port;
+		const foreign = ['Origin: http://foreign.example', `Content-Length: ${64 * 1024 + 1}`];
+		for (let i = 0; i < 2; i++) {
+			const refused = await exchange(port, post(port, foreign, { xhr: false }));
+			expect(refused.status).toContain('403');
+		}
+		expect((await exchange(port, post(port, ['Content-Length: 0']))).status).toContain('204');
+		expect((await exchange(port, post(port, ['Content-Length: 0'], { host: 'a b' }))).status).toContain('429');
+		expect((await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`]))).status).toContain('429');
+	});
+
+	it('hands the hook no bare trailing question mark, and keeps a query', async () => {
+		const port = plain.rt.port;
+		const bare = await exchange(port, post(port, ['x-mode: url', 'Content-Length: 0'], { target: '/__ws/auth?' }));
+		expect(bare.body).toBe(`http://127.0.0.1:${port}/__ws/auth`);
+		const query = await exchange(port, post(port, ['x-mode: url', 'Content-Length: 0'], { target: '/__ws/auth?a=1' }));
+		expect(query.body).toBe(`http://127.0.0.1:${port}/__ws/auth?a=1`);
+	});
+
+	it('opens its span when the hook runs, under the context the request carried', async () => {
+		const port = traced.rt.port;
+		const traceparent = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+		const before = authSpans().length;
+
+		const refused = await exchange(port, post(port, [`traceparent: ${traceparent}`, 'Origin: http://foreign.example', 'Content-Length: 0'], { xhr: false }));
+		expect(refused.status).toContain('403');
+		expect(authSpans().length, 'a request refused before the hook opens no span').toBe(before);
+
+		const admitted = await exchange(port, post(port, [`traceparent: ${traceparent}`, 'Content-Length: 0']));
+		expect(admitted.status).toContain('204');
+		const spans = authSpans().slice(before);
+		expect(spans).toHaveLength(1);
+		expect(spans[0].parent?.traceparent).toBe(traceparent);
+		expect(spans[0].attributes['http.request.method']).toBe('POST');
 	});
 });

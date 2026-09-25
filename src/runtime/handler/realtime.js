@@ -2627,11 +2627,16 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		return true;
 	}
 
-	// The body streams into the Request under the cap: a hook that never reads
-	// it never pays for it, and one that reads past the cap rejects with
-	// PayloadTooLargeError, answered 413 below.
+	// The body streams into the Request under the cap. It comes off the socket
+	// as the hook reads it, one chunk ahead, and a hook that reads past the cap
+	// rejects with PayloadTooLargeError, answered 413 below.
 	const body = readBody(req, AUTH_BODY_LIMIT, state);
-	const url = req.url || WS_AUTH_PATH;
+	// The path and, when there is one, the query: a bare trailing `?` names no
+	// query, so it is not carried into the URL the hook sees.
+	const target = req.url || WS_AUTH_PATH;
+	const queryAt = target.indexOf('?');
+	const query = queryAt === -1 ? '' : target.slice(queryAt + 1);
+	const url = query ? pathname + '?' + query : pathname;
 
 	// A base origin that satisfied the protocol and port checks can still build
 	// a URL the WHATWG parser refuses (a Host carrying a space), and a header
