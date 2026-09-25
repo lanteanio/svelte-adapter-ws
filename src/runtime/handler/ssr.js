@@ -69,6 +69,12 @@ const COMPRESSIBLE_TYPES = new Set([
  */
 export function readBody(req, limit, state) {
 	let initialized = false;
+	// Set once the stream is finished, from either side: the request ended,
+	// failed or passed the limit, or the consumer cancelled. The listeners
+	// stand down from then on. A chunk still arriving after a cancel would
+	// otherwise be enqueued into a closed controller, which throws inside the
+	// request's event listener, where nothing catches it and the process exits.
+	let done = false;
 	return new ReadableStream({
 		start(controller) {
 			if (state.aborted) controller.error(new Error('Request aborted'));
@@ -84,7 +90,6 @@ export function readBody(req, limit, state) {
 			}
 			initialized = true;
 			let size = 0;
-			let done = false;
 			req.on('data', (/** @type {Buffer} */ chunk) => {
 				if (done || state.aborted) return;
 				size += chunk.byteLength;
@@ -109,6 +114,9 @@ export function readBody(req, limit, state) {
 			});
 		},
 		cancel() {
+			// What is still on its way is discarded, and the socket keeps being
+			// read so the connection reaches its next request.
+			done = true;
 			req.resume();
 		}
 	});

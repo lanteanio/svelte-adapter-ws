@@ -124,6 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Origin` is still refused `400` on a connection that stays open. The
   handshake counts them as `upgrade_rejected_total{reason="ambiguous_framing"}`,
   ahead of every capacity answer.
+- **An app that stops reading a request body no longer takes the process
+  down.** The body stream fed from node's request kept pushing the bytes
+  still arriving into a stream the app had let go of - `request.body.cancel()`,
+  breaking out of `for await`, or cancelling a reader after a read - and the
+  push threw inside the request's event listener, where nothing catches it.
+  The rest of the body is now discarded and the connection reaches its next
+  request. SSR routes and the authenticate hook share this stream.
 
 ## [0.0.1] - 2026-09-22
 
