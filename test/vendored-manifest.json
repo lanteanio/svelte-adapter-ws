@@ -1098,7 +1098,13 @@
 		"file": "test/fixture/src/hooks.ws.subbatch.js"
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.subhook.js"
+		"file": "test/fixture/src/hooks.ws.subhook.js",
+		"adaptations": [
+			{
+				"lead": "\tif (topic.startsWith('hook-false:')) return false;\n}\n\n// Membership as the SERVER sees it. A denial frame alone would still be\n// satisfied by a runtime that answered the client and subscribed it anyway.\nexport function message(ws, { data, platform }) {\n\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (msg.type === 'count') {\n\t\tplatform.send(ws, 'probe', 'count', { topic: msg.topic, count: platform.subscribers(msg.topic) });\n\t}\n}\n",
+				"ours": "\tif (topic.startsWith('hook-false:')) return false;\n}\n\n// The unsubscribe hook's two failure modes, keyed by topic the same way:\n// - `unsub-throw:*` - the hook throws synchronously.\n// - `unsub-reject:*` - the hook returns a promise that rejects.\n// Both are contained by the runtime and reported as\n// ADAPTER-ERR-UNSUBSCRIBE-HOOK; the connection must survive either.\nexport function unsubscribe(_ws, topic) {\n\tif (topic.startsWith('unsub-throw:')) throw new Error('unsubscribe hook probe throw');\n\tif (topic.startsWith('unsub-reject:')) return Promise.reject(new Error('unsubscribe hook probe rejection'));\n}\n\n// Membership as the SERVER sees it. A denial frame alone would still be\n// satisfied by a runtime that answered the client and subscribed it anyway.\nexport function message(ws, { data, platform }) {\n\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (msg.type === 'count') {\n\t\tplatform.send(ws, 'probe', 'count', { topic: msg.topic, count: platform.subscribers(msg.topic), requestId: platform.requestId ?? null });\n\t}\n\t// A server-side revoke: platform.unsubscribe runs the same hook.\n\tif (msg.type === 'revoke') {\n\t\tconst removed = platform.unsubscribe(ws, msg.topic);\n\t\tplatform.send(ws, 'probe', 'revoked', { topic: msg.topic, removed });\n\t}\n}\n"
+			}
+		]
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.workercrash.js"

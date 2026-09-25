@@ -137,6 +137,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `adapter.websocket.admission` span under the trace context the client
   sent, where it opened a root span; a deferred-overflow refusal is
   parented on the collected headers.
+- **A throwing or rejecting `unsubscribe` hook no longer takes the
+  connection or the process down.** The hook was called bare, so a
+  synchronous throw escaped the message handler and an async hook's
+  rejection went unhandled, which is fatal under node's default policy. It
+  now runs behind a guard that catches the throw and attaches a rejection
+  handler to a returned thenable, reporting either once as
+  `ADAPTER-ERR-UNSUBSCRIBE-HOOK` with the topic and the connection's request
+  id; the hook is still not awaited, and the `unsubscribe` type admits a
+  promise return. `createTestServer` runs its hook the same way.
 
 ## [0.0.1] - 2026-09-22
 

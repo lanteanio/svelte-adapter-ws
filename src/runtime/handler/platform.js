@@ -67,6 +67,7 @@ import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-
 import { WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS } from './config.js';
 import { bumpOut } from './conn-stats.js';
 import { isWarmupRequest } from './warmup-registry.js';
+import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 
 const OPEN = 1;
 
@@ -629,7 +630,7 @@ export const platform = {
 	// app's unsubscribe hook through this slot - the shared primitive has no
 	// reference to this runtime's hook container.
 	[WS_REVOKED_UNSUBSCRIBE](ws, topic, ud) {
-		wsModule.unsubscribe?.(ws, topic, { platform: ud[WS_PLATFORM] });
+		runUnsubscribeHook(wsModule.unsubscribe, ws, topic, { platform: ud[WS_PLATFORM] });
 	},
 
 	publish,
@@ -1801,7 +1802,7 @@ export const platform = {
 		if (denial !== null) {
 			if (settleDeniedSubscribe(ud, topic, pendingToken, subs.has(topic)) === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
-				wsModule.unsubscribe?.(facade, topic, { platform: ud[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, topic, { platform: ud[WS_PLATFORM] });
 			}
 			return denial;
 		}
@@ -1814,7 +1815,7 @@ export const platform = {
 			if (heldVerdict === 'ack') return null;
 			if (heldVerdict === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
-				wsModule.unsubscribe?.(facade, topic, { platform: ud[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, topic, { platform: ud[WS_PLATFORM] });
 			}
 			return 'FORBIDDEN';
 		}
@@ -1915,7 +1916,7 @@ export const platform = {
 		}
 		removeLogicalSubscription(subs, topic);
 		if (sharedTopics.has(topic)) leaveSharedCohort(facade, /** @type {any} */ (facade).getUserData(), topic);
-		wsModule.unsubscribe?.(facade, topic, { platform: ud[WS_PLATFORM] });
+		runUnsubscribeHook(wsModule.unsubscribe, facade, topic, { platform: ud[WS_PLATFORM] });
 		return true;
 	},
 

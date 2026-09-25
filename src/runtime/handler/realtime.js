@@ -96,6 +96,7 @@ import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_
 import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
 import { readBody } from './ssr.js';
+import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 
 const OPEN = 1;
 
@@ -1884,7 +1885,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				// cohort-split publishes. No-op for an ordinary topic.
 				if (sharedTopics.has(msg.topic)) leaveSharedCohort(facade, userData, msg.topic);
 				releaseDerivedSubscriptions(facade, msg.topic);
-				wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
 				return;
 			}
 			if (msg.type === 'subscribe-batch' && Array.isArray(msg.topics)) {
@@ -2060,7 +2061,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	if (denial !== null) {
 		if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
 			unwindRevokedMembership(facade, msg.topic);
-			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
+			runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
 		}
 		sendDenied(facade, msg.topic, ref, denial);
 		return;
@@ -2076,7 +2077,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		}
 		if (heldVerdict === 'deny-unwind') {
 			unwindRevokedMembership(facade, msg.topic);
-			wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
+			runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
 		}
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
@@ -2125,7 +2126,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			}
 			if (heldVerdictR === 'deny-unwind') {
 				unwindRevokedMembership(facade, msg.topic);
-				wsModule.unsubscribe?.(facade, msg.topic, { platform: userData[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
 			}
 			discardResumeCapture(capture);
 			sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
@@ -2345,7 +2346,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		if (denial !== null) {
 			if (settleDeniedSubscribe(userData, topic, batchTokens[i], held) === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
-				wsModule.unsubscribe?.(facade, topic, { platform: userData[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, topic, { platform: userData[WS_PLATFORM] });
 			}
 			sendDenied(facade, topic, ref, denial);
 			continue;
@@ -2358,7 +2359,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			}
 			if (heldVerdict === 'deny-unwind') {
 				unwindRevokedMembership(facade, topic);
-				wsModule.unsubscribe?.(facade, topic, { platform: userData[WS_PLATFORM] });
+				runUnsubscribeHook(wsModule.unsubscribe, facade, topic, { platform: userData[WS_PLATFORM] });
 			}
 			sendDenied(facade, topic, ref, 'FORBIDDEN');
 			continue;
