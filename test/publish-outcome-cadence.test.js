@@ -458,7 +458,7 @@ describe('the wire lane', () => {
 		expect(take()).toEqual([]);
 	});
 
-	it('reports the binary cohort and the JSON cohort of a shared publish separately', () => {
+	it('reports one outcome for a shared publish, whichever cohorts carried it', async () => {
 		const shared = {
 			capability: SHARED_CAP,
 			schemaVersion: 1,
@@ -467,8 +467,19 @@ describe('the wire lane', () => {
 		};
 		take();
 		platform.publishWire('shared', 'pos', { x: 1 }, shared);
-		// capable joined the binary cohort, plain the JSON cohort: two fan-outs.
-		expect(take()).toEqual([true, true]);
+		// capable joined the binary cohort, plain the JSON cohort: one publish.
+		expect(take()).toEqual([true]);
+
+		// A binary cohort with an empty JSON cohort beside it is still one
+		// delivered publish, not a delivery plus a no-subscribers.
+		const lone = await connect('loneCapable', [SHARED_CAP], ['lone-shared']);
+		try {
+			take();
+			platform.publishWire('lone-shared', 'pos', { x: 1 }, shared);
+			expect(take()).toEqual([true]);
+		} finally {
+			state.wsConnections.delete(lone.facade);
+		}
 	});
 
 	it('reports a shed cohort member as reached', async () => {

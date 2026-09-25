@@ -146,6 +146,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ADAPTER-ERR-UNSUBSCRIBE-HOOK` with the topic and the connection's request
   id; the hook is still not awaited, and the `unsubscribe` type admits a
   promise return. `createTestServer` runs its hook the same way.
+- A shared-codec `publishWire` records one publish outcome per publish
+  rather than one per cohort, so a publish the binary cohort carried beside
+  an empty JSON cohort no longer counts a delivery and a no-subscribers
+  side by side. `createTestServer` no longer takes a second shared wire-id
+  reference when a socket rejoins a cohort it already holds.
 
 ## [0.0.1] - 2026-09-22
 

@@ -980,17 +980,20 @@ export const platform = {
 				// The binary cohort exists only if a capable client joined it (its
 				// announce succeeded); otherwise this shared topic currently has
 				// only JSON subscribers and skips the binary fan-out entirely.
-				// Each cohort is one fan-out, and the outcome family counts
-				// fan-outs: a shared publish reports the binary cohort (when it
-				// exists) and the JSON cohort separately, as the family's
-				// native tier does with its two publish calls.
+				// ONE outcome for this logical publish, whichever cohorts carried
+				// it: the outcome family sums to the publish family on every
+				// other exit, and a shared publish counted per cohort recorded a
+				// delivery beside a no-subscribers for the cohort that happened
+				// to be empty.
+				let delivered = false;
 				const id = getSharedWireId(topic);
 				if (id !== undefined) {
 					const walkedBin = fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
-					counters.publishOutcomeHook?.((walkedBin & FANOUT_REACHED) !== 0);
+					delivered = (walkedBin & FANOUT_REACHED) !== 0;
 				}
 				const walkedJson = fanOutCohort(json, envelope, false, compress);
-				counters.publishOutcomeHook?.((walkedJson & FANOUT_REACHED) !== 0);
+				if ((walkedJson & FANOUT_REACHED) !== 0) delivered = true;
+				counters.publishOutcomeHook?.(delivered);
 				// Cross-worker subscribers: each receiving worker re-derives the
 				// shared codec from its registry (relayPublishWire) and runs ITS
 				// OWN cohort split with its own server-wide id, so the
