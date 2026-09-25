@@ -431,7 +431,7 @@ function createNodeApp() {
 			}
 		}
 		if (!handler) {
-			nodeRes.writeHead(404, { 'content-type': 'text/plain' });
+			nodeRes.writeHead(404, { 'content-type': 'text/plain', 'content-length': '9' });
 			nodeRes.end('Not Found');
 			return;
 		}

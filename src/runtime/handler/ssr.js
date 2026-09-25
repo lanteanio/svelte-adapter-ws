@@ -151,6 +151,24 @@ export function buildRequest(req, baseOrigin, headers, state) {
 }
 
 /**
+ * A body chunk as bytes. A Response built on a stream the app wrote hands back
+ * whatever was enqueued, and the family's native tier writes a string or an
+ * ArrayBuffer as readily as a view, so both are taken here; anything else is
+ * a body this writer cannot put on the wire, and the throw reaches the failure
+ * path like a source that errored.
+ *
+ * @param {unknown} chunk
+ * @returns {Uint8Array}
+ */
+function chunkBytes(chunk) {
+	if (chunk instanceof Uint8Array) return chunk;
+	if (typeof chunk === 'string') return Buffer.from(chunk);
+	if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+	if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+	throw new TypeError('A response body chunk must be a string, an ArrayBuffer or a typed array');
+}
+
+/**
  * Pick the coding a single-chunk body is sent with, or '' to send it as is:
  * compressible types past the size floor, when the client negotiated a coding
  * and the app set none, and only when the coded body is actually smaller.
@@ -256,6 +274,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			if (writeHeaders(res, response, 0)) res.end();
 			return;
 		}
+		const firstBytes = chunkBytes(first.value);
 		// The second read decides single-chunk vs streaming, but it must never
 		// WITHHOLD a streaming shell: a page whose next chunk arrives seconds
 		// later (a load() streaming a promise) would otherwise ship its first
@@ -271,21 +290,21 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		if (state.aborted) return;
 		const second = raced === STREAMING ? null : /** @type {ReadableStreamReadResult<Uint8Array>} */ (raced);
 		if (second !== null && second.done) {
-			const whole = compressWhole(response, first.value, acceptEncoding || '');
+			const whole = compressWhole(response, firstBytes, acceptEncoding || '');
 			state.responseStarted = true;
 			if (writeHeaders(res, response, whole.body.byteLength, whole.encoding)) res.end(whole.body);
 			return;
 		}
 
+		/** @type {Uint8Array[]} */
+		const ready = [firstBytes];
+		if (second !== null) {
+			ready.push(chunkBytes(second.value));
+			pendingRead = null;
+		}
 		state.responseStarted = true;
 		if (!writeHeaders(res, response, null)) return;
 		streaming = true;
-		/** @type {Uint8Array[]} */
-		const ready = [first.value];
-		if (second !== null) {
-			ready.push(second.value);
-			pendingRead = null;
-		}
 		for (;;) {
 			let value;
 			if (ready.length > 0) {
@@ -294,7 +313,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 				const read = await (pendingRead ?? reader.read());
 				pendingRead = null;
 				if (read.done) { streamDone = true; break; }
-				value = read.value;
+				value = chunkBytes(read.value);
 			}
 			if (state.aborted) break;
 			if (!res.write(value)) {
@@ -344,7 +363,11 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 function writeHeaders(res, response, length, encoding = '') {
 	let hasContentTypeOptions = false;
 	for (const [key, value] of response.headers) {
-		if (key === 'set-cookie' || key === 'content-length') continue;
+		// The framing is this writer's to decide: a Response relayed from
+		// `fetch()` carries the upstream's Transfer-Encoding, and passing it
+		// through beside the length written for a whole body is a message
+		// no HTTP/1.1 client will read.
+		if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
 		if (key === 'x-content-type-options') hasContentTypeOptions = true;
 		try {
 			res.setHeader(key, value);

@@ -73,6 +73,27 @@ export class Server {
 			await consumed.text();
 			return consumed;
 		}
+		if (p === '/relayed-te') {
+			// A Response relayed from fetch() keeps the upstream's framing header.
+			return new Response('upstream body', { headers: { ...text, 'transfer-encoding': 'chunked' } });
+		}
+		if (p === '/string-chunk') {
+			return new Response(new ReadableStream({ start(c) { c.enqueue('hello'); c.close(); } }), { headers: text });
+		}
+		if (p === '/buffer-chunk') {
+			return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('bytes').buffer); c.close(); } }), { headers: text });
+		}
+		if (p === '/vary-merge') {
+			return new Response('<html>' + 'v'.repeat(4096) + '</html>', { headers: { 'content-type': 'text/html', vary: 'Accept-Language' } });
+		}
+		if (p === '/head-cancel') {
+			globalThis.__headCancelled = false;
+			return new Response(new ReadableStream({
+				pull(c) { c.enqueue(new TextEncoder().encode('never read')); },
+				cancel() { globalThis.__headCancelled = true; }
+			}), { headers: text });
+		}
+		if (p === '/head-cancel-state') return new Response(String(globalThis.__headCancelled), { headers: text });
 		return new Response('ok', { headers: text });
 	}
 }
@@ -285,6 +306,42 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(body).toContain('Invalid character in header content');
 	});
 
+	it('drops a Transfer-Encoding the Response carries, and frames the body by its length', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /relayed-te HTTP/1.1'], OK]), {
+			status: '200',
+			body: 'upstream body'
+		});
+		expect(header(first.lines, 'transfer-encoding')).toEqual([]);
+	});
+
+	it('writes a body enqueued as a string or an ArrayBuffer', async () => {
+		// Credentialed, so the dedup leader leaves the stream to this writer.
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /string-chunk HTTP/1.1', 'Cookie: s=1'], OK]), {
+			status: '200',
+			body: 'hello'
+		});
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /buffer-chunk HTTP/1.1', 'Cookie: s=1'], OK]), {
+			status: '200',
+			body: 'bytes'
+		});
+	});
+
+	it('keeps the app Vary beside the Accept-Encoding it adds for a compressed body', async () => {
+		const first = splitFirst(await pipeline(open.rt.port, [['GET /vary-merge HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
+		expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
+		const vary = header(first.lines, 'vary').join(', ').toLowerCase();
+		expect(vary).toContain('accept-language');
+		expect(vary).toContain('accept-encoding');
+	});
+
+	it('cancels the body of a HEAD it never reads', async () => {
+		// Credentialed, so the dedup leader does not read it first.
+		const head = splitFirst(await pipeline(open.rt.port, [['HEAD /head-cancel HTTP/1.1', 'Cookie: s=1'], OK]));
+		expect(head.status).toContain('200');
+		const state = await pipeline(open.rt.port, [['GET /head-cancel-state HTTP/1.1']]);
+		expect(splitFirst(state).rest).toBe('true');
+	});
+
 	it('length-frames the 500 for a Response whose body was already read', async () => {
 		// Credentialed, so the request-dedup leader, which reads the body
 		// before this writer sees it, stays out of the way.
@@ -373,5 +430,20 @@ describe('the upgrade-capacity answers are length-framed', () => {
 			status: '503',
 			body: 'Server is at upgrade capacity, please retry'
 		});
+	});
+});
+
+describe('createTestServer', () => {
+	it('length-frames its answer to a path it does not route', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({ handler: { upgrade: () => ({}) } });
+		try {
+			expectLengthFramed(await pipeline(mirror.port, [['GET /nowhere HTTP/1.1'], ['GET /healthz HTTP/1.1']]), {
+				status: '404',
+				body: 'Not Found'
+			});
+		} finally {
+			await mirror.close();
+		}
 	});
 });
