@@ -2,6 +2,7 @@ import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/r
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
+import { runOpenHook, runCloseHook } from './runtime/utils/hook-boundary.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -3454,7 +3455,7 @@ export async function createTestServer(options = {}) {
 			const welcome = '{"type":"welcome","sessionId":"' + sessionId + '"}';
 			sendControlT(ws, welcome);
 			wsConnections.add(ws);
-			handler.open?.(ws, { platform: userData[WS_PLATFORM] });
+			if (handler.open) runOpenHook(handler, ws, { platform: userData[WS_PLATFORM] });
 			for (const resolve of connectionWaiters) resolve(undefined);
 			connectionWaiters = [];
 		},
@@ -4076,18 +4077,19 @@ export async function createTestServer(options = {}) {
 					bytesOut: stats.bytesOut
 				}
 				: { code, message, platform: closePlatform, subscriptions: subs };
-			// Mirror production handler.js: run the close hook inside try/finally
-			// so the per-connection cleanup (cap counts, wire-codec state, the
-			// connection set) always runs even if the user's close hook throws -
-			// otherwise a leaked cap count would wedge a codec's JSON fast path on
-			// and a stateful codec's per-connection state would never be freed.
+			// Mirror production handler.js: the per-connection cleanup (cap
+			// counts, wire-codec state, the connection set) sits in a finally,
+			// so it runs whatever happens above it - otherwise a leaked cap count
+			// would wedge a codec's JSON fast path on and a stateful codec's
+			// per-connection state would never be freed. The close hook's own
+			// throw is caught by its boundary before it gets here.
 			try {
 				// Mirror production: the app close hook stays silent for a
 				// connection refused at open (a failed attribution) - its open
 				// hook never ran, and a counter paired across open/close must
 				// not go negative. The session id's absence marks exactly
 				// those connections; the finally cleanup still runs.
-				if (ud[WS_SESSION_ID] !== undefined) handler.close?.(ws, ctx);
+				if (ud[WS_SESSION_ID] !== undefined) runCloseHook(handler, ws, ctx);
 			} finally {
 				if (ud[WS_CONNECTION_PERMIT]) {
 					ud[WS_CONNECTION_PERMIT] = undefined;

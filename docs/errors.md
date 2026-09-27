@@ -4,7 +4,7 @@ Search this page with the exact stable ID, code, event, or beginning of the
 message you saw. Every operator-facing failure the runtime can emit is indexed
 here with its cause, what it means for traffic, whether anything recovers on its
 own, and what to do next: 42 entries carrying a stable ID and operator
-guidance, plus 35 indexing consequential plain console lines that never enter
+guidance, plus 38 indexing consequential plain console lines that never enter
 the diagnostic pipeline - each of those is printed through the registry and
 carries its stable ID tag, so the emitted text cannot drift from the prefix
 indexed here.
@@ -84,6 +84,9 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw) | `ws.shutdown-hook.threw` | `[ws] the WebSocket shutdown hook threw` |
 | [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled) | `ws.shutdown-hook.unsettled` | `[ws] the WebSocket shutdown hook has not settled after ` |
 | [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook) | `ws.message-hook.threw` | `[ws] the message hook threw` |
+| [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook) | `ws.open-hook.threw` | `[ws] the open hook threw` |
+| [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook) | `ws.drain-hook.threw` | `[ws] the drain hook threw` |
+| [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook) | `ws.close-hook.threw` | `[ws] the close hook threw` |
 | [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[ws] the recover-on-subscribe hook threw` |
 | [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape) | `ws.diagnostic.record-shape` | `[ws] operational event dropped, invalid record shape` |
 | [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[ws] diagnostic render failed: ` |
@@ -170,6 +173,9 @@ the stable ID tag on the line):
 - `[ws] the WebSocket shutdown hook threw` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw)
 - `[ws] the WebSocket shutdown hook has not settled after ` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled)
 - `[ws] the message hook threw` - [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook)
+- `[ws] the open hook threw` - [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook)
+- `[ws] the drain hook threw` - [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook)
+- `[ws] the close hook threw` - [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook)
 - `[ws] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
 - `[ws] operational event dropped, invalid record shape` - [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape)
 - `[ws] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
@@ -1345,6 +1351,60 @@ Log line begins:
 **Automatic recovery.** None for the frame. The client sees a close, and reconnection is the client library's own resume path.
 
 **What to do.** Fix the hook, or catch inside it and answer the client deliberately. The error printed with this line is the original throw.
+
+## ADAPTER-ERR-OPEN-HOOK
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] the open hook threw
+```
+
+**Cause.** The application `open` hook threw, or the promise it returned rejected.
+
+**Consequence.** That connection is closed with code 1011 and the reason `Open handler error`, and the `close` hook runs for it as for any other close. The cause stays server-side and is not sent to the client. Other connections are unaffected.
+
+**Automatic recovery.** None for the connection. The client sees a close, and reconnecting runs `open` again.
+
+**What to do.** Fix the hook, or catch inside it and close the connection deliberately with `ws.end(code, reason)`. The error printed with this line is the original throw.
+
+## ADAPTER-ERR-DRAIN-HOOK
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] the drain hook threw
+```
+
+**Cause.** The application `drain` hook threw, or the promise it returned rejected, when uWS reported the connection's send buffer draining.
+
+**Consequence.** That connection is closed with code 1011 and the reason `Drain handler error`. The cause stays server-side and is not sent to the client. Other connections are unaffected.
+
+**Automatic recovery.** None for the connection. The client sees a close and reconnects.
+
+**What to do.** Fix the hook, or catch inside it. The error printed with this line is the original throw.
+
+## ADAPTER-ERR-CLOSE-HOOK
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] the close hook threw
+```
+
+**Cause.** The application `close` hook threw, or the promise it returned rejected.
+
+**Consequence.** Only the log line. The connection was already closed, and the runtime's own teardown for it (subscriptions, counters, the live connection set) still runs.
+
+**Automatic recovery.** Not needed; nothing is left half-closed.
+
+**What to do.** Fix the hook. Whatever it was cleaning up after the throw was skipped, so check the state it owns. The error printed with this line is the original throw.
 
 ## ADAPTER-ERR-RECOVER-HOOK
 

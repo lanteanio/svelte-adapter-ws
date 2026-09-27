@@ -97,6 +97,7 @@ import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
 import { readBody } from './ssr.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
+import { runOpenHook, runDrainHook, runCloseHook } from '../utils/hook-boundary.js';
 
 const OPEN = 1;
 
@@ -1686,13 +1687,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		},
 		onDrain: (f) => {
 			flushCoalescedFor(f);
-			// The drain callback rides a node write callback, not a native
-			// boundary - an app throw here would otherwise be uncaught.
-			try {
-				wsModule.drain?.(f, { platform: userData[WS_PLATFORM] });
-			} catch (err) {
-				console.error('[adapter-ws] drain hook threw:', err);
-			}
+			if (wsModule.drain) runDrainHook(wsModule, f, { platform: userData[WS_PLATFORM] });
 		},
 		peerFacadeOf: (peer) => wsWrappers.get(peer)
 	});
@@ -1776,13 +1771,9 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		closeConnection(rawWs, facade, userData, code, reason);
 	});
 
-	// The app open hook runs LAST, with every listener armed: a throw here is
-	// contained and the connection keeps its close path.
-	try {
-		wsModule.open?.(facade, { platform: userData[WS_PLATFORM] });
-	} catch (err) {
-		console.error('[adapter-ws] open hook threw:', err);
-	}
+	// The app open hook runs LAST, with every listener armed: a throw or a
+	// rejection closes the connection with 1011, and its close path runs.
+	if (wsModule.open) runOpenHook(wsModule, facade, { platform: userData[WS_PLATFORM] });
 }
 
 /**
@@ -2494,7 +2485,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	const closePlatform = userData[WS_PLATFORM];
 	// The app close hook fires only for a connection whose open completed
 	// (an attribution refusal never opened).
-	if (userData[WS_SESSION_ID] !== undefined && wsModule.close) {
+	if (userData[WS_SESSION_ID] !== undefined && wsModule.close != null) {
 		const ctx = stats
 			? {
 				code,
@@ -2509,11 +2500,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 				bytesOut: stats.bytesOut
 			}
 			: { code, message: reasonAB, platform: closePlatform, subscriptions: subs };
-		try {
-			wsModule.close(facade, ctx);
-		} catch (err) {
-			console.error('[adapter-ws] close hook threw:', err);
-		}
+		runCloseHook(wsModule, facade, ctx);
 	}
 	// Leave the live set FIRST, before any other release. Everything below is
 	// teardown that reads userData and touches no connection set, but it is

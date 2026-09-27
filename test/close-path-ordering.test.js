@@ -29,7 +29,7 @@ const realtime = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js')
 
 /** The close teardown: from the app close-hook call to the end of the function. */
 function closeTeardown() {
-	const hookCall = realtime.indexOf('wsModule.close(facade, ctx);');
+	const hookCall = realtime.indexOf('runCloseHook(wsModule, facade, ctx);');
 	expect(hookCall, 'the app close-hook call moved; this slice is anchored on it').toBeGreaterThan(-1);
 	const end = realtime.indexOf('\n}', hookCall);
 	expect(end, 'the close function does not end').toBeGreaterThan(hookCall);

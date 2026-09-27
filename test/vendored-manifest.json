@@ -2171,5 +2171,11 @@
 				"ours": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n"
 			}
 		]
+	},
+	{
+		"file": "test/lifecycle-hook-boundary.test.js"
+	},
+	{
+		"file": "test/error-registry-hook-crash.test.js"
 	}
 ]

@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failing `open`, `drain` or `close` hook costs one connection, not the
+  process.** These hooks are called from a transport callback and never
+  awaited. A synchronous throw was caught and printed with a line of this
+  adapter's own, but a returned promise that rejected went unhandled, which
+  is fatal under node's default policy, and a failing `open` or `drain` left
+  its connection open. They now run inside the family's hook boundary: a
+  throw or a rejection from `open` or `drain` closes that connection with
+  1011 and is printed as `ADAPTER-ERR-OPEN-HOOK` or `ADAPTER-ERR-DRAIN-HOOK`,
+  and one from `close` is printed as `ADAPTER-ERR-CLOSE-HOOK` while the
+  connection's own teardown still runs. The `then` read sits inside the same
+  guard as the call, so a returned value whose `then` getter throws is
+  contained too. `createTestServer` and `vite dev` contain `open` and `close`
+  the same way; under `vite dev` a throwing close hook also skipped removing
+  the connection from the dev server's live maps.
 - **`vite dev` no longer withholds an echo that production delivers.** The dev
   plugin read `options.excludeWs` on `platform.publish`, and through it on
   `batch` and on the per-event fall-back `publishBatched` takes for a disjoint
