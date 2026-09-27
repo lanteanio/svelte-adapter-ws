@@ -6,7 +6,7 @@ import { randomUuid, setTimer, clearTimer } from '../runtime.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
-import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
+import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
@@ -151,24 +151,6 @@ export function buildRequest(req, baseOrigin, headers, state) {
 }
 
 /**
- * A body chunk as bytes. A Response built on a stream the app wrote hands back
- * whatever was enqueued, and the family's native tier writes a string or an
- * ArrayBuffer as readily as a view, so both are taken here; anything else is
- * a body this writer cannot put on the wire, and the throw reaches the failure
- * path like a source that errored.
- *
- * @param {unknown} chunk
- * @returns {Uint8Array}
- */
-function chunkBytes(chunk) {
-	if (chunk instanceof Uint8Array) return chunk;
-	if (typeof chunk === 'string') return Buffer.from(chunk);
-	if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
-	if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-	throw new TypeError('A response body chunk must be a string, an ArrayBuffer or a typed array');
-}
-
-/**
  * Pick the coding a single-chunk body is sent with, or '' to send it as is:
  * compressible types past the size floor, when the client negotiated a coding
  * and the app set none, and only when the coded body is actually smaller.
@@ -290,7 +272,9 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		if (state.aborted) return;
 		const second = raced === STREAMING ? null : /** @type {ReadableStreamReadResult<Uint8Array>} */ (raced);
 		if (second !== null && second.done) {
-			const whole = compressWhole(response, firstBytes, acceptEncoding || '');
+			// A string chunk goes out as is: the family's native tier decides
+			// on the chunk's own byteLength, and a string has none.
+			const whole = compressWhole(response, firstBytes, typeof first.value === 'string' ? '' : acceptEncoding || '');
 			state.responseStarted = true;
 			if (writeHeaders(res, response, whole.body.byteLength, whole.encoding)) res.end(whole.body);
 			return;
@@ -362,20 +346,25 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
  */
 function writeHeaders(res, response, length, encoding = '') {
 	let hasContentTypeOptions = false;
-	for (const [key, value] of response.headers) {
-		// The framing is this writer's to decide: a Response relayed from
-		// `fetch()` carries the upstream's Transfer-Encoding, and passing it
-		// through beside the length written for a whole body is a message
-		// no HTTP/1.1 client will read.
-		if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
-		if (key === 'x-content-type-options') hasContentTypeOptions = true;
-		try {
+	try {
+		for (const [key, value] of response.headers) {
+			// The framing is this writer's to decide: a Response relayed from
+			// `fetch()` carries the upstream's Transfer-Encoding, and passing
+			// it through beside the length written for a whole body is a
+			// message no HTTP/1.1 client will read.
+			if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
+			if (key === 'x-content-type-options') hasContentTypeOptions = true;
 			res.setHeader(key, value);
-		} catch (error) {
-			for (const name of res.getHeaderNames()) res.removeHeader(name);
-			endText(res, 500, {}, String(error));
-			return false;
 		}
+		// Inside the same guard: a cookie value node refuses is refused like
+		// any other header, not thrown past a response already marked as
+		// started, where nothing would answer it.
+		const cookies = response.headers.getSetCookie();
+		if (cookies.length > 0) res.setHeader('set-cookie', cookies);
+	} catch (error) {
+		for (const name of res.getHeaderNames()) res.removeHeader(name);
+		endText(res, 500, {}, String(error));
+		return false;
 	}
 	if (!hasContentTypeOptions) res.setHeader('x-content-type-options', 'nosniff');
 	if (encoding) {
@@ -383,8 +372,6 @@ function writeHeaders(res, response, length, encoding = '') {
 		const vary = res.getHeader('vary');
 		res.setHeader('vary', vary ? vary + ', Accept-Encoding' : 'Accept-Encoding');
 	}
-	const cookies = response.headers.getSetCookie();
-	if (cookies.length > 0) res.setHeader('set-cookie', cookies);
 	if (length !== null) res.setHeader('content-length', String(length));
 	res.writeHead(response.status);
 	return true;

@@ -42,6 +42,26 @@ export function declaresBodyPastCap(response, cap) {
 }
 
 /**
+ * A body chunk as bytes. A Response built on a stream the app wrote hands back
+ * whatever was enqueued, and the family's native tier writes a string or an
+ * ArrayBuffer as readily as a view, so both are taken here; anything else is
+ * a body that cannot go on the wire, and the throw reaches the failure path
+ * like a source that errored. Both readers of a response body take their
+ * chunks through this: the writer, and the dedup leader below, which would
+ * otherwise copy an ArrayBuffer or a string into its buffer as zeros.
+ *
+ * @param {unknown} chunk
+ * @returns {Uint8Array}
+ */
+export function chunkBytes(chunk) {
+	if (chunk instanceof Uint8Array) return chunk;
+	if (typeof chunk === 'string') return Buffer.from(chunk);
+	if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+	if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+	throw new TypeError('A response body chunk must be a string, an ArrayBuffer or a typed array');
+}
+
+/**
  * Read a body until it ends or its bytes pass `cap`, whichever comes first.
  *
  * The cap is a ceiling on what is HELD, not a check made after the whole
@@ -71,8 +91,15 @@ export async function readBodyUpTo(body, cap) {
 			for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
 			return { complete: true, bytes };
 		}
-		chunks.push(value);
-		total += value.byteLength;
+		let bytes;
+		try {
+			bytes = chunkBytes(value);
+		} catch (err) {
+			reader.cancel(err).catch(() => {});
+			throw err;
+		}
+		chunks.push(bytes);
+		total += bytes.byteLength;
 		if (total > cap) break;
 	}
 	// Past the cap: replay what is held, then continue from the source. The

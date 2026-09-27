@@ -21,8 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Transfer-Encoding: chunked` even when the app declared a
   `Content-Length`, which was written through before. A Transfer-Encoding the
   Response itself carries, as one relayed from `fetch()` does, is dropped
-  rather than written beside that length, and a stream that enqueues strings
-  or ArrayBuffers is written like one that enqueues bytes.
+  rather than written beside that length, on the SSR lane, the authenticate
+  endpoint, the admin lane and `createTestServer`'s admin mirror alike. A
+  stream that enqueues strings or ArrayBuffers is written like one that
+  enqueues bytes, except that a whole body of one string chunk goes out
+  uncompressed, as the native tier sends it.
 
 ### Fixed
 
@@ -100,6 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length and the body is cancelled unread. An anonymous one still passes
   through the request-dedup leader, which buffers a render it may share, as
   the native tier's does.
+- **An uncredentialed page that streams strings or ArrayBuffers is no longer
+  corrupted.** The request-dedup leader, which buffers an anonymous GET or
+  HEAD render it may share, copied an ArrayBuffer or a typed-array view into
+  its buffer as zeros (or as the wrong bytes, for a view with an offset),
+  answered a string chunk `500`, and counted neither toward its 512 KiB
+  sharing cap, so a long string stream was held whole before failing. It now
+  reads every chunk the way the response writer does.
+- An SSR Response carrying a `Set-Cookie` value node refuses to write is
+  answered `500`, as any other refused header is, where nothing was written
+  and the connection waited for the client to give up.
 - **The authenticate endpoint answers as the family's does.** The URL handed
   to the hook is built on `ORIGIN`, or on the configured `PROTOCOL_HEADER`,
   `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host, and carries a

@@ -2697,7 +2697,10 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 				/** @type {Record<string, string | string[]>} */
 				const outHeaders = {};
 				for (const [hk, hv] of result.headers) {
-					if (hk === 'set-cookie' || hk === 'content-length') continue;
+					// The framing is written below: a Transfer-Encoding relayed
+					// from fetch() beside that length is a message no HTTP/1.1
+					// client will read.
+					if (hk === 'set-cookie' || hk === 'content-length' || hk === 'transfer-encoding') continue;
 					outHeaders[hk] = hv;
 				}
 				const outCookies = [

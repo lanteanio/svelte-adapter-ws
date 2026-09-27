@@ -94,6 +94,79 @@ export class Server {
 			}), { headers: text });
 		}
 		if (p === '/head-cancel-state') return new Response(String(globalThis.__headCancelled), { headers: text });
+		if (p === '/bad-cookie') {
+			return new Response('x', { headers: { ...text, 'set-cookie': 'a=' + String.fromCharCode(127) } });
+		}
+		if (p === '/string-big') {
+			const page = '<html>' + 's'.repeat(4096) + '</html>';
+			return new Response(new ReadableStream({ start(c) { c.enqueue(page); c.close(); } }), { headers: { 'content-type': 'text/html' } });
+		}
+		if (p === '/multibyte-chunk') {
+			return new Response(new ReadableStream({ start(c) { c.enqueue('héllo €😀'); c.close(); } }), { headers: text });
+		}
+		if (p === '/view-chunk') {
+			// A DataView and a wider typed array, each over an offset into a
+			// larger buffer: only the bytes the view spans may go out.
+			const bytes = new TextEncoder().encode('ABCDEFGHIJKL');
+			return new Response(new ReadableStream({
+				start(c) {
+					c.enqueue(new DataView(bytes.buffer, 2, 4));
+					c.enqueue(new Uint16Array(bytes.buffer, 6, 2));
+					c.close();
+				}
+			}), { headers: text });
+		}
+		if (p === '/streamed-mixed') {
+			// The chunks after the first reach the streaming path, each a
+			// different shape of the same kind of content.
+			const bytes = new TextEncoder().encode('xxd|yy');
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(new TextEncoder().encode('a|'));
+					await new Promise((r) => setTimeout(r, 30));
+					c.enqueue('b€|');
+					c.enqueue(new TextEncoder().encode('c|').buffer);
+					c.enqueue(new DataView(bytes.buffer, 2, 2));
+					c.close();
+				}
+			}), { headers: text });
+		}
+		if (p === '/string-stream-big') {
+			// Past the dedup sharing cap in string chunks: the leader has to
+			// count them to stop holding the body.
+			const piece = 'x'.repeat(16 * 1024);
+			let sent = 0;
+			return new Response(new ReadableStream({
+				pull(c) {
+					if (sent === 40) { c.close(); return; }
+					sent += 1;
+					c.enqueue(piece);
+				}
+			}), { headers: text });
+		}
+		if (p === '/declared-past-cap') {
+			return new Response('tiny body', { headers: { ...text, 'content-length': '700000' } });
+		}
+		if (p === '/long-body') {
+			// 2 MiB, well past the dedup sharing cap. Finite, so a writer that
+			// reads it all instead of cancelling ends rather than hangs.
+			globalThis.__longBodyCancelled = false;
+			const piece = new Uint8Array(64 * 1024);
+			let sent = 0;
+			return new Response(new ReadableStream({
+				pull(c) {
+					if (sent === 32) { c.close(); return; }
+					sent += 1;
+					c.enqueue(piece);
+				},
+				cancel() { globalThis.__longBodyCancelled = true; }
+			}), { headers: text });
+		}
+		if (p === '/long-body-state') return new Response(String(globalThis.__longBodyCancelled), { headers: text });
+		if (p === '/slow-shared') {
+			await new Promise((r) => setTimeout(r, 200));
+			return new Response('shared body', { headers: text });
+		}
 		return new Response('ok', { headers: text });
 	}
 }
@@ -110,7 +183,16 @@ export function authenticate({ headers }) {
 	}
 	if (mode === 'declared') return new Response(null, { headers: { 'content-length': '12' } });
 	if (mode === 'declared-304') return new Response(null, { status: 304, headers: { 'content-length': '12' } });
+	if (mode === 'relayed-te') {
+		return new Response('auth relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
+	}
 	return {};
+}
+export function admin(request) {
+	if (new URL(request.url).pathname === '/__realtime/relayed-te') {
+		return new Response('admin relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
+	}
+	return new Response('admin', { headers: { 'content-type': 'text/plain' } });
 }
 `;
 
@@ -170,9 +252,12 @@ function expectLengthFramed(raw, { status, body }) {
 	const first = splitFirst(raw);
 	expect(first.status).toContain(status);
 	expect(header(first.lines, 'transfer-encoding')).toEqual([]);
-	expect(header(first.lines, 'content-length')).toEqual([String(Buffer.byteLength(body))]);
-	expect(first.rest.slice(0, body.length)).toBe(body);
-	const next = first.rest.slice(body.length);
+	// `raw` is latin1, one character per byte, so the body is cut by its byte
+	// length and decoded back before it is compared.
+	const bytes = Buffer.byteLength(body);
+	expect(header(first.lines, 'content-length')).toEqual([String(bytes)]);
+	expect(Buffer.from(first.rest.slice(0, bytes), 'latin1').toString('utf8')).toBe(body);
+	const next = first.rest.slice(bytes);
 	expect(next.startsWith('HTTP/1.1 200'), FOLLOWER + JSON.stringify(next.slice(0, 40))).toBe(true);
 	return first;
 }
@@ -214,6 +299,37 @@ function expectBodyless(raw, { status, length }) {
 	return first;
 }
 
+/**
+ * A chunked answer: no Content-Length, the decoded body, and the follower
+ * right after the terminating chunk. Decoded as bytes, so a multi-byte body
+ * compares as the text it carries.
+ *
+ * @param {string} raw
+ * @param {string} status
+ * @returns {string} the decoded body
+ */
+function readChunked(raw, status) {
+	const first = splitFirst(raw);
+	expect(first.status).toContain(status);
+	expect(header(first.lines, 'content-length')).toEqual([]);
+	expect(header(first.lines, 'transfer-encoding')).toEqual(['chunked']);
+	let at = 0;
+	/** @type {Buffer[]} */
+	const parts = [];
+	for (;;) {
+		const eol = first.rest.indexOf('\r\n', at);
+		expect(eol, 'a chunk size line').toBeGreaterThan(-1);
+		const size = parseInt(first.rest.slice(at, eol), 16);
+		at = eol + 2;
+		if (size === 0) { at += 2; break; }
+		parts.push(Buffer.from(first.rest.slice(at, at + size), 'latin1'));
+		at += size + 2;
+	}
+	const next = first.rest.slice(at);
+	expect(next.startsWith('HTTP/1.1 200'), FOLLOWER + JSON.stringify(next.slice(0, 40))).toBe(true);
+	return Buffer.concat(parts).toString('utf8');
+}
+
 const OK = ['GET /ok HTTP/1.1'];
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
 
@@ -236,7 +352,11 @@ async function boot(wsOptions) {
 /** @type {any} */ let siege;
 
 beforeAll(async () => {
-	open = await boot({ upgradeAdmission: { maxConcurrent: 10, waitingRoom: { admitCheckPath: '/__admit-check' } } });
+	open = await boot({
+		adminPath: '/__realtime',
+		adminAuthAcknowledged: true,
+		upgradeAdmission: { maxConcurrent: 10, waitingRoom: { admitCheckPath: '/__admit-check' } }
+	});
 	limited = await boot({ authPathRateLimit: 1 });
 	siege = await boot({
 		protection: 'siege',
@@ -326,6 +446,38 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		});
 	});
 
+	it('writes the bytes a view spans and a multi-byte string as UTF-8', async () => {
+		// Two chunks at once, so the writer streams them.
+		expect(readChunked(await pipeline(open.rt.port, [['GET /view-chunk HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('CDEFGHIJ');
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /multibyte-chunk HTTP/1.1', 'Cookie: s=1'], OK]), {
+			status: '200',
+			body: 'h\u00e9llo \u20ac\u{1F600}'
+		});
+	});
+
+	it('takes a string, an ArrayBuffer and a view after the first chunk of a stream', async () => {
+		const body = readChunked(await pipeline(open.rt.port, [['GET /streamed-mixed HTTP/1.1', 'Cookie: s=1'], OK]), '200');
+		expect(body).toBe('a|b\u20ac|c|d|');
+	});
+
+	it('sends a whole body of one string chunk uncompressed, as the native tier does', async () => {
+		// Uncredentialed and not a GET, so neither the BREACH rule nor the
+		// dedup leader decides: only the chunk's own shape does.
+		const first = splitFirst(await pipeline(open.rt.port, [
+			['POST /string-big HTTP/1.1', 'Accept-Encoding: gzip', 'Content-Length: 0'],
+			OK
+		]));
+		expect(first.status).toContain('200');
+		expect(header(first.lines, 'content-encoding')).toEqual([]);
+		expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
+	});
+
+	it('length-frames the 500 for a Set-Cookie value node refuses to write', async () => {
+		// Credentialed, so the dedup leader leaves the Response to this writer.
+		const body = readLengthFramed(await pipeline(open.rt.port, [['GET /bad-cookie HTTP/1.1', 'Cookie: s=1'], OK]), '500');
+		expect(body).toContain('Invalid character in header content');
+	});
+
 	it('keeps the app Vary beside the Accept-Encoding it adds for a compressed body', async () => {
 		const first = splitFirst(await pipeline(open.rt.port, [['GET /vary-merge HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
 		expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
@@ -408,9 +560,80 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		});
 	});
 
+	it('on a Response the hook relays with its own Transfer-Encoding, dropping that header', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: relayed-te'), OK]), {
+			status: '200',
+			body: 'auth relayed'
+		});
+	});
+
 	it('on a bodyless Response the hook returns, by the bodyless rule', async () => {
 		expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: declared'), OK]), { status: '200', length: 0 });
 		expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: declared-304'), OK]), { status: '304', length: 12 });
+	});
+});
+
+describe('the admin lane frames what it writes', () => {
+	it('drops a Transfer-Encoding the Response carries, and frames the body by its length', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/relayed-te HTTP/1.1'], OK]), {
+			status: '200',
+			body: 'admin relayed'
+		});
+	});
+});
+
+describe('the request-dedup leader reads a body the way the writer does', () => {
+	// Uncredentialed GET and HEAD go through the leader, which buffers a
+	// render it may share before the writer sees it.
+	it('keeps an ArrayBuffer, a view and a multi-byte string intact', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /buffer-chunk HTTP/1.1'], OK]), { status: '200', body: 'bytes' });
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /view-chunk HTTP/1.1'], OK]), { status: '200', body: 'CDEFGHIJ' });
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /string-chunk HTTP/1.1'], OK]), { status: '200', body: 'hello' });
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /multibyte-chunk HTTP/1.1'], OK]), {
+			status: '200',
+			body: 'h\u00e9llo \u20ac\u{1F600}'
+		});
+	});
+
+	it('counts string chunks toward its sharing cap and streams the rest', async () => {
+		const body = readChunked(await pipeline(open.rt.port, [['GET /string-stream-big HTTP/1.1'], OK]), '200');
+		expect(body.length).toBe(40 * 16 * 1024);
+		expect(body.replaceAll('x', '')).toBe('');
+	});
+
+	it('answers a HEAD past a declared cap with the declared length, not the body it carries', async () => {
+		expectBodyless(await pipeline(open.rt.port, [['HEAD /declared-past-cap HTTP/1.1'], OK]), {
+			status: '200',
+			length: 700000
+		});
+	});
+
+	it('answers a HEAD whose body runs past the cap without reading on, and cancels it', async () => {
+		expectBodyless(await pipeline(open.rt.port, [['HEAD /long-body HTTP/1.1'], OK]), { status: '200', length: null });
+		const state = await pipeline(open.rt.port, [['GET /long-body-state HTTP/1.1', 'Cookie: s=1']]);
+		expect(splitFirst(state).rest).toBe('true');
+	});
+
+	it('answers a waiting HEAD by the HEAD rule too, not by the shared body', async () => {
+		// Two at once: the second arrives while the first renders, and is
+		// answered from the first one's buffer.
+		const [leader, waiter] = await Promise.all([
+			pipeline(open.rt.port, [['HEAD /slow-shared HTTP/1.1'], OK]),
+			new Promise((r) => setTimeout(r, 50)).then(() => pipeline(open.rt.port, [['HEAD /slow-shared HTTP/1.1'], OK]))
+		]);
+		expectBodyless(leader, { status: '200', length: null });
+		expectBodyless(/** @type {string} */ (waiter), { status: '200', length: null });
+	});
+});
+
+describe('bodylessLength', () => {
+	it('reports no length for a declared value that is not a length', async () => {
+		const { bodylessLength } = await import('../src/runtime/handler/http-helpers.js');
+		for (const declared of ['-5', 'abc']) {
+			expect(bodylessLength(200, declared, true), declared).toBe(null);
+			expect(bodylessLength(304, declared, false), declared).toBe(null);
+		}
+		expect(bodylessLength(304, '12', false)).toBe(12);
 	});
 });
 
@@ -434,6 +657,26 @@ describe('the upgrade-capacity answers are length-framed', () => {
 });
 
 describe('createTestServer', () => {
+	it('drops a Transfer-Encoding its admin mirror is handed', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin() {
+					return new Response('admin relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
+				}
+			}
+		});
+		try {
+			expectLengthFramed(await pipeline(mirror.port, [['GET /__realtime/x HTTP/1.1'], ['GET /healthz HTTP/1.1']]), {
+				status: '200',
+				body: 'admin relayed'
+			});
+		} finally {
+			await mirror.close();
+		}
+	});
+
 	it('length-frames its answer to a path it does not route', async () => {
 		const { createTestServer } = await import('../src/testing.js');
 		const mirror = await createTestServer({ handler: { upgrade: () => ({}) } });
