@@ -293,9 +293,13 @@ describe('cluster sequence authority policy', () => {
 		// is pinned here rather than driven because production's relay needs a
 		// worker cluster: the behavioural pair lives in test/codec-relay.test.js
 		// against the harness copy.
-		const relaySet = source.slice(source.indexOf('export function relayPublishWire'));
-		expect(relaySet.indexOf('export function relayPublishWire'), 'relayPublishWire must stay findable by name')
-			.toBe(0);
+		// The function alone, declaration to closing brace: the pin helper
+		// judges a statement by the parse, so it needs a complete construct.
+		const relayStart = source.indexOf('export function relayPublishWire');
+		expect(relayStart, 'relayPublishWire must stay findable by name').toBeGreaterThan(-1);
+		const relayClose = source.indexOf('\n}\n', relayStart);
+		expect(relayClose, 'relayPublishWire has no closing brace').toBeGreaterThan(relayStart);
+		const relaySet = source.slice(relayStart + 'export '.length, relayClose + 2);
 		expectStatement(relaySet, 'platform.publishWire(topic, event, data, codec, { compress }, RELAY_RECEIVE, seq);', 'the relay set site hands the marker and the seq as arguments');
 		// The coercion is on the READ side now, and it is the whole of what
 		// keeps a non-number off the wire: a relayed frame legitimately

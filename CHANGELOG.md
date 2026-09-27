@@ -29,6 +29,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vite dev` no longer withholds an echo that production delivers.** The dev
+  plugin read `options.excludeWs` on `platform.publish`, and through it on
+  `batch` and on the per-event fall-back `publishBatched` takes for a disjoint
+  batch, while production reads no exclusion on any of those. An app developed
+  against the dev server saw the sender suppressed and got the echo under
+  `npm start`, with nothing to notice in between - and dev was not even
+  consistent with itself, since the batched fast path never excluded.
+  Exclusion stays declared and implemented on `publishWire` and
+  `publishWireBatch`, which honour it in dev exactly as before; in production
+  the same option also covers the envelope a codec falls back to when it
+  declines a frame, which is the supported way to skip the sender without a
+  binary payload.
+- **`vite dev` refuses the seq values production refuses.** The dev plugin
+  stamps no `seq` and read none on `platform.publish`, so `{ seq: 'x' }`, a
+  zero, a negative or a fraction delivered under `vite dev` and threw a
+  `TypeError` under `npm start`. Every dev lane now runs the value check
+  production runs before it admits - `publish` and the wire lanes through the
+  delivery seam, `batch` and `publishBatched` over every message before the
+  first goes out - so a bad value throws the same error on both servers, with
+  nothing of a batch delivered. The publish lanes in dev still stamp no seq on
+  the values they accept; the send lanes carry an explicit one as before.
 - **The liveness and readiness probes answer HEAD.** `healthCheckPath` and
   `readinessCheckPath` answered GET only, so a HEAD probe - the default for
   HAProxy's `httpchk` and for most uptime monitors - fell through to the

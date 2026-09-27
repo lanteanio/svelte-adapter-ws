@@ -36,9 +36,21 @@ function closeTeardown() {
 	return realtime.slice(hookCall, end);
 }
 
+/**
+ * The whole close function. The pin helper judges a statement by the parse,
+ * so it is handed a complete construct rather than the teardown's tail.
+ */
+function closeFunction() {
+	const start = realtime.indexOf('\nfunction closeConnection(');
+	expect(start, 'closeConnection moved; this slice is anchored on it').toBeGreaterThan(-1);
+	const end = realtime.indexOf('\n}\n', start);
+	expect(end, 'closeConnection does not end').toBeGreaterThan(start);
+	return realtime.slice(start + 1, end + 2);
+}
+
 describe('the close path leaves the live set before it releases anything else', () => {
 	it('removes the connection as its own statement', () => {
-		expectStatement(closeTeardown(), 'wsConnections.delete(facade);', 'the close path removes the connection');
+		expectStatement(closeFunction(), 'wsConnections.delete(facade);', 'the close path removes the connection');
 	});
 
 	it('removes it before every release that could throw first', () => {

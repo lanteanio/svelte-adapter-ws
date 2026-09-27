@@ -16,6 +16,7 @@ import {
 	DEFAULT_MAX_PAYLOAD_LENGTH
 } from './config-guards.js';
 import { assertBatchSequenceAuthority, assertBatchEntrySequenceAuthority, assertClusterSequenceAuthorityValues } from './runtime/handler/cluster-sequence-policy.js';
+import { assertStampableSeq } from './runtime/utils/epoch.js';
 import { createMessageAdmission, messageOverloadedFrame, runAdmittedMessageHook, runAdmittedMessageWork } from './runtime/utils/message-admission.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { normalizeEgressOptions, createEgressAccount, envelopeWireBytes, markAdmitted, admittedByBatch } from './runtime/utils/egress-account.js';
@@ -248,10 +249,12 @@ export default function uws(options = {}) {
 	const chargeableBytesV = (envelope, recipients) =>
 		envelopeWireBytes(envelope, recipients, egressAccountV.bytesEnabled);
 	/**
-	 * Local recipients of a topic on this dev server. `excludeWs` withholds one
-	 * connection, matched as either the uWS-shaped wrapper a handler receives
-	 * or the underlying raw socket - the same pair `publish` matches, so a
-	 * batch's admission counts exactly the recipients its entries will charge.
+	 * Local recipients of a topic on this dev server, for the egress admission.
+	 * `excludeWs` withholds one connection, matched as either the uWS-shaped
+	 * wrapper a handler receives or the underlying raw socket - the same pair
+	 * `deliver` matches, so an admission counts exactly the recipients the
+	 * delivery will charge. `publishWireBatch` hands its exclusion to both;
+	 * `publishWire` counts inside `deliver` itself; `publish` has none to hand.
 	 *
 	 * @param {string} topic
 	 * @param {object} [excludeWs]
@@ -446,20 +449,28 @@ export default function uws(options = {}) {
 	}
 
 	/**
-	 * Publish to all subscribers of a topic.
+	 * The one delivery point for every dev lane: builds the envelope, charges
+	 * egress once, and writes to each local subscriber.
+	 *
+	 * `excludeWs` is an ARGUMENT rather than something read from `options`,
+	 * because which lanes exclude is a contract: the wire lanes do and
+	 * `platform.publish` does not. Matched as either the uWS-shaped wrapper
+	 * handlers receive or the underlying raw socket.
+	 *
 	 * @param {string} topic
 	 * @param {string} event
 	 * @param {unknown} [data]
-	 * @param {{ relay?: boolean, excludeWs?: object }} [options] - `relay` is
-	 *   accepted for API parity with production and ignored in dev
-	 *   (single-process). `excludeWs` withholds delivery from that one
-	 *   connection - matched as either the uWS-shaped wrapper handlers
-	 *   receive or the underlying raw socket - mirroring the production
-	 *   sender-exclusion contract.
+	 * @param {{ seq?: boolean | number | bigint | null, relay?: boolean, jitterMs?: number }} [options]
+	 * @param {object | null} [excludeWs] - the connection this delivery skips
 	 * @returns {boolean}
 	 */
-	function publish(topic, event, data, options) {
-		const excludeWs = (options && options.excludeWs) || null;
+	function deliver(topic, event, data, options, excludeWs = null) {
+		// The seq VALUE is refused here exactly as production refuses it,
+		// though dev stamps none: a string, a zero, a negative or a fraction
+		// throws the same TypeError under `vite dev` as under `npm start`,
+		// instead of delivering here and throwing there. The cluster-topology
+		// refusals stay out - dev is one process.
+		assertStampableSeq(options != null ? options.seq : undefined);
 		// Mirror the production `{ jitterMs }` de-herd window stamp (platform.publish):
 		// carry the window so each client rolls its own dispatch delay.
 		const jitterMs = (options && typeof options.jitterMs === 'number' && options.jitterMs > 0) ? options.jitterMs : null;
@@ -500,6 +511,59 @@ export default function uws(options = {}) {
 	}
 
 	/**
+	 * Snapshot every message's options and refuse each seq value before a
+	 * batch lane delivers any of them - the same all-or-nothing production's
+	 * `batch` and `publishBatched` keep. The lanes publish from the snapshots,
+	 * not from the caller's objects: an accessor that answers the check with
+	 * one value and a later read with another would otherwise throw from
+	 * inside the delivery for message k with 0..k-1 already out, and a
+	 * snapshot reads inherited fields the spread it replaces did not. Dev
+	 * stamps none of these values; it refuses what production refuses.
+	 *
+	 * @param {Array<{ options?: { seq?: unknown, relay?: boolean, compress?: boolean, jitterMs?: number } }>} messages
+	 * @returns {Array<{ seq: any, relay: boolean | undefined, compress: boolean | undefined, jitterMs: number | undefined } | null | undefined>}
+	 */
+	function snapshotBatchOptions(messages) {
+		const snapshots = new Array(messages.length);
+		for (let i = 0; i < messages.length; i++) {
+			const o = messages[i].options;
+			const snap = o == null
+				? o
+				: { seq: o.seq, relay: o.relay, compress: o.compress, jitterMs: o.jitterMs };
+			assertStampableSeq(/** @type {any} */ (snap != null ? snap.seq : undefined));
+			snapshots[i] = snap;
+		}
+		return snapshots;
+	}
+
+	/**
+	 * Publish to all subscribers of a topic - `platform.publish`.
+	 *
+	 * @param {string} topic
+	 * @param {string} event
+	 * @param {unknown} [data]
+	 * @param {{ seq?: boolean | number | bigint | null, relay?: boolean, compress?: boolean, jitterMs?: number }} [options] -
+	 *   the four fields production's `publish` reads. `relay` is accepted for
+	 *   API parity and ignored in dev (single-process); `seq` is refused on
+	 *   the values production refuses and otherwise not stamped (documented
+	 *   on `publishBatched`); `jitterMs` lands in the envelope as `j` here
+	 *   exactly as it does in production.
+	 *
+	 *   `excludeWs` is NOT read here, because production's `publish` does not
+	 *   read it either: that lane is one native fan-out, and excluding one
+	 *   socket means a per-connection walk. Sender exclusion is declared and
+	 *   implemented on the wire lanes, which own that walk - and a codec that
+	 *   declines the frame publishes the envelope with the exclusion honoured,
+	 *   which is the supported way to skip the sender on JSON bytes. Reading it
+	 *   here would echo differently in dev than in production, silently, which
+	 *   is the one thing a dev mirror must not do.
+	 * @returns {boolean}
+	 */
+	function publish(topic, event, data, options) {
+		return deliver(topic, event, data, options, null);
+	}
+
+	/**
 	 * Dev-mode equivalent of `platform.publishBatched`. Same wire shape
 	 * as production - one `{type:'batch',events:[...]}` frame per
 	 * cap-able subscriber, fall back to N individual frames per old
@@ -508,12 +572,17 @@ export default function uws(options = {}) {
 	 * field. Tests that need to exercise the seq protocol should run
 	 * against `createTestServer` (the lead adapter's testing.js).
 	 *
-	 * @param {Array<{ topic: string, event: string, data?: unknown, options?: { relay?: boolean, seq?: boolean } }>} messages
+	 * @param {Array<{ topic: string, event: string, data?: unknown, options?: { seq?: boolean | number | bigint | null, relay?: boolean, compress?: boolean, jitterMs?: number } }>} messages
 	 */
 	function publishBatched(messages) {
 		if (!Array.isArray(messages) || messages.length === 0) return;
 		messages = collapseByCoalesceKey(messages);
 		if (messages.length === 0) return;
+		// Every entry's options are snapshotted and its seq value refused
+		// before EITHER path delivers, as production's batch does: a bad entry
+		// throws with nothing of the batch out. Vetting inside the per-event
+		// fall-back would deliver the entries before the bad one first.
+		const snapshots = snapshotBatchOptions(messages);
 		const firstTopic = messages[0].topic;
 		let allSameTopic = true;
 		for (let i = 1; i < messages.length; i++) {
@@ -545,11 +614,9 @@ export default function uws(options = {}) {
 			if (egressAccountV.enabled && !admitBatchEgressV(messages, null)) return;
 			for (let i = 0; i < messages.length; i++) {
 				const m = messages[i];
-				// Copied unconditionally: reading the caller's object directly
-				// on one branch and a spread snapshot on the other would make
-				// whether an inherited or accessor-carried option is honoured
-				// depend on whether a budget happens to be configured.
-				const per = { ...(m.options || {}) };
+				// The snapshot, never the caller's object: the value vetted
+				// above is the value delivered, whatever an accessor answers now.
+				const per = snapshots[i] ?? {};
 				if (egressAccountV.enabled) markAdmitted(per);
 				publish(m.topic, m.event, m.data, per);
 			}
@@ -829,10 +896,12 @@ export default function uws(options = {}) {
 		// optional). This mirrors dev's existing simpler-than-prod posture
 		// (dev also skips per-topic seq stamping). The full binary `0x03` path
 		// ships and is tested in production (src/runtime/handler.js) and the test
-		// server (the lead adapter's testing.js). Publish options flow through unchanged, so
-		// sender exclusion (`excludeWs`) behaves identically in dev.
+		// server (the lead adapter's testing.js). Sender exclusion behaves identically in dev
+		// because these lanes hand it to the delivery seam themselves - it is a
+		// wire-lane option, and `platform.publish` does not read it here any
+		// more than production's does.
 		publishWire(topic, event, data, _wire, options) {
-			return publish(topic, event, data, options);
+			return deliver(topic, event, data, options, (options && options.excludeWs) || null);
 		},
 		sendWire(ws, topic, event, data, _wire, options) {
 			return send(ws, topic, event, data, options);
@@ -843,10 +912,10 @@ export default function uws(options = {}) {
 		// sender exclusion flows through publishWire's options.
 		publishWireBatch(topic, event, entries, _wire, options) {
 			// Same refusal as production and the harness, checked before the
-			// entries: dev routes every entry through publish() with one shared
-			// options object, so a numeric seq would stamp them all identically
-			// here as well - and an empty dev batch must refuse what a full one
-			// refuses, or dev accepts a call production rejects.
+			// entries: dev routes every entry through the delivery seam with one
+			// shared options object, so a numeric seq would stamp them all
+			// identically here as well - and an empty dev batch must refuse what
+			// a full one refuses, or dev accepts a call production rejects.
 			// Field reads rather than a spread, as production reads them: an
 			// inherited or accessor-carried numeric seq must not slip a
 			// refusal here that production applies.
@@ -864,8 +933,8 @@ export default function uws(options = {}) {
 			// re-read them would disagree with production about what was sent.
 			// Per-entry seqs are validated with production's predicate - dev must
 			// refuse the call production refuses - and then carried through to
-			// publish(), which stamps no seq in dev (the documented dev posture;
-			// the seq protocol runs against createTestServer).
+			// the delivery seam, which stamps no seq in dev (the documented dev
+			// posture; the seq protocol runs against createTestServer).
 			const count = Array.isArray(entries) ? entries.length : 0;
 			const datas = new Array(count);
 			const excludes = new Array(count);
@@ -930,7 +999,7 @@ export default function uws(options = {}) {
 					if (excludes[i] != null) per.excludeWs = excludes[i];
 					if (entrySeq !== undefined) per.seq = entrySeq;
 				}
-				ok = publish(topic, event, datas[i], per) || ok;
+				ok = deliver(topic, event, datas[i], per, (per && per.excludeWs) || null) || ok;
 			}
 			return ok;
 		},
@@ -950,16 +1019,24 @@ export default function uws(options = {}) {
 		// surface in parity (see the contract above) without dead machinery.
 		registerWireCodec(_wire) {},
 		batch(messages) {
+			// Every message's options are snapshotted and its value vetted
+			// before the first publish, as production's batch does: a bad value
+			// on message k would otherwise throw from inside publish() with
+			// 0..k-1 already delivered, and an accessor answering the check
+			// with one value and the delivery with another would do the same.
+			const snapshots = snapshotBatchOptions(messages);
 			const results = [];
 			for (let i = 0; i < messages.length; i++) {
-				const { topic, event, data, options } = messages[i];
+				const { topic, event, data } = messages[i];
 				// Each entry carries its own options, exactly as it does through
 				// production's batch and the harness's: this method is a loop over
-				// independent publishes, so an entry's `excludeWs` or `jitterMs` is
-				// as load-bearing here as it is when the caller publishes directly.
-				// Dropping them made a dev batch quietly deliver a different frame
-				// than the same call under `npm start`.
-				results.push(publish(topic, event, data, options));
+				// independent publishes, so an entry's `jitterMs` is as
+				// load-bearing here as it is when the caller publishes directly.
+				// Dropping it made a dev batch quietly deliver a different frame
+				// than the same call under `npm start`. Exclusion is not among
+				// them: production's batch snapshots seq, relay, compress and
+				// jitterMs, and no exclusion, so neither does this.
+				results.push(publish(topic, event, data, snapshots[i]));
 			}
 			return results;
 		},
@@ -1274,7 +1351,7 @@ export default function uws(options = {}) {
 			// topic's local subscribers EXCLUDING the sender (echo suppression),
 			// echoing the sender's client id. Sender match handles both a raw
 			// socket (the wire handler passes the connection socket) and its
-			// wrapper (server-side app code), mirroring publish()'s excludeWs.
+			// wrapper (server-side app code), as the wire lanes' exclusion does.
 			// Dev-live egress: the sender's frozen attribution is the tenant,
 			// as production; a refusal stamps and delivers nothing.
 			let egressRecipients = 0;

@@ -421,13 +421,7 @@
 		"file": "src/runtime/divergence-diagnostics.js"
 	},
 	{
-		"file": "src/runtime/handler/cohort.js",
-		"adaptations": [
-			{
-				"lead": "\t\tcohorts.add(topic);\n\t\ttry { ws.subscribe(bin); } catch { counters.closedWsAborts++; }\n\t} else {\n\t\ttry { ws.subscribe(json); } catch { counters.closedWsAborts++; }\n\t}\n}\n",
-				"ours": "\t\tcohorts.add(topic);\n\t\t// Exactly one cohort per connection, which is what makes the split a\n\t\t// split. A connection can already be on the JSON cohort here: its own\n\t\t// first join was refused past the backpressure limit and served JSON,\n\t\t// and a later join - a plugin's trackedSubscribe of a topic the client\n\t\t// holds - now succeeds. Without this it would sit on both and receive\n\t\t// every shared publish twice, as the 0x03 frame and as the envelope.\n\t\t// Unsubscribing a cohort the connection is not on is a no-op.\n\t\ttry { ws.unsubscribe(json); } catch { counters.closedWsAborts++; }\n\t\ttry { ws.subscribe(bin); } catch { counters.closedWsAborts++; }\n\t} else {\n\t\t// The move in the other direction, and the same reason. A connection\n\t\t// can be in the binary cohort when it arrives here: a re-sent hello\n\t\t// REPLACES its capability set, and a refused per-connection announce\n\t\t// poisons the capability's wire state, so the join a plugin's\n\t\t// trackedSubscribe makes for a topic the connection still holds now\n\t\t// takes this branch. Leaving it subscribed to the binary cohort would\n\t\t// send it every shared publish twice, and its reference would still\n\t\t// count toward the binary cohort in the egress split.\n\t\tconst held = ud[WS_SHARED_COHORTS];\n\t\tif (held && held.delete(topic)) {\n\t\t\treleaseSharedWireId(topic);\n\t\t\ttry { ws.unsubscribe(bin); } catch { counters.closedWsAborts++; }\n\t\t}\n\t\ttry { ws.subscribe(json); } catch { counters.closedWsAborts++; }\n\t}\n}\n"
-			}
-		]
+		"file": "src/runtime/handler/cohort.js"
 	},
 	{
 		"file": "src/runtime/handler/egress-budget.js"
@@ -589,12 +583,8 @@
 		"file": "src/runtime/utils/operational-diagnostic.js",
 		"adaptations": [
 			{
-				"lead": "export function listenFailureDiagnostic(host, port) {",
-				"ours": "/**\n * The fatal record for a listen that never bound.\n *\n * `error` is optional because the transport decides whether there is one to\n * report. A transport that answers a failed listen with a falsy socket and\n * nothing else has only the placeholder below as the honest content of the\n * declared field; a transport that rejects with the real reason (EADDRINUSE\n * from `node:http`, say) passes it and the operator reads the cause in the\n * field that exists for it. The call site here passes the bind error.\n *\n * @param {string} host\n * @param {number | string} port\n * @param {unknown} [error] - the bind error the transport reported, if any\n */\nexport function listenFailureDiagnostic(host, port, error) {"
-			},
-			{
-				"lead": "\t\terror: Object.assign(new Error('uWebSockets.js returned no listen socket'), { code: 'LISTEN_FAILED' })",
-				"ours": "\t\terror: error === undefined\n\t\t\t? Object.assign(new Error('no listen socket was bound'), { code: 'LISTEN_FAILED' })\n\t\t\t: error"
+				"lead": " * that exists for it. The call sites here pass two arguments and keep the\n * placeholder.\n",
+				"ours": " * that exists for it. The call site here passes the bind error node reports.\n"
 			}
 		]
 	},
@@ -611,13 +601,7 @@
 		"file": "src/runtime/utils/static-headers.js"
 	},
 	{
-		"file": "src/runtime/utils/subscribe-policy.js",
-		"adaptations": [
-			{
-				"lead": "import { isPluginOwnedTopic } from './ws-symbols.js';\n\n/**\n * Whether the wire-level system-topic guard must refuse `topic`.\n *\n * Registered plugin namespaces are the one narrow exception to the default\n * `__` block. They have to reach their own subscribe hook in order to establish\n * membership; {@link deniesWireSubscribeLanding} then requires that membership\n * even when the global grant gate is off or an app hook is present. This is\n * deliberately a policy decision shared by every socket surface, not another\n * inline prefix check for the mirrors to drift on.\n *\n * @param {object} input\n * @param {boolean} input.allowSystem - the broad system-topic opt-out is enabled\n * @param {string} input.topic\n * @returns {boolean}\n */\nexport function deniesWireSystemTopicSubscribe(",
-				"ours": "import { isPluginOwnedTopic } from './ws-symbols.js';\n\n/**\n * Whether the wire-level system-topic guard must refuse `topic`.\n *\n * Registered plugin namespaces are the one narrow exception to the default\n * `__` block. They have to reach their own subscribe hook in order to establish\n * membership; {@link deniesWireSubscribeLanding} then requires that membership\n * even when the global grant gate is off or an app hook is present. This is\n * deliberately a policy decision shared by every socket surface, not another\n * inline prefix check for the mirrors to drift on.\n *\n * @param {object} input\n * @param {boolean} input.allowSystem - the broad system-topic opt-out is enabled\n * @param {string} input.topic\n * @returns {boolean}\n */\n/**\n * Whether a parsed control-prefixed frame is the envelope `MessageContext.msg`\n * is declared to carry, which is a plain object.\n *\n * `typeof [] === 'object'`, so an array passes an object test that does not\n * name it, matches no control type (`type` is undefined on an array) and\n * reaches the app hook as an envelope the declared contract excludes. Each\n * surface used to spell this inline, and production spelled it without the\n * array, so an app saw one envelope shape in development and another in\n * production. Null and every primitive are out for the same declared reason;\n * `undefined` is what a failed parse leaves behind and is out too.\n *\n * @param {unknown} parsed - what `JSON.parse` produced, or undefined if it threw\n * @returns {boolean}\n */\nexport function carriesPreParsedEnvelope(parsed) {\n\treturn parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);\n}\n\nexport function deniesWireSystemTopicSubscribe("
-			}
-		]
+		"file": "src/runtime/utils/subscribe-policy.js"
 	},
 	{
 		"file": "src/runtime/utils/upgrade-admission.js"
@@ -769,14 +753,6 @@
 				"lead": "[adapter-uws]",
 				"ours": "[adapter-ws]",
 				"all": true
-			},
-			{
-				"lead": "import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';\nimport { deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';\n",
-				"ours": "import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';\nimport { carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';\n"
-			},
-			{
-				"lead": "\t\t\t\t\t\t\t// through path with parse failures.\n\t\t\t\t\t\t\tif (msg === null || typeof msg !== 'object' || Array.isArray(msg)) throw 0;\n",
-				"ours": "\t\t\t\t\t\t\t// through path with parse failures.\n\t\t\t\t\t\t\tif (!carriesPreParsedEnvelope(msg)) throw 0;\n"
 			}
 		]
 	},
@@ -1080,10 +1056,6 @@
 	{
 		"file": "test/fixture/src/hooks.ws.js",
 		"adaptations": [
-			{
-				"lead": "\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (msg.type === 'echo') {\n\t\tplatform.send(ws, 'test-topic', 'echo', msg.payload);\n\t}\n",
-				"ours": "\tconst msg = JSON.parse(Buffer.from(data).toString());\n\tif (Array.isArray(msg) || msg.type === 'envelope-shape-probe') {\n\t\t// What the runtime put in `ctx.msg`, reported back so a case can assert\n\t\t// it. Both shapes take this branch on purpose: an array must arrive\n\t\t// with no pre-parsed envelope (`typeof [] === 'object'`, so it reaches\n\t\t// the check that excludes it only if that check names arrays), and an\n\t\t// object envelope no control type claims must still arrive with one.\n\t\t// The nonce correlates the two answers on a single connection.\n\t\tplatform.send(ws, 'test-topic', 'envelope-shape', {\n\t\t\tnonce: Array.isArray(msg) ? msg[0]?.nonce : msg.nonce,\n\t\t\tpresent: ctx.msg !== undefined,\n\t\t\tisArray: Array.isArray(ctx.msg)\n\t\t});\n\t\treturn;\n\t}\n\tif (msg.type === 'echo') {\n\t\tplatform.send(ws, 'test-topic', 'echo', msg.payload);\n\t}\n"
-			},
 			{
 				"lead": "export function authenticate({ cookies, headers }) {\n\tif (headers['x-set-cookie-probe'] === '1') {\n",
 				"ours": "export function authenticate({ cookies, headers }) {\n\t// A hook may answer with its own Response; this lane returns a bodyless\n\t// 204 so the wire the adapter writes for that branch is observable too.\n\tif (headers['x-auth-response'] === '204') return new Response(null, { status: 204 });\n\tif (headers['x-set-cookie-probe'] === '1') {\n"
@@ -1645,8 +1617,8 @@
 		"file": "test/control-egress.test.js",
 		"adaptations": [
 			{
-				"lead": "\t\texpectStatement(read('../src/runtime/handler.js'),\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);', 'handler.js');\n",
-				"ours": "\t\texpectStatement(read('../src/runtime/handler/realtime.js'),\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);', 'handler/realtime.js');\n"
+				"lead": "\t\texpectStatementBlock(read('../src/runtime/handler.js'), [\n\t\t\t'const runIngressApplicationWork = (ws, context) =>',\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler.js');\n",
+				"ours": "\t\texpectStatementBlock(read('../src/runtime/handler/realtime.js'), [\n\t\t\t'const runIngressApplicationWork = (facade, context) =>',\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler/realtime.js');\n"
 			},
 			{
 				"lead": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,345 frames - twelve times what it cost to ask, and repeatable,\n",
@@ -2173,5 +2145,14 @@
 				"ours": "const ws = { getUserData: () => ({ __adapter_ws_request_id__: 'req-42' }) };"
 			}
 		]
+	},
+	{
+		"file": "test/shared-cohort-accounting.test.js"
+	},
+	{
+		"file": "test/message-envelope-shape-real.test.js"
+	},
+	{
+		"file": "test/source-pins.test.js"
 	}
 ]

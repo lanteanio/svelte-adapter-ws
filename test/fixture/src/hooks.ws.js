@@ -110,8 +110,10 @@ export function message(ws, ctx) {
 	}
 	if (msg.type === 'shared-publish') {
 		// A shared stateless codec publish, so the cohort lane runs in the
-		// built runtime: the topic splits into a binary and a JSON cohort and
-		// the outcome accounting has one logical publish to report.
+		// built runtime: the topic splits into a binary and a JSON cohort, and
+		// each cohort the split publishes to takes its own native call. The
+		// split is reached only while some connection advertises the
+		// capability; otherwise the publish takes the JSON fast path.
 		platform.publishWire(msg.topic, 'snapshot', { n: msg.n ?? 1 }, {
 			capability: 'fixture.shared:1', schemaVersion: 1, shared: true, encode: () => new Uint8Array([msg.n ?? 1])
 		});
@@ -154,6 +156,32 @@ export function message(ws, ctx) {
 				const entries = msg.entry === 'wire-batch-one' ? [{ data: { n: 1 } }] : [];
 				result = platform.publishWireBatch(topic, event, entries, {
 					capability: 'fixture.sequence-batch:1', schemaVersion: 1, state: {}, encode: () => null
+				}, options);
+			} else if (msg.entry === 'wire-batch-entry-counter' || msg.entry === 'wire-batch-entry-counter-stateless') {
+				// An entry drawing the per-worker COUNTER, which is the other
+				// refusal the batch pre-pass carries: a clustered batch cannot
+				// take `{ seq: true }` on an entry whatever its options say,
+				// because the counter is per worker and the relay is
+				// multi-origin. Same two codecs, for the same two pre-passes.
+				result = platform.publishWireBatch(topic, event, [{ data: { n: 1 } }, { data: { n: 2 }, seq: true }], {
+					capability: 'fixture.sequence-batch:1',
+					schemaVersion: 1,
+					...(msg.entry === 'wire-batch-entry-counter' ? { state: {} } : {}),
+					encode: () => null
+				}, options);
+			} else if (msg.entry === 'wire-batch-entry-seq' || msg.entry === 'wire-batch-entry-seq-stateless') {
+				// A per-ENTRY seq: the clustered spelling of an authoritative
+				// batch, where the options renounce the counter and each entry
+				// carries the number an external allocator gave it. A codec with
+				// `state` takes the stateful snapshot pass and one without it
+				// reroutes per entry, so the two kinds drive the two pre-passes
+				// that have to refuse it - and neither refusal exists off-cluster,
+				// which is why they are asked of a real clustered runtime.
+				result = platform.publishWireBatch(topic, event, [{ data: { n: 1 } }, { data: { n: 2 }, seq: 21 }], {
+					capability: 'fixture.sequence-batch:1',
+					schemaVersion: 1,
+					...(msg.entry === 'wire-batch-entry-seq' ? { state: {} } : {}),
+					encode: () => null
 				}, options);
 			} else if (msg.entry === 'batch') {
 				platform.publishBatched([{ topic, event, data: { n: 1 }, options }]);

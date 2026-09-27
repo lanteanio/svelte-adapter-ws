@@ -1,5 +1,7 @@
 /**
- * The subscribe decisions, as pure functions of explicit inputs.
+ * The socket-surface decisions, as pure functions of explicit inputs. Mostly
+ * about subscribes, which is what the file is named for, and since one of them
+ * is about the shape of an inbound frame the name is narrower than the content.
  *
  * WHY THIS MODULE EXISTS. `src/runtime/handler.js` (production),
  * `src/testing.js` (the published `svelte-adapter-ws/testing` server) and
