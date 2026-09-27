@@ -35,7 +35,7 @@ function cell(value) {
 // undocumented.
 const SIBLING_ERROR_DOCUMENTS = Object.freeze([
 	Object.freeze({ repo: 'svelte-realtime', label: 'svelte-realtime errors', documentPath: 'docs/errors.md' }),
-	Object.freeze({ repo: 'svelte-adapter-uws-extensions', label: 'svelte-adapter-uws-extensions errors', documentPath: 'ERRORS.md' })
+	Object.freeze({ repo: 'svelte-adapter-uws-extensions', label: 'svelte-adapter-uws-extensions errors', documentPath: 'docs/errors.md' })
 ]);
 
 // A prerelease links the siblings' dev branch, a release their main: the

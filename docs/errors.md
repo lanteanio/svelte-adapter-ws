@@ -16,7 +16,7 @@ This is the adapter-owned part of the ecosystem index. The sibling packages
 generate and ship their own runtime-owned references on the same release channel:
 
 - [svelte-realtime errors](https://github.com/lanteanio/svelte-realtime/blob/main/docs/errors.md)
-- [svelte-adapter-uws-extensions errors](https://github.com/lanteanio/svelte-adapter-uws-extensions/blob/main/ERRORS.md)
+- [svelte-adapter-uws-extensions errors](https://github.com/lanteanio/svelte-adapter-uws-extensions/blob/main/docs/errors.md)
 
 | Stable ID | Code or event | Searchable message prefix |
 |---|---|---|
@@ -708,7 +708,7 @@ Log line begins:
 
 **Automatic recovery.** The client reconnects on its own throttle curve. A client whose behavior is unchanged will reach the budget again and be closed again, backing off further each time.
 
-**What to do.** Identify the client. A repeating cycle from one page is usually a resubscribe loop - a store that re-subscribes on every render, or a reconnect handler that restores topics it never released - and fixing that removes the condition. The budget is a fixed ceiling with no option to raise it: about 4 MiB of control frames in ten seconds, and a subscribe ack costs roughly sixty bytes plus the topic name, once per topic whether or not the subscribes were batched. The one legitimate shape that reaches it is a reconnect restoring a topic set whose acks add up to more than the window, and the answer for that connection is to hold fewer topics, or to restore them in slices spread across windows.
+**What to do.** Identify the client. A repeating cycle from one page is usually a resubscribe loop - a store that re-subscribes on every render, or a reconnect handler that restores topics it never released - and fixing that removes the condition. The budget is a fixed ceiling with no option to raise it: about 4 MiB of control frames in ten seconds, and a subscribe ack costs roughly sixty bytes plus the topic name, once per topic whether or not the subscribes were batched. The one legitimate shape that reaches it is a connection subscribing to, or a reconnect restoring, a topic set whose acks - and denials, for topics the app hook no longer grants - add up to more than the window. The bundled client is one connection per page and restores every held topic in one burst, so with it the only lever is fewer topics per connection; a custom client can split the set across connections, or spread the subscribes across windows more than ten seconds apart.
 
 ## ADAPTER-ERR-ATTRIBUTION
 
