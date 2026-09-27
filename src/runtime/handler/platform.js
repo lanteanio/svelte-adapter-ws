@@ -980,20 +980,32 @@ export const platform = {
 				// The binary cohort exists only if a capable client joined it (its
 				// announce succeeded); otherwise this shared topic currently has
 				// only JSON subscribers and skips the binary fan-out entirely.
-				// ONE outcome for this logical publish, whichever cohorts carried
-				// it: the outcome family sums to the publish family on every
-				// other exit, and a shared publish counted per cohort recorded a
-				// delivery beside a no-subscribers for the cohort that happened
-				// to be empty.
-				let delivered = false;
 				const id = getSharedWireId(topic);
+				// ONE OUTCOME PER COHORT FAN-OUT, so a publish that reaches this
+				// split reports one for each cohort it publishes to. The two
+				// fan-outs below are not symmetric about that: the binary one runs
+				// only while some connection holds the binary cohort, the JSON one
+				// after it runs whether or not anyone is on it - so an empty JSON
+				// cohort still costs a fan-out and a `no_subscribers`, an empty
+				// binary cohort costs neither. Note also what does NOT reach here:
+				// with no live connection advertising the capability the publish
+				// took the JSON fast path above, and a codec that declined the
+				// frame published once on the logical topic.
+				//
+				// The counter is documented as the result of each fan-out handed
+				// to the transport and is deliberately not a per-logical-publish
+				// census (an excluding publish takes the per-socket walk and
+				// reports nothing at all, and a batch reports once for the N
+				// events its single frame carries). A cohort that is empty really
+				// did find no subscribers, which is what `no_subscribers` says.
+				// Reporting one merged outcome here would make this lane the only
+				// one that answers a different question from the rest.
 				if (id !== undefined) {
 					const walkedBin = fanOutCohort(bin, buildBinaryFrame(wire.schemaVersion, id, seq ?? 0, payload), true, compress);
-					delivered = (walkedBin & FANOUT_REACHED) !== 0;
+					counters.publishOutcomeHook?.((walkedBin & FANOUT_REACHED) !== 0);
 				}
 				const walkedJson = fanOutCohort(json, envelope, false, compress);
-				if ((walkedJson & FANOUT_REACHED) !== 0) delivered = true;
-				counters.publishOutcomeHook?.(delivered);
+				counters.publishOutcomeHook?.((walkedJson & FANOUT_REACHED) !== 0);
 				// Cross-worker subscribers: each receiving worker re-derives the
 				// shared codec from its registry (relayPublishWire) and runs ITS
 				// OWN cohort split with its own server-wide id, so the

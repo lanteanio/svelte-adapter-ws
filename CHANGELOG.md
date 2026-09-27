@@ -153,13 +153,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id; the hook is still not awaited, and the `unsubscribe` type admits a
   promise return. `createTestServer` and the dev plugin run their hook the
   same way.
-- A shared-codec `publishWire` records one publish outcome per publish
-  rather than one per cohort, so a publish the binary cohort carried beside
-  an empty JSON cohort no longer counts a delivery and a no-subscribers
-  side by side. A socket that rejoins a shared cohort it already holds - a
+- **A shared cohort join holds one reference and leaves the connection in one
+  cohort.** A socket that rejoins a shared cohort it already holds - a
   plugin's `trackedSubscribe` of a topic the client subscribed over the
   wire - no longer takes a second shared wire-id reference, which kept the
-  id alive after its last member left; `createTestServer` follows.
+  id alive after its last member left. The same call could also leave a
+  connection on BOTH cohorts: its own first announce refused past the
+  backpressure limit put it on the JSON cohort, and a later successful join
+  added the binary one without removing that, so it received every shared
+  publish twice, as the frame and as the envelope. The successful join now
+  moves the connection rather than adding to it, and a join that finds the
+  capability gone - a re-sent `hello` replaces the set, a refused
+  per-connection announce poisons the wire state - moves it the other way,
+  out of the binary cohort and off its reference. Both in the runtime and in
+  `createTestServer`. `ws_publish_outcomes_total` stays one outcome per
+  cohort fan-out, so a `no_subscribers` on a shared topic answers for one
+  cohort and not for the publish; the README and the type documentation now
+  say so.
 
 ## [0.0.1] - 2026-09-22
 

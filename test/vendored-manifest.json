@@ -421,7 +421,13 @@
 		"file": "src/runtime/divergence-diagnostics.js"
 	},
 	{
-		"file": "src/runtime/handler/cohort.js"
+		"file": "src/runtime/handler/cohort.js",
+		"adaptations": [
+			{
+				"lead": "\t\tcohorts.add(topic);\n\t\ttry { ws.subscribe(bin); } catch { counters.closedWsAborts++; }\n\t} else {\n\t\ttry { ws.subscribe(json); } catch { counters.closedWsAborts++; }\n\t}\n}\n",
+				"ours": "\t\tcohorts.add(topic);\n\t\t// Exactly one cohort per connection, which is what makes the split a\n\t\t// split. A connection can already be on the JSON cohort here: its own\n\t\t// first join was refused past the backpressure limit and served JSON,\n\t\t// and a later join - a plugin's trackedSubscribe of a topic the client\n\t\t// holds - now succeeds. Without this it would sit on both and receive\n\t\t// every shared publish twice, as the 0x03 frame and as the envelope.\n\t\t// Unsubscribing a cohort the connection is not on is a no-op.\n\t\ttry { ws.unsubscribe(json); } catch { counters.closedWsAborts++; }\n\t\ttry { ws.subscribe(bin); } catch { counters.closedWsAborts++; }\n\t} else {\n\t\t// The move in the other direction, and the same reason. A connection\n\t\t// can be in the binary cohort when it arrives here: a re-sent hello\n\t\t// REPLACES its capability set, and a refused per-connection announce\n\t\t// poisons the capability's wire state, so the join a plugin's\n\t\t// trackedSubscribe makes for a topic the connection still holds now\n\t\t// takes this branch. Leaving it subscribed to the binary cohort would\n\t\t// send it every shared publish twice, and its reference would still\n\t\t// count toward the binary cohort in the egress split.\n\t\tconst held = ud[WS_SHARED_COHORTS];\n\t\tif (held && held.delete(topic)) {\n\t\t\treleaseSharedWireId(topic);\n\t\t\ttry { ws.unsubscribe(bin); } catch { counters.closedWsAborts++; }\n\t\t}\n\t\ttry { ws.subscribe(json); } catch { counters.closedWsAborts++; }\n\t}\n}\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/handler/egress-budget.js"

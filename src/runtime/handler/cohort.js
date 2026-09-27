@@ -69,8 +69,29 @@ export function joinSharedCohort(ws, ud, topic, capability) {
 		let cohorts = ud[WS_SHARED_COHORTS];
 		if (!cohorts) { cohorts = new Set(); ud[WS_SHARED_COHORTS] = cohorts; }
 		cohorts.add(topic);
+		// Exactly one cohort per connection, which is what makes the split a
+		// split. A connection can already be on the JSON cohort here: its own
+		// first join was refused past the backpressure limit and served JSON,
+		// and a later join - a plugin's trackedSubscribe of a topic the client
+		// holds - now succeeds. Without this it would sit on both and receive
+		// every shared publish twice, as the 0x03 frame and as the envelope.
+		// Unsubscribing a cohort the connection is not on is a no-op.
+		try { ws.unsubscribe(json); } catch { counters.closedWsAborts++; }
 		try { ws.subscribe(bin); } catch { counters.closedWsAborts++; }
 	} else {
+		// The move in the other direction, and the same reason. A connection
+		// can be in the binary cohort when it arrives here: a re-sent hello
+		// REPLACES its capability set, and a refused per-connection announce
+		// poisons the capability's wire state, so the join a plugin's
+		// trackedSubscribe makes for a topic the connection still holds now
+		// takes this branch. Leaving it subscribed to the binary cohort would
+		// send it every shared publish twice, and its reference would still
+		// count toward the binary cohort in the egress split.
+		const held = ud[WS_SHARED_COHORTS];
+		if (held && held.delete(topic)) {
+			releaseSharedWireId(topic);
+			try { ws.unsubscribe(bin); } catch { counters.closedWsAborts++; }
+		}
 		try { ws.subscribe(json); } catch { counters.closedWsAborts++; }
 	}
 }

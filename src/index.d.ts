@@ -356,7 +356,14 @@ export interface WebSocketOptions {
 	 *   hands to the transport, classified as delivered/no-subscribers
 	 *   (counter), with no recipient walk. A publish that excludes a socket is
 	 *   delivered by a per-socket walk instead, so it is counted by
-	 *   `ws_publishes_total` and is absent here: the two do not sum.
+	 *   `ws_publishes_total` and is absent here: the two do not sum. In the
+	 *   other direction, a publish that splits its topic into cohorts - what a
+	 *   `shared: true` codec's publish does - makes one fan-out per cohort it
+	 *   publishes to, and contributes one outcome for each. So an outcome
+	 *   answers for one FAN-OUT, not for the publish: a `no_subscribers` on a
+	 *   cohort-split topic is one empty cohort, and says nothing by itself
+	 *   about whether the other fan-out delivered. `ws_publishes_total` is the
+	 *   count of logical publishes.
 	 * - `ws_backpressure_max_bytes` - worst per-connection outbound buffered
 	 *   bytes over the sampled connection set (gauge, sampled; `0` when healthy).
 	 * - `ws_backpressure_connections` - sampled connections holding a

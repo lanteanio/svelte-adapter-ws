@@ -458,7 +458,7 @@ describe('the wire lane', () => {
 		expect(take()).toEqual([]);
 	});
 
-	it('reports one outcome for a shared publish, whichever cohorts carried it', async () => {
+	it('reports each cohort fan-out of a shared publish separately', async () => {
 		const shared = {
 			capability: SHARED_CAP,
 			schemaVersion: 1,
@@ -467,18 +467,30 @@ describe('the wire lane', () => {
 		};
 		take();
 		platform.publishWire('shared', 'pos', { x: 1 }, shared);
-		// capable joined the binary cohort, plain the JSON cohort: one publish.
-		expect(take()).toEqual([true]);
+		// capable joined the binary cohort, plain the JSON cohort: two fan-outs.
+		expect(take()).toEqual([true, true]);
 
-		// A binary cohort with an empty JSON cohort beside it is still one
-		// delivered publish, not a delivery plus a no-subscribers.
+		// The JSON fan-out runs whether or not anyone is on that cohort, so a
+		// binary cohort with an empty JSON cohort beside it is a delivery and a
+		// no-subscribers.
 		const lone = await connect('loneCapable', [SHARED_CAP], ['lone-shared']);
 		try {
 			take();
 			platform.publishWire('lone-shared', 'pos', { x: 1 }, shared);
-			expect(take()).toEqual([true]);
+			expect(take()).toEqual([true, false]);
 		} finally {
 			state.wsConnections.delete(lone.facade);
+		}
+
+		// The binary fan-out runs only while some connection holds that
+		// cohort: a split topic whose subscribers are all JSON-only is one.
+		const plainOnly = await connect('plainOnlyShared', [], ['json-only-shared']);
+		try {
+			take();
+			platform.publishWire('json-only-shared', 'pos', { x: 1 }, shared);
+			expect(take()).toEqual([true]);
+		} finally {
+			state.wsConnections.delete(plainOnly.facade);
 		}
 	});
 
