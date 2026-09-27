@@ -6,6 +6,7 @@
 import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+import { setOperationalEventSink } from '../src/runtime/diagnostic.js';
 
 const WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -28,14 +29,22 @@ const WS_OPTS = {
 	unsafeSameOriginWithoutHostPin: false
 };
 
-// `x-mode: url` answers with the URL the hook was handed; `x-mode: read` reads
-// the whole body and answers with its length; anything else never touches
-// the body and succeeds.
+// `x-mode: url` answers with the URL the hook was handed, `event-url` with the
+// event's own `url`; `x-mode: read` reads the whole body and answers with its
+// length; `throw` fails the hook, `bad-header` returns a header node refuses;
+// anything else never touches the body and succeeds.
 const WS_HANDLER = `
 export function message() {}
-export async function authenticate({ request, headers }) {
+export async function authenticate({ request, headers, url }) {
 	if (headers['x-mode'] === 'url') {
 		return new Response(request.url, { headers: { 'content-type': 'text/plain' } });
+	}
+	if (headers['x-mode'] === 'event-url') {
+		return new Response(url, { headers: { 'content-type': 'text/plain' } });
+	}
+	if (headers['x-mode'] === 'throw') throw new Error('authenticate boom');
+	if (headers['x-mode'] === 'bad-header') {
+		return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
 	}
 	if (headers['x-mode'] === 'read') {
 		const body = await request.text();
@@ -208,8 +217,51 @@ describe('the authenticate endpoint', () => {
 		// length alone, which is the only way it can arrive at all here.
 		const port = plain.rt.port;
 		const answer = await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`]));
+		expect(answer.status).toBe('HTTP/1.1 413 Content Too Large');
+		expect(answer.body).toBe('Content Too Large');
+	});
+
+	it('refuses an unusable base origin before a declared body past the cap', async () => {
+		const port = proxied.rt.port;
+		const answer = await exchange(port, post(port, ['x-forwarded-proto: ftp', `Content-Length: ${64 * 1024 + 1}`]));
+		expect(answer.status).toContain('400');
+		expect(answer.body).toBe('Bad Request');
+	});
+
+	it('refuses a declared body past the cap before building the Request', async () => {
+		// A Host the URL parser refuses would be the Request-build 400; the
+		// declared length is judged first.
+		const port = plain.rt.port;
+		const answer = await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`], { host: 'a b' }));
 		expect(answer.status).toContain('413');
 		expect(answer.body).toBe('Content Too Large');
+	});
+
+	it('names the 500 for a relayed header node refuses, not the status it replaced', async () => {
+		const port = plain.rt.port;
+		const answer = await exchange(port, post(port, ['x-mode: bad-header', 'Content-Length: 0']));
+		expect(answer.status).toBe('HTTP/1.1 500 Internal Server Error');
+		expect(answer.body).toBe('Internal Server Error');
+	});
+
+	it('reports a failing hook as runtime.authenticate.failed with the request id it answered', async () => {
+		/** @type {any[]} */
+		const events = [];
+		const dispose = setOperationalEventSink((record) => { events.push(record); });
+		try {
+			const port = plain.rt.port;
+			const answer = await exchange(port, post(port, ['x-mode: throw', 'Content-Length: 0']));
+			expect(answer.status).toContain('500');
+			const requestId = answer.lines
+				.filter((line) => line.toLowerCase().startsWith('x-request-id:'))
+				.map((line) => line.slice('x-request-id:'.length).trim());
+			expect(requestId).toHaveLength(1);
+			const failed = events.filter((r) => r.event === 'runtime.authenticate.failed');
+			expect(failed).toHaveLength(1);
+			expect(failed[0].attributes.requestId).toBe(requestId[0]);
+		} finally {
+			dispose();
+		}
 	});
 
 	it('refuses an undeclared oversized body only when the hook reads past the cap', async () => {
@@ -278,6 +330,12 @@ describe('the authenticate endpoint', () => {
 		expect(bare.body).toBe(`http://127.0.0.1:${port}/__ws/auth`);
 		const query = await exchange(port, post(port, ['x-mode: url', 'Content-Length: 0'], { target: '/__ws/auth?a=1' }));
 		expect(query.body).toBe(`http://127.0.0.1:${port}/__ws/auth?a=1`);
+
+		// The event's own `url` is the same path and query.
+		const eventBare = await exchange(port, post(port, ['x-mode: event-url', 'Content-Length: 0'], { target: '/__ws/auth?' }));
+		expect(eventBare.body).toBe('/__ws/auth');
+		const eventQuery = await exchange(port, post(port, ['x-mode: event-url', 'Content-Length: 0'], { target: '/__ws/auth?a=1' }));
+		expect(eventQuery.body).toBe('/__ws/auth?a=1');
 	});
 
 	it('opens its span when the hook runs, under the context the request carried', async () => {
@@ -299,5 +357,6 @@ describe('the authenticate endpoint', () => {
 		expect(spans).toHaveLength(1);
 		expect(spans[0].parent?.traceparent).toBe(traceparent);
 		expect(spans[0].attributes['http.request.method']).toBe('POST');
+		expect(spans[0].attributes['network.protocol.name']).toBe('http');
 	});
 });

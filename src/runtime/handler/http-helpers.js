@@ -2,6 +2,8 @@
 // late failure can never write a second response into an exchange whose first
 // byte already left; the caller owns deciding whether that situation is fatal.
 
+import { STATUS_CODES } from 'node:http';
+
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
 // forbids (`new Request()` throws a TypeError for them - surfaced as a
@@ -28,12 +30,19 @@ export const ALLOW_HEADER = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
  * written here. A HEAD needs nothing more: node drops the payload of a HEAD
  * itself, and the header still names the size the GET would carry.
  *
+ * The reason phrase is set here rather than left to node. A writeHead that
+ * threw on a header node refuses has already set `statusMessage`, which a
+ * later writeHead keeps, so the 500 that follows it would read `500 OK`; and
+ * node still spells 413 by its pre-RFC 9110 name, where the family writes
+ * `Content Too Large`. writeHead keeps a `statusMessage` it finds set.
+ *
  * @param {import('node:http').ServerResponse} res
  * @param {number} status
  * @param {Record<string, string>} headers
  * @param {string} text
  */
 export function endText(res, status, headers, text) {
+	res.statusMessage = status === 413 ? 'Content Too Large' : STATUS_CODES[status] || '';
 	res.writeHead(status, { ...headers, 'content-length': String(Buffer.byteLength(text)) });
 	res.end(text);
 }

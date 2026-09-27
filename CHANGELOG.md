@@ -113,6 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An SSR Response carrying a `Set-Cookie` value node refuses to write is
   answered `500`, as any other refused header is, where nothing was written
   and the connection waited for the client to give up.
+- A `413` reads `Content Too Large`, as RFC 9110 and the family's native tier
+  name it, where node's default wrote `Payload Too Large`, and the `500` that
+  follows a relayed header node refuses reads `Internal Server Error` rather
+  than `OK`.
 - **The authenticate endpoint answers as the family's does.** The URL handed
   to the hook is built on `ORIGIN`, or on the configured `PROTOCOL_HEADER`,
   `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host, and carries a

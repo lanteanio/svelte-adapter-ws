@@ -547,7 +547,7 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		const first = splitFirst(await pipeline(open.rt.port, [
 			['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', `Content-Length: ${big.length}`]
 		], big));
-		expect(first.status).toContain('413');
+		expect(first.status).toBe('HTTP/1.1 413 Content Too Large');
 		expect(header(first.lines, 'transfer-encoding')).toEqual([]);
 		expect(header(first.lines, 'content-length')).toEqual([String('Content Too Large'.length)]);
 		expect(first.rest.slice(0, 'Content Too Large'.length)).toBe('Content Too Large');

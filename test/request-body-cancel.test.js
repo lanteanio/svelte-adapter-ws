@@ -161,6 +161,43 @@ describe('a body the app lets go of is discarded, and the server stays up', () =
  * @param {string} body
  * @param {{ chunked?: boolean }} [opts] send the body undeclared, as one chunk
  */
+/**
+ * The status of each response in `raw`, read one after another by its own
+ * framing: a response has to start exactly where the one before it ends, so a
+ * length that is off, or a body left on the wire, stops the walk short and the
+ * follower's status is missing from the list.
+ *
+ * @param {string} raw latin1, one character per byte
+ * @returns {string[]}
+ */
+function walkResponses(raw) {
+	/** @type {string[]} */
+	const statuses = [];
+	let at = 0;
+	while (at < raw.length) {
+		const match = /^HTTP\/1\.1 (\d{3})/.exec(raw.slice(at, at + 12));
+		if (!match) break;
+		const end = raw.indexOf('\r\n\r\n', at);
+		if (end < 0) break;
+		const lines = raw.slice(at, end).toLowerCase().split('\r\n');
+		statuses.push(match[1]);
+		at = end + 4;
+		const length = lines.find((line) => line.startsWith('content-length:'));
+		if (length) {
+			at += Number(length.slice('content-length:'.length).trim());
+		} else if (lines.includes('transfer-encoding: chunked')) {
+			for (;;) {
+				const eol = raw.indexOf('\r\n', at);
+				if (eol < 0) return statuses;
+				const size = parseInt(raw.slice(at, eol), 16);
+				at = eol + 2 + (size === 0 ? 2 : size + 2);
+				if (size === 0) break;
+			}
+		}
+	}
+	return statuses;
+}
+
 function withFollower(port, head, body, { chunked = false } = {}) {
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(port, '127.0.0.1', () => {
@@ -175,7 +212,7 @@ function withFollower(port, head, body, { chunked = false } = {}) {
 		let raw = '';
 		const timer = setTimeout(() => { socket.destroy(); reject(new Error('the follower was not answered within 5 s: ' + JSON.stringify(raw.slice(0, 120)))); }, 5000);
 		socket.on('data', (chunk) => { raw += chunk.toString('latin1'); });
-		socket.on('close', () => { clearTimeout(timer); resolve([...raw.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1])); });
+		socket.on('close', () => { clearTimeout(timer); resolve(walkResponses(raw)); });
 		socket.on('error', () => {});
 	});
 }

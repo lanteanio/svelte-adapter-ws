@@ -2628,11 +2628,11 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		return true;
 	}
 
-	// The body streams into the Request under the cap. Building the Request
-	// pulls once, which takes whatever node has read off the socket - a body
-	// within the cap usually arrives whole in that read - and the rest follows
-	// as the hook reads it. A hook that reads past the cap rejects with
-	// PayloadTooLargeError, answered 413 below.
+	// The body streams into the Request under the cap. The stream pulls once
+	// on its own as soon as it starts, which takes whatever node has read off
+	// the socket - a body within the cap usually arrives whole in that read -
+	// and the rest follows as the hook reads it. A hook that reads past the
+	// cap rejects with PayloadTooLargeError, answered 413 below.
 	const body = readBody(req, AUTH_BODY_LIMIT, state);
 	// The path and, when there is one, the query: a bare trailing `?` names no
 	// query, so it is not carried into the URL the hook sees.
