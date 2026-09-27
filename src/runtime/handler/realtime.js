@@ -18,7 +18,7 @@ import {
 } from '../utils/ws-symbols.js';
 import { MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION } from '../utils/caps.js';
 import {
-	deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook,
+	carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook,
 	deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked,
 	deniesRefLessRecover, deniesRefLessRecoverBatch, recoverRequiresRefFrame,
 	exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve
@@ -1853,13 +1853,12 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 		} catch {
 			parsed = undefined;
 		}
-		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-			// Not a JSON object envelope (parse failed, or parsed to
-			// null / a primitive / an array). Forward raw bytes only.
-			// The array needs naming because `typeof [] === 'object'`
-			// passes the check above it: `msg` is declared to carry a
-			// plain object envelope, so an array must not arrive as
-			// one. testing.js and vite.js exclude it the same way.
+		if (!carriesPreParsedEnvelope(parsed)) {
+			// Not the declared envelope (the parse failed, or produced
+			// null, a primitive or an array). Forward raw bytes only.
+			// The shape question is the shared policy's, not this
+			// surface's, because all three surfaces have to answer it
+			// the same way and this one used to answer it differently.
 			await runAdmittedMessageHook(messageAdmission, wsModule.message, facade, { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), isBinary, msg, platform: userData[WS_PLATFORM] }, rejectApplicationMessage);
 			return;
 		}

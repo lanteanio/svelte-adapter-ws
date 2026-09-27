@@ -611,7 +611,13 @@
 		"file": "src/runtime/utils/static-headers.js"
 	},
 	{
-		"file": "src/runtime/utils/subscribe-policy.js"
+		"file": "src/runtime/utils/subscribe-policy.js",
+		"adaptations": [
+			{
+				"lead": "import { isPluginOwnedTopic } from './ws-symbols.js';\n\n/**\n * Whether the wire-level system-topic guard must refuse `topic`.\n *\n * Registered plugin namespaces are the one narrow exception to the default\n * `__` block. They have to reach their own subscribe hook in order to establish\n * membership; {@link deniesWireSubscribeLanding} then requires that membership\n * even when the global grant gate is off or an app hook is present. This is\n * deliberately a policy decision shared by every socket surface, not another\n * inline prefix check for the mirrors to drift on.\n *\n * @param {object} input\n * @param {boolean} input.allowSystem - the broad system-topic opt-out is enabled\n * @param {string} input.topic\n * @returns {boolean}\n */\nexport function deniesWireSystemTopicSubscribe(",
+				"ours": "import { isPluginOwnedTopic } from './ws-symbols.js';\n\n/**\n * Whether the wire-level system-topic guard must refuse `topic`.\n *\n * Registered plugin namespaces are the one narrow exception to the default\n * `__` block. They have to reach their own subscribe hook in order to establish\n * membership; {@link deniesWireSubscribeLanding} then requires that membership\n * even when the global grant gate is off or an app hook is present. This is\n * deliberately a policy decision shared by every socket surface, not another\n * inline prefix check for the mirrors to drift on.\n *\n * @param {object} input\n * @param {boolean} input.allowSystem - the broad system-topic opt-out is enabled\n * @param {string} input.topic\n * @returns {boolean}\n */\n/**\n * Whether a parsed control-prefixed frame is the envelope `MessageContext.msg`\n * is declared to carry, which is a plain object.\n *\n * `typeof [] === 'object'`, so an array passes an object test that does not\n * name it, matches no control type (`type` is undefined on an array) and\n * reaches the app hook as an envelope the declared contract excludes. Each\n * surface used to spell this inline, and production spelled it without the\n * array, so an app saw one envelope shape in development and another in\n * production. Null and every primitive are out for the same declared reason;\n * `undefined` is what a failed parse leaves behind and is out too.\n *\n * @param {unknown} parsed - what `JSON.parse` produced, or undefined if it threw\n * @returns {boolean}\n */\nexport function carriesPreParsedEnvelope(parsed) {\n\treturn parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);\n}\n\nexport function deniesWireSystemTopicSubscribe("
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/upgrade-admission.js"
@@ -763,6 +769,14 @@
 				"lead": "[adapter-uws]",
 				"ours": "[adapter-ws]",
 				"all": true
+			},
+			{
+				"lead": "import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';\nimport { deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';\n",
+				"ours": "import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';\nimport { carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t// through path with parse failures.\n\t\t\t\t\t\t\tif (msg === null || typeof msg !== 'object' || Array.isArray(msg)) throw 0;\n",
+				"ours": "\t\t\t\t\t\t\t// through path with parse failures.\n\t\t\t\t\t\t\tif (!carriesPreParsedEnvelope(msg)) throw 0;\n"
 			}
 		]
 	},
