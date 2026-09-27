@@ -483,13 +483,7 @@
 		"file": "src/runtime/metrics-collector.js"
 	},
 	{
-		"file": "src/runtime/observability-manifest.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\t'auth_rate_limit', 'siege', 'cursor_lane', 'over_capacity', 'connection_capacity', 'duplicate_header',\n\t\t\t'ip_rate_limit', 'bad_origin', 'deferred_overflow', 'auth_timeout', 'auth_rejected', 'hook_error'\n\t\t]) })\n",
-				"ours": "\t\t\t'auth_rate_limit', 'siege', 'cursor_lane', 'over_capacity', 'connection_capacity', 'duplicate_header',\n\t\t\t'ambiguous_framing', 'ip_rate_limit', 'bad_origin', 'deferred_overflow', 'auth_timeout', 'auth_rejected',\n\t\t\t'hook_error'\n\t\t]) })\n"
-			}
-		]
+		"file": "src/runtime/observability-manifest.js"
 	},
 	{
 		"file": "src/runtime/posture-collector.js"
@@ -683,10 +677,6 @@
 			{
 				"lead": "export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';\n",
 				"ours": "export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';\n"
-			},
-			{
-				"lead": "\t * `siege`, `over_capacity`, `connection_capacity`, `cursor_lane`, `auth_rejected`,\n\t * `hook_error`, `duplicate_header` and `deferred_overflow`, plus the\n",
-				"ours": "\t * `siege`, `over_capacity`, `connection_capacity`, `cursor_lane`, `auth_rejected`,\n\t * `hook_error`, `duplicate_header`, `ambiguous_framing` and `deferred_overflow`, plus the\n"
 			}
 		]
 	},
@@ -1045,22 +1035,10 @@
 		"file": "test/fixture/src/hooks.ws.grant.js"
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.hookcrash.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\theaders: { 'content-type': 'application/json' }\n\t\t});\n\t}\n\treturn new Response(JSON.stringify({ ok: true, path: new URL(request.url).pathname }), {\n\t\tstatus: 200,\n",
-				"ours": "\t\t\theaders: { 'content-type': 'application/json' }\n\t\t});\n\t}\n\tconst path = new URL(request.url).pathname;\n\t// Bodyless answers, so the wire the admin writer produces for them is\n\t// observable on a real build: a 204, and a 200 that declares a length it\n\t// carries no bytes for (what a HEAD-answering handler does).\n\tif (path.endsWith('/empty')) return new Response(null, { status: 204 });\n\tif (path.endsWith('/declared')) {\n\t\treturn new Response(null, { status: 200, headers: { 'content-length': '12' } });\n\t}\n\treturn new Response(JSON.stringify({ ok: true, path }), {\n\t\tstatus: 200,\n"
-			}
-		]
+		"file": "test/fixture/src/hooks.ws.hookcrash.js"
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.js",
-		"adaptations": [
-			{
-				"lead": "export function authenticate({ cookies, headers }) {\n\tif (headers['x-set-cookie-probe'] === '1') {\n",
-				"ours": "export function authenticate({ cookies, headers }) {\n\t// A hook may answer with its own Response; this lane returns a bodyless\n\t// 204 so the wire the adapter writes for that branch is observable too.\n\tif (headers['x-auth-response'] === '204') return new Response(null, { status: 204 });\n\tif (headers['x-set-cookie-probe'] === '1') {\n"
-			}
-		]
+		"file": "test/fixture/src/hooks.ws.js"
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.park.js"
@@ -1168,13 +1146,7 @@
 		"file": "test/fixture/svelte.config.js"
 	},
 	{
-		"file": "test/fixture/variants.js",
-		"adaptations": [
-			{
-				"lead": "\t// zero-config defaults, because the default page IS the surface under\n\t// test. Its rest, update, and failure states are browser-rendered\n\t// behavior no string-level test can observe.\n\twaitingdefault: {\n\t\tout: 'build-waiting-default',\n\t\te2eOnly: true,\n\t\thandler: null,\n",
-				"ours": "\t// zero-config defaults, because the default page IS the surface under\n\t// test. Its rest, update, and failure states are browser-rendered\n\t// behavior no string-level test can observe.\n\t//\n\t// Not e2e-only any more: its live-connection ceiling is the one gate a\n\t// raw-socket suite can genuinely FILL, which is what the request-framing\n\t// ordering needs - a refusal written while the gate is shut keeps its\n\t// connection, so a framing answer has to come before it. Building it here\n\t// rather than lazily inside a worker keeps that build on the serial path\n\t// ahead of the workers instead of under the shared lock.\n\twaitingdefault: {\n\t\tout: 'build-waiting-default',\n\t\thandler: null,\n"
-			}
-		]
+		"file": "test/fixture/variants.js"
 	},
 	{
 		"file": "test/fixture/vite.config.js"
@@ -1822,13 +1794,7 @@
 		]
 	},
 	{
-		"file": "test/request-headers.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t'origin'\n\t];\n\n\tfor (const name of REFUSED) {\n\t\tit(`reports a repeated ${name}`, () => {\n\t\t\tconst { ambiguous } = collect([[name, 'first'], [name, 'second']]);\n\t\t\texpect(ambiguous).toBe(name);\n\t\t});\n\t}\n\n\tit('accepts every one of them when it arrives once', () => {\n\t\tconst { ambiguous } = collect(REFUSED.map((name) => /** @type {[string, string]} */ ([name, 'only'])));\n\t\texpect(ambiguous).toBe(null);\n\t});\n\n\tit('names the first offender and still finishes the walk', () => {\n\t\t// uWS offers no way to stop the iteration, so the caller must get a\n\t\t// complete object rather than a half-filled one - a caller that ignores\n\t\t// the finding must not also get truncated headers.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['content-length', '1'],\n\t\t\t['content-length', '2'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('host');\n\t\texpect(headers.accept).toBe('text/html');\n\t\texpect(headers.host).toBe('a.test');\n\t});\n\n\tit('keeps merging every other class after an offender is seen', () => {\n",
-				"ours": "\t\t'origin'\n\t];\n\n\t// The two framing names carry a value the VALUE rule accepts, so the repeat\n\t// is the only thing left that can answer for them. Give them `first` and\n\t// `second` like the rest and they are refused for naming an unreadable\n\t// coding and a length that is not a count, and the repeat tracking could be\n\t// deleted without either case noticing.\n\tconst REPEATABLE = { 'content-length': ['1', '2'], 'transfer-encoding': ['chunked', 'chunked'] };\n\tfor (const name of REFUSED) {\n\t\tit(`reports a repeated ${name}`, () => {\n\t\t\tconst [first, second] = REPEATABLE[name] || ['first', 'second'];\n\t\t\tconst { ambiguous } = collect([[name, first], [name, second]]);\n\t\t\texpect(ambiguous).toBe(name);\n\t\t});\n\t}\n\n\tit('accepts every one of them when it arrives once', () => {\n\t\t// Two things this case cannot do any more, both of them rules rather\n\t\t// than accidents: a framing header carries a usable value, because one\n\t\t// naming a coding this server cannot read is refused unrepeated; and\n\t\t// the two framing headers never appear together, because a request\n\t\t// carrying both frames its body twice and is refused for that alone.\n\t\t// Each of those is its own case below. So the identity headers are\n\t\t// walked together, and each framing header joins them on its own.\n\t\tconst IDENTITY = REFUSED.filter((name) => name !== 'content-length' && name !== 'transfer-encoding');\n\t\tconst pairs = (extra) => /** @type {[string, string][]} */ (\n\t\t\tIDENTITY.map((name) => [name, 'only']).concat(extra)\n\t\t);\n\t\texpect(collect(pairs([])).ambiguous).toBe(null);\n\t\texpect(collect(pairs([['content-length', '0']])).ambiguous).toBe(null);\n\t\texpect(collect(pairs([['transfer-encoding', 'chunked']])).ambiguous).toBe(null);\n\t});\n\n\tdescribe('a header that frames the body, arriving once', () => {\n\t\t// The walk cannot see these - nothing is repeated - so they are the rule\n\t\t// asked of the finished header set, and the caller reads the same answer\n\t\t// it reads for a repeat: a framing header it must refuse.\n\t\tit('refuses a Transfer-Encoding naming anything but chunked', () => {\n\t\t\tfor (const value of ['xchunked', 'chunkedX', 'gzip', 'chunked, chunked', 'gzip, chunked', 'chunked, gzip', '']) {\n\t\t\t\tconst { ambiguous } = collect([['transfer-encoding', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe('transfer-encoding');\n\t\t\t}\n\t\t});\n\n\t\tit('accepts chunked in any capitalisation', () => {\n\t\t\tfor (const value of ['chunked', 'Chunked', 'CHUNKED']) {\n\t\t\t\tconst { ambiguous } = collect([['transfer-encoding', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe(null);\n\t\t\t}\n\t\t});\n\n\t\tit('refuses a Content-Length that is not a bare count', () => {\n\t\t\tfor (const value of ['', ' ', '12abc', '0x6', '+6', '-1', '1.5']) {\n\t\t\t\tconst { ambiguous } = collect([['content-length', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe('content-length');\n\t\t\t}\n\t\t});\n\n\t\tit('accepts a count, leading zeros and all', () => {\n\t\t\tfor (const value of ['0', '2', '000002', '9007199254740993']) {\n\t\t\t\tconst { ambiguous } = collect([['content-length', value]]);\n\t\t\t\texpect(ambiguous, JSON.stringify(value)).toBe(null);\n\t\t\t}\n\t\t});\n\n\t\tit('refuses a request that carries both framing headers', () => {\n\t\t\tconst { ambiguous } = collect([['transfer-encoding', 'chunked'], ['content-length', '2']]);\n\t\t\texpect(ambiguous).toBe('transfer-encoding');\n\t\t});\n\n\t\tit('answers the framing header even when another single-valued one repeats', () => {\n\t\t\t// The ordering that decides whether the caller closes the connection.\n\t\t\t// Two Authorization lines are refused too, but on their own they\n\t\t\t// leave the connection readable; the unusable Transfer-Encoding does\n\t\t\t// not, and naming the Authorization instead would keep a connection\n\t\t\t// whose remaining bytes are the ones in dispute.\n\t\t\tconst { ambiguous } = collect([\n\t\t\t\t['authorization', 'Bearer one'],\n\t\t\t\t['authorization', 'Bearer two'],\n\t\t\t\t['transfer-encoding', 'xchunked']\n\t\t\t]);\n\t\t\texpect(ambiguous).toBe('transfer-encoding');\n\t\t});\n\t});\n\n\tit('names the first offender and still finishes the walk', () => {\n\t\t// uWS offers no way to stop the iteration, so the caller must get a\n\t\t// complete object rather than a half-filled one - a caller that ignores\n\t\t// the finding must not also get truncated headers.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['origin', 'https://a.test'],\n\t\t\t['origin', 'https://b.test'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('host');\n\t\texpect(headers.accept).toBe('text/html');\n\t\texpect(headers.host).toBe('a.test');\n\t});\n\n\tit('names a repeated framing header ahead of any other repeat', () => {\n\t\t// Which name comes back decides whether the caller keeps the connection,\n\t\t// and the first offender is whichever line the SENDER put first. Two\n\t\t// Host lines make the request ambiguous; two Content-Length lines say\n\t\t// the sender and this server may disagree about where the request ENDS,\n\t\t// so the bytes after the response are not ones to keep reading.\n\t\t//\n\t\t// The value question cannot answer this one: the walk keeps the FIRST\n\t\t// value of a repeated header, and `1` is a perfectly good count, so\n\t\t// reading the collected object finds nothing wrong.\n\t\tconst { headers, ambiguous } = collect([\n\t\t\t['host', 'a.test'],\n\t\t\t['host', 'b.test'],\n\t\t\t['content-length', '1'],\n\t\t\t['content-length', '2'],\n\t\t\t['accept', 'text/html']\n\t\t]);\n\t\texpect(ambiguous).toBe('content-length');\n\t\texpect(headers.accept, 'the walk still finishes').toBe('text/html');\n\t\texpect(headers['content-length'], 'and still keeps the first value').toBe('1');\n\t});\n\n\tit('names a repeated Transfer-Encoding the same way', () => {\n\t\tconst { ambiguous } = collect([\n\t\t\t['origin', 'https://a.test'],\n\t\t\t['origin', 'https://b.test'],\n\t\t\t['transfer-encoding', 'chunked'],\n\t\t\t['transfer-encoding', 'chunked']\n\t\t]);\n\t\texpect(ambiguous).toBe('transfer-encoding');\n\t});\n\n\tit('keeps merging every other class after an offender is seen', () => {\n"
-			}
-		]
+		"file": "test/request-headers.test.js"
 	},
 	{
 		"file": "test/subscribe-pending-cap.test.js"
@@ -2154,5 +2120,56 @@
 	},
 	{
 		"file": "test/source-pins.test.js"
+	},
+	{
+		"file": "test/head-and-204-framing-real.test.js"
+	},
+	{
+		"file": "test/fixture/src/routes/head-declared/+server.js"
+	},
+	{
+		"file": "test/request-framing-real.test.js",
+		"adaptations": [
+			{
+				"lead": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// The vendored parser reads the PRESENCE of Transfer-Encoding, not its value:\n// `xchunked`, `gzip`, `chunked, chunked` and `chunked, gzip` are all decoded as\n// chunked, and an empty Content-Length is accepted as a bodyless request.\n// (Measured against uWebSockets.js v20.69.0; the malformed Content-Length\n// spellings it does refuse - `0x6`, `+6`, `6abc` - are refused before any of\n// this runs, and a request carrying both Transfer-Encoding and Content-Length\n// is refused there too.) A conformant intermediary in front reads the same\n// bytes differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses these shapes itself.\n//\n// Two oracles, and the second is the one that matters:\n//\n",
+				"ours": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// node's parser refuses most of these shapes itself, with a 400 and a closed\n// connection: an unknown or doubled coding, `chunked, gzip`, an empty or\n// repeated Content-Length, and a request carrying both framing headers. It\n// decodes a coding list that ENDS in chunked (`gzip, chunked`) as chunked,\n// though, and hands a request with an EMPTY Transfer-Encoding to the listener\n// as a bodyless one. A conformant intermediary in front reads the same bytes\n// differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses the shapes that reach it.\n//\n// Two oracles, and the second is the one that matters:\n//\n"
+			},
+			{
+				"lead": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// Measured, so the cases below read correctly: uWS ends the connection when a\n// response is finished with its close flag, but a request it has ALREADY\n// parsed out of the same segment is still answered first. So these probes go\n// one request at a time and watch for the server's own hangup, rather than\n// pipelining a follower and asserting silence.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n",
+				"ours": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// These probes go one request at a time and watch for the server's own\n// hangup, rather than pipelining a follower and asserting silence: a refusal\n// ends the connection once its answer is flushed, whether the parser or a\n// lane wrote it.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n"
+			},
+			{
+				"lead": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. uWS\n\t\t// emits it itself for a response finished with its close flag, so a\n\t\t// refusal that writes one as well puts the field on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n",
+				"ours": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. node\n\t\t// writes the field a refusal sets and adds none of its own, so a\n\t\t// second writer would put it on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n"
+			},
+			{
+				"lead": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length on the fast path').toBe('200');\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// A repeated Content-Length, not a Transfer-Encoding shape: the one\n\t\t\t// lookup in front of every route reads the first value of a repeat\n\t\t\t// and sees nothing wrong, so this reaches the authenticate door,\n\t\t\t// which builds the header set and refuses there. A Transfer-Encoding\n\t\t\t// probe would be answered by the wrapper and this case would stay\n\t\t\t// green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Content-Length: 2',\n\t\t\t\t'Content-Length: 3'\n\t\t\t], 'AA');\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n",
+				"ours": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\t// node's own parser refuses a repeated Content-Length before any lane\n\t\t\t// reads the request, on every lane alike, and closes the connection.\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length never reaches the fast path').toBe('400');\n\t\t\texpect(repeated.closedByServer).toBe(true);\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// An EMPTY Transfer-Encoding: the one lookup in front of every route\n\t\t\t// reads it as absent and sees nothing wrong, so this reaches the\n\t\t\t// authenticate door, which builds the header set and refuses there.\n\t\t\t// A repeated Content-Length never gets that far on node, whose\n\t\t\t// parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t\t// would be answered in front of the door; either would keep this\n\t\t\t// case green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Transfer-Encoding:'\n\t\t\t]);\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n"
+			},
+			{
+				"lead": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503 and KEEPS its connection. That is what the framing answer has to come\n\t// before: delete the lookup at the top of the upgrade callback and this\n\t// case reads 503 on an open connection instead of 400 on a closed one.\n\tlet server;\n\tlet port;\n\tconst held = [];\n",
+				"ours": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503. That is what the framing answer has to come before: delete the\n\t// lookup at the top of the upgrade listener and this case reads 503 instead\n\t// of 400. node hands an upgrade over with its HTTP parser detached from the\n\t// socket, so every refusal written there closes the connection, the 503\n\t// included.\n\tlet server;\n\tlet port;\n\tconst held = [];\n"
+			},
+			{
+				"lead": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n",
+				"ours": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n"
+			},
+			{
+				"lead": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. A repeated Content-Length is the probe,\n\t\t// because the one lookup in front of every route cannot see a repeat -\n\t\t// it reads the first value - so this reaches the admin handler, which\n\t\t// builds the header set and refuses there. A Transfer-Encoding shape\n\t\t// would be answered by the wrapper before this lane ever ran, and the\n\t\t// case would pass without the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n",
+				"ours": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. An EMPTY Transfer-Encoding is the probe,\n\t\t// because the one lookup in front of every route reads it as absent, so\n\t\t// this reaches the admin handler, which builds the header set and\n\t\t// refuses there. A repeated Content-Length never gets that far on node,\n\t\t// whose parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t// would be answered in front of this lane; either would pass without\n\t\t// the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n"
+			},
+			{
+				"lead": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t'AA'\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n",
+				"ours": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Transfer-Encoding:'],\n\t\t\t''\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n"
+			},
+			{
+				"lead": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503\n\t\t// and KEEPS the connection, so a handshake whose framing this server and\n\t\t// the one in front of it read differently has to be answered first.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n",
+				"ours": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503,\n\t\t// so a handshake whose framing this server and the one in front of it\n\t\t// read differently has to be answered first. Like production's, every\n\t\t// refusal the mirror writes on an upgrade closes the connection.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n"
+			},
+			{
+				"lead": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\t\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n",
+				"ours": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n"
+			}
+		]
 	}
 ]
