@@ -151,17 +151,6 @@ describe('a body the app lets go of is discarded, and the server stays up', () =
 });
 
 /**
- * A request with a body and a pipelined follower on ONE keep-alive connection;
- * resolves with both status lines, or rejects when the follower is never
- * answered. The follower is what shows that the rest of a let-go body was
- * drained off the socket rather than left in front of the next request.
- *
- * @param {number} port
- * @param {string} head request line and headers, no terminator
- * @param {string} body
- * @param {{ chunked?: boolean }} [opts] send the body undeclared, as one chunk
- */
-/**
  * The status of each response in `raw`, read one after another by its own
  * framing: a response has to start exactly where the one before it ends, so a
  * length that is off, or a body left on the wire, stops the walk short and the
@@ -182,22 +171,38 @@ function walkResponses(raw) {
 		const lines = raw.slice(at, end).toLowerCase().split('\r\n');
 		statuses.push(match[1]);
 		at = end + 4;
+		// Chunked wins over a length, as a client reads it (RFC 9112 6.3).
 		const length = lines.find((line) => line.startsWith('content-length:'));
-		if (length) {
-			at += Number(length.slice('content-length:'.length).trim());
-		} else if (lines.includes('transfer-encoding: chunked')) {
+		if (lines.includes('transfer-encoding: chunked')) {
 			for (;;) {
 				const eol = raw.indexOf('\r\n', at);
 				if (eol < 0) return statuses;
-				const size = parseInt(raw.slice(at, eol), 16);
+				const sizeText = raw.slice(at, eol);
+				// A size line that is not hex ends the walk rather than
+				// restarting it from the top.
+				if (!/^[0-9a-f]+$/i.test(sizeText)) return statuses;
+				const size = parseInt(sizeText, 16);
 				at = eol + 2 + (size === 0 ? 2 : size + 2);
 				if (size === 0) break;
 			}
+		} else if (length) {
+			at += Number(length.slice('content-length:'.length).trim());
 		}
 	}
 	return statuses;
 }
 
+/**
+ * A request with a body and a pipelined follower on ONE keep-alive connection;
+ * resolves with both status lines, or rejects when the follower is never
+ * answered. The follower is what shows that the rest of a let-go body was
+ * drained off the socket rather than left in front of the next request.
+ *
+ * @param {number} port
+ * @param {string} head request line and headers, no terminator
+ * @param {string} body
+ * @param {{ chunked?: boolean }} [opts] send the body undeclared, as one chunk
+ */
 function withFollower(port, head, body, { chunked = false } = {}) {
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(port, '127.0.0.1', () => {

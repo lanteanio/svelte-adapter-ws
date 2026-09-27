@@ -35,7 +35,13 @@ const WS_OPTS = {
 // anything else never touches the body and succeeds.
 const WS_HANDLER = `
 export function message() {}
-export async function authenticate({ request, headers, url }) {
+export async function authenticate({ request, headers, url, cookies, platform, getClientAddress }) {
+	if (headers['x-mode'] === 'cookies') {
+		cookies.set('set_by', 'cookies', { path: '/' });
+		return new Response('ok', { headers: { 'set-cookie': 'set_by=response; Path=/' } });
+	}
+	if (headers['x-mode'] === 'rid') return new Response(platform.requestId, { headers: { 'content-type': 'text/plain' } });
+	if (headers['x-mode'] === 'addr') return new Response(getClientAddress(), { headers: { 'content-type': 'text/plain' } });
 	if (headers['x-mode'] === 'url') {
 		return new Response(request.url, { headers: { 'content-type': 'text/plain' } });
 	}
@@ -154,6 +160,7 @@ const authSpans = () => (/** @type {any} */ (globalThis).__authSpans ?? [])
 /** @type {any} */ let proxied;
 /** @type {any} */ let pinned;
 /** @type {any} */ let traced;
+/** @type {any} */ let addressed;
 
 beforeAll(async () => {
 	plain = await boot({});
@@ -163,10 +170,11 @@ beforeAll(async () => {
 	proxied = await boot({}, { PROTOCOL_HEADER: 'x-forwarded-proto' });
 	pinned = await boot({}, { ORIGIN: 'https://app.example' });
 	traced = await boot({}, {}, { 'tracing-provider.js': RECORDING_PROVIDER });
+	addressed = await boot({}, { ADDRESS_HEADER: 'x-client-ip' });
 }, 60000);
 
 afterAll(async () => {
-	for (const built of [plain, limited, ordered, hostless, proxied, pinned, traced]) {
+	for (const built of [plain, limited, ordered, hostless, proxied, pinned, traced, addressed]) {
 		await built?.rt.close();
 		built?.payload.cleanup();
 	}
@@ -322,6 +330,55 @@ describe('the authenticate endpoint', () => {
 		expect((await exchange(port, bare)).status).toContain('400');
 		expect((await exchange(port, bare)).status).toContain('429');
 		expect((await exchange(port, post(port, ['Content-Length: 0']))).status).toContain('429');
+	});
+
+	it('answers the method before anything else, and a repeated header before the origin', async () => {
+		// The native tier registers the route for POST only, so any other
+		// method is 405 whatever its headers say; a POST that repeats a header
+		// is refused before its origin is judged.
+		const port = plain.rt.port;
+		const getLine = (lines) => ['GET /__ws/auth HTTP/1.1', `Host: 127.0.0.1:${port}`, ...lines, '', ''].join('\r\n');
+		expect((await exchange(port, getLine(['Origin: http://foreign.example']))).status).toContain('405');
+		expect((await exchange(port, getLine(['Origin: http://allowed.example', 'Origin: http://allowed.example']))).status).toContain('405');
+		const repeated = await exchange(port, post(port, ['Origin: http://foreign.example', 'Origin: http://allowed.example', 'Content-Length: 0'], { xhr: false }));
+		expect(repeated.status).toContain('400');
+	});
+
+	it('relays the Response Set-Cookie first and the cookies.set ones after it', async () => {
+		const port = plain.rt.port;
+		const answer = await exchange(port, post(port, ['x-mode: cookies', 'Content-Length: 0']));
+		expect(answer.status).toContain('200');
+		const cookies = answer.lines.filter((line) => line.toLowerCase().startsWith('set-cookie:')).map((line) => line.slice(11).trim());
+		expect(cookies.map((c) => c.split(';')[0])).toEqual(['set_by=response', 'set_by=cookies']);
+	});
+
+	it('hands the hook the request id the client sent', async () => {
+		const port = plain.rt.port;
+		const id = '6f1c2a4e-9b3d-4c5e-8f7a-1b2c3d4e5f60';
+		const answer = await exchange(port, post(port, ['x-mode: rid', `x-request-id: ${id}`, 'Content-Length: 0']));
+		expect(answer.body).toBe(id);
+	});
+
+	it('hands the hook the client address the configured header names', async () => {
+		const port = addressed.rt.port;
+		const answer = await exchange(port, post(port, ['x-mode: addr', 'x-client-ip: 203.0.113.7', 'Content-Length: 0']));
+		expect(answer.body).toBe('203.0.113.7');
+	});
+
+	it('reports no failure for a hook that read past the cap', async () => {
+		/** @type {any[]} */
+		const events = [];
+		const dispose = setOperationalEventSink((record) => { events.push(record); });
+		try {
+			const port = plain.rt.port;
+			const big = 'x'.repeat(64 * 1024 + 1);
+			const chunked = big.length.toString(16) + '\r\n' + big + '\r\n0\r\n\r\n';
+			const read = await exchange(port, post(port, ['x-mode: read', 'Transfer-Encoding: chunked', 'Connection: close'], { body: chunked }));
+			expect(read.status).toContain('413');
+			expect(events.filter((r) => r.event === 'runtime.authenticate.failed')).toEqual([]);
+		} finally {
+			dispose();
+		}
 	});
 
 	it('hands the hook no bare trailing question mark, and keeps a query', async () => {
