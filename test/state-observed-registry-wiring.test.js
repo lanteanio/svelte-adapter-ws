@@ -107,7 +107,7 @@ describe('every stamping lane records what it stamped', () => {
 
 	it('the wire batch records one watermark, or every entry when authorities mix', () => {
 		const body = block(platform, '\tpublishWireBatch(', '\n\t/**');
-		expect(body).toContain('if (sawEntrySeq) {');
+		expect(body).toContain('if (sawExplicitEntrySeq) {');
 		expect(body).toContain("if (typeof entrySeqs[i] === 'number') recordSeen(maxSeenSeq, topic, seqs[i], seqBound);");
 		expect(body).toContain('} else if (highestSeq !== null) {');
 		expect(body).toContain('recordStampedSeen(maxSeenSeq, topic, highestSeq, seqBound);');

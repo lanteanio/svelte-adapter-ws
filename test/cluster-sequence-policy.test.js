@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { expectStatement, expectStatementCount } from './helpers/source-pins.js';
+import { codeLineIndex, expectStatement, expectStatementBlockCount, expectStatementCount } from './helpers/source-pins.js';
 
 /**
  * Read a source with its line endings normalized, so an anchor spanning a line
@@ -80,6 +80,23 @@ describe('cluster sequence authority policy', () => {
 		}
 	});
 
+	it('leaves an uncarryable bigint to the stamp, so the caller reads the magnitude message', () => {
+		// The gate asks a topology question and the stamp asks a value
+		// question. An offset past the range the wire carries faithfully
+		// satisfies the first and fails the second, and the order decides which
+		// message the caller sees: with the relay renounced the topology is
+		// satisfied, so the refusal must come from the stamp and must name the
+		// magnitude, not relay settings and worker counters.
+		const uncarryable = 1541815603606036481n;
+		expect(clusterSequenceAccepted({ seq: uncarryable, relay: false }, cluster)).toBe(true);
+		expect(() => stampSeq({ seq: uncarryable }, new Map(), 'room')).toThrow(/exceeds the wire/i);
+		expect(() => stampSeq({ seq: uncarryable }, new Map(), 'room')).not.toThrow(/relay|worker/i);
+		// With the relay left on, the topology is wrong too and is refused
+		// first - a caller who fixes only the magnitude would still be wrong.
+		expect(() => assertClusterSequenceAuthority({ seq: uncarryable, relay: true }, cluster))
+			.toThrow(CLUSTER_SEQUENCE_ERROR);
+	});
+
 	it('rejects a numeric authority on the batch surface whatever it is publishing', () => {
 		expect(() => assertBatchSequenceAuthority({ seq: 7, relay: false }, cluster))
 			.toThrow(BATCH_SEQUENCE_ERROR);
@@ -134,6 +151,22 @@ describe('cluster sequence authority policy', () => {
 	// proof the built-in multi-origin relay is off. Off-cluster the entry form
 	// is unconditionally welcome - the counter and an external authority
 	// cannot interleave across workers when there is only one.
+	it('refuses an options seq the stamp could not take, whatever the entries are', () => {
+		for (const bad of ['7', '', {}, [], () => 1, Symbol.iterator, Number.NaN]) {
+			expect(() => assertBatchSequenceAuthority({ seq: bad }), `seq ${String(bad)}`)
+				.toThrow(TypeError);
+		}
+		expect(() => assertBatchSequenceAuthority({ seq: '7' })).toThrow(/publish seq must be/);
+		expect(() => assertBatchSequenceAuthority({ seq: Number.NaN })).toThrow(BATCH_SEQUENCE_ERROR);
+		// And still takes every spelling the batch supports, or the refusals
+		// above would be satisfied by a gate that threw on everything.
+		for (const ok of [undefined, true, false, null]) {
+			expect(() => assertBatchSequenceAuthority({ seq: ok }), `seq ${String(ok)}`).not.toThrow();
+		}
+		expect(() => assertBatchSequenceAuthority(undefined)).not.toThrow();
+		expect(() => assertBatchSequenceAuthority(null)).not.toThrow();
+	});
+
 	it('admits clustered per-entry authority only with the relay renounced', () => {
 		for (const solo of [null, { totalWorkers: 1 }]) {
 			for (const options of [undefined, {}, { seq: false }, { relay: true }]) {
@@ -249,45 +282,95 @@ describe('cluster sequence authority policy', () => {
 			.not.toMatch(/stampSeq|fanOut\(|captureResumeFrame|entries\.length|Array\.isArray/);
 		// The per-entry authority check runs inside the batch too - in BOTH
 		// branches (the stateless reroute pre-reads and the stateful snapshot
-		// pass), before anything is stamped or fanned out: the last call site
-		// precedes the first counter stamp and the first per-entry publish.
-		expect(wireBatch.split('assertBatchEntrySequenceAuthority(opts)').length, 'both batch branches vet per-entry authority')
-			.toBe(3);
-		// Source order: the stateless branch's check (first occurrence) sits in
-		// its pre-read loop, before the first per-entry publish; the stateful
-		// branch's (last occurrence) sits in the snapshot pass, before the
-		// first counter stamp.
-		expect(wireBatch.indexOf('assertBatchEntrySequenceAuthority(opts)'),
-			'the stateless reroute must vet per-entry authority before it publishes')
-			.toBeLessThan(wireBatch.indexOf('this.publishWire('));
-		expect(wireBatch.lastIndexOf('assertBatchEntrySequenceAuthority(opts)'),
-			'the stateful branch must vet per-entry authority before it stamps')
-			.toBeLessThan(wireBatch.indexOf('stampSeqValue(opts'));
-		// The per-entry refusal lives in the shared resolveEntrySeq table (one
-		// spelling of the entry lane for production, the harness, and dev), so
-		// the batch body proves it consults that table - removing the call is
-		// removing the refusal.
+		// pass), before anything is stamped or fanned out.
+		//
+		// Pinned as the BLOCK it belongs to rather than as a line with a count
+		// beside it, and located in the same blanked view that counts it. Two
+		// reasons, both learned from mutations that passed the pins this
+		// replaces. A count in one view with `indexOf` order in another is two
+		// questions: neutralized text is gone from the count and still there
+		// for `indexOf`, so commenting out one call and duplicating the live
+		// one satisfied both. And a call is only a guard where it STANDS - the
+		// block carries the resolve that feeds it and the latch that fires it
+		// once, so lifting the check out of the branch, or up into the egress
+		// gate below the loop, changes these lines even though the call is
+		// untouched.
+		// The block spans both arms of the resolve, so it carries BOTH refusals
+		// and the latch that fires the first once: the authority check in the
+		// numeric arm, the counter refusal in the `true` arm. Comment lines
+		// between them are skipped, so the pin survives an edit to the prose and
+		// not to the code. It stops at the arm's close rather than running to
+		// the end of the resolve, because the bookkeeping after it carries
+		// nothing this pin is about and a pin fails on every rename it spans.
+		//
+		// These pins are the SECOND line of defence. What the per-entry refusal
+		// actually runs is pinned behaviourally in
+		// test/cluster-sequence-policy-real.test.js, against a real two-worker
+		// runtime, because the refusal returns early off-cluster and no
+		// in-process case can reach it.
+		const entrySeqPrePass = [
+			'const resolved = resolveEntrySeq(entry.seq, i);',
+			'if (resolved !== undefined) {',
+			'if (typeof resolved === \'number\') {',
+			'if (!sawExplicitEntrySeq) {',
+			'assertBatchEntrySequenceAuthority(opts);',
+			'sawExplicitEntrySeq = true;',
+			'}',
+			'} else if (resolved === true) {',
+			'assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);',
+			'}'
+		];
+		const prePasses = expectStatementBlockCount(wireBatch, entrySeqPrePass, 2,
+			'both batch branches vet per-entry authority and the entry counter draw, each in its own resolve arm');
+		// The latch the numeric arm reads has to START false in both branches.
+		// Flipping one initialiser leaves every line above byte-identical and
+		// stops the authority check ever running on that lane.
+		expectStatementCount(wireBatch, 'let sawExplicitEntrySeq = false;', 2,
+			'each branch arms its own explicit-seq latch');
+		// And each pre-pass has to be the body of a loop over every entry. A
+		// loop bound to nothing (`i < 0`) leaves the check present and unrun,
+		// and the three lines that open both loops are what say otherwise.
+		const loopOpens = expectStatementBlockCount(wireBatch, [
+			'for (let i = 0; i < count; i++) {',
+			'const entry = entries[i];',
+			'datas[i] = entry.data;'
+		], 2, 'each branch walks every entry in its pre-pass');
+		// One per BRANCH rather than two in the same loop. The stateless branch
+		// publishes at `this.publishWire(`, so a pre-pass before that line is
+		// that branch's and one after it is the stateful snapshot pass. Both
+		// sides are read as line indexes of the qualifying blocks, so a
+		// duplicate of the live branch cannot stand in for the dead one.
+		const publishAt = codeLineIndex(wireBatch, 'this.publishWire(');
+		const stampAt = codeLineIndex(wireBatch, 'stampSeqValue(opts');
+		expect(publishAt, 'the stateless reroute must still publish through publishWire').toBeGreaterThan(-1);
+		expect(stampAt, 'the stateful branch must still stamp through stampSeqValue').toBeGreaterThan(-1);
+		expect(prePasses[0], 'the stateless reroute must vet per-entry authority before it publishes')
+			.toBeLessThan(publishAt);
+		expect(prePasses[1], 'the second pre-pass must be the stateful branch, not a repeat in the stateless loop')
+			.toBeGreaterThan(publishAt);
+		// And BEFORE the stamping loop, which is the half a per-branch count
+		// cannot say: a pre-pass moved below the stamp still reads as one per
+		// branch while refusing an entry whose seq is already on the wire.
+		expect(prePasses[1], 'the stateful pre-pass must refuse before anything is stamped')
+			.toBeLessThan(stampAt);
+		// Each pre-pass inside its OWN loop, and the second one on the stateful
+		// side of the branch. Position alone cannot say which branch a copy
+		// belongs to - two copies in the stateless branch, one either side of
+		// its publish, satisfy every bound above - so the stateful branch's own
+		// exclusion state is the landmark between them.
+		const statefulAt = codeLineIndex(wireBatch, 'let anyExclude = sharedExclude !== null;');
+		expect(statefulAt, 'the stateful branch must still gather its exclusions').toBeGreaterThan(publishAt);
+		expect(prePasses[0], 'the stateless pre-pass runs inside the stateless loop').toBeGreaterThan(loopOpens[0]);
+		expect(prePasses[0], 'and stays on the stateless side of the branch').toBeLessThan(statefulAt);
+		expect(prePasses[1], 'the stateful pre-pass runs inside the stateful loop').toBeGreaterThan(loopOpens[1]);
+		expect(loopOpens[1], 'which is itself on the stateful side of the branch').toBeGreaterThan(statefulAt);
+		// The entry-level counter draw is inside the block above, in the
+		// `resolved === true` arm, so its place is pinned by the block rather
+		// than by a distance: a clustered batch refuses { seq: true } on an
+		// entry up front instead of diverging silently on the stateful lane or
+		// half-delivering on the stateless one. The values form with `true` is
+		// refused for every relay shape in the table above.
 		expectStatementCount(wireBatch, 'const resolved = resolveEntrySeq(entry.seq, i);', 2, 'both publishWireBatch branches consult the entry refusal table');
-		// And an entry-level counter draw takes the cluster refusal in BOTH
-		// pre-passes, before anything fans out: a clustered batch must refuse
-		// { seq: true } on an entry up front, not diverge silently on the
-		// stateful lane or half-deliver on the stateless one. The values form
-		// with `true` is refused for every relay shape in the table above.
-		expect(wireBatch.split('assertClusterSequenceAuthorityValues(true,').length,
-			'both batch branches vet an entry-level counter draw').toBe(3);
-		// The occurrence counts above are satisfiable with both calls in ONE
-		// branch, and a substring count still sees a call parked behind
-		// `false &&`. So: the LAST per-entry authority check sits past the
-		// stateless branch's per-entry publish (it is the stateful one), and
-		// each site is a bare statement.
-		expect(wireBatch.lastIndexOf('assertBatchEntrySequenceAuthority(opts)'),
-			'the stateful branch must carry its own per-entry authority check')
-			.toBeGreaterThan(wireBatch.indexOf('this.publishWire('));
-		expect(wireBatch.lastIndexOf('assertClusterSequenceAuthorityValues(true,'),
-			'the stateful branch must carry its own entry-level counter refusal')
-			.toBeGreaterThan(wireBatch.indexOf('this.publishWire('));
-		expectStatementCount(wireBatch, 'assertBatchEntrySequenceAuthority(opts);', 2, 'both per-entry authority checks are live statements');
-		expectStatementCount(wireBatch, 'assertClusterSequenceAuthorityValues(true, opts != null ? opts.relay : undefined);', 2, 'both entry-level counter refusals are live statements');
 		expect(wireBatch).not.toContain('Number.isInteger(entrySeq)');
 		// The relay SET site hands the token and the seq as ARGUMENTS, and it
 		// is pinned here rather than driven because production's relay needs a

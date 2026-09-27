@@ -1235,7 +1235,7 @@ export const platform = {
 		const datas = new Array(count);
 		const excludes = new Array(count);
 		const entrySeqs = new Array(count);
-		let sawEntrySeq = false;
+		let sawExplicitEntrySeq = false;
 		let anyExclude = sharedExclude !== null;
 		for (let i = 0; i < count; i++) {
 			const entry = entries[i];
@@ -1259,9 +1259,9 @@ export const platform = {
 					// publishWire({ seq: N }) and takes the same clustered rule:
 					// the external allocator must also be the fan-out, proven by
 					// relay: false. Checked once per batch, on the first number.
-					if (!sawEntrySeq) {
+					if (!sawExplicitEntrySeq) {
 						assertBatchEntrySequenceAuthority(opts);
-						sawEntrySeq = true;
+						sawExplicitEntrySeq = true;
 					}
 				} else if (resolved === true) {
 					// An entry drawing the per-worker counter takes the cluster's
@@ -1340,7 +1340,7 @@ export const platform = {
 		// worker's numbers, so those entries go through the monotone-max
 		// guard in entry order, as N separate calls would have. A batch
 		// whose entries all drew the counter moves the watermark once.
-		if (sawEntrySeq) {
+		if (sawExplicitEntrySeq) {
 			for (let i = 0; i < count; i++) {
 				if (seqs[i] === 0) continue;
 				if (typeof entrySeqs[i] === 'number') recordSeen(maxSeenSeq, topic, seqs[i], seqBound);
