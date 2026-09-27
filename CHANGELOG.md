@@ -163,17 +163,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer as zeros and a wider typed array as the wrong bytes, answered a
   string chunk `500`, and never counted a string toward its 512 KiB sharing
   cap, so a long string stream was held whole before failing. It now reads
-  every chunk the way the response writer does, and a body of one string
-  chunk goes out uncompressed from its buffer too.
-- An SSR Response carrying a `Set-Cookie` value node refuses to write is
-  answered `500`, as any other refused header is, where nothing was written
-  and the connection waited for the client to give up. `createTestServer`'s
-  admin mirror answers a header node refuses with the `500` the runtime's
-  admin lane writes, where it wrote nothing.
-- A `413` reads `Content Too Large`, as RFC 9110 and the family's native tier
-  name it, where node's default wrote `Payload Too Large`, and the `500` that
-  follows a relayed header node refuses reads `Internal Server Error` rather
-  than `OK`.
+  every chunk the way the response writer does, and hands a body past the
+  cap to the writer as the chunks it read, so a body of one string chunk goes
+  out uncompressed on every path, as the writer sends it.
+- **A header node refuses to write is answered `500` on every lane, framed
+  for the body it carries.** An SSR Response carrying such a `Set-Cookie`
+  value got no answer at all and the connection waited for the client to give
+  up; so did a waiting-room page whose renderer returned such a header, and
+  in `createTestServer` that page threw out of the request listener and ended
+  the process. A relayed `204` or `304` from the authenticate hook or the
+  admin handler was answered with a `500` whose declared body never came,
+  because node had already settled that no body follows, and a relayed
+  `connection: close` beside the refused header dropped a pipelined request
+  behind it. Relayed headers are now set one by one before the status is
+  written, so a refusal commits nothing, and the answer is the lane's own
+  `500`; `createTestServer`'s admin mirror and waiting room answer the same
+  way. A relayed `Trailer`, which node refuses on an answer it frames by
+  length, is dropped with the other framing headers the writer owns.
+- A `413` the adapter writes reads `Content Too Large`, as RFC 9110 and the
+  family's native tier name it, where node's default wrote `Payload Too
+  Large`, and the `500` that follows a relayed header node refuses reads
+  `Internal Server Error` rather than `OK`.
 - **The authenticate endpoint answers as the family's does.** The URL handed
   to the hook is built on `ORIGIN`, or on the configured `PROTOCOL_HEADER`,
   `HOST_HEADER` and `PORT_HEADER`, where it was the raw Host, and carries a

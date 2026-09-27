@@ -152,6 +152,12 @@ export class Server {
 				pull() { return new Promise(() => {}); }
 			}), { headers: { ...text, 'content-length': '700000' } });
 		}
+		if (p === '/trailer') return new Response('hello', { headers: { ...text, trailer: 'x-foo' } });
+		if (p === '/trailer-204') return new Response(null, { status: 204, headers: { trailer: 'x-foo' } });
+		if (p === '/one-string-past-cap') {
+			const page = '<html>' + 'b'.repeat(600 * 1024) + '</html>';
+			return new Response(new ReadableStream({ start(c) { c.enqueue(page); c.close(); } }), { headers: { 'content-type': 'text/html' } });
+		}
 		if (p === '/slow-string') {
 			await new Promise((r) => setTimeout(r, 200));
 			const page = '<html>' + 's'.repeat(4096) + '</html>';
@@ -193,12 +199,22 @@ export function authenticate({ headers }) {
 	}
 	if (mode === 'declared') return new Response(null, { headers: { 'content-length': '12' } });
 	if (mode === 'declared-304') return new Response(null, { status: 304, headers: { 'content-length': '12' } });
+	if (mode === 'bad-204') return new Response(null, { status: 204, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+	if (mode === 'trailer') return new Response('auth trailer', { headers: { 'content-type': 'text/plain', trailer: 'x-foo' } });
 	if (mode === 'relayed-te') {
 		return new Response('auth relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
 	}
 	return {};
 }
 export function admin(request) {
+	const adminPath = new URL(request.url).pathname;
+	if (adminPath === '/__realtime/bad-204') return new Response(null, { status: 204, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+	if (adminPath === '/__realtime/close-bad') {
+		return new Response('x', { headers: { connection: 'close', 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+	}
+	if (adminPath === '/__realtime/trailer') {
+		return new Response('admin trailer', { headers: { 'content-type': 'text/plain', trailer: 'x-foo' } });
+	}
 	if (new URL(request.url).pathname === '/__realtime/bad-header') {
 		return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 	}
@@ -346,9 +362,27 @@ function readChunked(raw, status) {
 const OK = ['GET /ok HTTP/1.1'];
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
 
-/** @param {Record<string, unknown>} wsOptions */
-async function boot(wsOptions) {
+// A waiting-room renderer whose one header node refuses to write.
+const BAD_RENDERER = `
+export default function renderer() {
+	return {
+		body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+			'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+			'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+		lang: 'en',
+		dir: 'ltr',
+		headers: { 'x-note': 'a' + String.fromCharCode(127) + 'b' }
+	};
+}
+`;
+
+/**
+ * @param {Record<string, unknown>} wsOptions
+ * @param {Record<string, unknown>} [extra] further build options
+ */
+async function boot(wsOptions, extra = {}) {
 	const payload = buildRuntime({
+		...extra,
 		replace: {
 			WS_ENABLED: JSON.stringify(true),
 			WS_OPTIONS: JSON.stringify({ ...BASE_WS_OPTS, ...wsOptions })
@@ -363,6 +397,7 @@ async function boot(wsOptions) {
 /** @type {any} */ let open;
 /** @type {any} */ let limited;
 /** @type {any} */ let siege;
+/** @type {any} */ let waiting;
 
 beforeAll(async () => {
 	open = await boot({
@@ -371,6 +406,10 @@ beforeAll(async () => {
 		upgradeAdmission: { maxConcurrent: 10, waitingRoom: { admitCheckPath: '/__admit-check' } }
 	});
 	limited = await boot({ authPathRateLimit: 1 });
+	waiting = await boot(
+		{ upgradeAdmission: { maxConcurrent: 1, waitingRoom: { renderer: './renderer.js' } } },
+		{ waitingRoomRendererSource: BAD_RENDERER }
+	);
 	siege = await boot({
 		protection: 'siege',
 		upgradeAdmission: { maxConcurrent: 10, waitingRoom: { admitCheckPath: '/__admit-check' } }
@@ -378,7 +417,7 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(async () => {
-	for (const built of [open, limited, siege]) {
+	for (const built of [open, limited, siege, waiting]) {
 		await built?.rt.close();
 		built?.payload.cleanup();
 	}
@@ -491,6 +530,18 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(body).toContain('Invalid character in header content');
 	});
 
+	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
+		for (const cookie of [[], ['Cookie: s=1']]) {
+			const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /trailer HTTP/1.1', ...cookie], OK]), {
+				status: '200',
+				body: 'hello'
+			});
+			expect(header(first.lines, 'trailer')).toEqual([]);
+		}
+		const empty = expectBodyless(await pipeline(open.rt.port, [['GET /trailer-204 HTTP/1.1'], OK]), { status: '204', length: null });
+		expect(header(empty.lines, 'trailer')).toEqual([]);
+	});
+
 	it('keeps the app Vary beside the Accept-Encoding it adds for a compressed body', async () => {
 		const first = splitFirst(await pipeline(open.rt.port, [['GET /vary-merge HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
 		expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
@@ -580,6 +631,22 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		});
 	});
 
+	it('on a relayed 204 with a header node refuses, with a 500 that carries its body', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: bad-204'), OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	});
+
+	it('on a relayed Trailer, which it drops', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: trailer'), OK]), {
+			status: '200',
+			body: 'auth trailer'
+		});
+		expect(header(first.lines, 'trailer')).toEqual([]);
+	});
+
 	it('on a bodyless Response the hook returns, by the bodyless rule', async () => {
 		expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: declared'), OK]), { status: '200', length: 0 });
 		expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: declared-304'), OK]), { status: '304', length: 12 });
@@ -587,6 +654,28 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 });
 
 describe('the admin lane frames what it writes', () => {
+	it('answers a relayed 204 with a header node refuses with a 500 that carries its body', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/bad-204 HTTP/1.1'], OK]), {
+			status: '500',
+			body: '{"error":"internal error"}'
+		});
+	});
+
+	it('keeps the connection for its follower when a refused header came with connection: close', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/close-bad HTTP/1.1'], OK]), {
+			status: '500',
+			body: '{"error":"internal error"}'
+		});
+	});
+
+	it('drops a relayed Trailer', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/trailer HTTP/1.1'], OK]), {
+			status: '200',
+			body: 'admin trailer'
+		});
+		expect(header(first.lines, 'trailer')).toEqual([]);
+	});
+
 	it('answers a header node refuses with its length-framed 500', async () => {
 		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/bad-header HTTP/1.1'], OK]), {
 			status: '500',
@@ -648,6 +737,13 @@ describe('the request-dedup leader reads a body the way the writer does', () => 
 		}
 	});
 
+	it('sends a one-string body past the sharing cap uncompressed too', async () => {
+		const first = splitFirst(await pipeline(open.rt.port, [['GET /one-string-past-cap HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
+		expect(first.status).toContain('200');
+		expect(header(first.lines, 'content-encoding')).toEqual([]);
+		expect(header(first.lines, 'content-length')).toEqual([String(600 * 1024 + '<html></html>'.length)]);
+	});
+
 	it('answers a waiting HEAD by the HEAD rule too, not by the shared body', async () => {
 		// Two at once: the second arrives while the first renders, and is
 		// answered from the first one's buffer.
@@ -671,6 +767,50 @@ describe('bodylessLength', () => {
 	});
 });
 
+describe('a waiting-room renderer header node refuses', () => {
+	it('is answered with the plain 500 on the runtime holding page', async () => {
+		const first = expectLengthFramed(await pipeline(waiting.rt.port, [['GET /__waiting-room HTTP/1.1', 'Accept: text/html'], OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	});
+
+	it('is answered the same way by the test server, and nothing escapes it', async () => {
+		/** @type {unknown[]} */
+		const escaped = [];
+		const onEscaped = (/** @type {unknown} */ err) => { escaped.push(err); };
+		process.on('uncaughtException', onEscaped);
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: { message() {} },
+			upgradeAdmission: {
+				maxConcurrent: 1,
+				waitingRoom: {
+					renderer: () => ({
+						body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+							'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+							'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+						lang: 'en',
+						dir: 'ltr',
+						headers: { 'x-note': 'a' + String.fromCharCode(127) + 'b' }
+					})
+				}
+			}
+		});
+		try {
+			expectLengthFramed(await pipeline(mirror.port, [['GET /__waiting-room HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]), {
+				status: '500',
+				body: 'Internal Server Error'
+			});
+			expect(escaped, 'nothing escaped the request listener').toEqual([]);
+		} finally {
+			process.off('uncaughtException', onEscaped);
+			await mirror.close();
+		}
+	});
+});
+
 describe('the upgrade-capacity answers are length-framed', () => {
 	it('on the admitting poll', async () => {
 		expectLengthFramed(await pipeline(open.rt.port, [['GET /__admit-check HTTP/1.1'], OK]), {
@@ -691,6 +831,32 @@ describe('the upgrade-capacity answers are length-framed', () => {
 });
 
 describe('createTestServer', () => {
+	it('answers a refused header on a bodyless or HEAD admin answer with the 500', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin(request) {
+					const status = new URL(request.url).pathname === '/__realtime/204' ? 204 : 200;
+					return new Response(status === 204 ? null : 'x', { status, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+				}
+			}
+		});
+		try {
+			for (const target of ['GET /__realtime/204 HTTP/1.1', 'HEAD /__realtime/x HTTP/1.1']) {
+				const first = splitFirst(await pipeline(mirror.port, [[target], ['GET /healthz HTTP/1.1']]));
+				expect(first.status, target).toBe('HTTP/1.1 500 Internal Server Error');
+				const body = '{"error":"internal error"}';
+				expect(header(first.lines, 'content-length'), target).toEqual([String(body.length)]);
+				const bodyBytes = target.startsWith('HEAD') ? '' : body;
+				expect(first.rest.slice(0, bodyBytes.length), target).toBe(bodyBytes);
+				expect(first.rest.slice(bodyBytes.length).startsWith('HTTP/1.1 200'), target).toBe(true);
+			}
+		} finally {
+			await mirror.close();
+		}
+	});
+
 	it('answers a header node refuses in its admin mirror, as the runtime does', async () => {
 		const { createTestServer } = await import('../src/testing.js');
 		const mirror = await createTestServer({

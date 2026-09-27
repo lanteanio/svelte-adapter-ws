@@ -83,29 +83,37 @@ export function chunkBytes(chunk) {
  */
 export async function readBodyUpTo(body, cap) {
 	const reader = body.getReader();
-	/** @type {Uint8Array[]} */
+	// The chunks as the source yielded them: a body that passes the cap is
+	// replayed to the writer unchanged, so it meets the writer's own rules
+	// for each shape. Only a complete body is turned into bytes.
+	/** @type {unknown[]} */
 	const chunks = [];
 	let total = 0;
-	let firstIsString = false;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) {
 			reader.releaseLock();
 			const bytes = new Uint8Array(total);
 			let offset = 0;
-			for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-			return { complete: true, bytes, oneString: firstIsString && chunks.length === 1 };
+			for (const chunk of chunks) {
+				const view = chunkBytes(chunk);
+				bytes.set(view, offset);
+				offset += view.byteLength;
+			}
+			return { complete: true, bytes, oneString: chunks.length === 1 && typeof chunks[0] === 'string' };
 		}
-		let bytes;
+		// Counted by its bytes, and refused here if it has none, so a string
+		// is held to the cap like any other chunk. A string's UTF-8 length is
+		// read without encoding it.
+		let size;
 		try {
-			bytes = chunkBytes(value);
+			size = typeof value === 'string' ? Buffer.byteLength(value) : chunkBytes(value).byteLength;
 		} catch (err) {
 			reader.cancel(err).catch(() => {});
 			throw err;
 		}
-		if (chunks.length === 0) firstIsString = typeof value === 'string';
-		chunks.push(bytes);
-		total += bytes.byteLength;
+		chunks.push(value);
+		total += size;
 		if (total > cap) break;
 	}
 	// Past the cap: replay what is held, then continue from the source. The

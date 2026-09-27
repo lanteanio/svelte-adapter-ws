@@ -94,7 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
 import { readBody } from './ssr.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from '../utils/hook-boundary.js';
@@ -2692,23 +2692,27 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 				// both APIs work together.
 				const buf = result.body ? Buffer.from(await result.arrayBuffer()) : null;
 				if (state.aborted) return;
-				/** @type {Record<string, string | string[]>} */
-				const outHeaders = {};
+				/** @type {Array<[string, string | string[]]>} */
+				const outHeaders = [];
 				for (const [hk, hv] of result.headers) {
 					// The framing is written below: a Transfer-Encoding relayed
 					// from fetch() beside that length is a message no HTTP/1.1
-					// client will read.
-					if (hk === 'set-cookie' || hk === 'content-length' || hk === 'transfer-encoding') continue;
-					outHeaders[hk] = hv;
+					// client will read, and node refuses a Trailer on an answer
+					// framed by its length.
+					if (hk === 'set-cookie' || hk === 'content-length' || hk === 'transfer-encoding' || hk === 'trailer') continue;
+					outHeaders.push([hk, hv]);
 				}
 				const outCookies = [
 					...result.headers.getSetCookie(),
 					...cookies._serialize()
 				];
-				if (outCookies.length > 0) outHeaders['set-cookie'] = outCookies;
+				if (outCookies.length > 0) outHeaders.push(['set-cookie', outCookies]);
 				const length = buf ? buf.byteLength : bodylessLength(result.status, result.headers.get('content-length'), false);
-				if (length !== null) outHeaders['content-length'] = String(length);
-				res.writeHead(result.status, outHeaders);
+				if (length !== null) outHeaders.push(['content-length', String(length)]);
+				// Staged before the status, so a refused header reaches the 500
+				// below with nothing committed.
+				stageHeaders(res, outHeaders);
+				res.writeHead(result.status);
 				if (buf) res.end(buf);
 				else res.end();
 				return;
@@ -2802,18 +2806,27 @@ function httpRefusalResponse(res) {
 		},
 		writeHeader(name, value) { headers[String(name).toLowerCase()] = String(value); return facade; },
 		end(body) {
+			const text = body == null ? '' : String(body);
+			// uWS derives a length from the body handed to end(), so this
+			// facade fills one in too: without it node answers chunked where
+			// the family answers with a length, and a HEAD carries no size at
+			// all. Never on a status defined to carry no body, and never over a
+			// length the writer set for itself.
+			if (
+				headers['content-length'] === undefined &&
+				status >= 200 && status !== 204 && status !== 304
+			) headers['content-length'] = String(Buffer.byteLength(text));
+			// A renderer's header node refuses throws here, before anything
+			// is committed, and is answered with the plain 500 the other lanes
+			// give a refused header rather than left without an answer.
 			try {
-				const text = body == null ? '' : String(body);
-				// uWS derives a length from the body handed to end(), so this
-				// facade fills one in too: without it node answers chunked
-				// where the family answers with a length, and a HEAD carries
-				// no size at all. Never on a status defined to carry no body,
-				// and never over a length the writer set for itself.
-				if (
-					headers['content-length'] === undefined &&
-					status >= 200 && status !== 204 && status !== 304
-				) headers['content-length'] = String(Buffer.byteLength(text));
-				res.writeHead(status, statusText || undefined, headers);
+				stageHeaders(res, Object.entries(headers));
+			} catch {
+				send500(res);
+				return facade;
+			}
+			try {
+				res.writeHead(status, statusText || undefined);
 				res.end(text);
 			} catch { /* exchange already gone */ }
 			return facade;

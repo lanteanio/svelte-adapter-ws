@@ -12,7 +12,7 @@
 // throws or rejects yields a generic 500 with no detail leaked to the client.
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
-import { FORBIDDEN_METHODS, send405, endText, bodylessLength } from './http-helpers.js';
+import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders } from './http-helpers.js';
 import { buildRequest } from './ssr.js';
 import { collectRequestHeaders, isFramingHeader } from '../utils/request-headers.js';
 import { wsModule } from '../ws-handler-bridge.js';
@@ -86,33 +86,31 @@ async function writeAdminResponse(res, response, state, headOnly) {
 		return;
 	}
 	if (state.aborted || res.headersSent) return;
-	/** @type {Record<string, string | string[]>} */
-	const headers = {};
+	/** @type {Array<[string, string | string[]]>} */
+	const headers = [];
 	let hasContentTypeOptions = false;
 	for (const [key, value] of response.headers) {
-		// content-length is implied by the body we write, and a relayed
-		// Transfer-Encoding beside it is a message no HTTP/1.1 client will
-		// read; set-cookie is emitted via getSetCookie() so multiple cookies are
-		// not folded.
-		if (key === 'content-length' || key === 'transfer-encoding' || key === 'set-cookie') continue;
+		// The framing is this writer's: content-length is implied by the body
+		// we write, a relayed Transfer-Encoding beside it is a message no
+		// HTTP/1.1 client will read, and node refuses a Trailer on an answer
+		// framed by its length. set-cookie is emitted via getSetCookie() so
+		// multiple cookies are not folded.
+		if (key === 'content-length' || key === 'transfer-encoding' || key === 'trailer' || key === 'set-cookie') continue;
 		if (key === 'x-content-type-options') hasContentTypeOptions = true;
-		headers[key] = value;
+		headers.push([key, value]);
 	}
-	if (!hasContentTypeOptions) headers['x-content-type-options'] = 'nosniff';
+	if (!hasContentTypeOptions) headers.push(['x-content-type-options', 'nosniff']);
 	const cookies = response.headers.getSetCookie();
-	if (cookies.length) headers['set-cookie'] = cookies;
+	if (cookies.length) headers.push(['set-cookie', cookies]);
 	// The handler's own content-length was dropped above; a body writes the
 	// length it actually has, as uWS derives it from the body it is handed.
-	if (body && body.byteLength) {
-		headers['content-length'] = String(body.byteLength);
-		res.writeHead(response.status, headers);
-		res.end(body);
-		return;
-	}
-	const length = bodylessLength(response.status, response.headers.get('content-length'), headOnly);
-	if (length !== null) headers['content-length'] = String(length);
-	res.writeHead(response.status, headers);
-	res.end();
+	const whole = body !== null && body.byteLength > 0;
+	const length = whole ? body.byteLength : bodylessLength(response.status, response.headers.get('content-length'), headOnly);
+	if (length !== null) headers.push(['content-length', String(length)]);
+	stageHeaders(res, headers);
+	res.writeHead(response.status);
+	if (whole) res.end(body);
+	else res.end();
 }
 
 /**

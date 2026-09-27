@@ -351,8 +351,10 @@ function writeHeaders(res, response, length, encoding = '') {
 			// The framing is this writer's to decide: a Response relayed from
 			// `fetch()` carries the upstream's Transfer-Encoding, and passing
 			// it through beside the length written for a whole body is a
-			// message no HTTP/1.1 client will read.
-			if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
+			// message no HTTP/1.1 client will read. node refuses a Trailer
+			// on any answer it does not frame as chunked, so that is the
+			// writer's too.
+			if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding' || key === 'trailer') continue;
 			if (key === 'x-content-type-options') hasContentTypeOptions = true;
 			res.setHeader(key, value);
 		}

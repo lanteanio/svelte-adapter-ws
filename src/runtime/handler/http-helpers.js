@@ -48,6 +48,27 @@ export function endText(res, status, headers, text) {
 }
 
 /**
+ * Stage the headers a relayed Response carries, one setHeader at a time,
+ * before anything commits the status. node's writeHead commits the status -
+ * and, for a 204 or 304, that no body follows - before it validates the
+ * headers it is handed, so a value it refuses there would leave the 500 that
+ * answers it framed for a body it never gets; setHeader refuses the same
+ * values without touching either. A refused header clears whatever was
+ * staged and rethrows, so the caller's own failure path writes a clean answer.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {Iterable<[string, string | string[]]>} entries
+ */
+export function stageHeaders(res, entries) {
+	try {
+		for (const [name, value] of entries) res.setHeader(name, value);
+	} catch (err) {
+		for (const name of res.getHeaderNames()) res.removeHeader(name);
+		throw err;
+	}
+}
+
+/**
  * The Content-Length a response that carries no content reports, or null for
  * none. A 204 never reports one: RFC 9110 8.6 forbids Content-Length there. A
  * 304 reports one only when the app declared it, because the header is

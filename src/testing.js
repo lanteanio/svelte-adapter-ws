@@ -348,18 +348,20 @@ function createNodeApp() {
 		let aborted = false;
 		let ended = false;
 		/**
-		 * A header node refuses throws before anything is written, and the
-		 * exchange is still open: the staged answer is dropped and the throw
-		 * handed back to the caller, whose own failure path answers it the way
-		 * the runtime's lanes do. Only a peer that is gone is swallowed. The
-		 * reason phrase the failed writeHead set is cleared too, or the answer
-		 * that follows would keep it.
+		 * The staged headers are set one at a time before the status is
+		 * written, so a header node refuses throws with nothing committed - not
+		 * the status, and for a 204 or 304 not the "no body" that writeHead
+		 * decides first. The staged answer is dropped and the throw handed back
+		 * to the caller, whose own failure path answers it the way the
+		 * runtime's lanes do. A throw once the head is out is a peer that is
+		 * gone, and is swallowed.
 		 *
 		 * @param {unknown} err
 		 */
 		const unstage = (err) => {
-			if (aborted || nodeRes.headersSent) return;
+			if (nodeRes.headersSent) return;
 			pendingHeaders.clear();
+			for (const name of nodeRes.getHeaderNames()) nodeRes.removeHeader(name);
 			statusCode = 200;
 			statusText = 'OK';
 			nodeRes.statusMessage = '';
@@ -411,7 +413,8 @@ function createNodeApp() {
 							: typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength;
 						pendingHeaders.set('content-length', String(bytes));
 					}
-					nodeRes.writeHead(statusCode, statusText || undefined, Object.fromEntries(pendingHeaders));
+					for (const [k, v] of pendingHeaders) nodeRes.setHeader(k, v);
+					nodeRes.writeHead(statusCode, statusText || undefined);
 					if (body === undefined || body === null) nodeRes.end();
 					else if (typeof body === 'string' || Buffer.isBuffer(body)) nodeRes.end(body);
 					else nodeRes.end(Buffer.from(body));
@@ -430,7 +433,8 @@ function createNodeApp() {
 					if (typeof reportedContentLength === 'number' && !pendingHeaders.has('content-length')) {
 						pendingHeaders.set('content-length', String(reportedContentLength));
 					}
-					nodeRes.writeHead(statusCode, statusText || undefined, Object.fromEntries(pendingHeaders));
+					for (const [k, v] of pendingHeaders) nodeRes.setHeader(k, v);
+					nodeRes.writeHead(statusCode, statusText || undefined);
 					nodeRes.end();
 				} catch (err) { unstage(err); }
 				return res;
@@ -730,6 +734,27 @@ function createNodeApp() {
  * @param {import('./testing.js').TestServerOptions} [options]
  * @returns {Promise<import('./testing.js').TestServer>}
  */
+/**
+ * The waiting-room page on an HTTP lane of the test server. The page carries
+ * the renderer's headers, and one node refuses is thrown back by the response
+ * double with nothing written; it is answered with the plain 500 the runtime
+ * answers it with, rather than thrown out of the request listener.
+ * @param {any} res the HTTP response double
+ * @param {any} page
+ * @param {string} [status]
+ */
+function sendWaitingRoomPageT(res, page, status) {
+	try {
+		sendWaitingRoomPage(res, page, status);
+	} catch {
+		res.cork(() => {
+			res.writeStatus('500 Internal Server Error');
+			res.writeHeader('content-type', 'text/plain');
+			res.end('Internal Server Error');
+		});
+	}
+}
+
 export async function createTestServer(options = {}) {
 	const divergenceDiagnosticsT = createDivergenceDiagnosticStore();
 	// A permissive test double for a restrictive production deployment creates a
@@ -4155,13 +4180,13 @@ export async function createTestServer(options = {}) {
 			}
 			if (negotiateRejection(req.getHeader('accept'), req.getHeader('upgrade')) === 'html') {
 				if (WAITING_ROOM !== null) {
-					sendWaitingRoomPage(res, WAITING_ROOM.renderResponse(
+					sendWaitingRoomPageT(res, WAITING_ROOM.renderResponse(
 						undefined,
 						createWaitingRoomRequest(req)
 					));
 					return;
 				}
-				sendWaitingRoomPage(res, {
+				sendWaitingRoomPageT(res, {
 					body: buildAccessibleCapacityRefusalPage(),
 					lang: 'en',
 					dir: 'ltr',
@@ -4226,7 +4251,7 @@ export async function createTestServer(options = {}) {
 				currentQueueDepth(),
 				createWaitingRoomRequest(req)
 			);
-			sendWaitingRoomPage(res, page);
+			sendWaitingRoomPageT(res, page);
 		});
 	}
 
@@ -4313,7 +4338,7 @@ export async function createTestServer(options = {}) {
 							res.writeStatus(String(response.status));
 							let hasCTO = false;
 							for (const [k, v] of response.headers) {
-								if (k === 'content-length' || k === 'transfer-encoding' || k === 'set-cookie') continue;
+								if (k === 'content-length' || k === 'transfer-encoding' || k === 'trailer' || k === 'set-cookie') continue;
 								if (k === 'x-content-type-options') hasCTO = true;
 								res.writeHeader(k, v);
 							}
