@@ -21,7 +21,7 @@ const MAX_SSR_DEDUP = 500;
 const MAX_SSR_DEDUP_BODY = 512 * 1024;
 
 /**
- * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array }} SharedResponse
+ * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array, oneString: boolean }} SharedResponse
  */
 
 /**
@@ -540,7 +540,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: shared.headers
 						}),
 						state,
-						respAcceptEncoding,
+						shared.oneString ? '' : respAcceptEncoding,
 						headOnly
 					);
 					return;
@@ -635,7 +635,8 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 						status: response.status,
 						statusText: response.statusText,
 						headers: /** @type {[string, string][]} */ ([...response.headers]),
-						body: read.bytes
+						body: read.bytes,
+						oneString: read.oneString
 					}));
 
 					// Serve the leader's own response from the same buffer
@@ -647,7 +648,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: response.headers
 						}),
 						state,
-						respAcceptEncoding,
+						read.oneString ? '' : respAcceptEncoding,
 						headOnly
 					);
 				} catch (err) {

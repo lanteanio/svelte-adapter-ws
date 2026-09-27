@@ -73,15 +73,20 @@ export function chunkBytes(chunk) {
  * chunks and then continues from the reader, so the leader streams the body
  * it decided not to share without re-rendering or losing a byte.
  *
+ * A body that was one string chunk says so (`oneString`): the writer sends such
+ * a body uncompressed, as the family's native tier does, and the buffered
+ * copy has to keep that answer.
+ *
  * @param {ReadableStream<Uint8Array>} body
  * @param {number} cap
- * @returns {Promise<{ complete: true, bytes: Uint8Array } | { complete: false, stream: ReadableStream<Uint8Array> }>}
+ * @returns {Promise<{ complete: true, bytes: Uint8Array, oneString: boolean } | { complete: false, stream: ReadableStream<Uint8Array> }>}
  */
 export async function readBodyUpTo(body, cap) {
 	const reader = body.getReader();
 	/** @type {Uint8Array[]} */
 	const chunks = [];
 	let total = 0;
+	let firstIsString = false;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) {
@@ -89,7 +94,7 @@ export async function readBodyUpTo(body, cap) {
 			const bytes = new Uint8Array(total);
 			let offset = 0;
 			for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-			return { complete: true, bytes };
+			return { complete: true, bytes, oneString: firstIsString && chunks.length === 1 };
 		}
 		let bytes;
 		try {
@@ -98,6 +103,7 @@ export async function readBodyUpTo(body, cap) {
 			reader.cancel(err).catch(() => {});
 			throw err;
 		}
+		if (chunks.length === 0) firstIsString = typeof value === 'string';
 		chunks.push(bytes);
 		total += bytes.byteLength;
 		if (total > cap) break;

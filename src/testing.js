@@ -332,6 +332,25 @@ function createNodeApp() {
 		const pendingHeaders = new Map();
 		let aborted = false;
 		let ended = false;
+		/**
+		 * A header node refuses throws before anything is written, and the
+		 * exchange is still open: the staged answer is dropped and the throw
+		 * handed back to the caller, whose own failure path answers it the way
+		 * the runtime's lanes do. Only a peer that is gone is swallowed. The
+		 * reason phrase the failed writeHead set is cleared too, or the answer
+		 * that follows would keep it.
+		 *
+		 * @param {unknown} err
+		 */
+		const unstage = (err) => {
+			if (aborted || nodeRes.headersSent) return;
+			pendingHeaders.clear();
+			statusCode = 200;
+			statusText = 'OK';
+			nodeRes.statusMessage = '';
+			ended = false;
+			throw err;
+		};
 		const res = {
 			onAborted: (cb) => {
 				nodeRes.on('close', () => {
@@ -381,7 +400,7 @@ function createNodeApp() {
 					if (body === undefined || body === null) nodeRes.end();
 					else if (typeof body === 'string' || Buffer.isBuffer(body)) nodeRes.end(body);
 					else nodeRes.end(Buffer.from(body));
-				} catch { /* peer gone */ }
+				} catch (err) { unstage(err); }
 				return res;
 			},
 			endWithoutBody: (reportedContentLength) => {
@@ -398,7 +417,7 @@ function createNodeApp() {
 					}
 					nodeRes.writeHead(statusCode, statusText || undefined, Object.fromEntries(pendingHeaders));
 					nodeRes.end();
-				} catch { /* peer gone */ }
+				} catch (err) { unstage(err); }
 				return res;
 			},
 			onData: (cb) => {

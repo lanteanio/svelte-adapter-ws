@@ -145,7 +145,17 @@ export class Server {
 			}), { headers: text });
 		}
 		if (p === '/declared-past-cap') {
-			return new Response('tiny body', { headers: { ...text, 'content-length': '700000' } });
+			// A first chunk and then nothing, ever: only the lane that trusts
+			// the declared length can answer a HEAD for it.
+			return new Response(new ReadableStream({
+				start(c) { c.enqueue(new TextEncoder().encode('tiny body')); },
+				pull() { return new Promise(() => {}); }
+			}), { headers: { ...text, 'content-length': '700000' } });
+		}
+		if (p === '/slow-string') {
+			await new Promise((r) => setTimeout(r, 200));
+			const page = '<html>' + 's'.repeat(4096) + '</html>';
+			return new Response(new ReadableStream({ start(c) { c.enqueue(page); c.close(); } }), { headers: { 'content-type': 'text/html' } });
 		}
 		if (p === '/long-body') {
 			// 2 MiB, well past the dedup sharing cap. Finite, so a writer that
@@ -189,6 +199,9 @@ export function authenticate({ headers }) {
 	return {};
 }
 export function admin(request) {
+	if (new URL(request.url).pathname === '/__realtime/bad-header') {
+		return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+	}
 	if (new URL(request.url).pathname === '/__realtime/relayed-te') {
 		return new Response('admin relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
 	}
@@ -574,6 +587,14 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 });
 
 describe('the admin lane frames what it writes', () => {
+	it('answers a header node refuses with its length-framed 500', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/bad-header HTTP/1.1'], OK]), {
+			status: '500',
+			body: '{"error":"internal error"}'
+		});
+		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	});
+
 	it('drops a Transfer-Encoding the Response carries, and frames the body by its length', async () => {
 		expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/relayed-te HTTP/1.1'], OK]), {
 			status: '200',
@@ -612,6 +633,19 @@ describe('the request-dedup leader reads a body the way the writer does', () => 
 		expectBodyless(await pipeline(open.rt.port, [['HEAD /long-body HTTP/1.1'], OK]), { status: '200', length: null });
 		const state = await pipeline(open.rt.port, [['GET /long-body-state HTTP/1.1', 'Cookie: s=1']]);
 		expect(splitFirst(state).rest).toBe('true');
+	});
+
+	it('sends a whole body of one string chunk uncompressed, from the leader and to a waiter', async () => {
+		const [leader, waiter] = await Promise.all([
+			pipeline(open.rt.port, [['GET /slow-string HTTP/1.1', 'Accept-Encoding: gzip'], OK]),
+			new Promise((r) => setTimeout(r, 50)).then(() => pipeline(open.rt.port, [['GET /slow-string HTTP/1.1', 'Accept-Encoding: gzip'], OK]))
+		]);
+		for (const raw of [leader, /** @type {string} */ (waiter)]) {
+			const first = splitFirst(raw);
+			expect(first.status).toContain('200');
+			expect(header(first.lines, 'content-encoding')).toEqual([]);
+			expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
+		}
 	});
 
 	it('answers a waiting HEAD by the HEAD rule too, not by the shared body', async () => {
@@ -657,6 +691,27 @@ describe('the upgrade-capacity answers are length-framed', () => {
 });
 
 describe('createTestServer', () => {
+	it('answers a header node refuses in its admin mirror, as the runtime does', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin() {
+					return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+				}
+			}
+		});
+		try {
+			const first = expectLengthFramed(await pipeline(mirror.port, [['GET /__realtime/x HTTP/1.1'], ['GET /healthz HTTP/1.1']]), {
+				status: '500',
+				body: '{"error":"internal error"}'
+			});
+			expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+		} finally {
+			await mirror.close();
+		}
+	});
+
 	it('drops a Transfer-Encoding its admin mirror is handed', async () => {
 		const { createTestServer } = await import('../src/testing.js');
 		const mirror = await createTestServer({

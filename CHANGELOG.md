@@ -126,14 +126,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the native tier's does.
 - **An uncredentialed page that streams strings or ArrayBuffers is no longer
   corrupted.** The request-dedup leader, which buffers an anonymous GET or
-  HEAD render it may share, copied an ArrayBuffer or a typed-array view into
-  its buffer as zeros (or as the wrong bytes, for a view with an offset),
-  answered a string chunk `500`, and counted neither toward its 512 KiB
-  sharing cap, so a long string stream was held whole before failing. It now
-  reads every chunk the way the response writer does.
+  HEAD render it may share, copied an ArrayBuffer or a DataView into its
+  buffer as zeros and a wider typed array as the wrong bytes, answered a
+  string chunk `500`, and never counted a string toward its 512 KiB sharing
+  cap, so a long string stream was held whole before failing. It now reads
+  every chunk the way the response writer does, and a body of one string
+  chunk goes out uncompressed from its buffer too.
 - An SSR Response carrying a `Set-Cookie` value node refuses to write is
   answered `500`, as any other refused header is, where nothing was written
-  and the connection waited for the client to give up.
+  and the connection waited for the client to give up. `createTestServer`'s
+  admin mirror answers a header node refuses with the `500` the runtime's
+  admin lane writes, where it wrote nothing.
 - A `413` reads `Content Too Large`, as RFC 9110 and the family's native tier
   name it, where node's default wrote `Payload Too Large`, and the `500` that
   follows a relayed header node refuses reads `Internal Server Error` rather

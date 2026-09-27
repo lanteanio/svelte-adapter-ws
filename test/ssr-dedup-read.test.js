@@ -66,6 +66,30 @@ describe('readBodyUpTo', () => {
 		expect(out).toEqual([...bytes(4, 1), ...bytes(4, 2), ...bytes(4, 3), ...bytes(4, 4), ...bytes(4, 5)]);
 	});
 
+	it('refuses a chunk that is not bytes, a string or a buffer, and cancels the source', async () => {
+		/** @type {unknown} */
+		let cancelled = null;
+		// Still open after the bad chunk, as a source that has more to say is:
+		// a closed stream has nothing left to cancel.
+		const source = new ReadableStream({
+			start(controller) { controller.enqueue(bytes(2, 1)); controller.enqueue(42); },
+			pull() { return new Promise(() => {}); },
+			cancel(reason) { cancelled = reason; }
+		});
+		await expect(readBodyUpTo(source, 100)).rejects.toThrow(TypeError);
+		expect(cancelled).toBeInstanceOf(TypeError);
+	});
+
+	it('says when the whole body was one string chunk', async () => {
+		const one = await readBodyUpTo(stream(['h\u00e9']), 100);
+		expect(one.complete && one.oneString).toBe(true);
+		if (one.complete) expect(Buffer.from(one.bytes).toString('utf8')).toBe('h\u00e9');
+		const two = await readBodyUpTo(stream(['a', 'b']), 100);
+		expect(two.complete && two.oneString).toBe(false);
+		const buffer = await readBodyUpTo(stream([bytes(3, 1)]), 100);
+		expect(buffer.complete && buffer.oneString).toBe(false);
+	});
+
 	it('cancelling the continuation cancels the source', async () => {
 		let cancelled = null;
 		const read = await readBodyUpTo(stream([bytes(8, 1), bytes(8, 2), bytes(8, 3)], (reason) => { cancelled = reason; }), 4);
