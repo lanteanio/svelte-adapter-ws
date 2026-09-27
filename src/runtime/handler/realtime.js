@@ -2720,8 +2720,10 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 
 			// Implicit success: 204 No Content with any Set-Cookie headers.
 			const outCookies = cookies._serialize();
-			if (outCookies.length > 0) res.writeHead(204, { 'set-cookie': outCookies });
-			else res.writeHead(204);
+			// Staged like the relayed Response: a cookie node refuses (a name or
+			// domain past U+00FF) reaches the 500 with nothing committed.
+			if (outCookies.length > 0) stageHeaders(res, [['set-cookie', outCookies]]);
+			res.writeHead(204);
 			res.end();
 		})
 		.catch((err) => {
@@ -2819,8 +2821,10 @@ function httpRefusalResponse(res) {
 			// A renderer's header node refuses throws here, before anything
 			// is committed, and is answered with the plain 500 the other lanes
 			// give a refused header rather than left without an answer.
+			// A Trailer is framing this writer owns: node refuses one on an
+			// answer framed by its length.
 			try {
-				stageHeaders(res, Object.entries(headers));
+				stageHeaders(res, Object.entries(headers).filter(([name]) => name !== 'trailer'));
 			} catch {
 				send500(res);
 				return facade;
@@ -2828,7 +2832,14 @@ function httpRefusalResponse(res) {
 			try {
 				res.writeHead(status, statusText || undefined);
 				res.end(text);
-			} catch { /* exchange already gone */ }
+			} catch {
+				// Nothing went out: answered like a refused header. Once the
+				// head is out, the exchange is already gone.
+				if (!res.headersSent) {
+					for (const name of res.getHeaderNames()) res.removeHeader(name);
+					send500(res);
+				}
+			}
 			return facade;
 		}
 	};

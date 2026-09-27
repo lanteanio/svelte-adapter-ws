@@ -169,17 +169,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A header node refuses to write is answered `500` on every lane, framed
   for the body it carries.** An SSR Response carrying such a `Set-Cookie`
   value got no answer at all and the connection waited for the client to give
-  up; so did a waiting-room page whose renderer returned such a header, and
-  in `createTestServer` that page threw out of the request listener and ended
-  the process. A relayed `204` or `304` from the authenticate hook or the
-  admin handler was answered with a `500` whose declared body never came,
-  because node had already settled that no body follows, and a relayed
+  up; so did a waiting-room page whose renderer returned such a header, in
+  the runtime and in `createTestServer`. A relayed `204` or `304` from the
+  authenticate hook or the admin handler, and the authenticate endpoint's
+  implicit `204` carrying a cookie set with a name or domain past U+00FF,
+  were answered with a `500` whose declared body never came, because node
+  had already settled that no body follows, and a relayed
   `connection: close` beside the refused header dropped a pipelined request
-  behind it. Relayed headers are now set one by one before the status is
+  behind it. Headers are now checked whole, then set, before the status is
   written, so a refusal commits nothing, and the answer is the lane's own
   `500`; `createTestServer`'s admin mirror and waiting room answer the same
-  way. A relayed `Trailer`, which node refuses on an answer it frames by
-  length, is dropped with the other framing headers the writer owns.
+  way. A relayed `Trailer`, which node refuses on an answer it does not
+  stream chunked, is dropped there with the other framing headers the writer
+  owns, and kept on an SSR answer that does stream.
 - A `413` the adapter writes reads `Content Too Large`, as RFC 9110 and the
   family's native tier name it, where node's default wrote `Payload Too
   Large`, and the `500` that follows a relayed header node refuses reads

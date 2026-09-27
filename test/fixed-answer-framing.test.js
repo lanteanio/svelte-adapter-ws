@@ -154,6 +154,17 @@ export class Server {
 		}
 		if (p === '/trailer') return new Response('hello', { headers: { ...text, trailer: 'x-foo' } });
 		if (p === '/trailer-204') return new Response(null, { status: 204, headers: { trailer: 'x-foo' } });
+		if (p === '/trailer-stream') {
+			const enc = new TextEncoder();
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(enc.encode('one|'));
+					await new Promise((r) => setTimeout(r, 30));
+					c.enqueue(enc.encode('two'));
+					c.close();
+				}
+			}), { headers: { ...text, trailer: 'x-foo' } });
+		}
 		if (p === '/one-string-past-cap') {
 			const page = '<html>' + 'b'.repeat(600 * 1024) + '</html>';
 			return new Response(new ReadableStream({ start(c) { c.enqueue(page); c.close(); } }), { headers: { 'content-type': 'text/html' } });
@@ -190,8 +201,13 @@ export class Server {
 
 const WS_HANDLER = `
 export function message() {}
-export function authenticate({ headers }) {
+export function authenticate({ headers, cookies }) {
 	const mode = headers['x-mode'];
+	if (mode === 'bad-cookie') {
+		// A cookie name past U+00FF, which node refuses to write.
+		cookies.set(String.fromCharCode(256), 'v', { path: '/' });
+		return undefined;
+	}
 	if (mode === 'deny') return false;
 	if (mode === 'throw') throw new Error('authenticate boom');
 	if (mode === 'body') {
@@ -208,6 +224,7 @@ export function authenticate({ headers }) {
 }
 export function admin(request) {
 	const adminPath = new URL(request.url).pathname;
+	if (adminPath === '/__realtime/date-bad') return new Response('x', { headers: { date: 'Thu, 01 Jan 2026 00:00:00 GMT', 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
 	if (adminPath === '/__realtime/bad-204') return new Response(null, { status: 204, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
 	if (adminPath === '/__realtime/close-bad') {
 		return new Response('x', { headers: { connection: 'close', 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
@@ -364,7 +381,17 @@ const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHt
 
 // A waiting-room renderer whose one header node refuses to write.
 const BAD_RENDERER = `
-export default function renderer() {
+export default function renderer(context) {
+	if (String(context && context.request && context.request.url).includes('trailer')) {
+		return {
+			body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+				'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+				'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+			lang: 'en',
+			dir: 'ltr',
+			headers: { trailer: 'x-foo' }
+		};
+	}
 	return {
 		body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
 			'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
@@ -530,6 +557,12 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(body).toContain('Invalid character in header content');
 	});
 
+	it('keeps a Trailer on an answer it streams chunked', async () => {
+		const raw = await pipeline(open.rt.port, [['GET /trailer-stream HTTP/1.1', 'Cookie: s=1'], OK]);
+		expect(header(splitFirst(raw).lines, 'trailer')).toEqual(['x-foo']);
+		expect(readChunked(raw, '200')).toBe('one|two');
+	});
+
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
 		for (const cookie of [[], ['Cookie: s=1']]) {
 			const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /trailer HTTP/1.1', ...cookie], OK]), {
@@ -639,6 +672,14 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
 	});
 
+	it('on a cookie node refuses beside the implicit 204, with a 500 that carries its body', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: bad-cookie'), OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	});
+
 	it('on a relayed Trailer, which it drops', async () => {
 		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: trailer'), OK]), {
 			status: '200',
@@ -666,6 +707,14 @@ describe('the admin lane frames what it writes', () => {
 			status: '500',
 			body: '{"error":"internal error"}'
 		});
+	});
+
+	it('keeps its Date on the 500 after a refused header', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/date-bad HTTP/1.1'], OK]), {
+			status: '500',
+			body: '{"error":"internal error"}'
+		});
+		expect(header(first.lines, 'date')).toHaveLength(1);
 	});
 
 	it('drops a relayed Trailer', async () => {
@@ -776,6 +825,13 @@ describe('a waiting-room renderer header node refuses', () => {
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
 	});
 
+	it('serves the runtime holding page without a Trailer its renderer set', async () => {
+		const raw = await pipeline(waiting.rt.port, [['GET /__waiting-room?trailer HTTP/1.1', 'Accept: text/html'], OK]);
+		const body = readLengthFramed(raw, '200');
+		expect(header(splitFirst(raw).lines, 'trailer')).toEqual([]);
+		expect(body).toContain('<h1>Hold</h1>');
+	});
+
 	it('is answered the same way by the test server, and nothing escapes it', async () => {
 		/** @type {unknown[]} */
 		const escaped = [];
@@ -787,13 +843,15 @@ describe('a waiting-room renderer header node refuses', () => {
 			upgradeAdmission: {
 				maxConcurrent: 1,
 				waitingRoom: {
-					renderer: () => ({
+					renderer: (/** @type {any} */ context) => ({
 						body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
 							'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
 							'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
 						lang: 'en',
 						dir: 'ltr',
-						headers: { 'x-note': 'a' + String.fromCharCode(127) + 'b' }
+						headers: String(context && context.request && context.request.url).includes('trailer')
+							? { trailer: 'x-foo' }
+							: { 'x-note': 'a' + String.fromCharCode(127) + 'b' }
 					})
 				}
 			}
@@ -803,6 +861,9 @@ describe('a waiting-room renderer header node refuses', () => {
 				status: '500',
 				body: 'Internal Server Error'
 			});
+			const served = await pipeline(mirror.port, [['GET /__waiting-room?trailer HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]);
+			readLengthFramed(served, '200');
+			expect(header(splitFirst(served).lines, 'trailer')).toEqual([]);
 			expect(escaped, 'nothing escaped the request listener').toEqual([]);
 		} finally {
 			process.off('uncaughtException', onEscaped);
@@ -837,7 +898,10 @@ describe('createTestServer', () => {
 			handler: {
 				message() {},
 				admin(request) {
-					const status = new URL(request.url).pathname === '/__realtime/204' ? 204 : 200;
+					const p = new URL(request.url).pathname;
+					if (p === '/__realtime/trailer') return new Response('t', { headers: { trailer: 'x-foo' } });
+					if (p === '/__realtime/close-bad') return new Response('x', { headers: { connection: 'close', 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+					const status = p === '/__realtime/204' ? 204 : 200;
 					return new Response(status === 204 ? null : 'x', { status, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
 				}
 			}
@@ -852,6 +916,13 @@ describe('createTestServer', () => {
 				expect(first.rest.slice(0, bodyBytes.length), target).toBe(bodyBytes);
 				expect(first.rest.slice(bodyBytes.length).startsWith('HTTP/1.1 200'), target).toBe(true);
 			}
+			const trailer = expectLengthFramed(await pipeline(mirror.port, [['GET /__realtime/trailer HTTP/1.1'], ['GET /healthz HTTP/1.1']]), { status: '200', body: 't' });
+			expect(header(trailer.lines, 'trailer')).toEqual([]);
+			const closeBad = expectLengthFramed(await pipeline(mirror.port, [['GET /__realtime/close-bad HTTP/1.1'], ['GET /healthz HTTP/1.1']]), {
+				status: '500',
+				body: '{"error":"internal error"}'
+			});
+			expect(header(closeBad.lines, 'connection')).not.toContain('close');
 		} finally {
 			await mirror.close();
 		}

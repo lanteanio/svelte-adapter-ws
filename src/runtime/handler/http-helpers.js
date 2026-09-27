@@ -2,7 +2,7 @@
 // late failure can never write a second response into an exchange whose first
 // byte already left; the caller owns deciding whether that situation is fatal.
 
-import { STATUS_CODES } from 'node:http';
+import { STATUS_CODES, validateHeaderName, validateHeaderValue } from 'node:http';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
@@ -52,20 +52,23 @@ export function endText(res, status, headers, text) {
  * before anything commits the status. node's writeHead commits the status -
  * and, for a 204 or 304, that no body follows - before it validates the
  * headers it is handed, so a value it refuses there would leave the 500 that
- * answers it framed for a body it never gets; setHeader refuses the same
- * values without touching either. A refused header clears whatever was
- * staged and rethrows, so the caller's own failure path writes a clean answer.
+ * answers it framed for a body it never gets. Every name and value is
+ * checked before the first is set, so a refused one throws with the response
+ * untouched and the caller's own failure path writes a clean answer; taking
+ * headers back out would change that answer too, since node stops sending
+ * Date once `date` is removed and forgets a `connection: close`.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Iterable<[string, string | string[]]>} entries
  */
 export function stageHeaders(res, entries) {
-	try {
-		for (const [name, value] of entries) res.setHeader(name, value);
-	} catch (err) {
-		for (const name of res.getHeaderNames()) res.removeHeader(name);
-		throw err;
+	const list = [...entries];
+	for (const [name, value] of list) {
+		validateHeaderName(name);
+		if (Array.isArray(value)) for (const one of value) validateHeaderValue(name, one);
+		else validateHeaderValue(name, value);
 	}
+	for (const [name, value] of list) res.setHeader(name, value);
 }
 
 /**

@@ -4,7 +4,7 @@ import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtim
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
 import { runOpenHook, runCloseHook } from './runtime/utils/hook-boundary.js';
 import { closeFrameReason } from './runtime/utils/close-frame.js';
-import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength } from './runtime/handler/http-helpers.js';
+import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength, stageHeaders } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
@@ -348,20 +348,20 @@ function createNodeApp() {
 		let aborted = false;
 		let ended = false;
 		/**
-		 * The staged headers are set one at a time before the status is
+		 * The staged headers are checked whole and set before the status is
 		 * written, so a header node refuses throws with nothing committed - not
 		 * the status, and for a 204 or 304 not the "no body" that writeHead
-		 * decides first. The staged answer is dropped and the throw handed back
-		 * to the caller, whose own failure path answers it the way the
-		 * runtime's lanes do. A throw once the head is out is a peer that is
-		 * gone, and is swallowed.
+		 * decides first. A Trailer is dropped: this double never streams, and
+		 * node refuses one on any other answer. The staged answer is dropped and
+		 * the throw handed back to the caller, whose own failure path answers it
+		 * the way the runtime's lanes do. A throw once the head is out is a peer
+		 * that is gone, and is swallowed.
 		 *
 		 * @param {unknown} err
 		 */
 		const unstage = (err) => {
 			if (nodeRes.headersSent) return;
 			pendingHeaders.clear();
-			for (const name of nodeRes.getHeaderNames()) nodeRes.removeHeader(name);
 			statusCode = 200;
 			statusText = 'OK';
 			nodeRes.statusMessage = '';
@@ -413,7 +413,7 @@ function createNodeApp() {
 							: typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength;
 						pendingHeaders.set('content-length', String(bytes));
 					}
-					for (const [k, v] of pendingHeaders) nodeRes.setHeader(k, v);
+					stageHeaders(nodeRes, [...pendingHeaders].filter(([k]) => k !== 'trailer'));
 					nodeRes.writeHead(statusCode, statusText || undefined);
 					if (body === undefined || body === null) nodeRes.end();
 					else if (typeof body === 'string' || Buffer.isBuffer(body)) nodeRes.end(body);
@@ -433,7 +433,7 @@ function createNodeApp() {
 					if (typeof reportedContentLength === 'number' && !pendingHeaders.has('content-length')) {
 						pendingHeaders.set('content-length', String(reportedContentLength));
 					}
-					for (const [k, v] of pendingHeaders) nodeRes.setHeader(k, v);
+					stageHeaders(nodeRes, [...pendingHeaders].filter(([k]) => k !== 'trailer'));
 					nodeRes.writeHead(statusCode, statusText || undefined);
 					nodeRes.end();
 				} catch (err) { unstage(err); }

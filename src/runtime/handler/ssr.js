@@ -3,7 +3,7 @@ import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import { randomUuid, setTimer, clearTimer } from '../runtime.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
@@ -287,7 +287,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			pendingRead = null;
 		}
 		state.responseStarted = true;
-		if (!writeHeaders(res, response, null)) return;
+		if (!writeHeaders(res, response, null, '', true)) return;
 		streaming = true;
 		for (;;) {
 			let value;
@@ -344,27 +344,29 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
  * @param {string} [encoding] the content coding the body was sent with
  * @returns {boolean} false when a header was refused and the 500 was written
  */
-function writeHeaders(res, response, length, encoding = '') {
+function writeHeaders(res, response, length, encoding = '', chunked = false) {
+	/** @type {Array<[string, string | string[]]>} */
+	const staged = [];
 	let hasContentTypeOptions = false;
+	for (const [key, value] of response.headers) {
+		// The framing is this writer's to decide: a Response relayed from
+		// `fetch()` carries the upstream's Transfer-Encoding, and passing it
+		// through beside the length written for a whole body is a message no
+		// HTTP/1.1 client will read. A Trailer goes out only on a chunked
+		// answer; node refuses it on any other.
+		if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
+		if (key === 'trailer' && !chunked) continue;
+		if (key === 'x-content-type-options') hasContentTypeOptions = true;
+		staged.push([key, value]);
+	}
+	const cookies = response.headers.getSetCookie();
+	if (cookies.length > 0) staged.push(['set-cookie', cookies]);
+	// Checked whole before the first is set: a refused header (a cookie
+	// value included) is answered with the 500, not thrown past a response
+	// already marked as started, where nothing would answer it.
 	try {
-		for (const [key, value] of response.headers) {
-			// The framing is this writer's to decide: a Response relayed from
-			// `fetch()` carries the upstream's Transfer-Encoding, and passing
-			// it through beside the length written for a whole body is a
-			// message no HTTP/1.1 client will read. node refuses a Trailer
-			// on any answer it does not frame as chunked, so that is the
-			// writer's too.
-			if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding' || key === 'trailer') continue;
-			if (key === 'x-content-type-options') hasContentTypeOptions = true;
-			res.setHeader(key, value);
-		}
-		// Inside the same guard: a cookie value node refuses is refused like
-		// any other header, not thrown past a response already marked as
-		// started, where nothing would answer it.
-		const cookies = response.headers.getSetCookie();
-		if (cookies.length > 0) res.setHeader('set-cookie', cookies);
+		stageHeaders(res, staged);
 	} catch (error) {
-		for (const name of res.getHeaderNames()) res.removeHeader(name);
 		endText(res, 500, {}, String(error));
 		return false;
 	}
