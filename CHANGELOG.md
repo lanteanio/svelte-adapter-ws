@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Closing a socket refuses a code it cannot send and never splits a
+  character in the reason.** `ws.end()` handed its code and reason to the
+  `ws` library, which throws for a code outside the sendable ranges and for a
+  reason past 123 bytes; that throw was caught as a closed socket, so the
+  connection stayed open and nothing said why. One rule now applies on every
+  surface, as on the family's native tier: a code outside 1000-1003,
+  1007-1014 and 3000-4999, a non-number, a reason without a code, and reason
+  bytes that are not UTF-8 throw a `TypeError` and leave the connection open;
+  a longer reason is shortened at a character boundary and a lone surrogate
+  is sent as U+FFFD. `createTestServer` no longer sends 1000 for an `end()`
+  with no code, it sends no status as production does. Under `vite dev` a
+  long reason no longer throws, a binary reason is sent as its bytes, and
+  `ws.close()` drops the connection without a close frame, so the client
+  reads 1006 rather than 1005.
+- The `close` hook reads the code and reason the server sent when the close
+  was the server's own, and 0 for a close sent with no code, as on the
+  family's native tier, where it read the peer's reply (1005 for an empty
+  close). In the simulator a close with no code reports 0 to the server and
+  1005 to the peer, where it reported 1000 to both.
 - On Windows, a request path that does not percent-decode is no longer
   refused by the reserved-character check, which now reads the decoded
   spelling only when there is one. GET and HEAD still get `400` from the

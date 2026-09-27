@@ -3,6 +3,7 @@ import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
 import { runOpenHook, runCloseHook } from './runtime/utils/hook-boundary.js';
+import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION , TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -225,12 +226,16 @@ function createNodeApp() {
 	function wrapServerSocket(rawWs, userData) {
 		/** Valid through the close dispatch; flipped when it returns. */
 		let invalid = false;
+		/** The close this server started, reported as production does. */
+		/** @type {{ code: number, reason: Buffer } | null} */
+		let serverEnd = null;
 		/** @type {Set<string>} */
 		const topics = new Set();
 		const enc = new TextEncoder();
 		const wrapper = {
 			_topics: topics,
 			_raw: rawWs,
+			_serverEnd() { return serverEnd; },
 			_invalidate() {
 				invalid = true;
 				for (const t of topics) {
@@ -291,8 +296,17 @@ function createNodeApp() {
 				return enc.encode(stripMappedV4(rawWs._socket?.remoteAddress)).buffer;
 			},
 			cork(fn) { return fn(); },
-			end(code = 1000, reason = '') {
-				try { rawWs.close(code, String(reason)); } catch { /* already gone */ }
+			// The same close rule as production, before anything is sent.
+			end(code, reason) {
+				const sent = closeFrameReason(code, reason);
+				if (serverEnd === null && rawWs.readyState === 1) {
+					serverEnd = { code: code ?? 0, reason: sent === undefined ? Buffer.alloc(0) : Buffer.from(typeof sent === 'string' ? Buffer.from(sent) : sent) };
+				}
+				try {
+					if (code === undefined) rawWs.close();
+					else if (sent === undefined) rawWs.close(code);
+					else rawWs.close(code, typeof sent === 'string' ? sent : Buffer.from(sent.buffer, sent.byteOffset, sent.byteLength));
+				} catch { /* already gone */ }
 			},
 			close() {
 				try { rawWs.terminate(); } catch { /* already gone */ }
@@ -583,7 +597,10 @@ function createNodeApp() {
 			});
 		});
 
-		rawWs.on('close', (code, reason) => {
+		rawWs.on('close', (peerCode, peerReason) => {
+			const ended = wrapper._serverEnd();
+			const code = ended !== null ? ended.code : peerCode;
+			const reason = ended !== null ? ended.reason : peerReason;
 			if (idleTimer !== null) { clearTimer(idleTimer); idleTimer = null; }
 			const reasonBuf = reason || Buffer.alloc(0);
 			const reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);
@@ -2948,6 +2965,10 @@ export async function createTestServer(options = {}) {
 			if (cfg && cfg.scenario === 'worker-flap') {
 				const code = typeof cfg.code === 'number' ? cfg.code : 1012;
 				const reason = typeof cfg.reason === 'string' ? cfg.reason : 'worker restart';
+				// Checked once, here, so a code the wire cannot carry is the
+				// caller's TypeError rather than a throw swallowed per socket
+				// below, which would leave every connection open.
+				closeFrameReason(code, reason);
 				// Snapshot first - end() removes the entry from
 				// wsConnections via the close handler, which would mutate
 				// the Set we are iterating. We use ws.end(code, reason)

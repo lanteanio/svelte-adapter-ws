@@ -1676,10 +1676,19 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	Object.defineProperty(wsPlatform, 'connectionTraceContext', { value: connectionTraceContext });
 	userData[WS_PLATFORM] = wsPlatform;
 
+	// The close this server started, if it did. uWS hands the close handler
+	// the code and reason the server itself sent - 0 when it sent no code -
+	// where the `ws` library reports whatever the peer answered with.
+	/** @type {{ code: number, reason: Buffer } | null} */
+	let serverEnd = null;
 	const facade = wrapWebSocket(rawWs, userData, {
 		maxBackpressure: MAX_BACKPRESSURE,
 		closeOnBackpressureLimit: CLOSE_ON_BACKPRESSURE_LIMIT,
 		compressionEnabled: !!COMPRESSION,
+		onEnd: (code, sent) => {
+			if (serverEnd !== null) return;
+			serverEnd = { code: code ?? 0, reason: sent === undefined ? Buffer.alloc(0) : Buffer.from(typeof sent === 'string' ? Buffer.from(sent) : sent) };
+		},
 		onDrop: (byteLength) => {
 			counters.droppedFrames++;
 			counters.droppedBytes += byteLength;
@@ -1759,7 +1768,9 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		);
 	});
 
-	rawWs.on('close', (code, reason) => {
+	rawWs.on('close', (peerCode, peerReason) => {
+		const code = serverEnd !== null ? serverEnd.code : peerCode;
+		const reason = serverEnd !== null ? serverEnd.reason : peerReason;
 		if (idleTimer !== null) clearIntervalTimer(idleTimer);
 		// 1000 (normal) and 1001 (going away) are the two codes a peer sends
 		// deliberately; everything else - including the 1006 a dropped TCP

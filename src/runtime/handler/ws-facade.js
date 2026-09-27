@@ -11,6 +11,7 @@
 // and bump `closedWsAborts`.
 
 import { subscribeSocket, unsubscribeSocket, socketHolds, socketTopicList, subscribersOf } from './topic-registry.js';
+import { closeFrameReason } from '../utils/close-frame.js';
 
 const OPEN = 1;
 
@@ -27,7 +28,8 @@ function throwClosed() {
  *   closeOnBackpressureLimit: boolean,
  *   compressionEnabled: boolean,
  *   onDrop?: (byteLength: number) => void,
- *   onDrain?: (facade: object) => void
+ *   onDrain?: (facade: object) => void,
+ *   onEnd?: (code: number | undefined, reason: string | Uint8Array | undefined) => void
  * }} FacadeOptions
  */
 
@@ -96,12 +98,22 @@ export function wrapWebSocket(rawWs, userData, opts) {
 		},
 
 		/**
+		 * The family's close rule, which the native tier installs on its own
+		 * sockets: a code the wire cannot carry, a reason with no code and a
+		 * reason that is not UTF-8 text are the caller's TypeError, thrown before
+		 * anything is sent, and a reason past 123 bytes is cut at a character.
+		 * The `ws` library refuses those shapes by throwing too, which the catch
+		 * below would read as a closed socket and leave the connection open.
 		 * @param {number} [code]
-		 * @param {string | ArrayBuffer} [message]
+		 * @param {string | ArrayBuffer | ArrayBufferView} [reason]
 		 */
-		end(code, message) {
+		end(code, reason) {
+			const sent = closeFrameReason(code, reason);
+			if (rawWs.readyState === OPEN) opts.onEnd?.(code, sent);
 			try {
-				rawWs.close(code, typeof message === 'string' ? message : message ? Buffer.from(message).toString() : undefined);
+				if (code === undefined) rawWs.close();
+				else if (sent === undefined) rawWs.close(code);
+				else rawWs.close(code, typeof sent === 'string' ? sent : Buffer.from(sent.buffer, sent.byteOffset, sent.byteLength));
 			} catch { /* already gone */ }
 		},
 

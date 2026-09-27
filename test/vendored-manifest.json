@@ -2177,5 +2177,14 @@
 	},
 	{
 		"file": "test/error-registry-hook-crash.test.js"
+	},
+	{
+		"file": "src/runtime/utils/close-frame.js"
+	},
+	{
+		"file": "test/close-frame.test.js"
+	},
+	{
+		"file": "test/close-frame-real.test.js"
 	}
 ]
