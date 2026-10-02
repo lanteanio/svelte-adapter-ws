@@ -86,6 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **A connection attempt the network never answers is abandoned and
+  retried.** A WebSocket handshake or an auth preflight that got no response
+  at all - no open, no error, no close - left the bundled client in
+  `connecting` indefinitely, as on networks that silently drop traffic
+  (captive portals, broken proxies, mobile handovers). Each attempt is now
+  bounded at 15 seconds and then handed to the usual reconnect path; the
+  bound is internal, and the backoff, `maxReconnectAttempts` and the failure
+  classes are unchanged.
 - **A rate-limited auth preflight no longer closes the client for good.** The
   bundled client read every 4xx from the preflight as a verdict on the user,
   so a `429`, which clients behind one address earn together, marked them all
