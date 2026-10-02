@@ -1631,18 +1631,24 @@ export const platform = {
 			counters.closedWsAborts++;
 			return;
 		}
-		const coalesceKey = key ?? topic + '\0' + event;
 		let pending = userData[WS_COALESCED];
 		if (!pending) {
 			pending = new Map();
 			userData[WS_COALESCED] = pending;
 		}
-		if (pending.size >= MAX_COALESCED_KEYS_PER_CONNECTION && !pending.has(coalesceKey)) {
+		assert(pending instanceof Map, 'coalesce.userdata-pending-type', null);
+		// At cap with a brand-new key: drop the oldest insertion-order
+		// entry. sendCoalesced is latest-value-wins by contract, so an
+		// evicted oldest is simply a value the caller already replaced
+		// with a fresher write under the same key (or, with unbounded
+		// distinct keys, the caller is leaking and the oldest-pending
+		// is the most stale value to lose).
+		if (pending.size >= MAX_COALESCED_KEYS_PER_CONNECTION && !pending.has(key)) {
 			const oldest = pending.keys().next().value;
 			if (oldest !== undefined) pending.delete(oldest);
 		}
-		pending.set(coalesceKey, { topic, event, data });
-		flushCoalescedFor(facade, userData);
+		pending.set(key, { topic, event, data });
+		flushCoalescedFor(facade);
 	},
 
 	/**
@@ -2178,31 +2184,35 @@ let _topicHelperCache = null;
  * Exported for the facade's drain callback.
  *
  * @param {object} facade
- * @param {any} [userData]
  */
-export function flushCoalescedFor(facade, userData) {
-	let ud = userData;
-	if (ud === undefined) {
-		try {
-			ud = /** @type {any} */ (facade).getUserData();
-		} catch {
-			counters.closedWsAborts++;
-			return;
-		}
-	}
-	const pending = ud?.[WS_COALESCED];
+export function flushCoalescedFor(facade) {
+	let ud;
+	try { ud = /** @type {any} */ (facade).getUserData(); }
+	catch { counters.closedWsAborts++; return; }
+	const pending = ud[WS_COALESCED];
 	if (!pending || pending.size === 0) return;
-	drainCoalesced(pending, (value) => {
-		const payload = envelopePrefix(value.topic, value.event) + JSON.stringify(value.data ?? null) + '}';
-		try {
-			const result = /** @type {any} */ (facade).send(payload, false, false);
-			if (result !== 2) bumpOut(ud, payload);
-			return result;
-		} catch {
+	assert(pending instanceof Map, 'coalesce.pending-type', null);
+	let aborted = false;
+	drainCoalesced(pending, (msg) => {
+		if (aborted) return 2;
+		assert(typeof msg.topic === 'string', 'coalesce.entry-topic-type', null);
+		assert(typeof msg.event === 'string', 'coalesce.entry-event-type', null);
+		const payload = envelopePrefix(msg.topic, msg.event) + JSON.stringify(msg.data ?? null) + '}';
+		let result;
+		try { result = /** @type {any} */ (facade).send(payload, false, false); }
+		catch {
+			// Socket closed mid-drain. There will be no further drain to
+			// retry on, so the rest of the buffer is dropped: returning 0
+			// removes this entry and halts the loop, and the clear below
+			// wipes the rest.
 			counters.closedWsAborts++;
-			return 2;
+			aborted = true;
+			return 0;
 		}
+		if (result !== 2) bumpOut(ud, payload);
+		return result;
 	});
+	if (aborted) pending.clear();
 }
 
 // - Cross-worker relay receive -----------------------------------------------

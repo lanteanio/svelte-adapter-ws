@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream that enqueues strings or ArrayBuffers is written like one that
   enqueues bytes, except that a whole body of one string chunk goes out
   uncompressed, as the native tier sends it.
+- `platform.sendCoalesced` queues under the `key` it is given, as the
+  family's native tier does. A call without a key used to queue under its
+  topic and event; such calls now share one slot. A socket that closes with
+  values queued drops the whole queue at the next flush instead of keeping
+  it.
 
 ### Fixed
 
