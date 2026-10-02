@@ -2829,17 +2829,8 @@ function httpRefusalResponse(res) {
 				send500(res);
 				return facade;
 			}
-			try {
-				res.writeHead(status, statusText || undefined);
-				res.end(text);
-			} catch {
-				// Nothing went out: answered like a refused header. Once the
-				// head is out, the exchange is already gone.
-				if (!res.headersSent) {
-					for (const name of res.getHeaderNames()) res.removeHeader(name);
-					send500(res);
-				}
-			}
+			res.writeHead(status, statusText || undefined);
+			res.end(text);
 			return facade;
 		}
 	};

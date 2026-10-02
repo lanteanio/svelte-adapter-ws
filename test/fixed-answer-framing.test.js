@@ -563,6 +563,23 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(readChunked(raw, '200')).toBe('one|two');
 	});
 
+	it('drops that Trailer for an HTTP/1.0 request, which node answers close-delimited', async () => {
+		const first = splitFirst(await pipeline(open.rt.port, [['GET /trailer-stream HTTP/1.0', 'Cookie: s=1']]));
+		expect(first.status).toContain('200');
+		expect(header(first.lines, 'trailer')).toEqual([]);
+		expect(header(first.lines, 'transfer-encoding')).toEqual([]);
+		expect(header(first.lines, 'content-length')).toEqual([]);
+		expect(first.rest).toBe('one|two');
+	});
+
+	it('keeps it for an HTTP/1.0 request that accepts chunked', async () => {
+		const first = splitFirst(await pipeline(open.rt.port, [['GET /trailer-stream HTTP/1.0', 'Cookie: s=1', 'TE: chunked']]));
+		expect(first.status).toContain('200');
+		expect(header(first.lines, 'trailer')).toEqual(['x-foo']);
+		expect(header(first.lines, 'transfer-encoding')).toEqual(['chunked']);
+		expect(first.rest).toBe('4\r\none|\r\n3\r\ntwo\r\n0\r\n\r\n');
+	});
+
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
 		for (const cookie of [[], ['Cookie: s=1']]) {
 			const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /trailer HTTP/1.1', ...cookie], OK]), {
@@ -923,6 +940,42 @@ describe('createTestServer', () => {
 				body: '{"error":"internal error"}'
 			});
 			expect(header(closeBad.lines, 'connection')).not.toContain('close');
+		} finally {
+			await mirror.close();
+		}
+	});
+
+	it('drops a Trailer and keeps the connection on its bodyless admin answers too', async () => {
+		const bad = 'a' + String.fromCharCode(1) + 'b';
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin(request) {
+					const p = new URL(request.url).pathname;
+					if (p === '/__realtime/trailer') return new Response('t', { headers: { trailer: 'x-foo' } });
+					if (p === '/__realtime/trailer-204') return new Response(null, { status: 204, headers: { trailer: 'x-foo' } });
+					if (p === '/__realtime/close-bad') return new Response('x', { headers: { connection: 'close', 'x-bad': bad } });
+					return new Response(null, { status: 204, headers: { connection: 'close', 'x-bad': bad } });
+				}
+			}
+		});
+		try {
+			// A HEAD declares the length of the body the handler returned.
+			const head = expectBodyless(await pipeline(mirror.port, [['HEAD /__realtime/trailer HTTP/1.1'], ['GET /healthz HTTP/1.1']]), { status: '200', length: 1 });
+			expect(header(head.lines, 'trailer')).toEqual([]);
+			const empty = expectBodyless(await pipeline(mirror.port, [['GET /__realtime/trailer-204 HTTP/1.1'], ['GET /healthz HTTP/1.1']]), { status: '204', length: null });
+			expect(header(empty.lines, 'trailer')).toEqual([]);
+			const body = '{"error":"internal error"}';
+			for (const target of ['HEAD /__realtime/close-bad HTTP/1.1', 'GET /__realtime/close-bad-204 HTTP/1.1']) {
+				const first = splitFirst(await pipeline(mirror.port, [[target], ['GET /healthz HTTP/1.1']]));
+				expect(first.status, target).toBe('HTTP/1.1 500 Internal Server Error');
+				expect(header(first.lines, 'connection'), target).not.toContain('close');
+				expect(header(first.lines, 'content-length'), target).toEqual([String(body.length)]);
+				const bodyBytes = target.startsWith('HEAD') ? '' : body;
+				expect(first.rest.slice(0, bodyBytes.length), target).toBe(bodyBytes);
+				expect(first.rest.slice(bodyBytes.length).startsWith('HTTP/1.1 200'), target + ': the follower is served').toBe(true);
+			}
 		} finally {
 			await mirror.close();
 		}

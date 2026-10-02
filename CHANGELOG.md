@@ -207,7 +207,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `500`; `createTestServer`'s admin mirror and waiting room answer the same
   way. A relayed `Trailer`, which node refuses on an answer it does not
   stream chunked, is dropped there with the other framing headers the writer
-  owns, and kept on an SSR answer that does stream.
+  owns, and kept on an SSR answer node streams chunked. An HTTP/1.0 request
+  without `TE: chunked` is answered close-delimited, so the Trailer is
+  dropped for it too.
 - A `413` the adapter writes reads `Content Too Large`, as RFC 9110 and the
   family's native tier name it, where node's default wrote `Payload Too
   Large`, and the `500` that follows a relayed header node refuses reads

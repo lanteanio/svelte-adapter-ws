@@ -287,7 +287,9 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			pendingRead = null;
 		}
 		state.responseStarted = true;
-		if (!writeHeaders(res, response, null, '', true)) return;
+		// node frames this answer chunked unless the request is HTTP/1.0
+		// without `TE: chunked`, which it answers close-delimited instead.
+		if (!writeHeaders(res, response, null, '', res.useChunkedEncodingByDefault)) return;
 		streaming = true;
 		for (;;) {
 			let value;
@@ -342,6 +344,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
  * @param {Response} response
  * @param {number | null} length the Content-Length to write, or null for none
  * @param {string} [encoding] the content coding the body was sent with
+ * @param {boolean} [chunked] node will frame this answer chunked, so a
+ *   Trailer the Response carries can go out with it
  * @returns {boolean} false when a header was refused and the 500 was written
  */
 function writeHeaders(res, response, length, encoding = '', chunked = false) {
