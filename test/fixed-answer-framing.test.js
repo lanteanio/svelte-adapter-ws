@@ -627,20 +627,14 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(first.rest).toBe('4\r\none|\r\n3\r\ntwo\r\n0\r\n\r\n');
 	});
 
-	it('never ends a body that failed mid-stream the way a complete one ends', async () => {
+	it('cuts a chunked body that failed mid-stream before its terminal chunk', async () => {
 		const ask = (/** @type {string} */ version, /** @type {string[]} */ extra = []) => exchange(
 			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
 			[`GET /fail-mid HTTP/${version}`, 'Host: 127.0.0.1', 'Cookie: s=1', ...extra]
 		);
-		// HTTP/1.0 without TE: chunked is answered close-delimited, where a clean
-		// close is how a complete body ends: the connection is reset instead.
-		const closeDelimited = await ask('1.0');
-		expect(closeDelimited.buffer.startsWith('HTTP/1.1 200'), closeDelimited.buffer.slice(0, 40)).toBe(true);
-		expect(header(splitFirst(closeDelimited.buffer).lines, 'content-length')).toEqual([]);
-		expect(closeDelimited.how).toBe('error ECONNRESET');
-		// A chunked answer, to HTTP/1.1 or to HTTP/1.0 that asked for it, is cut
-		// before its terminal chunk. The close stays a plain one there, so the
-		// client keeps every byte sent before it, which a reset may discard.
+		// To HTTP/1.1, or to HTTP/1.0 that asked for chunked, the cut leaves out
+		// the terminal chunk, and the close is a plain one, so the client keeps
+		// every byte sent before it.
 		for (const [version, extra] of /** @type {Array<[string, string[]]>} */ ([['1.1', []], ['1.0', ['TE: chunked']]])) {
 			const chunked = await ask(version, extra);
 			expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding'), version).toEqual(['chunked']);

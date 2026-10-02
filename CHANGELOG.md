@@ -64,12 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint, the admin lane and `createTestServer`'s admin mirror alike. A
   stream that enqueues strings or ArrayBuffers is written like one that
   enqueues bytes, except that a whole body of one string chunk goes out
-  uncompressed, as the native tier sends it. An HTTP/1.0 request without
-  `TE: chunked` cannot be answered chunked, so a stream goes out to it
-  close-delimited; if that body fails mid-way the connection is reset rather
-  than closed, because a clean close is how such a body ends complete. Over
-  TLS, where node cannot reset the socket, it is closed without a TLS
-  close_notify instead.
+  uncompressed, as the native tier sends it.
 - The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
   UTF-16 code units, the `length` JavaScript reports, as the family's native
   tier counts them, where they counted UTF-8 bytes; binary frames are still

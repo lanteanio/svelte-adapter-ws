@@ -365,8 +365,9 @@ function createNodeApp() {
 		 * The staged headers are checked whole and set before the status is
 		 * written, so a header node refuses throws with nothing committed - not
 		 * the status, and for a 204 or 304 not the "no body" that writeHead
-		 * decides first. A Trailer is dropped: this double never streams, and
-		 * node refuses one on any other answer. The staged answer is dropped and
+		 * decides first. `end()` drops a Trailer: this double never streams, and
+		 * node refuses one on any other answer; the bodyless answer's callers
+		 * pass none. The staged answer is dropped and
 		 * the throw handed back to the caller, whose own failure path answers it
 		 * the way the runtime's lanes do. A throw once the head is out is a peer
 		 * that is gone, and is swallowed.
