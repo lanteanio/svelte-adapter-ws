@@ -207,6 +207,7 @@
 		"@sveltejs/kit": "^2.0.0",
 		"acorn": "^8.18.0",
 		"esbuild": "^0.28.2",
+		"markdown-it": "^15.0.0",
 		"publint": "^0.3.22",
 		"svelte-adapter-ws": "file:.",
 		"typescript": "^6.0.3",

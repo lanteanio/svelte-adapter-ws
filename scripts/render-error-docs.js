@@ -80,10 +80,26 @@ lines.push(
 	'|---|---|---|'
 );
 
+/**
+ * An inline code span that renders `value` exactly: the fence is one backtick
+ * longer than the longest run inside it, and a value that starts or ends with a
+ * backtick, or starts and ends with a space, is padded with one space each
+ * side - the one case CommonMark strips a space, which it then strips again.
+ * @param {string} value
+ */
+function codeSpan(value) {
+	const text = String(value);
+	let longest = 0;
+	for (const run of text.match(/`+/g) || []) longest = Math.max(longest, run.length);
+	const fence = '`'.repeat(longest + 1);
+	const pad = /^`|`$/.test(text) || (/^ /.test(text) && / $/.test(text)) ? ' ' : '';
+	return fence + pad + text + pad + fence;
+}
+
 for (const entry of ADAPTER_ERROR_REGISTRY) {
 	lines.push(
 		'| [' + entry.id + '](#' + entry.anchor + ') | `' + cell(entry.code || entry.event) +
-		'` | `' + cell(entry.messagePrefix) + '` |'
+		'` | ' + codeSpan(cell(entry.messagePrefix)) + ' |'
 	);
 }
 
@@ -104,7 +120,7 @@ lines.push(
 	''
 );
 for (const entry of consoleEntries) {
-	lines.push('- `' + cell(entry.messagePrefix) + '` - [' + entry.id + '](#' + entry.anchor + ')');
+	lines.push('- ' + codeSpan(cell(entry.messagePrefix)) + ' - [' + entry.id + '](#' + entry.anchor + ')');
 }
 lines.push('');
 

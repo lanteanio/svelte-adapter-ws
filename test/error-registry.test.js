@@ -13,6 +13,14 @@ import { ADAPTER_ERROR_IDS, ADAPTER_ERROR_REGISTRY, adapterConsoleLine } from '.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcRoot = path.join(repoRoot, 'src');
 
+/**
+ * The text between a code span's fences, as CommonMark reads it: one space is
+ * stripped from each side when both sides have one and the text is not only
+ * spaces.
+ * @param {string} inner
+ */
+const spanText = (inner) => (/^ [\s\S]* $/.test(inner) && inner.trim() !== '' ? inner.slice(1, -1) : inner);
+
 /** @type {{ f: string, s: string }[]} */
 const corpus = [];
 const walk = (dir) => {
@@ -124,8 +132,8 @@ describe('error catalog', () => {
 		// missing row leaves an entry reachable only by scrolling.
 		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
 		const rows = new Map(
-			[...docs.matchAll(/^\| \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\) \| `([^`]*)` \| `([\s\S]*?)` \|$/gm)]
-				.map((m) => [m[1], { anchor: m[2], key: m[3], prefix: m[4] }])
+			[...docs.matchAll(/^\| \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\) \| `([^`]*)` \| (`+)([\s\S]*?)\4 \|$/gm)]
+				.map((m) => [m[1], { anchor: m[2], key: m[3], prefix: spanText(m[5]) }])
 		);
 		expect(rows.size, 'one index row per registry entry').toBe(ADAPTER_ERROR_REGISTRY.length);
 		for (const entry of ADAPTER_ERROR_REGISTRY) {
@@ -144,8 +152,8 @@ describe('error catalog', () => {
 		// sees, so it is listed under the prefix that is printed instead.
 		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
 		const listed = new Map(
-			[...docs.matchAll(/^- `([\s\S]*?)` - \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\)$/gm)]
-				.map((m) => [m[2], { key: m[1], anchor: m[3] }])
+			[...docs.matchAll(/^- (`+)([\s\S]*?)\1 - \[(ADAPTER-ERR-[A-Z-]+)\]\(#([a-z0-9-]+)\)$/gm)]
+				.map((m) => [m[3], { key: spanText(m[2]), anchor: m[4] }])
 		);
 		expect(listed.size, 'one list entry per registry entry').toBe(ADAPTER_ERROR_REGISTRY.length);
 		for (const entry of ADAPTER_ERROR_REGISTRY) {

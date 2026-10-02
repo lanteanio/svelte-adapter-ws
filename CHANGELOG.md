@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **The error reference quotes a message prefix that carries backticks
+  intact.** `docs/errors.md` put each prefix in a single-backtick code span, so
+  a prefix with backticks of its own, as `ADAPTER-ERR-METRICS-MODULE-SHAPE`'s
+  has, closed the span early and the rest spilled out as prose. Each span's
+  fence is now one backtick longer than the longest run inside it.
 - **The control-channel ceiling documents its worst case.** The README
   quoted a subscribe batch of short topics, about twelve times amplified, at
   one frame more than this runtime sends. Filling the 256-topic cap and

@@ -93,7 +93,7 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[ws] diagnostic render failed: ` |
 | [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write) | `ws.diagnostic.console-write` | `[ws] diagnostic rendered but the console refused it: ` |
 | [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice) | `ws.diagnostic.sink-notice` | `[ws] operational sink failed and its failure notice could not be built: ` |
-| [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | `[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ` |
+| [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | ``[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` |
 | [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument) | `ws.metrics.instrument-threw` | `[ws] a metrics instrument threw; further errors from it are suppressed` |
 | [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled) | `ws.posture-export.disabled` | `[ws] posture export disabled: ` |
 | [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer) | `ws.posture-observer.threw` | `[ws] a posture transition handler threw` |
@@ -183,7 +183,7 @@ the stable ID tag on the line):
 - `[ws] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
 - `[ws] diagnostic rendered but the console refused it: ` - [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write)
 - `[ws] operational sink failed and its failure notice could not be built: ` - [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice)
-- `[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
+- ``[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
 - `[ws] a metrics instrument threw; further errors from it are suppressed` - [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument)
 - `[ws] posture export disabled: ` - [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled)
 - `[ws] a posture transition handler threw` - [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer)
