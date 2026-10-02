@@ -447,7 +447,7 @@ function createNodeApp() {
 					if (typeof reportedContentLength === 'number' && !pendingHeaders.has('content-length')) {
 						pendingHeaders.set('content-length', String(reportedContentLength));
 					}
-					stageHeaders(nodeRes, [...pendingHeaders].filter(([k]) => k !== 'trailer'));
+					stageHeaders(nodeRes, [...pendingHeaders]);
 					nodeRes.writeHead(statusCode, statusText || undefined);
 					nodeRes.end();
 				} catch (err) { unstage(err); }

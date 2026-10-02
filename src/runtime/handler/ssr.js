@@ -192,7 +192,8 @@ function compressWhole(response, body, acceptEncoding) {
  * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
  * without `streamDone`, and the exchange is then closed abruptly rather than
  * ended: a clean EOF on a partial body would read as a successful but
- * truncated response. The failure is rethrown so the caller reports it; the
+ * truncated response. A chunked answer is cut before its terminal chunk; a
+ * close-delimited one, which has none, is reset. The failure is rethrown so the caller reports it; the
  * close it caused is marked as the server's, so that report is not mistaken
  * for a client abort.
  *
@@ -314,7 +315,11 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 				res.end();
 			} else {
 				state.closedByServer = true;
-				res.destroy();
+				// A close-delimited answer (HTTP/1.0 without `TE: chunked`) has no
+				// terminal chunk to leave out, so a clean close would end it as a
+				// complete message: reset the connection instead.
+				if (!res.useChunkedEncodingByDefault && res.socket) res.socket.resetAndDestroy();
+				else res.destroy();
 			}
 		}
 		reader.cancel().catch(() => {});

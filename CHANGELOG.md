@@ -44,7 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint, the admin lane and `createTestServer`'s admin mirror alike. A
   stream that enqueues strings or ArrayBuffers is written like one that
   enqueues bytes, except that a whole body of one string chunk goes out
-  uncompressed, as the native tier sends it.
+  uncompressed, as the native tier sends it. An HTTP/1.0 request without
+  `TE: chunked` cannot be answered chunked, so a stream goes out to it
+  close-delimited; if that body fails mid-way the connection is reset rather
+  than closed, because a clean close is how such a body ends complete.
 - `platform.sendCoalesced` queues under the `key` it is given, as the
   family's native tier does. A call without a key used to queue under its
   topic and event; such calls now share one slot. A socket that closes with

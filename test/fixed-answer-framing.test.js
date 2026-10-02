@@ -165,6 +165,18 @@ export class Server {
 				}
 			}), { headers: { ...text, trailer: 'x-foo' } });
 		}
+		if (p === '/fail-mid') {
+			const enc = new TextEncoder();
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(enc.encode('part1|'));
+					await new Promise((r) => setTimeout(r, 30));
+					c.enqueue(enc.encode('part2|'));
+					await new Promise((r) => setTimeout(r, 30));
+					c.error(new Error('source failed'));
+				}
+			}), { headers: { ...text, 'content-length': '18' } });
+		}
 		if (p === '/one-string-past-cap') {
 			const page = '<html>' + 'b'.repeat(600 * 1024) + '</html>';
 			return new Response(new ReadableStream({ start(c) { c.enqueue(page); c.close(); } }), { headers: { 'content-type': 'text/html' } });
@@ -578,6 +590,39 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(header(first.lines, 'trailer')).toEqual(['x-foo']);
 		expect(header(first.lines, 'transfer-encoding')).toEqual(['chunked']);
 		expect(first.rest).toBe('4\r\none|\r\n3\r\ntwo\r\n0\r\n\r\n');
+	});
+
+	it('never ends a body that failed mid-stream the way a complete one ends', async () => {
+		/**
+		 * One request on its own socket: what arrived, and how the socket ended.
+		 * @param {string} version
+		 */
+		const exchange = (version) => new Promise((resolve) => {
+			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
+				socket.write(`GET /fail-mid HTTP/${version}\r\nHost: 127.0.0.1\r\nCookie: s=1\r\n\r\n`);
+			});
+			let buffer = '';
+			let how = 'timeout';
+			socket.on('data', (chunk) => { buffer += chunk.toString('latin1'); });
+			socket.on('end', () => { if (how === 'timeout') how = 'end'; });
+			socket.on('error', (err) => { how = 'error ' + /** @type {any} */ (err).code; });
+			socket.on('close', () => { clearTimeout(timer); resolve({ buffer, how }); });
+			const timer = setTimeout(() => { socket.destroy(); resolve({ buffer, how }); }, 5000);
+		});
+		// HTTP/1.0 without TE: chunked is answered close-delimited, where a clean
+		// close is how a complete body ends: the connection is reset instead.
+		const closeDelimited = /** @type {{ buffer: string, how: string }} */ (await exchange('1.0'));
+		expect(closeDelimited.buffer.startsWith('HTTP/1.1 200'), closeDelimited.buffer.slice(0, 40)).toBe(true);
+		expect(header(splitFirst(closeDelimited.buffer).lines, 'content-length')).toEqual([]);
+		expect(closeDelimited.how).toBe('error ECONNRESET');
+		// HTTP/1.1 streams chunked, and the cut leaves out the terminal chunk. The
+		// close stays a plain one there, so the client keeps every byte sent
+		// before it, which a reset may discard.
+		const chunked = /** @type {{ buffer: string, how: string }} */ (await exchange('1.1'));
+		expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding')).toEqual(['chunked']);
+		expect(chunked.buffer).toContain('part1|');
+		expect(chunked.buffer.endsWith('0\r\n\r\n'), 'no terminal chunk').toBe(false);
+		expect(chunked.how).toBe('end');
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
