@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TE: chunked` cannot be answered chunked, so a stream goes out to it
   close-delimited; if that body fails mid-way the connection is reset rather
   than closed, because a clean close is how such a body ends complete.
+- The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
+  UTF-16 code units, the `length` JavaScript reports, as the family's native
+  tier counts them, where they counted UTF-8 bytes; binary frames are still
+  counted in bytes. The two agree for ASCII text, and a non-ASCII frame now
+  reads lower. An exact UTF-8 count would scan every frame on every send.
 - `platform.sendCoalesced` queues under the `key` it is given, as the
   family's native tier does. A call without a key used to queue under its
   topic and event; such calls now share one slot. A socket that closes with

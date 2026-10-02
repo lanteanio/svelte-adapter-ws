@@ -41,7 +41,7 @@ export function bumpIn(userData, payload) {
 	const stats = userData?.[WS_STATS];
 	if (!stats) return;
 	stats.messagesIn++;
-	stats.bytesIn += typeof payload === 'string' ? Buffer.byteLength(payload) : payload.byteLength;
+	stats.bytesIn += typeof payload === 'string' ? payload.length : payload.byteLength;
 }
 
 /**
@@ -53,5 +53,8 @@ export function bumpOut(userData, payload) {
 	const stats = userData?.[WS_STATS];
 	if (!stats) return;
 	stats.messagesOut++;
-	stats.bytesOut += typeof payload === 'string' ? Buffer.byteLength(payload) : payload.byteLength;
+	// Bytes for a binary frame, UTF-16 code units for a text one: an exact UTF-8
+	// count would scan every frame on every send. The unit is documented on
+	// CloseContext.bytesOut.
+	stats.bytesOut += typeof payload === 'string' ? payload.length : payload.byteLength;
 }

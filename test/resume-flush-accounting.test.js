@@ -1,7 +1,8 @@
 // The gap-fill flush is the one send lane whose frames leave through the
-// resume buffer instead of a platform method, so it is where a second byte
-// counter goes unnoticed: this runtime counts bytesOut in BYTES on every
-// other lane, and a flushed frame must not report UTF-16 code units instead.
+// resume buffer instead of a platform method, so it is where a second counter
+// goes unnoticed: bytesOut counts a text frame in UTF-16 code units on every
+// lane, as the family's native tier does, and a flushed frame must count the
+// same unit.
 // The second case pins the PRIMITIVE the batch lane sweeps with: a flush
 // deregisters only its own topic, so closing the rest is discardResumeCapture's
 // job and not something the flush does on its way past. The lane driving that
@@ -40,11 +41,11 @@ describe('the gap-fill flush accounts for what it sent', () => {
 		};
 	}
 
-	it('counts a flushed frame in bytes, not UTF-16 code units', () => {
+	it('counts a flushed text frame in UTF-16 code units, the unit every lane uses', () => {
 		const conn = scriptedWs();
 		const topic = 'flush-accounting-bytes';
-		// Two-byte characters in the payload, so the two counts differ: any
-		// lane still measuring `.length` under-reports this frame by 2.
+		// Two-byte characters in the payload, so the two counts differ: a lane
+		// measuring UTF-8 bytes over-reports this frame by 2.
 		const envelope = `{"topic":"${topic}","event":"update","data":"Grüße"}`;
 		expect(Buffer.byteLength(envelope), 'the payload must actually be multi-byte').toBeGreaterThan(envelope.length);
 		// Arm BOTH stats gates. They are wired to the same thing in the runtime
@@ -60,7 +61,7 @@ describe('the gap-fill flush accounts for what it sent', () => {
 			expect(resumeBuffer.flushResumeTopic(capture, topic, 0), 'the flush must not report a closed connection').toBe(false);
 			expect(conn.sent).toEqual([envelope]);
 			expect(ud[symbols.WS_STATS].messagesOut).toBe(1);
-			expect(ud[symbols.WS_STATS].bytesOut).toBe(Buffer.byteLength(envelope));
+			expect(ud[symbols.WS_STATS].bytesOut).toBe(envelope.length);
 		} finally {
 			connStats.setStatsEnabled(false);
 			config.armCloseHookAccounting(false);
