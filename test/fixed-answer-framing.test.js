@@ -10,6 +10,9 @@
 // due, moves that boundary.
 
 import net from 'node:net';
+import tls from 'node:tls';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 
@@ -165,6 +168,19 @@ export class Server {
 				}
 			}), { headers: { ...text, trailer: 'x-foo' } });
 		}
+		if (p === '/refuse-mid') {
+			// A chunk the writer refuses, after one it sent: the source is still
+			// open, so the writer has to cancel it.
+			const enc = new TextEncoder();
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(enc.encode('part1|'));
+					await new Promise((r) => setTimeout(r, 30));
+					c.enqueue(42);
+				},
+				cancel() { globalThis.__fafRefuseCancelled = true; }
+			}), { headers: text });
+		}
 		if (p === '/fail-mid') {
 			const enc = new TextEncoder();
 			return new Response(new ReadableStream({
@@ -296,6 +312,25 @@ function splitFirst(raw) {
 const header = (lines, name) => lines
 	.filter((line) => line.toLowerCase().startsWith(name + ':'))
 	.map((line) => line.slice(name.length + 1).trim());
+
+/**
+ * One request on its own socket: what arrived, and how the socket ended.
+ * @param {(onConnect: () => void) => import('node:net').Socket} open
+ * @param {string[]} lines the request head
+ * @returns {Promise<{ buffer: string, how: string }>}
+ */
+function exchange(open, lines) {
+	return new Promise((resolve) => {
+		const socket = open(() => { socket.write(lines.join('\r\n') + '\r\n\r\n'); });
+		let buffer = '';
+		let how = 'timeout';
+		socket.on('data', (chunk) => { buffer += chunk.toString('latin1'); });
+		socket.on('end', () => { if (how === 'timeout') how = 'end'; });
+		socket.on('error', (err) => { how = 'error ' + /** @type {any} */ (err).code; });
+		socket.on('close', () => { clearTimeout(timer); resolve({ buffer, how }); });
+		const timer = setTimeout(() => { socket.destroy(); resolve({ buffer, how }); }, 5000);
+	});
+}
 
 const FOLLOWER = 'the next response begins where the framing says this one ends; got: ';
 
@@ -593,36 +628,26 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 	});
 
 	it('never ends a body that failed mid-stream the way a complete one ends', async () => {
-		/**
-		 * One request on its own socket: what arrived, and how the socket ended.
-		 * @param {string} version
-		 */
-		const exchange = (version) => new Promise((resolve) => {
-			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
-				socket.write(`GET /fail-mid HTTP/${version}\r\nHost: 127.0.0.1\r\nCookie: s=1\r\n\r\n`);
-			});
-			let buffer = '';
-			let how = 'timeout';
-			socket.on('data', (chunk) => { buffer += chunk.toString('latin1'); });
-			socket.on('end', () => { if (how === 'timeout') how = 'end'; });
-			socket.on('error', (err) => { how = 'error ' + /** @type {any} */ (err).code; });
-			socket.on('close', () => { clearTimeout(timer); resolve({ buffer, how }); });
-			const timer = setTimeout(() => { socket.destroy(); resolve({ buffer, how }); }, 5000);
-		});
+		const ask = (/** @type {string} */ version, /** @type {string[]} */ extra = []) => exchange(
+			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+			[`GET /fail-mid HTTP/${version}`, 'Host: 127.0.0.1', 'Cookie: s=1', ...extra]
+		);
 		// HTTP/1.0 without TE: chunked is answered close-delimited, where a clean
 		// close is how a complete body ends: the connection is reset instead.
-		const closeDelimited = /** @type {{ buffer: string, how: string }} */ (await exchange('1.0'));
+		const closeDelimited = await ask('1.0');
 		expect(closeDelimited.buffer.startsWith('HTTP/1.1 200'), closeDelimited.buffer.slice(0, 40)).toBe(true);
 		expect(header(splitFirst(closeDelimited.buffer).lines, 'content-length')).toEqual([]);
 		expect(closeDelimited.how).toBe('error ECONNRESET');
-		// HTTP/1.1 streams chunked, and the cut leaves out the terminal chunk. The
-		// close stays a plain one there, so the client keeps every byte sent
-		// before it, which a reset may discard.
-		const chunked = /** @type {{ buffer: string, how: string }} */ (await exchange('1.1'));
-		expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding')).toEqual(['chunked']);
-		expect(chunked.buffer).toContain('part1|');
-		expect(chunked.buffer.endsWith('0\r\n\r\n'), 'no terminal chunk').toBe(false);
-		expect(chunked.how).toBe('end');
+		// A chunked answer, to HTTP/1.1 or to HTTP/1.0 that asked for it, is cut
+		// before its terminal chunk. The close stays a plain one there, so the
+		// client keeps every byte sent before it, which a reset may discard.
+		for (const [version, extra] of /** @type {Array<[string, string[]]>} */ ([['1.1', []], ['1.0', ['TE: chunked']]])) {
+			const chunked = await ask(version, extra);
+			expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding'), version).toEqual(['chunked']);
+			expect(chunked.buffer, version).toContain('part1|');
+			expect(chunked.buffer.endsWith('0\r\n\r\n'), version + ': no terminal chunk').toBe(false);
+			expect(chunked.how, version).toBe('end');
+		}
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
@@ -1078,5 +1103,42 @@ describe('createTestServer', () => {
 		} finally {
 			await mirror.close();
 		}
+	});
+});
+
+describe('a close-delimited body that fails mid-stream over TLS', () => {
+	// A TLS socket cannot be reset the way a TCP one can, so the cut must still
+	// close the exchange rather than leave it open with nothing to answer.
+	const prefix = 'SAW_FAF_TLS_';
+	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
+	/** @type {any} */ let secure;
+
+	beforeAll(async () => {
+		process.env[prefix + 'SSL_CERT'] = path.join(certs, 'localhost.crt');
+		process.env[prefix + 'SSL_KEY'] = path.join(certs, 'localhost.key');
+		process.env[prefix + 'SSL_WATCH'] = '0';
+		const payload = buildRuntime({ replace: { ENV_PREFIX: JSON.stringify(prefix) }, serverSource: SERVER });
+		secure = { payload, rt: await bootRuntime(payload) };
+	}, 60000);
+
+	afterAll(async () => {
+		for (const name of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH']) delete process.env[prefix + name];
+		await secure?.rt.close();
+		secure?.payload.cleanup();
+	});
+
+	it('closes the exchange, cancels the source, and lets shutdown drain', async () => {
+		delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+		for (const target of ['/fail-mid', '/refuse-mid']) {
+			const answer = await exchange(
+				(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
+				[`GET ${target} HTTP/1.0`, 'Host: 127.0.0.1', 'Cookie: s=1']
+			);
+			expect(answer.buffer.startsWith('HTTP/1.1 200'), target + ': ' + answer.buffer.slice(0, 40)).toBe(true);
+			expect(header(splitFirst(answer.buffer).lines, 'content-length'), target).toEqual([]);
+			expect(answer.how, target + ' is closed, not left open').not.toBe('timeout');
+		}
+		expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, 'the refused source was cancelled').toBe(true);
+		expect(await secure.rt.handler.shutdown({ timeoutMs: 2000 }), 'nothing is left in flight').toBe(true);
 	});
 });
