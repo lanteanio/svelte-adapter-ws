@@ -2189,5 +2189,8 @@
 	},
 	{
 		"file": "test/coalesced-drain-real.test.js"
+	},
+	{
+		"file": "test/platform-type-surface.test.js"
 	}
 ]

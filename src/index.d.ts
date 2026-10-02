@@ -1174,6 +1174,13 @@ export interface Platform {
 	adviseReconnect(options?: { windowMs?: number; afterMs?: number; close?: boolean; filter?: (userData: any) => boolean; compress?: boolean }): number;
 	readonly connections: number;
 	readonly closedWsAborts: number;
+	/**
+	 * Per-category count of framework invariant violations on this worker,
+	 * keyed by category string. The Map is live and owned by the runtime -
+	 * read it, do not modify it. `introspect()` reports the same counts as a
+	 * plain object.
+	 */
+	readonly assertions: ReadonlyMap<string, number>;
 	introspect(): {
 		connections: number;
 		closedWsAborts: number;

@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **`platform.assertions` is declared for TypeScript.** The per-category
+  invariant-violation counter exists on every surface's platform and is
+  documented, but the `Platform` type did not declare it, so a TypeScript app
+  reading it failed to compile. It is declared as a read-only `Map`;
+  `introspect().assertions` keeps its plain-object type.
 - **A long diagnostic message parses back.** A message past 512 characters
   was cut after its whitespace was collapsed and trimmed, so a cut landing
   just past a space left a trailing one, and `parseDiagnostic` from
