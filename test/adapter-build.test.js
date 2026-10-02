@@ -63,6 +63,9 @@ function copyTree(from, to, replace) {
 	}
 }
 
+/** The `__` server entries the fake build writes, in the order they must load. */
+const EXTRA_ENTRIES = ['__a#b', "__it's", '__plain'];
+
 /** @type {string[]} */
 const warnings = [];
 
@@ -102,6 +105,12 @@ function makeBuilder() {
 		writeServer(/** @type {string} */ dest) {
 			mkdirSync(dest, { recursive: true });
 			writeFileSync(path.join(dest, 'index.js'), SERVER_SRC);
+			// Entries a Vite plugin adds to the server build, named the ways that
+			// broke a specifier built from the name: Rollup writes `#` as `_`, and
+			// an apostrophe ended a single-quoted import.
+			for (const name of EXTRA_ENTRIES) {
+				writeFileSync(path.join(dest, `${name}.js`), `(globalThis.__extraEntryRan ??= []).push(${JSON.stringify(name)});\n`);
+			}
 			return [];
 		},
 		generateManifest: () => "{ appPath: '_app', mimeTypes: {}, assets: new Set([]) }",
@@ -203,6 +212,22 @@ describe('adapter build output', () => {
 		const spans = globalThis.__traceSpans ?? [];
 		expect(spans.length).toBeGreaterThan(before);
 		expect(typeof spans[spans.length - 1].name).toBe('string');
+	});
+
+	it('imports every __ entry the server build carries, by the file Rollup wrote, in name order', async () => {
+		// The startup file opens with one import per entry. Each must name a file
+		// that exists - Rollup rewrote `#` - and loading them in that order runs
+		// every entry once, sorted the same way on every filesystem.
+		const index = readFileSync(path.join(out, 'index.js'), 'utf8');
+		const specifiers = [...index.matchAll(/^import ("[^"\n]*");$/gm)].map((m) => JSON.parse(m[1]));
+		expect(specifiers).toHaveLength(EXTRA_ENTRIES.length);
+		expect(index.startsWith('import ' + JSON.stringify(specifiers[0]) + ';\n'), 'the imports open the file').toBe(true);
+		for (const specifier of specifiers) {
+			expect(existsSync(path.join(out, specifier)), specifier).toBe(true);
+		}
+		delete /** @type {any} */ (globalThis).__extraEntryRan;
+		for (const specifier of specifiers) await import(pathToFileURL(path.join(out, specifier)).href);
+		expect(/** @type {any} */ (globalThis).__extraEntryRan).toEqual([...EXTRA_ENTRIES].sort());
 	});
 
 	it('leaves no placeholder unreplaced in the copied runtime', () => {

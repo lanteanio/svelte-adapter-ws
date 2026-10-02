@@ -2208,5 +2208,8 @@
 				"ours": "\t\t\texpect(state.counters.totalSubscriptions).toBe(baseTotal);\n\t\t} finally {\n\t\t\t// The hand-written entry was never charged, so releasing it at the close\n\t\t\t// drives the counter below zero, and that soft assertion throws in a test\n\t\t\t// run out of the transport close event. Undo it first.\n\t\t\tfor (const ws of state.wsConnections) ws.getUserData()[SUBSCRIPTIONS]?.delete('__probe:raw');\n\t\t\tclient.close();\n\t\t}"
 			}
 		]
+	},
+	{
+		"file": "test/extra-entry-imports.test.js"
 	}
 ]

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Server entries a Vite plugin adds to the build are bundled and run at
+  startup.** A `__`-prefixed `.js` entry in the server build, such as the
+  registry `svelte-realtime` emits, is now bundled with the server and
+  imported by the generated `index.js` before the server starts, as on the
+  family's native tier; the build never picked them up before. Each is
+  imported by the file Rollup wrote for it, so a name with a `#`, `%` or an
+  apostrophe loads, and in file-name order on every filesystem.
 - **`svelte-adapter-ws/subscriptions`: accounted topic membership for
   plugins in other packages.** A plugin that called `ws.subscribe` and wrote
   the connection's subscription registry by hand left the worker's

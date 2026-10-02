@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rollup } from 'rollup';
@@ -6,7 +6,7 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
 import { normalizeStaticCacheControl, normalizeStaticHeaders } from './build-config.js';
-import { writeAndCloseRollupBundle } from './build-rollup-lifecycle.js';
+import { writeAndCloseRollupBundle, extraEntryImports } from './build-rollup-lifecycle.js';
 import { listExcludedDotPaths } from './static-scan.js';
 import {
 	assertWireSubscribeAuthorization,
@@ -902,6 +902,21 @@ export default function (opts = {}) {
 				input['instrumentation.server'] = `${tmp}/instrumentation.server.js`;
 			}
 
+			// Include extra entry files written by Vite plugins (e.g. __live-registry.js).
+			// Only picks up __-prefixed files to avoid bundling SvelteKit internals.
+			const knownEntries = new Set(Object.values(input).map((f) => path.basename(f)));
+			/** @type {string[]} */
+			const extraEntries = [];
+			// Sorted, so the entries load in the same order on every filesystem: the
+			// directory listing order is the filesystem's, and NTFS and ext4 disagree.
+			for (const file of readdirSync(tmp).sort()) {
+				if (file.startsWith('__') && file.endsWith('.js') && !knownEntries.has(file)) {
+					const name = file.replace(/\.js$/, '');
+					input[name] = `${tmp}/${file}`;
+					extraEntries.push(name);
+				}
+			}
+
 			// Bundle the Vite output so that deployments only need their
 			// production dependencies. Anything in devDependencies gets
 			// included in the bundled code.
@@ -938,7 +953,7 @@ export default function (opts = {}) {
 				}
 			});
 
-			await writeAndCloseRollupBundle(bundle, {
+			const written = await writeAndCloseRollupBundle(bundle, {
 				dir: `${out}/server`,
 				format: 'esm',
 				sourcemap: true,
@@ -1089,6 +1104,15 @@ export default function (opts = {}) {
 					WORKERS_CONFIG: JSON.stringify({ compute: computeWorkers })
 				}
 			});
+
+			// Import discovered __-prefixed entries so they execute at startup
+			if (extraEntries.length > 0) {
+				const entryImports = extraEntryImports(written, tmp, extraEntries);
+				const indexPath = `${out}/index.js`;
+				const indexContent = readFileSync(indexPath, 'utf8');
+				writeFileSync(indexPath, entryImports + '\n' + indexContent);
+				builder.log.minor(`Extra entries: ${extraEntries.join(', ')}`);
+			}
 			// tracing.js reaches trace-context.js at the runtime root once
 			// copied; in the source tree it sits one level up.
 			const tracingRuntimePath = out + '/tracing.js';
