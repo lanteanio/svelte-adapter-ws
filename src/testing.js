@@ -14,7 +14,7 @@ import { createSharedWireIdTable } from './runtime/handler/shared-wire-id.js';
 import { deliverStatefulWireBatch, deliverStatelessWireFanout, encodeStatelessWirePayload } from './runtime/handler/wire-fanout.js';
 import { snapshotUpgradeHeaders, warnSetCookieOnUpgradeOnce } from './runtime/utils/upgrade-headers.js';
 import { carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';
-import { beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, releaseDerivedSubscriptions, isAuthorizationHook, WS_REVOKED_UNSUBSCRIBE } from './runtime/utils/ws-symbols.js';
+import { beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, releaseDerivedSubscriptions, isAuthorizationHook, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE } from './runtime/utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './runtime/handler/ingress.js';
 import { registerGameIngress, GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload } from './runtime/handler/game-ingress.js';
 import { createMessageAdmission, messageOverloadedFrame, runAdmittedMessageHook, runAdmittedMessageWork } from './runtime/utils/message-admission.js';
@@ -1696,6 +1696,15 @@ export async function createTestServer(options = {}) {
 		// connections. See WS_REVOKED_UNSUBSCRIBE.
 		[WS_REVOKED_UNSUBSCRIBE](ws, topic, ud) {
 			runUnsubscribeHook(handler.unsubscribe, ws, topic, { platform: ud[WS_PLATFORM] });
+		},
+		// trackedSubscribe / trackedUnsubscribe join and leave THIS server's shared
+		// cohorts through these slots, as production does through its own. See
+		// WS_COHORT_JOIN.
+		[WS_COHORT_JOIN](ws, ud, topic) {
+			if (sharedTopicsT.has(topic)) joinCohortT(ws, ud, topic, sharedTopicsT.get(topic));
+		},
+		[WS_COHORT_LEAVE](ws, ud, topic) {
+			if (sharedTopicsT.has(topic)) leaveCohortT(ws, ud, topic);
 		},
 		publish(topic, event, data, options) {
 			// The seq VALUE first, so a refusal does not depend on whether a
@@ -4215,7 +4224,10 @@ export async function createTestServer(options = {}) {
 				capCountsT.adjust(ud[WS_CAPS], null);
 				detachWireStatesT(ws, ud);
 				const sc = ud[WS_SHARED_COHORTS];
-				if (sc) { for (const t of sc) sharedWireIds.release(t); }
+				// Emptied once released: the simulator's socket still answers
+				// getUserData after close, so a late tracked leave would otherwise
+				// find the topic here and release its reference a second time.
+				if (sc) { for (const t of sc) sharedWireIds.release(t); sc.clear(); }
 				if (ud[WS_LEASE]) ud[WS_LEASE] = undefined;
 				wsConnections.delete(ws);
 			}

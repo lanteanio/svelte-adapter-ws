@@ -113,6 +113,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **A plugin's tracked join of a shared topic joins its own server's
+  cohort.** `trackedSubscribe` and `trackedUnsubscribe` reached the
+  shared-fan-out cohort through one process-wide hook that only the
+  production runtime installed, so `createTestServer` never cohorted a
+  plugin's join of a shared topic, and two servers in one process shared
+  whichever hook was installed last. Each surface now carries the join and
+  leave on its own platform. A tracked leave that lands after its socket
+  closed no longer releases the shared wire-id reference the close already
+  released, which dropped the id from under the members that remained.
 - **Message data JSON has no form for is refused, never put on the wire.**
   A function or a symbol serialized to `undefined`, and every envelope
   builder concatenated that into the frame as `"data":undefined`, which no

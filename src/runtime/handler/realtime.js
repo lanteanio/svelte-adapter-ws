@@ -83,7 +83,7 @@ import { normalizePressureThresholds, startPressureSampler } from './pressure.js
 import { configureEgress } from './egress-budget.js';
 import { leaseGrantSize } from '../wire.js';
 import { recordBackpressureDrop } from '../utils/backpressure.js';
-import { accountClosedLogicalSubscriptions, addLogicalSubscription, isSettledSubscriptionRegistry, removeLogicalSubscription, setCohortHooks, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
+import { accountClosedLogicalSubscriptions, addLogicalSubscription, isSettledSubscriptionRegistry, removeLogicalSubscription, setSubscriptionAccountingHook } from '../utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './ingress.js';
 import { registerGameIngress, gameLaneClusterSafe } from './game-ingress.js';
 import { registerSocket, unregisterSocket } from './topic-registry.js';
@@ -196,17 +196,6 @@ function adjustTotalSubscriptions(delta) {
 		counters.totalSubscriptions = next;
 	}
 }
-// Make the low-level membership primitive (trackedSubscribe / trackedUnsubscribe,
-// used by plugins to establish server-side membership) cohort-aware: a tracked
-// subscribe to an already-shared topic joins its cohort + announces the server-wide
-// id; a tracked unsubscribe leaves the cohort + releases the wire-id ref. Without
-// this, a plugin that server-side-subscribes a socket to a shared topic AFTER it was
-// promoted would be in no cohort and miss every cohort-split publish.
-setCohortHooks(
-	(ws, ud, topic) => { if (sharedTopics.has(topic)) joinSharedCohort(ws, ud, topic, sharedTopics.get(topic)); },
-	(ws, ud, topic) => { if (sharedTopics.has(topic)) leaveSharedCohort(ws, ud, topic); }
-);
-
 if (setSubscriptionAccountingHook(adjustTotalSubscriptions)) {
 	emitOperationalEvent({
 		source: 'svelte-adapter-ws',
@@ -2534,7 +2523,9 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	// the server-wide id table reclaims a topic on its last cohort leave.
 	// The topic registry drops the cohort subscriptions themselves below.
 	const sharedCohorts = userData[WS_SHARED_COHORTS];
-	if (sharedCohorts) { for (const t of sharedCohorts) releaseSharedWireId(t); }
+	// Emptied once released, so nothing that still holds the userData can
+	// release a reference twice.
+	if (sharedCohorts) { for (const t of sharedCohorts) releaseSharedWireId(t); sharedCohorts.clear(); }
 	unregisterSocket(rawWs);
 	wsWrappers.delete(rawWs);
 }

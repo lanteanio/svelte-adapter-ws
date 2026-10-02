@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-	WS_SUBSCRIPTIONS, setCohortHooks, setSubscriptionAccountingHook, trackedSubscribe, trackedUnsubscribe,
+	WS_SUBSCRIPTIONS, setSubscriptionAccountingHook, trackedSubscribe, trackedUnsubscribe,
 	accountClosedLogicalSubscriptions, isSettledSubscriptionRegistry
 } from '../src/runtime/utils/ws-symbols.js';
 
@@ -33,22 +33,6 @@ describe('the process-wide slots are defined, not assigned', () => {
 			if (before) Object.defineProperty(globalThis, key, before);
 		}
 	}
-
-	it('the cohort hooks are installed where the fan-out reads them', () => {
-		underAccessor(Symbol.for('adapter-uws.cohort-hooks'), (stolen) => {
-			const joined = [];
-			setCohortHooks((_ws, _ud, topic) => { joined.push(topic); }, null);
-			expect(stolen, 'the hooks object reached an inherited setter').toEqual([]);
-			expect(Object.hasOwn(globalThis, Symbol.for('adapter-uws.cohort-hooks'))).toBe(true);
-			// Through the public path: a tracked subscribe on a connection that
-			// holds no registry yet must reach the hook just installed.
-			const subs = new Set();
-			const ws = { getUserData: () => ({ [WS_SUBSCRIPTIONS]: subs }), subscribe() { return true; } };
-			trackedSubscribe(ws, 'room:1');
-			expect(joined).toEqual(['room:1']);
-			setCohortHooks(null, null);
-		});
-	});
 
 	it('the subscription accounting hook is installed, not swallowed', () => {
 		underAccessor(Symbol.for('adapter-uws.subscription-accounting-hook'), (stolen) => {
