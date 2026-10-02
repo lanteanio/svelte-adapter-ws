@@ -498,8 +498,8 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 
 	if (range === null) {
 		// Syntactically valid but unsatisfiable against the representation this
-		// request selected - a start past its end, or a zero-length suffix - so
-		// that is the length to quote.
+		// request selected - a start past its end, or a zero-length suffix
+		// (`bytes=-0`) - so that representation's length is the one to quote.
 		res.writeHead(416, { 'content-range': `bytes */${body.byteLength}`, 'content-length': '0' });
 		res.end();
 		return;
