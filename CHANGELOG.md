@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **A long diagnostic message parses back.** A message past 512 characters
+  was cut after its whitespace was collapsed and trimmed, so a cut landing
+  just past a space left a trailing one, and `parseDiagnostic` from
+  `svelte-adapter-ws/observability` refused the line `formatDiagnostic` had
+  just written. The message is trimmed again after the cut.
 - **`vite dev` no longer withholds an echo that production delivers.** The dev
   plugin read `options.excludeWs` on `platform.publish`, and through it on
   `batch` and on the per-event fall-back `publishBatched` takes for a disjoint
