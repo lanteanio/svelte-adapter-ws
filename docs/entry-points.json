@@ -17,6 +17,12 @@
 		"stability": "supported",
 		"deprecation": "none"
 	},
+	"./subscriptions": {
+		"role": "Accounted topic membership for plugins",
+		"environment": "Node runtime",
+		"stability": "supported",
+		"deprecation": "none"
+	},
 	"./client": {
 		"role": "Reactive connection and topic stores",
 		"environment": "Browser",

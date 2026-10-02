@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`svelte-adapter-ws/subscriptions`: accounted topic membership for
+  plugins in other packages.** A plugin that called `ws.subscribe` and wrote
+  the connection's subscription registry by hand left the worker's
+  accounting behind, which the consistency auditor reports as
+  `subs.total-mismatch`. The new entry exports the runtime's own
+  `trackedSubscribe(ws, topic)` and `trackedUnsubscribe(ws, topic)`, the
+  helpers the bundled plugins use: native membership, the registry, the
+  per-connection cap, the shared-codec cohort and the accounting move
+  together, and they reach the running app's connection state from any
+  module instance.
+
 ### Changed
 
 - **Closing a socket refuses a code it cannot send and never splits a
