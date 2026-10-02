@@ -24,7 +24,7 @@ import {
 } from '../utils/subscribe-policy.js';
 import { isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
-	completeEnvelope, completeGameEnvelope, createHlc, stampSeqValue,
+	completeEnvelope, completeGameEnvelope, envelopeData, createHlc, stampSeqValue,
 	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
@@ -1493,7 +1493,7 @@ export const platform = {
 			let result = prior;
 			for (; i < count; i++) {
 				const d = source === null ? entries[i].data : source[i];
-				const json = envelopePrefix(topic, event) + JSON.stringify(d ?? null) + '}';
+				const json = envelopePrefix(topic, event) + envelopeData(d) + '}';
 				try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
 				bumpOut(ud, json);
 			}
@@ -1523,7 +1523,7 @@ export const platform = {
 			for (let i = 0; i < count; i++) {
 				const p = wire.encode(event, datas[i], state);
 				if (p == null) {
-					const json = envelopePrefix(topic, event) + JSON.stringify(datas[i] ?? null) + '}';
+					const json = envelopePrefix(topic, event) + envelopeData(datas[i]) + '}';
 					try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
 					bumpOut(ud, json);
 					continue;
@@ -1571,7 +1571,7 @@ export const platform = {
 	 * @returns {number}
 	 */
 	sendTo(filter, topic, event, data, options) {
-		const envelope = envelopePrefix(topic, event) + JSON.stringify(data ?? null) + '}';
+		const envelope = envelopePrefix(topic, event) + envelopeData(data) + '}';
 		const compress = WS_COMPRESSION_ON && Boolean(options && options.compress === true);
 		const targets = [];
 		for (const facade of wsConnections) {

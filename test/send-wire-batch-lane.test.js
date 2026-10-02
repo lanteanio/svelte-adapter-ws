@@ -802,6 +802,25 @@ describe('sendWireBatch', () => {
 		}
 	});
 
+	it('throws for data JSON has no form for, on the JSON-only send, the declined-entry envelope and sendTo, and sends nothing', () => {
+		const plain = connect([]);
+		const conn = connect([CAP]);
+		try {
+			expect(() => platform.sendWireBatch(plain.facade, TOPIC, 'update', [{ data: () => 1 }], statefulCodec())).toThrow(TypeError);
+			expect(plain.frames()).toEqual([]);
+			const codec = statefulCodec();
+			codec.encode = () => null;
+			expect(() => platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: Symbol('s') }], codec)).toThrow(TypeError);
+			expect(conn.frames()).toEqual([]);
+			expect(() => platform.sendTo(() => true, TOPIC, 'update', () => 1)).toThrow(TypeError);
+			expect(plain.frames()).toEqual([]);
+			expect(conn.frames()).toEqual([]);
+		} finally {
+			plain.leave();
+			conn.leave();
+		}
+	});
+
 	it('stamps the attached schema version into every entry frame of the declined walk', () => {
 		const conn = connect([CAP]);
 		try {

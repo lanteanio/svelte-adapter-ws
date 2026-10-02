@@ -113,6 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **Message data JSON has no form for is refused, never put on the wire.**
+  A function or a symbol serialized to `undefined`, and every envelope
+  builder concatenated that into the frame as `"data":undefined`, which no
+  client can parse. `publish`, `send`, `sendTo`, the batch lanes, the
+  `sendWireBatch` JSON envelopes and the game lane now throw a `TypeError` to
+  the caller for it, as they already did for a BigInt or a cycle, on the
+  runtime, `createTestServer` and `vite dev`.
 - **A connection attempt the network never answers is abandoned and
   retried.** A WebSocket handshake or an auth preflight that got no response
   at all - no open, no error, no close - left the bundled client in
