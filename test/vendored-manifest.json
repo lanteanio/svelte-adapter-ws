@@ -2187,5 +2187,8 @@
 	},
 	{
 		"file": "test/send-wire-batch-shed.test.js"
+	},
+	{
+		"file": "test/transport-metric-labels.test.js"
 	}
 ]
