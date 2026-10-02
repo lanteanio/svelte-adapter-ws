@@ -2604,7 +2604,10 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		// upgrade gate, and folding it into ip_rate_limit would hide which door
 		// an attack is hitting.
 		mUpgradeRejected?.inc({ reason: 'auth_rate_limit' });
-		endText(res, 429, { 'content-type': 'text/plain' }, 'Too many authentication requests');
+		// About one limiter window, jittered so the clients behind one
+		// address do not all come back in the same second.
+		const retryAfter = jitterRetryAfter(wsOptions.authPathRateLimitWindow ?? 10, 0.5);
+		endText(res, 429, { 'retry-after': String(retryAfter), 'content-type': 'text/plain' }, 'Too many authentication requests');
 		return true;
 	}
 

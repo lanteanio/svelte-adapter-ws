@@ -2190,5 +2190,8 @@
 	},
 	{
 		"file": "test/transport-metric-labels.test.js"
+	},
+	{
+		"file": "test/auth-throttle-real.test.js"
 	}
 ]

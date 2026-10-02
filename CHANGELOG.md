@@ -83,6 +83,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **A rate-limited auth preflight no longer closes the client for good.** The
+  bundled client read every 4xx from the preflight as a verdict on the user,
+  so a `429`, which clients behind one address earn together, marked them all
+  permanently closed until a reload. A `429` now backs off like a throttling
+  close: the failure store reads `class: 'THROTTLE'` with
+  `kind: 'auth-preflight'`, and the reconnect waits no sooner than the
+  `Retry-After` the server sends, capped at five minutes. The preflight's
+  `429` now carries `Retry-After` of about one `authPathRateLimitWindow`,
+  jittered. Every other 4xx is still terminal and 5xx still retries.
 - **The error reference quotes a message prefix that carries backticks
   intact.** `docs/errors.md` put each prefix in a single-backtick code span, so
   a prefix with backticks of its own, as `ADAPTER-ERR-METRICS-MODULE-SHAPE`'s
