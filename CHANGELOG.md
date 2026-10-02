@@ -83,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **The control-channel ceiling documents its worst case.** The README
+  quoted a subscribe batch of short topics, about twelve times amplified, at
+  one frame more than this runtime sends. Filling the 256-topic cap and
+  padding with empty entries, each denied on its own, is twenty-one times:
+  measured on this runtime at 2,466 frames and 174,956 bytes for an
+  8,175-byte request, so the 4 MiB per 10 s ceiling is reached from about
+  20 KB/s of inbound rather than 34. The ceiling itself is unchanged.
 - **`sendWireBatch` reports a dropped last frame.** When the codec declined
   the batch and the binary frame for the final entry was dropped, the call
   returned 1, as if everything had gone out; it now returns 2, on the

@@ -177,10 +177,14 @@ egress budget: those budgets meter application-data fan-out, and charging
 control frames to them would let an exhausted tenant budget refuse the very
 grant frames that pace a client down. They carry their own ceiling instead,
 because the channel amplifies: a client names a topic in a few bytes and is
-answered with a whole frame, and one 8 KB `subscribe-batch` comes back as
-roughly 97 KB across 1,345 frames. Each connection may be sent 4 MiB of
-control frames per 10-second window, after which it is closed with `4429`,
-the throttle code the bundled client already reconnects on. The ceiling is
+answered with a whole frame. The worst legal shape, an 8 KB
+`subscribe-batch` that fills the 256-topic cap and pads the rest with empty
+entries, each answered with its own denial, comes back as roughly 175 KB
+across 2,466 frames, twenty-one times what it cost to ask, and an amplifier
+reaches the ceiling from about 20 KB/s of sustained inbound. Each connection
+may be sent 4 MiB of control frames per 10-second window, after which it is
+closed with `4429`, the throttle code the bundled client already reconnects
+on. The ceiling is
 fixed: a client restoring 256 topics is answered with about 15 KB and a
 5,000-topic restore costs about 300 KB, so a healthy burst sits far under it.
 Application `send` and `publish` traffic is never charged here. See

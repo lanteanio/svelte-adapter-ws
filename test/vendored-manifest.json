@@ -1591,10 +1591,6 @@
 			{
 				"lead": "\t\texpectStatementBlock(read('../src/runtime/handler.js'), [\n\t\t\t'const runIngressApplicationWork = (ws, context) =>',\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler.js');\n",
 				"ours": "\t\texpectStatementBlock(read('../src/runtime/handler/realtime.js'), [\n\t\t\t'const runIngressApplicationWork = (facade, context) =>',\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler/realtime.js');\n"
-			},
-			{
-				"lead": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,345 frames - twelve times what it cost to ask, and repeatable,\n",
-				"ours": "// Measured on this runtime at the worst legal shape: one 8,121-byte\n// `subscribe-batch` of 1,344 shortest-legal topics comes back as 97,484 bytes\n// across 1,344 frames - twelve times what it cost to ask, and repeatable,\n"
 			}
 		]
 	},
@@ -2066,10 +2062,6 @@
 			{
 				"lead": "\tbumpOut(ws, payload);",
 				"ours": "\tbumpOut(ws.getUserData(), payload);"
-			},
-			{
-				"lead": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,345 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n",
-				"ours": "// MEASURED, on this runtime, at the worst legal shape: one 8,121-byte\n// `subscribe-batch` carrying 1,344 shortest-legal topics is answered with\n// 97,484 bytes across 1,344 frames. Twelve times what it cost to ask, and\n// repeatable - the frame is legal, so nothing refuses the next one.\n"
 			}
 		]
 	},

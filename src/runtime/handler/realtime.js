@@ -779,7 +779,8 @@ if (RESOURCE_GROWTH_AUDIT_INTERVAL_MS > 0) {
 		// Self-healing / bounded collections only, so a rising trend really is a
 		// leak: wsConnections shrinks as clients disconnect, topicPublishStats is
 		// cleared every pressure tick, and lastPublishWarnAt / decodeCache /
-		// envelopePrefixCache are LRU-evicted while staticCache plateaus at the
+		// envelopePrefixCache evict their oldest insertion when full (FIFO: a hit
+		// does not refresh an entry) while staticCache plateaus at the
 		// finite asset set. The per-topic registries topicSeqs and sharedTopics
 		// grow with topic cardinality BY DESIGN, so probing them here would
 		// self-fire a false leak: topicSeqs is held to its configured ceiling by
