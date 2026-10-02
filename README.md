@@ -422,7 +422,12 @@ adapter mounts it at the reserved `/__realtime/*` path, matched **before** the
 static and SSR lanes. The match reads the request target as sent: a target that
 resolves outside the prefix is refused `400` rather than rewritten, and one
 whose raw form lies outside the prefix takes the ordinary static and SSR lanes
-even where it would resolve inside it. The adapter bridges the `node:http`
+even where it would resolve inside it. One spelling stays inside the prefix on
+every reading and is passed through: an encoded separator, as in
+`/__realtime/..%2freflect`, reaches your `admin()` handler with the `%2F`
+intact. Split the pathname on `/` before decoding any segment - as
+`svelte-realtime`'s `admin()` does - so a decoded `..` can never walk your own
+routing. The adapter bridges the `node:http`
 request to the framework-agnostic Web `Request` -> `Response` contract the
 handler speaks and writes the response back; it is pure
 transport plumbing, so **all** authorization lives in your handler (the adapter
