@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outbound chokepoint so chaos scenarios apply, and runs the app's
   `drain` hook inside the lifecycle boundary. `vite dev` still sends each
   coalesced value at once and never calls `drain`.
+- **`sendWireBatch` reports a dropped last frame.** When the codec declined
+  the batch and the binary frame for the final entry was dropped, the call
+  returned 1, as if everything had gone out; it now returns 2, on the
+  production runtime and under `createTestServer`. A dropped frame followed by
+  entries that fall back to JSON still reports the status of the last send.
 - **`platform.assertions` is declared for TypeScript.** The per-category
   invariant-violation counter exists on every surface's platform and is
   documented, but the `Platform` type did not declare it, so a TypeScript app

@@ -2192,5 +2192,8 @@
 	},
 	{
 		"file": "test/platform-type-surface.test.js"
+	},
+	{
+		"file": "test/send-wire-batch-shed.test.js"
 	}
 ]

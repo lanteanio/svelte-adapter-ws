@@ -1487,8 +1487,10 @@ export const platform = {
 		// also one socket, so no two subscribers can be handed different bytes
 		// for the same entry. Deciding it here keeps the JSON-only send
 		// allocating nothing but the string it sends.
-		const sendJsonFrom = (i, source) => {
-			let result = 1;
+		// `prior` is the status of the send this continues from, so a call whose
+		// last frame was dropped, with nothing left to send, still reports it.
+		const sendJsonFrom = (i, source, prior = 1) => {
+			let result = prior;
 			for (; i < count; i++) {
 				const d = source === null ? entries[i].data : source[i];
 				const json = envelopePrefix(topic, event) + JSON.stringify(d ?? null) + '}';
@@ -1536,7 +1538,7 @@ export const platform = {
 				bumpOut(ud, frame);
 				if (result === 2) {
 					poisonWireState(ws, ud, wire.capability);
-					return sendJsonFrom(i + 1, datas);
+					return sendJsonFrom(i + 1, datas, 2);
 				}
 			}
 			return result;

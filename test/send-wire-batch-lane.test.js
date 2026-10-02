@@ -818,7 +818,7 @@ describe('sendWireBatch', () => {
 		}
 	});
 
-	it('reports 1 when the last entry frame of the declined walk was shed', () => {
+	it('reports 2 when the last entry frame of the declined walk was shed', () => {
 		const conn = connect([CAP]);
 		try {
 			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 0 }], statefulCodec())).toBe(1);
@@ -834,10 +834,9 @@ describe('sendWireBatch', () => {
 			codec.encode = (event, data) => (event.endsWith('-batch') ? null : perEntry(event, data));
 			const before = conn.frames().length;
 			// The shed frame is the walk's LAST: the fallback starts past the end
-			// and has nothing to send, so the walk reports the fallback's seed, 1,
-			// while the capability is poisoned all the same. That is the family's
-			// answer at this site; a reader pacing on the return sees 1 here.
-			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(1);
+			// and has nothing to send, so the walk reports the shed itself, and the
+			// capability is poisoned.
+			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 1 }, { data: 2 }], codec)).toBe(2);
 			expect(conn.frames().slice(before).map((f) => (f.binary ? 'binary' : 'text'))).toEqual(['binary']);
 			expect(platform.sendWireBatch(conn.facade, TOPIC, 'update', [{ data: 3 }], statefulCodec())).toBe(1);
 			expect(conn.frames().slice(before + 1).map((f) => f.text)).toEqual([`{"topic":"${TOPIC}","event":"update","data":3}`]);
