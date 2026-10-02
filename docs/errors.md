@@ -4,7 +4,7 @@ Search this page with the exact stable ID, code, event, or beginning of the
 message you saw. Every operator-facing failure the runtime can emit is indexed
 here with its cause, what it means for traffic, whether anything recovers on its
 own, and what to do next: 42 entries carrying a stable ID and operator
-guidance, plus 38 indexing consequential plain console lines that never enter
+guidance, plus 39 indexing consequential plain console lines that never enter
 the diagnostic pipeline - each of those is printed through the registry and
 carries its stable ID tag, so the emitted text cannot drift from the prefix
 indexed here.
@@ -87,6 +87,7 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook) | `ws.open-hook.threw` | `[ws] the open hook threw` |
 | [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook) | `ws.drain-hook.threw` | `[ws] the drain hook threw` |
 | [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook) | `ws.close-hook.threw` | `[ws] the close hook threw` |
+| [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable) | `ws.send-coalesced.unserializable` | `[ws] a sendCoalesced value has no JSON form and was dropped` |
 | [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[ws] the recover-on-subscribe hook threw` |
 | [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape) | `ws.diagnostic.record-shape` | `[ws] operational event dropped, invalid record shape` |
 | [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[ws] diagnostic render failed: ` |
@@ -176,6 +177,7 @@ the stable ID tag on the line):
 - `[ws] the open hook threw` - [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook)
 - `[ws] the drain hook threw` - [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook)
 - `[ws] the close hook threw` - [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook)
+- `[ws] a sendCoalesced value has no JSON form and was dropped` - [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable)
 - `[ws] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
 - `[ws] operational event dropped, invalid record shape` - [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape)
 - `[ws] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
@@ -1405,6 +1407,24 @@ Log line begins:
 **Automatic recovery.** Not needed; nothing is left half-closed.
 
 **What to do.** Fix the hook. Whatever it was cleaning up after the throw was skipped, so check the state it owns. The error printed with this line is the original throw.
+
+## ADAPTER-ERR-COALESCED-UNSERIALIZABLE
+
+Severity: error
+
+Log line begins:
+
+```
+[ws] a sendCoalesced value has no JSON form and was dropped
+```
+
+**Cause.** A value passed to `platform.sendCoalesced` while the connection was backpressured could not be serialized when the queue drained: a BigInt, a cycle, a `toJSON` that throws, or a value such as a function that JSON has no form for.
+
+**Consequence.** That one entry is dropped and the rest of the queue for the connection still goes out. The connection stays open. A value that fails while it is flushed at once throws from the `sendCoalesced` call instead and never reaches this line.
+
+**Automatic recovery.** None for the entry; the next value set under the same key is sent normally.
+
+**What to do.** Send only JSON-serializable data, or convert it (for example a BigInt to a string) before calling sendCoalesced. The error printed with this line is the one the serializer threw.
 
 ## ADAPTER-ERR-RECOVER-HOOK
 

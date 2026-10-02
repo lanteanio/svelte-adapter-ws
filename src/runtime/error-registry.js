@@ -85,6 +85,7 @@ export const ADAPTER_ERROR_IDS = Object.freeze({
 	OPEN_HOOK: 'ADAPTER-ERR-OPEN-HOOK',
 	DRAIN_HOOK: 'ADAPTER-ERR-DRAIN-HOOK',
 	CLOSE_HOOK: 'ADAPTER-ERR-CLOSE-HOOK',
+	COALESCED_UNSERIALIZABLE: 'ADAPTER-ERR-COALESCED-UNSERIALIZABLE',
 	RECOVER_HOOK: 'ADAPTER-ERR-RECOVER-HOOK',
 	DIAGNOSTIC_RECORD_SHAPE: 'ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE',
 	DIAGNOSTIC_RENDER_COLLAPSE: 'ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE',
@@ -1261,6 +1262,23 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		sources: Object.freeze(['src/runtime/utils/hook-boundary.js']),
 		anchor: 'adapter-err-close-hook',
 		help: 'docs/errors.md#adapter-err-close-hook'
+	}),
+	Object.freeze({
+		id: ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE,
+		code: null,
+		event: 'ws.send-coalesced.unserializable',
+		component: null,
+		severity: 'error',
+		emission: 'console',
+		problemPrefix: null,
+		messagePrefix: '[ws] a sendCoalesced value has no JSON form and was dropped',
+		cause: 'A value passed to `platform.sendCoalesced` while the connection was backpressured could not be serialized when the queue drained: a BigInt, a cycle, a `toJSON` that throws, or a value such as a function that JSON has no form for.',
+		consequence: 'That one entry is dropped and the rest of the queue for the connection still goes out. The connection stays open. A value that fails while it is flushed at once throws from the `sendCoalesced` call instead and never reaches this line.',
+		automaticRecovery: 'None for the entry; the next value set under the same key is sent normally.',
+		nextAction: 'Send only JSON-serializable data, or convert it (for example a BigInt to a string) before calling sendCoalesced. The error printed with this line is the one the serializer threw.',
+		sources: Object.freeze(['src/runtime/handler/platform.js', 'src/testing.js']),
+		anchor: 'adapter-err-coalesced-unserializable',
+		help: 'docs/errors.md#adapter-err-coalesced-unserializable'
 	}),
 	Object.freeze({
 		id: ADAPTER_ERROR_IDS.RECOVER_HOOK,

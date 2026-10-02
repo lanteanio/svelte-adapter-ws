@@ -1619,7 +1619,9 @@ export const platform = {
 
 	/**
 	 * Latest-value-wins coalescing per (connection, key), flushed immediately
-	 * and again on every drain.
+	 * and again on every drain. A value JSON cannot carry throws from this
+	 * call when it is flushed at once, as `send` would; one flushed later from
+	 * a drain is dropped and reported instead.
 	 * @param {object} facade
 	 * @param {{ key?: string, topic: string, event: string, data?: unknown }} message
 	 */
@@ -1647,8 +1649,9 @@ export const platform = {
 			const oldest = pending.keys().next().value;
 			if (oldest !== undefined) pending.delete(oldest);
 		}
-		pending.set(key, { topic, event, data });
-		flushCoalescedFor(facade);
+		const entry = { topic, event, data };
+		pending.set(key, entry);
+		flushCoalescedFor(facade, entry);
 	},
 
 	/**
@@ -2183,9 +2186,18 @@ let _topicHelperCache = null;
  * Flush a connection's coalesced entries through the drain-aware pump.
  * Exported for the facade's drain callback.
  *
+ * A value JSON cannot carry (a BigInt, a cycle, a throwing `toJSON`, a
+ * function) is dropped here and the rest of the queue still goes out. When
+ * the value is the one the caller of `sendCoalesced` just set, the flush is
+ * running inside that call, so the caller gets the TypeError exactly as
+ * `send` would give it. Any other failing entry was set while the socket was
+ * backpressured and is being flushed from the drain callback, where a throw
+ * would end the process, so it is reported instead.
+ *
  * @param {object} facade
+ * @param {object} [callerEntry] the entry the calling `sendCoalesced` just set
  */
-export function flushCoalescedFor(facade) {
+export function flushCoalescedFor(facade, callerEntry) {
 	let ud;
 	try { ud = /** @type {any} */ (facade).getUserData(); }
 	catch { counters.closedWsAborts++; return; }
@@ -2193,11 +2205,21 @@ export function flushCoalescedFor(facade) {
 	if (!pending || pending.size === 0) return;
 	assert(pending instanceof Map, 'coalesce.pending-type', null);
 	let aborted = false;
+	let callerError = null;
 	drainCoalesced(pending, (msg) => {
 		if (aborted) return 2;
 		assert(typeof msg.topic === 'string', 'coalesce.entry-topic-type', null);
 		assert(typeof msg.event === 'string', 'coalesce.entry-event-type', null);
-		const payload = envelopePrefix(msg.topic, msg.event) + JSON.stringify(msg.data ?? null) + '}';
+		let body;
+		try { body = JSON.stringify(msg.data ?? null); }
+		catch (err) { body = err; }
+		if (typeof body !== 'string') {
+			const err = body instanceof Error ? body : new TypeError('sendCoalesced data has no JSON form');
+			if (msg === callerEntry) callerError = err;
+			else console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE), err);
+			return 1;
+		}
+		const payload = envelopePrefix(msg.topic, msg.event) + body + '}';
 		let result;
 		try { result = /** @type {any} */ (facade).send(payload, false, false); }
 		catch {
@@ -2213,6 +2235,7 @@ export function flushCoalescedFor(facade) {
 		return result;
 	});
 	if (aborted) pending.clear();
+	if (callerError !== null) throw callerError;
 }
 
 // - Cross-worker relay receive -----------------------------------------------

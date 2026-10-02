@@ -67,6 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contained too. `createTestServer` and `vite dev` contain `open` and `close`
   the same way; under `vite dev` a throwing close hook also skipped removing
   the connection from the dev server's live maps.
+- **A `sendCoalesced` value JSON cannot carry no longer ends the process.**
+  Serialization waits for the flush, so a value queued behind backpressure
+  was first serialized from the drain callback, where a BigInt, a cycle or a
+  throwing `toJSON` was an uncaught exception. Such an entry is now dropped
+  and reported as `ADAPTER-ERR-COALESCED-UNSERIALIZABLE` while the rest of
+  the queue goes out, and a value that flushes at once still throws to the
+  caller, as `send` does. A function or a symbol, which the serializer turns
+  into nothing, is refused the same way. An older queued entry that fails no
+  longer throws out of a later, unrelated `sendCoalesced` call.
+- **`createTestServer` has `sendCoalesced` and runs the `drain` hook.** Its
+  platform had no `sendCoalesced` and its sockets never signalled a drain, so
+  a suite using either met a missing method or a hook that never ran. It now
+  queues and drains on real backpressure the way production does, through
+  the outbound chokepoint so chaos scenarios apply, and runs the app's
+  `drain` hook inside the lifecycle boundary. `vite dev` still sends each
+  coalesced value at once and never calls `drain`.
 - **`vite dev` no longer withholds an echo that production delivers.** The dev
   plugin read `options.excludeWs` on `platform.publish`, and through it on
   `batch` and on the per-event fall-back `publishBatched` takes for a disjoint

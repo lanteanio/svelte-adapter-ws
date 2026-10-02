@@ -2186,5 +2186,8 @@
 	},
 	{
 		"file": "test/close-frame-real.test.js"
+	},
+	{
+		"file": "test/coalesced-drain-real.test.js"
 	}
 ]
