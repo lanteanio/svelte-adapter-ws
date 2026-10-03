@@ -40,7 +40,13 @@ const BASE_WS_OPTS = {
 // Every route answers with a shape whose framing is the writer's decision,
 // never the Response's own Content-Length. `vary` keeps the request-dedup
 // leader from buffering the streamed body into one chunk.
+// A download name past ASCII. node re-encodes a content-disposition stored
+// after a content-length as latin1, so this header shows whether a writer
+// stages it ahead of the length it sets.
+const DISPOSITION_SRC = "const DISPOSITION = 'attachment; filename=\"' + String.fromCharCode(220) + 'bersicht.pdf\"';";
+
 const SERVER = `
+${DISPOSITION_SRC}
 export class Server {
 	constructor(manifest) { this.manifest = manifest; }
 	async init() {}
@@ -99,7 +105,7 @@ export class Server {
 		if (p === '/head-cancel-state') return new Response(String(globalThis.__headCancelled), { headers: text });
 		if (p === '/status-error') return Response.error();
 		if (p === '/wide-header') {
-			return new Response('x', { headers: { ...text, 'x-note': String.fromCharCode(99, 97, 102, 233) } });
+			return new Response('x', { headers: { ...text, 'x-note': String.fromCharCode(99, 97, 102, 233), 'content-disposition': DISPOSITION } });
 		}
 		if (p === '/bad-cookie') {
 			return new Response('x', { headers: { ...text, 'set-cookie': 'a=' + String.fromCharCode(127) } });
@@ -232,6 +238,7 @@ export class Server {
 `;
 
 const WS_HANDLER = `
+${DISPOSITION_SRC}
 export function message() {}
 export function authenticate({ headers, cookies }) {
 	const mode = headers['x-mode'];
@@ -244,6 +251,15 @@ export function authenticate({ headers, cookies }) {
 	if (mode === 'wide-cookie') {
 		// A cookie name past U+00FF, which goes out as its UTF-8 bytes.
 		cookies.set(String.fromCharCode(256), 'v', { path: '/' });
+		return undefined;
+	}
+	if (mode === 'wide-header') {
+		return new Response('x', { headers: { 'content-type': 'text/plain', 'content-disposition': DISPOSITION } });
+	}
+	if (mode === 'expires-control') {
+		// A cookie the API lets through and node refuses: an expires whose
+		// toUTCString() carries a control character.
+		cookies.set('a', 'v', { path: '/', expires: { toUTCString: () => 'x' + String.fromCharCode(1) + 'y' } });
 		return undefined;
 	}
 	if (mode === 'deny') return false;
@@ -278,7 +294,7 @@ export function admin(request) {
 	}
 	if (adminPath === '/__realtime/empty') return new Response('', { headers: { 'content-type': 'text/plain' } });
 	if (adminPath === '/__realtime/wide-header') {
-		return new Response('x', { headers: { 'content-type': 'text/plain', 'x-note': String.fromCharCode(99, 97, 102, 233) } });
+		return new Response('x', { headers: { 'content-type': 'text/plain', 'x-note': String.fromCharCode(99, 97, 102, 233), 'content-disposition': DISPOSITION } });
 	}
 	if (adminPath === '/__realtime/empty-declared') {
 		return new Response('', { headers: { 'content-type': 'text/plain', 'content-length': '5' } });
@@ -443,10 +459,21 @@ function readChunked(raw, status) {
 const OK = ['GET /ok HTTP/1.1'];
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
 
-// A waiting-room renderer whose one header node refuses to write, and on a
-// URL carrying `wide` one past U+00FF, which goes out as its UTF-8 bytes.
+// A waiting-room renderer whose one header node refuses to write, on a URL
+// carrying `wide` one past U+00FF, which goes out as its UTF-8 bytes, and on
+// one carrying `lone` a lone surrogate, which goes out as its three bytes.
 const BAD_RENDERER = `
 export default function renderer(context) {
+	if (String(context && context.request && context.request.url).includes('lone')) {
+		return {
+			body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+				'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+				'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+			lang: 'en',
+			dir: 'ltr',
+			headers: { 'x-note': 'a' + String.fromCharCode(0xd800) + 'b' }
+		};
+	}
 	if (String(context && context.request && context.request.url).includes('wide')) {
 		return {
 			body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
@@ -806,12 +833,20 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 	});
 
 	it('on a cookie past U+00FF beside the implicit 204, which goes out as its UTF-8 bytes', async () => {
-		// The cookie API refuses every control character itself; a name past
-		// U+00FF goes out as its UTF-8 bytes, and the implicit 204 stays
-		// bodyless.
+		// A name past U+00FF goes out as its UTF-8 bytes, and the implicit 204
+		// stays bodyless.
 		const first = expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: wide-cookie'), OK]), { status: '204', length: null });
 		const wire = Buffer.from(String.fromCharCode(256) + '=v', 'utf8').toString('latin1');
 		expect(header(first.lines, 'set-cookie').some((c) => c.startsWith(wire))).toBe(true);
+	});
+
+	it('on a cookie node refuses beside the implicit 204, with a 500 that carries its body', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: expires-control'), OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+		expect(header(first.lines, 'set-cookie')).toEqual([]);
 	});
 
 	it('on a relayed Trailer, which it drops', async () => {
@@ -968,21 +1003,37 @@ describe('a header value past ASCII goes out as its UTF-8 bytes', () => {
 	// which uWS writes as `c3 a9`; a renderer's plain headers can carry more.
 	const WIDE = Buffer.from(String.fromCharCode(99, 97, 102, 233), 'utf8').toString('latin1');
 	const WIDER = Buffer.from(String.fromCharCode(99, 97, 102, 233, 32, 9731), 'utf8').toString('latin1');
+	// node writes a content-disposition stored after a content-length as
+	// latin1, so this one also shows the writer staged it ahead of the length.
+	const DOWNLOAD = Buffer.from('attachment; filename="' + String.fromCharCode(220) + 'bersicht.pdf"', 'utf8').toString('latin1');
 
 	it('on a page', async () => {
 		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /wide-header HTTP/1.1', 'Cookie: s=1'], OK]), { status: '200', body: 'x' });
 		expect(header(first.lines, 'x-note')).toEqual([WIDE]);
+		expect(header(first.lines, 'content-disposition')).toEqual([DOWNLOAD]);
 	});
 
 	it('on the admin route', async () => {
 		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/wide-header HTTP/1.1'], OK]), { status: '200', body: 'x' });
 		expect(header(first.lines, 'x-note')).toEqual([WIDE]);
+		expect(header(first.lines, 'content-disposition')).toEqual([DOWNLOAD]);
+	});
+
+	it('on the authenticate endpoint', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: wide-header'), OK]), { status: '200', body: 'x' });
+		expect(header(first.lines, 'content-disposition')).toEqual([DOWNLOAD]);
 	});
 
 	it('on the runtime holding page', async () => {
 		const raw = await pipeline(waiting.rt.port, [['GET /__waiting-room?wide HTTP/1.1', 'Accept: text/html'], OK]);
 		readLengthFramed(raw, '200');
 		expect(header(splitFirst(raw).lines, 'x-note')).toEqual([WIDER]);
+	});
+
+	it('on the runtime holding page, a lone surrogate as its three bytes', async () => {
+		const raw = await pipeline(waiting.rt.port, [['GET /__waiting-room?lone HTTP/1.1', 'Accept: text/html'], OK]);
+		readLengthFramed(raw, '200');
+		expect(header(splitFirst(raw).lines, 'x-note')).toEqual(['a\xed\xa0\x80b']);
 	});
 
 	it('on the test server\'s holding page', async () => {
