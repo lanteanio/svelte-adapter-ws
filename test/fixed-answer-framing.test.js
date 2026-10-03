@@ -44,8 +44,11 @@ const BASE_WS_OPTS = {
 const DISPOSITION_SRC = "const DISPOSITION = 'attachment; filename=\"' + String.fromCharCode(220) + 'bersicht.pdf\"';";
 
 // Every route answers with a shape whose framing is the writer's decision,
-// never the Response's own Content-Length. `vary` keeps the request-dedup
-// leader from buffering the streamed body into one chunk.
+// never the Response's own Content-Length. A route whose header node refuses
+// also carries `x-app`, an ordinary header staged ahead of the refused one,
+// which the 500 that answers it must not carry.
+// `vary` keeps the request-dedup leader from buffering the streamed body into
+// one chunk.
 const SERVER = `
 ${DISPOSITION_SRC}
 export class Server {
@@ -76,7 +79,7 @@ export class Server {
 		if (p === '/declared-304') return new Response(null, { status: 304, headers: { 'content-length': '12' } });
 		if (p === '/declared-204') return new Response(null, { status: 204, headers: { 'content-length': '0' } });
 		if (p === '/refused-header') {
-			return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+			return new Response('x', { headers: { 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		// A refused header in front of a body the writer never reads in full: one
 		// that never ends, and one whose second chunk comes too late to be one
@@ -86,7 +89,7 @@ export class Server {
 			return new Response(new ReadableStream({
 				pull(c) { c.enqueue(new TextEncoder().encode('never read')); },
 				cancel() { globalThis.__refusedCancelled = true; }
-			}), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+			}), { headers: { ...text, 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		if (p === '/refused-stream') {
 			globalThis.__refusedCancelled = false;
@@ -100,17 +103,17 @@ export class Server {
 					}, 200));
 				},
 				cancel() { globalThis.__refusedCancelled = true; }
-			}), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+			}), { headers: { ...text, 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		if (p === '/refused-cancel-state') return new Response(String(globalThis.__refusedCancelled), { headers: text });
 		if (p === '/refused-empty-stream') {
-			return new Response(new ReadableStream({ start(c) { c.close(); } }), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+			return new Response(new ReadableStream({ start(c) { c.close(); } }), { headers: { ...text, 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		// A slow render with a refused header, which concurrent anonymous GETs share.
 		if (p === '/refused-shared') {
 			globalThis.__refusedRenders = (globalThis.__refusedRenders || 0) + 1;
 			await new Promise((r) => setTimeout(r, 150));
-			return new Response('x', { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+			return new Response('x', { headers: { ...text, 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		if (p === '/refused-renders') return new Response(String(globalThis.__refusedRenders || 0), { headers: text });
 		if (p === '/locked') {
@@ -144,7 +147,7 @@ export class Server {
 			return new Response('x', { headers: { ...text, 'x-note': String.fromCharCode(99, 97, 102, 233), 'content-disposition': DISPOSITION } });
 		}
 		if (p === '/bad-cookie') {
-			return new Response('x', { headers: { ...text, 'set-cookie': 'a=' + String.fromCharCode(127) } });
+			return new Response('x', { headers: { ...text, 'x-app': 'leak', 'set-cookie': 'a=' + String.fromCharCode(127) } });
 		}
 		if (p === '/string-big') {
 			const page = '<html>' + 's'.repeat(4096) + '</html>';
@@ -305,7 +308,7 @@ export function authenticate({ headers, cookies }) {
 	}
 	if (mode === 'declared') return new Response(null, { headers: { 'content-length': '12' } });
 	if (mode === 'declared-304') return new Response(null, { status: 304, headers: { 'content-length': '12' } });
-	if (mode === 'bad-204') return new Response(null, { status: 204, headers: { 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
+	if (mode === 'bad-204') return new Response(null, { status: 204, headers: { 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(1) + 'b' } });
 	if (mode === 'trailer') return new Response('auth trailer', { headers: { 'content-type': 'text/plain', trailer: 'x-foo' } });
 	if (mode === 'relayed-te') {
 		return new Response('auth relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
@@ -526,6 +529,7 @@ function expectPageFailure(raw, failures) {
 	const ids = header(first.lines, 'x-request-id');
 	expect(ids).toHaveLength(1);
 	expect(failures.map((record) => record.attributes?.requestId)).toEqual(ids);
+	expect(header(first.lines, 'x-app'), 'the 500 carries none of the Response\'s headers').toEqual([]);
 	return first;
 }
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
@@ -684,6 +688,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		const first = expectBodyless(result, { status: '500', length: 21 });
 		const ids = header(first.lines, 'x-request-id');
 		expect(ids).toHaveLength(1);
+		expect(header(first.lines, 'x-app'), 'the 500 carries none of the Response\'s headers').toEqual([]);
 		expect(failures.map((record) => record.attributes?.requestId)).toEqual(ids);
 		const state = await pipeline(open.rt.port, [['GET /refused-cancel-state HTTP/1.1']]);
 		expect(splitFirst(state).rest).toBe('true');
@@ -918,6 +923,7 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 			body: 'Internal Server Error'
 		});
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+		expect(header(first.lines, 'x-app'), 'the 500 carries none of the Response\'s headers').toEqual([]);
 	});
 
 	it('on the 500 for a status node refuses, which carries nothing of the hook\'s', async () => {
