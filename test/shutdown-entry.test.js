@@ -1,5 +1,5 @@
 // The server entry's shutdown sequence, driven as a child process the way an
-// orchestrator drives it. Two properties only the entry can show, because both
+// orchestrator drives it. Properties only the entry can show, because they
 // live in src/runtime/index.js and only run as a process:
 //
 //   - a stop signal that lands while the server module is still EVALUATING
@@ -10,20 +10,24 @@
 //   - SHUTDOWN_TIMEOUT bounds the hook and the cleanup listeners TOGETHER. A
 //     hook that spends most of it leaves the listeners the remainder, not a
 //     fresh allowance, so the process is down when the operator's number says
-//     it is.
+//     it is;
+//   - a request still in flight has its signal aborted before the process
+//     exits, also when the sequence threw ahead of the drain that aborts it,
+//     and when fatal() or an uncaught exception ends a worker.
 //
 // Windows does not deliver SIGTERM to a Node child, so a wrapper re-emits the
 // event on the child's own process object from a line on stdin; everything
 // downstream of that is production code either way.
 
 import { spawn } from 'node:child_process';
-import { rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildRuntime } from './helpers/build-runtime.js';
+import { expectStatement, expectStatementBlockCount } from './helpers/source-pins.js';
 
 /** @type {Array<() => void>} */
 const cleanups = [];
@@ -94,11 +98,17 @@ const WS_OPTS = {
  * A wrapper entry: installs the cleanup listener the case asks for, arms the
  * stdin re-emit, then imports the payload's real entry.
  * @param {string} dir
- * @param {{ cleanupMs?: number, cleanupLog?: boolean }} [opts]
+ * @param {{ cleanupMs?: number, cleanupLog?: boolean, breakIdleClose?: boolean }} [opts]
  */
 function writeWrapper(dir, opts = {}) {
 	const file = path.join(dir, 'entry.mjs');
 	writeFileSync(file, [
+		// A broken global of the kind instrumentation layers leave behind: the
+		// listener's idle-connection close throws, which the shutdown sequence
+		// meets after the listener stops accepting and before its drain.
+		opts.breakIdleClose
+			? "(await import('node:http')).default.Server.prototype.closeIdleConnections = function () { throw new Error('__CLOSE_IDLE_THREW__'); };"
+			: '',
 		opts.cleanupMs
 			? `process.on('sveltekit:shutdown', () => new Promise((r) => setTimeout(r, ${opts.cleanupMs})));`
 			: '',
@@ -198,6 +208,32 @@ describe('the entry under a stop signal', () => {
 		expect(cleanup, 'a cleanup listener ran while a request was still in flight').toBeGreaterThan(released);
 	}, 60000);
 
+	it('aborts what is still in flight when the sequence itself throws ahead of the drain', async () => {
+		// The drain is where shutdown tells a request it is about to be dropped.
+		// A throw ahead of it skips that, and the exit still owes the request
+		// its signal.
+		const payload = buildRuntime();
+		cleanups.push(() => payload.cleanup());
+		linkPackages(payload);
+		const entry = writeWrapper(payload.dir, { breakIdleClose: true });
+		const port = await freePort();
+		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, (text) => text.includes('Ready for traffic'));
+		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
+		const closed = new Promise((resolve) => proc.once('close', resolve));
+
+		http.get({ host: '127.0.0.1', port, path: '/api/hold?ms=20000' }).on('error', () => { /* dropped by the exit */ });
+		const t0 = Date.now();
+		while (!output.text.includes('[hold] holding') && Date.now() - t0 < 10000) await sleep(25);
+		expect(output.text, 'the held request never reached the server').toContain('[hold] holding');
+
+		requestShutdown(proc);
+		expect(await whenExited(proc, 30000)).toBe(0);
+		await closed;
+		expect(output.text, 'the sequence threw').toContain('__CLOSE_IDLE_THREW__');
+		expect(output.text).toContain('[hold] aborted: The server shut down before the request finished');
+		expect(output.text).not.toContain('[hold] released');
+	}, 60000);
+
 	it('leaves the rotation on a signal that lands while the server module is still evaluating', async () => {
 		// The server bundle takes 1500ms to evaluate; the signal lands at 300ms,
 		// before the handler module - and with it the lifecycle state - exists.
@@ -270,4 +306,32 @@ export class Server {
 		expect(elapsed).toBeGreaterThanOrEqual(1900);
 		expect(elapsed, 'the listeners were handed a budget of their own').toBeLessThan(2450);
 	}, 60000);
+});
+
+describe('a worker that fatal() or an uncaught exception ends', () => {
+	// A worker runs only under CLUSTER_WORKERS, which needs Linux, so what the
+	// worker installs is pinned from its source.
+	const source = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+
+	it('aborts what is still in flight before fatal() exits', () => {
+		const start = source.indexOf('\t\tsetFatalSink({\n');
+		expect(start, 'the worker installs no fatal sink').toBeGreaterThan(-1);
+		const close = '\n\t\t});';
+		const end = source.indexOf(close, start);
+		expect(end, 'the sink has no end').toBeGreaterThan(start);
+		expectStatementBlockCount(source.slice(start, end + close.length), ['abortInFlightRequests();', 'process.exit(code);'], 1,
+			'the sink aborts the requests in flight, then exits');
+	});
+
+	it('aborts what is still in flight on an uncaught exception no application handler keeps', () => {
+		const opening = "\t\tprocess.on('uncaughtExceptionMonitor', () => {\n";
+		const start = source.indexOf(opening);
+		expect(start, 'the worker watches no uncaught exception').toBeGreaterThan(-1);
+		const close = '\n\t\t});';
+		const end = source.indexOf(close, start);
+		expect(end, 'the monitor has no end').toBeGreaterThan(start);
+		expectStatement(source.slice(start, end + close.length),
+			"if (process.listenerCount('uncaughtException') === 0) abortInFlightRequests();",
+			'the monitor aborts the requests in flight when nothing keeps the worker');
+	});
 });

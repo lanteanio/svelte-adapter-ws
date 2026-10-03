@@ -1475,6 +1475,8 @@ if (is_primary) {
 	async function performShutdown(reason, handler) {
 		if (phase === 'shutting-down') return;
 		phase = 'shutting-down';
+		// The instance the handler graph loaded, which exists by now.
+		const { abortInFlightRequests } = await import('./handler/lifecycle.js');
 		if (isMainThread) {
 			sdNotify.stopping();
 			sdNotify.disarmWatchdog();
@@ -1584,6 +1586,9 @@ if (is_primary) {
 			const spent = (monotonicNow() - t_close).toFixed(0);
 			if (drained && cleaned) console.log(`[svelte-adapter-ws] ${prefix}Shutdown complete in ${spent}ms.`);
 			else console.error(`[svelte-adapter-ws] ${prefix}Shutdown finished in ${spent}ms but was NOT clean (see the lines above).`);
+			// A request still open is cut off by the exit, and its signal says so
+			// first, also when a throw above skipped the drain that would have.
+			abortInFlightRequests();
 			exitAfterFlush(0);
 		}
 	}
@@ -1680,6 +1685,23 @@ if (is_primary) {
 		const handler = await import('./handler.js');
 		// The same instance the handler graph above loaded.
 		const { abortInFlightRequests } = await import('./handler/lifecycle.js');
+		// A hard-tier fatal() ends this worker. A request still in flight is cut
+		// off by that exit, and its signal says so first, as on every other way
+		// out of a worker.
+		const { setFatalSink } = await import('./utils/assertions.js');
+		setFatalSink({
+			exit: (code) => {
+				abortInFlightRequests();
+				process.exit(code);
+			}
+		});
+		// So does an uncaught exception, unless the application installed a
+		// handler that keeps the worker alive. Read from the monitor, which
+		// leaves node's own disposition standing: the thread dies and the
+		// primary's worker 'error' event reports it.
+		process.on('uncaughtExceptionMonitor', () => {
+			if (process.listenerCount('uncaughtException') === 0) abortInFlightRequests();
+		});
 		const role = workerData?.role ?? 'io';
 		let booted = false;
 		/** @type {any[]} */

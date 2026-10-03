@@ -132,8 +132,12 @@ export class Server {
 		if (p === '/api/hold') {
 			// A request that stays in flight for ms, announcing both edges on
 			// stdout so a test reads "in flight" and "released" off the server's
-			// own output rather than assuming them from a delay.
+			// own output rather than assuming them from a delay, and its signal
+			// aborting, with the reason.
 			const ms = Number(url.searchParams.get('ms') || '1000');
+			request.signal.addEventListener('abort', () => {
+				console.log('[hold] aborted: ' + (request.signal.reason?.message ?? String(request.signal.reason)));
+			}, { once: true });
 			console.log('[hold] holding');
 			await new Promise((r) => setTimeout(r, ms));
 			console.log('[hold] released');

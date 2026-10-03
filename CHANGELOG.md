@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `admin()` handler, carried no signal, so it never fired. It now aborts
   when the client goes away before its request body has arrived in full -
   always, for a request without one - as under SvelteKit's Node adapter,
-  and when the shutdown budget runs out, with an `AbortError` whose message
-  names the shutdown. A request whose response completes never sees it, and
+  and when the process exits with the request still in flight - the shutdown
+  budget runs out, the shutdown sequence itself throws, or `fatal()` or an
+  uncaught exception the application does not handle ends a worker - with an
+  `AbortError` whose message names the shutdown. A request whose response completes never sees it, and
   neither does one whose client leaves after its body arrived, so a form
   action that has its data finishes what it started. `createTestServer`'s
   admin lane aborts it on a disconnect too.
