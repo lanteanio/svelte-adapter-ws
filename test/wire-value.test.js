@@ -23,5 +23,8 @@ describe('wireValue', () => {
 	it('writes a lone surrogate as its three bytes, as uWS does', () => {
 		expect(hex('a' + String.fromCharCode(0xd800) + 'b')).toBe('61eda08062');
 		expect(hex('x' + String.fromCharCode(0xdc00))).toBe('78edb080');
+		// A pair beside a lone half is still one four-byte character.
+		expect(hex(String.fromCharCode(0xd83d, 0xde00, 0xd800))).toBe('f09f9880eda080');
+		expect(hex(String.fromCharCode(0xd800, 0xd83d, 0xde00))).toBe('eda080f09f9880');
 	});
 });

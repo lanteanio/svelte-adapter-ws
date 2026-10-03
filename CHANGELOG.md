@@ -161,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every lane that writes an app or configured header - pages, the auth
   endpoint, the admin route, the waiting-room renderer, built assets and
   `createTestServer` - now writes the value's UTF-8 bytes, as the family's
-  native tier does, a lone surrogate included. A control character is still
+  native tier does, a lone surrogate included (the WebSocket door's own
+  refusals still write a lone surrogate as U+FFFD). A control character is still
   refused. A Response whose status node cannot write is answered with a
   `500` that carries none of its headers or cookies.
 - **A static download whose file name is not ASCII is served.** Its

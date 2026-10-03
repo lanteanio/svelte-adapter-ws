@@ -1,8 +1,8 @@
 // A built asset's headers go out as the bytes the native tier writes: a value
 // past ASCII - a download's file name, a configured header - as its UTF-8
 // bytes. node re-encodes a content-disposition written after a content-length
-// as latin1, so the length goes last; before it did, a download whose name was
-// not ASCII failed its answer with an exception no listener caught.
+// as latin1, so the length goes last, and a download whose name is not ASCII
+// is served.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import net from 'node:net';

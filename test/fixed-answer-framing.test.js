@@ -97,6 +97,7 @@ export class Server {
 			}), { headers: text });
 		}
 		if (p === '/head-cancel-state') return new Response(String(globalThis.__headCancelled), { headers: text });
+		if (p === '/status-error') return Response.error();
 		if (p === '/wide-header') {
 			return new Response('x', { headers: { ...text, 'x-note': String.fromCharCode(99, 97, 102, 233) } });
 		}
@@ -778,6 +779,14 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 			body: 'Internal Server Error'
 		});
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	});
+
+	it('on a page whose Response carries a status node cannot write, with a length-framed 500', async () => {
+		const first = splitFirst(await pipeline(open.rt.port, [['GET /status-error HTTP/1.1', 'Cookie: s=1'], OK]));
+		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+		const length = Number(header(first.lines, 'content-length')[0]);
+		expect(Number.isInteger(length) && length > 0).toBe(true);
+		expect(first.rest.slice(length).startsWith('HTTP/1.1 200'), 'the follower is served').toBe(true);
 	});
 
 	it('on the 500 for a status node refuses, which carries nothing of the hook\'s', async () => {
