@@ -216,9 +216,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		return;
 	}
 	if (!response.body) {
-		state.responseStarted = true;
-		const length = bodylessLength(response.status, response.headers.get('content-length'), headOnly);
-		if (writeHeaders(res, response, length)) res.end();
+		writeHeaders(res, response, state, bodylessLength(response.status, response.headers.get('content-length'), headOnly));
+		res.end();
 		return;
 	}
 	if (response.body.locked) {
@@ -242,10 +241,9 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 	// omit fields settled only while generating the content; the GET's coded
 	// length is one).
 	if (headOnly) {
-		state.responseStarted = true;
-		const length = bodylessLength(response.status, response.headers.get('content-length'), true);
-		if (writeHeaders(res, response, length)) res.end();
 		response.body.cancel().catch(() => {});
+		writeHeaders(res, response, state, bodylessLength(response.status, response.headers.get('content-length'), true));
+		res.end();
 		return;
 	}
 
@@ -256,8 +254,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		const first = await reader.read();
 		if (state.aborted) return;
 		if (first.done) {
-			state.responseStarted = true;
-			if (writeHeaders(res, response, 0)) res.end();
+			writeHeaders(res, response, state, 0);
+			res.end();
 			return;
 		}
 		const firstBytes = chunkBytes(first.value);
@@ -279,8 +277,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			// A string chunk goes out as is: the family's native tier decides
 			// on the chunk's own byteLength, and a string has none.
 			const whole = compressWhole(response, firstBytes, typeof first.value === 'string' ? '' : acceptEncoding || '');
-			state.responseStarted = true;
-			if (writeHeaders(res, response, whole.body.byteLength, whole.encoding)) res.end(whole.body);
+			writeHeaders(res, response, state, whole.body.byteLength, whole.encoding);
+			res.end(whole.body);
 			return;
 		}
 
@@ -290,10 +288,9 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			ready.push(chunkBytes(second.value));
 			pendingRead = null;
 		}
-		state.responseStarted = true;
 		// node frames this answer chunked unless the request is HTTP/1.0
 		// without `TE: chunked`, which it answers close-delimited instead.
-		if (!writeHeaders(res, response, null, '', res.useChunkedEncodingByDefault)) return;
+		writeHeaders(res, response, state, null, '', res.useChunkedEncodingByDefault);
 		streaming = true;
 		for (;;) {
 			let value;
@@ -340,19 +337,21 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
  * and Referrer-Policy choices vary by app. Those are app-level decisions and
  * the right tier is `hooks.server.js`.
  *
- * A header the transport refuses (a name or value with characters node will
- * not put on the wire) turns the whole response into a 500 before any byte
- * starts, the same answer Kit's own node writer gives.
+ * A status node cannot write, or a header it refuses (a name or value with
+ * characters it will not put on the wire), throws before anything is staged
+ * or the response is marked as started, so the lane answers it as any other
+ * failure of the render: its event, and the 500 carrying the request id.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
+ * @param {{ responseStarted?: boolean }} state marked started once the
+ *   headers are staged
  * @param {number | null} length the Content-Length to write, or null for none
  * @param {string} [encoding] the content coding the body was sent with
  * @param {boolean} [chunked] node will frame this answer chunked, so a
  *   Trailer the Response carries can go out with it
- * @returns {boolean} false when a header was refused and the 500 was written
  */
-function writeHeaders(res, response, length, encoding = '', chunked = false) {
+function writeHeaders(res, response, state, length, encoding = '', chunked = false) {
 	/** @type {Array<[string, string | string[]]>} */
 	const staged = [];
 	let hasContentTypeOptions = false;
@@ -369,16 +368,11 @@ function writeHeaders(res, response, length, encoding = '', chunked = false) {
 	}
 	const cookies = response.headers.getSetCookie();
 	if (cookies.length > 0) staged.push(['set-cookie', cookies]);
-	// Checked whole before the first is set: a refused header (a cookie
-	// value included) is answered with the 500, not thrown past a response
-	// already marked as started, where nothing would answer it.
-	try {
-		assertWritableStatus(response.status);
-		stageHeaders(res, staged);
-	} catch (error) {
-		endText(res, 500, {}, String(error));
-		return false;
-	}
+	// Checked whole before the first is set, so a refused header (a cookie
+	// value included) leaves nothing staged for the 500 that answers it.
+	assertWritableStatus(response.status);
+	stageHeaders(res, staged);
+	state.responseStarted = true;
 	if (!hasContentTypeOptions) res.setHeader('x-content-type-options', 'nosniff');
 	if (encoding) {
 		res.setHeader('content-encoding', encoding);
@@ -387,7 +381,6 @@ function writeHeaders(res, response, length, encoding = '', chunked = false) {
 	}
 	if (length !== null) res.setHeader('content-length', String(length));
 	res.writeHead(response.status);
-	return true;
 }
 
 /**

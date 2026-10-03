@@ -175,10 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every lane that writes an app or configured header - pages, the auth
   endpoint, the admin route, the waiting-room renderer, built assets and
   `createTestServer` - now writes the value's UTF-8 bytes, as the family's
-  native tier does, a lone surrogate included (the WebSocket door's own
-  refusals still write a lone surrogate as U+FFFD). A control character is still
-  refused. A Response whose status node cannot write is answered with a
-  `500` that carries none of its headers or cookies.
+  native tier does, a lone surrogate included. A control character is still
+  refused. A Response whose status node cannot write, or that carries a header
+  node refuses, is answered as a failure of its lane, with a `500` that
+  carries none of its headers or cookies; a page's now carries the request
+  id and reports `runtime.ssr.failed`, where it answered with the error's
+  text.
 - **A static download whose file name is not ASCII is served.** Its
   `content-disposition`, and a `staticHeaders` or `staticCacheControl` value
   past U+00FF, failed the answer with an exception nothing caught, which ended

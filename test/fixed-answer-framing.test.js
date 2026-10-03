@@ -575,9 +575,12 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		});
 	});
 
-	it('length-frames the 500 for a header node refuses to write', async () => {
-		const body = readLengthFramed(await pipeline(open.rt.port, [['GET /refused-header HTTP/1.1'], OK]), '500');
-		expect(body).toContain('Invalid character in header content');
+	it('answers a header node refuses to write with the length-framed 500 and the request id', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /refused-header HTTP/1.1'], OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
 	});
 
 	it('drops a Transfer-Encoding the Response carries, and frames the body by its length', async () => {
@@ -626,10 +629,23 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
 	});
 
-	it('length-frames the 500 for a Set-Cookie value node refuses to write', async () => {
+	it('answers a Set-Cookie value node refuses to write with the length-framed 500 and the request id', async () => {
 		// Credentialed, so the dedup leader leaves the Response to this writer.
-		const body = readLengthFramed(await pipeline(open.rt.port, [['GET /bad-cookie HTTP/1.1', 'Cookie: s=1'], OK]), '500');
-		expect(body).toContain('Invalid character in header content');
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /bad-cookie HTTP/1.1', 'Cookie: s=1'], OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+		expect(header(first.lines, 'set-cookie')).toEqual([]);
+	});
+
+	it('answers a Response carrying a status node cannot write the same way', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /status-error HTTP/1.1', 'Cookie: s=1'], OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+		expect(header(first.lines, 'content-type')).toEqual(['text/plain']);
 	});
 
 	it('keeps a Trailer on an answer it streams chunked', async () => {
@@ -779,14 +795,6 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 			body: 'Internal Server Error'
 		});
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
-	});
-
-	it('on a page whose Response carries a status node cannot write, with a length-framed 500', async () => {
-		const first = splitFirst(await pipeline(open.rt.port, [['GET /status-error HTTP/1.1', 'Cookie: s=1'], OK]));
-		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
-		const length = Number(header(first.lines, 'content-length')[0]);
-		expect(Number.isInteger(length) && length > 0).toBe(true);
-		expect(first.rest.slice(length).startsWith('HTTP/1.1 200'), 'the follower is served').toBe(true);
 	});
 
 	it('on the 500 for a status node refuses, which carries nothing of the hook\'s', async () => {
