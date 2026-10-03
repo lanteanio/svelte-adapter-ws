@@ -4456,12 +4456,6 @@ export async function createTestServer(options = {}) {
 				return;
 			}
 
-			// The route matched the RAW path and building a Request normalizes
-			// dot segments, so `${adminPath}/../reflect` matches this route and
-			// would hand `handler.admin` a request whose pathname is `/reflect`
-			// - outside the prefix that was routed and outside the namespace the
-			// handler dispatches on. Refused here, as production does, and
-			// before any body is read.
 			// The Host value is the URL's authority, so one carrying a path or a
 			// query would pick the pathname checked below. Refused as production
 			// refuses it; node's parser has already refused a request with no Host.
@@ -4473,6 +4467,12 @@ export async function createTestServer(options = {}) {
 			try {
 				adminParsed = new URL('http://' + adminHeaders.host + adminUrl);
 			} catch { failAdmin(400); return; }
+			// The route matched the RAW path and building a Request normalizes
+			// dot segments, so `${adminPath}/../reflect` matches this route and
+			// would hand `handler.admin` a request whose pathname is `/reflect`
+			// - outside the prefix that was routed and outside the namespace the
+			// handler dispatches on. Refused here, as production does, and
+			// before any body is read.
 			if (adminParsed.pathname !== adminPath &&
 				!adminParsed.pathname.startsWith(adminPath + '/')) {
 				failAdmin(400);
