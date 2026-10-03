@@ -118,10 +118,11 @@ function writeWrapper(dir, opts = {}) {
 			? "process.on('sveltekit:shutdown', () => { console.log('CLEANUP RAN'); });"
 			: '',
 		// A marker for every stop signal the process receives, with how many
-		// listeners it has, so a case can count the signals and see that the
-		// runtime's own listener was there for each. Opt-in: on POSIX a listener
-		// replaces node's default disposition.
-		opts.markSignals ? "for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { console.log('[wrapper] ' + signal + ' listeners=' + process.listenerCount(signal)); });" : '',
+		// listeners were added after it, which only the runtime does, so a case
+		// can count the signals and see that the runtime's own listener was there
+		// for each. Opt-in: on POSIX a listener replaces node's default
+		// disposition.
+		opts.markSignals ? "for (const signal of ['SIGTERM', 'SIGINT']) { process.on(signal, () => { console.log('[wrapper] ' + signal + ' added=' + (process.listenerCount(signal) - base)); }); const base = process.listenerCount(signal); }" : '',
 		// One signal per line, however the lines arrive.
 		"process.stdin.on('data', (d) => { for (const line of String(d).split('\\n')) { if (line.includes('shutdown')) process.emit('SIGTERM'); if (line.includes('interrupt')) process.emit('SIGINT'); } });",
 		'process.stdin.unref();',
@@ -262,7 +263,10 @@ export class Server {
 		expect(output.text, 'the signal must land before the server module evaluated').not.toContain('SERVER MODULE EVALUATED');
 		requestShutdown(proc);
 		// A second signal during boot changes nothing: the first is the one
-		// reported, and the boot is not dispatched twice.
+		// reported, and the boot is not dispatched twice. Sent apart: POSIX
+		// delivers two pending signals lowest number first, SIGINT ahead of
+		// SIGTERM.
+		await sleep(50);
 		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
 		else proc.kill('SIGINT');
 
@@ -302,20 +306,20 @@ export class Server {
 		// The same signal again, then the other one: a listener taken off after
 		// its first signal shows on the repeat, one that treats SIGINT apart on
 		// the last.
+		const exited = whenExited(proc, 30000);
 		requestShutdown(proc);
 		await sleep(200);
 		requestShutdown(proc);
 		await sleep(200);
 		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
 		else proc.kill('SIGINT');
-		expect(await whenExited(proc, 30000)).toBe(0);
+		expect(await exited).toBe(0);
 		expect(await held, 'the held request is answered').toBe('held');
 		/** @param {RegExp} pattern */
 		const count = (pattern) => (output.text.match(pattern) || []).length;
-		const marks = [...output.text.matchAll(/\[wrapper\] (SIGTERM|SIGINT) listeners=(\d+)/g)];
+		const marks = [...output.text.matchAll(/\[wrapper\] (SIGTERM|SIGINT) added=(\d+)/g)];
 		expect(marks.map((mark) => mark[1]), 'every signal arrived, in order').toEqual(['SIGTERM', 'SIGTERM', 'SIGINT']);
-		// The marker is one listener; the runtime's own must still be there.
-		expect(marks.map((mark) => Number(mark[2]) >= 2), 'the runtime still listens').toEqual([true, true, true]);
+		expect(marks.map((mark) => Number(mark[2]) >= 1), 'the runtime still listens').toEqual([true, true, true]);
 		expect(count(/Received SIGTERM, shutting down gracefully/g), 'one shutdown ran').toBe(1);
 		expect(output.text, 'the SIGINT started nothing').not.toContain('Received SIGINT');
 		expect(count(/CLEANUP RAN/g), 'the cleanup listeners ran once').toBe(1);
@@ -377,7 +381,7 @@ describe('a cluster primary under a second stop signal', () => {
 		const code = source.slice(start + opening.length, end).split('\n')
 			.map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('//'));
 		expect(code[0]).toBe('if (primary_booted) { graceful_shutdown(reason); return; }');
-		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) return;\n');
+		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) return;\n\t\tshutting_down = true;\n');
 		expect(guard, 'graceful_shutdown returns when one is already running').toBeGreaterThan(-1);
 	});
 });
