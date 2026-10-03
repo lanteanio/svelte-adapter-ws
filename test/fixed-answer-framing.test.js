@@ -234,6 +234,12 @@ const WS_HANDLER = `
 export function message() {}
 export function authenticate({ headers, cookies }) {
 	const mode = headers['x-mode'];
+	if (mode === 'wide-cookie-error') {
+		// A wide cookie set, then a Response node cannot write a status for:
+		// the 500 that answers it carries none of the hook's headers.
+		cookies.set('caf' + String.fromCharCode(233), 'v', { path: '/' });
+		return Response.error();
+	}
 	if (mode === 'wide-cookie') {
 		// A cookie name past U+00FF, which goes out as its UTF-8 bytes.
 		cookies.set(String.fromCharCode(256), 'v', { path: '/' });
@@ -774,10 +780,18 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
 	});
 
+	it('on the 500 for a status node refuses, which carries nothing of the hook\'s', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: wide-cookie-error'), OK]), {
+			status: '500',
+			body: 'Internal Server Error'
+		});
+		expect(header(first.lines, 'set-cookie')).toEqual([]);
+	});
+
 	it('on a cookie past U+00FF beside the implicit 204, which goes out as its UTF-8 bytes', async () => {
-		// The cookie API refuses every control character itself, so a name past
-		// U+00FF was the one cookie node refused; it is written as its UTF-8
-		// bytes now, and the implicit 204 stays bodyless.
+		// The cookie API refuses every control character itself; a name past
+		// U+00FF goes out as its UTF-8 bytes, and the implicit 204 stays
+		// bodyless.
 		const first = expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: wide-cookie'), OK]), { status: '204', length: null });
 		const wire = Buffer.from(String.fromCharCode(256) + '=v', 'utf8').toString('latin1');
 		expect(header(first.lines, 'set-cookie').some((c) => c.startsWith(wire))).toBe(true);

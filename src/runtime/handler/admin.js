@@ -12,7 +12,7 @@
 // throws or rejects yields a generic 500 with no detail leaked to the client.
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
-import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders } from './http-helpers.js';
+import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { buildRequest } from './ssr.js';
 import { openRequestSignal, closeRequestSignal } from './lifecycle.js';
 import { collectRequestHeaders, isFramingHeader } from '../utils/request-headers.js';
@@ -108,6 +108,7 @@ async function writeAdminResponse(res, response, state, headOnly) {
 	const whole = body !== null && body.byteLength > 0;
 	const length = whole ? body.byteLength : bodylessLength(response.status, response.headers.get('content-length'), headOnly);
 	if (length !== null) headers.push(['content-length', String(length)]);
+	assertWritableStatus(response.status);
 	stageHeaders(res, headers);
 	res.writeHead(response.status);
 	if (whole) res.end(body);

@@ -3,7 +3,7 @@ import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import { randomUuid, setTimer, clearTimer } from '../runtime.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
@@ -373,6 +373,7 @@ function writeHeaders(res, response, length, encoding = '', chunked = false) {
 	// value included) is answered with the 500, not thrown past a response
 	// already marked as started, where nothing would answer it.
 	try {
+		assertWritableStatus(response.status);
 		stageHeaders(res, staged);
 	} catch (error) {
 		endText(res, 500, {}, String(error));

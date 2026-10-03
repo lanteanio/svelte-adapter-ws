@@ -48,6 +48,19 @@ export function endText(res, status, headers, text) {
 }
 
 /**
+ * Throw, as writeHead would, for a status node cannot write - before any
+ * header is staged, so the 500 that answers it carries nothing of the
+ * Response's, and no header value spelled for the wire meets a string body.
+ *
+ * @param {number} status
+ */
+export function assertWritableStatus(status) {
+	if (!Number.isInteger(status) || status < 100 || status > 999) {
+		throw Object.assign(new RangeError(`Invalid status code: ${status}`), { code: 'ERR_HTTP_INVALID_STATUS_CODE' });
+	}
+}
+
+/**
  * A header value as the bytes the native tier puts on the wire. uWS writes
  * text as its UTF-8 bytes; node's HTTP/1.1 writer takes one byte per
  * character and refuses one past U+00FF, so a value past ASCII goes to node
@@ -56,7 +69,48 @@ export function endText(res, status, headers, text) {
  * @param {string} value
  */
 export function wireValue(value) {
-	return /[^\x00-\x7f]/.test(value) ? Buffer.from(value, 'utf8').toString('latin1') : value;
+	if (!/[^\x00-\x7f]/.test(value)) return value;
+	if (!LONE_SURROGATE.test(value)) return Buffer.from(value, 'utf8').toString('latin1');
+	// uWS writes a lone surrogate as its three bytes (WTF-8), where
+	// Buffer.from would put U+FFFD in its place.
+	let out = '';
+	for (let i = 0; i < value.length; i++) {
+		let c = value.charCodeAt(i);
+		if (c >= 0xd800 && c <= 0xdbff && i + 1 < value.length) {
+			const low = value.charCodeAt(i + 1);
+			if (low >= 0xdc00 && low <= 0xdfff) {
+				c = 0x10000 + ((c - 0xd800) << 10) + (low - 0xdc00);
+				i++;
+			}
+		}
+		if (c < 0x80) out += String.fromCharCode(c);
+		else if (c < 0x800) out += String.fromCharCode(0xc0 | (c >> 6), 0x80 | (c & 63));
+		else if (c < 0x10000) out += String.fromCharCode(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+		else out += String.fromCharCode(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+	}
+	return out;
+}
+
+/** A surrogate half without its partner. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+/**
+ * What a header value needs beyond a copy: anything but visible ASCII and
+ * tabs. A value without one is valid as it is and reads the same in latin1 and
+ * UTF-8, so it skips both the spelling and node's own check.
+ */
+const NEEDS_SPELLING = /[^\t\x20-\x7e]/;
+
+/**
+ * A value that needs more than a copy, spelled and then checked by node.
+ *
+ * @param {string} name
+ * @param {string | number} value
+ */
+function spelledValue(name, value) {
+	const spelled = typeof value === 'string' ? wireValue(value) : value;
+	validateHeaderValue(name, spelled);
+	return spelled;
 }
 
 /**
@@ -77,15 +131,27 @@ export function wireValue(value) {
  * @param {Iterable<[string, string | string[]]>} entries
  */
 export function stageHeaders(res, entries) {
-	/** @type {Array<[string, string | string[]]>} */
-	const list = [];
-	for (const [name, value] of entries) list.push([name, Array.isArray(value) ? value.map(wireValue) : wireValue(value)]);
-	for (const [name, value] of list) {
+	/** @type {string[]} */
+	const names = [];
+	/** @type {Array<string | number | Array<string | number>>} */
+	const values = [];
+	for (const [name, value] of entries) {
 		validateHeaderName(name);
-		if (Array.isArray(value)) for (const one of value) validateHeaderValue(name, one);
-		else validateHeaderValue(name, value);
+		if (Array.isArray(value)) {
+			let out = value;
+			for (let i = 0; i < value.length; i++) {
+				const one = value[i];
+				if (typeof one === 'string' && !NEEDS_SPELLING.test(one)) continue;
+				if (out === value) out = value.slice();
+				out[i] = spelledValue(name, one);
+			}
+			values.push(out);
+		} else {
+			values.push(typeof value === 'string' && !NEEDS_SPELLING.test(value) ? value : spelledValue(name, value));
+		}
+		names.push(name);
 	}
-	for (const [name, value] of list) res.setHeader(name, value);
+	for (let i = 0; i < names.length; i++) res.setHeader(names[i], values[i]);
 }
 
 /**

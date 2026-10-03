@@ -94,7 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -2729,7 +2729,9 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 				const length = buf ? buf.byteLength : bodylessLength(result.status, result.headers.get('content-length'), false);
 				if (length !== null) outHeaders.push(['content-length', String(length)]);
 				// Staged before the status, so a refused header reaches the 500
-				// below with nothing committed.
+				// below with nothing committed; a status node cannot write is
+				// refused before anything is staged.
+				assertWritableStatus(result.status);
 				stageHeaders(res, outHeaders);
 				res.writeHead(result.status);
 				if (buf) res.end(buf);
@@ -2739,8 +2741,9 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 
 			// Implicit success: 204 No Content with any Set-Cookie headers.
 			const outCookies = cookies._serialize();
-			// Staged like the relayed Response: a cookie node refuses (a name or
-			// domain past U+00FF) reaches the 500 with nothing committed.
+			// Staged like the relayed Response, which spells a name or value past
+			// ASCII as its UTF-8 bytes; the cookie API has already refused every
+			// control character, so nothing here is left for node to refuse.
 			if (outCookies.length > 0) stageHeaders(res, [['set-cookie', outCookies]]);
 			res.writeHead(204);
 			res.end();

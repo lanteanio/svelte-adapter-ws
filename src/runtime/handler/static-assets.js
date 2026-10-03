@@ -14,7 +14,7 @@ import { locationTarget } from '../utils/location-target.js';
 import { revalidationHeaders } from '../utils/revalidation-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
-import { send400 } from './http-helpers.js';
+import { send400, wireValue } from './http-helpers.js';
 
 // File extensions that browsers cannot render inline. Serving these with
 // Content-Disposition: attachment prompts a download dialog instead of
@@ -149,10 +149,13 @@ function flattenRevalidation(tuples) {
  */
 function flattenHeaders(tuples, contentType, contentLength) {
 	/** @type {(string | number)[]} */
-	const flat = ['content-type', contentType, 'content-length', contentLength];
+	const flat = ['content-type', contentType];
 	for (let i = 0; i < tuples.length; i++) {
 		flat.push(tuples[i][0], tuples[i][1]);
 	}
+	// Last: node re-encodes a content-disposition stored after a content-length
+	// as latin1, which takes apart the UTF-8 bytes wireValue spelled for it.
+	flat.push('content-length', contentLength);
 	return flat;
 }
 
@@ -210,7 +213,10 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 			headers.push(['content-disposition', contentDispositionValue(path.basename(relPath))]);
 		}
 
-		const merged = mergeStaticHeaders(headers, staticHeaders);
+		// Spelled once, here, as the bytes the native tier writes: a value past
+		// ASCII - a download's file name, a configured header - goes to node as
+		// its UTF-8 bytes. See wireValue.
+		const merged = mergeStaticHeaders(headers, staticHeaders).map(([name, value]) => /** @type {[string, string]} */ ([name, wireValue(value)]));
 		/** @type {import('./state.js').StaticEntry} */
 		const entry = {
 			buffer,
@@ -528,12 +534,13 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 		/** @type {(string | number)[]} */
 		const flat = [
 			'content-type', entry.contentType,
-			'content-range', `bytes ${start}-${end}/${body.byteLength}`,
-			'content-length', slice.byteLength
+			'content-range', `bytes ${start}-${end}/${body.byteLength}`
 		];
 		for (let i = 0; i < headers.length; i++) {
 			flat.push(headers[i][0], headers[i][1]);
 		}
+		// Last, as in flattenHeaders.
+		flat.push('content-length', slice.byteLength);
 		res.writeHead(206, flat);
 		// node drops the body of a HEAD reply on its own; not handing it the
 		// slice keeps the HEAD answer from depending on that.
