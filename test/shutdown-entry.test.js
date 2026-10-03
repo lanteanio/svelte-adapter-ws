@@ -117,9 +117,11 @@ function writeWrapper(dir, opts = {}) {
 		opts.cleanupLog
 			? "process.on('sveltekit:shutdown', () => { console.log('CLEANUP RAN'); });"
 			: '',
-		// A marker for every SIGTERM the process receives, so a case can count
-		// them. Opt-in: on POSIX a listener replaces node's default disposition.
-		opts.markSignals ? "process.on('SIGTERM', () => { console.log('[wrapper] SIGTERM'); });" : '',
+		// A marker for every stop signal the process receives, with how many
+		// listeners it has, so a case can count the signals and see that the
+		// runtime's own listener was there for each. Opt-in: on POSIX a listener
+		// replaces node's default disposition.
+		opts.markSignals ? "for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { console.log('[wrapper] ' + signal + ' listeners=' + process.listenerCount(signal)); });" : '',
 		// One signal per line, however the lines arrive.
 		"process.stdin.on('data', (d) => { for (const line of String(d).split('\\n')) { if (line.includes('shutdown')) process.emit('SIGTERM'); if (line.includes('interrupt')) process.emit('SIGINT'); } });",
 		'process.stdin.unref();',
@@ -297,15 +299,25 @@ export class Server {
 		while (!output.text.includes('[hold] holding') && Date.now() - t0 < 10000) await sleep(25);
 		expect(output.text, 'the held request never reached the server').toContain('[hold] holding');
 
+		// The same signal again, then the other one: a listener taken off after
+		// its first signal shows on the repeat, one that treats SIGINT apart on
+		// the last.
 		requestShutdown(proc);
 		await sleep(200);
 		requestShutdown(proc);
+		await sleep(200);
+		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
+		else proc.kill('SIGINT');
 		expect(await whenExited(proc, 30000)).toBe(0);
 		expect(await held, 'the held request is answered').toBe('held');
 		/** @param {RegExp} pattern */
 		const count = (pattern) => (output.text.match(pattern) || []).length;
-		expect(count(/\[wrapper\] SIGTERM/g), 'both signals arrived').toBe(2);
+		const marks = [...output.text.matchAll(/\[wrapper\] (SIGTERM|SIGINT) listeners=(\d+)/g)];
+		expect(marks.map((mark) => mark[1]), 'every signal arrived, in order').toEqual(['SIGTERM', 'SIGTERM', 'SIGINT']);
+		// The marker is one listener; the runtime's own must still be there.
+		expect(marks.map((mark) => Number(mark[2]) >= 2), 'the runtime still listens').toEqual([true, true, true]);
 		expect(count(/Received SIGTERM, shutting down gracefully/g), 'one shutdown ran').toBe(1);
+		expect(output.text, 'the SIGINT started nothing').not.toContain('Received SIGINT');
 		expect(count(/CLEANUP RAN/g), 'the cleanup listeners ran once').toBe(1);
 		expect(output.text, 'the held request was not cut off').not.toContain('[hold] aborted');
 	}, 60000);
@@ -346,15 +358,17 @@ export class Server {
 	}, 60000);
 });
 
-describe('a worker that fatal() or an uncaught exception ends', () => {
-	// A worker runs only under CLUSTER_WORKERS, which needs Linux, so what the
-	// worker installs is pinned from its source.
-	const source = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+// The cluster primary and its workers run only under CLUSTER_WORKERS, which
+// needs Linux, so what they install is pinned from source here.
+const entrySource = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 
-	it('hands a primary\'s every stop signal to the one graceful shutdown', () => {
-		// The cluster primary runs only under CLUSTER_WORKERS too. Its signal
-		// handler starts with the hand-off, so a signal during a shutdown already
-		// running reaches graceful_shutdown's own guard and nothing else.
+describe('a cluster primary under a second stop signal', () => {
+	const source = entrySource;
+
+	it('hands every stop signal to the one graceful shutdown', () => {
+		// The signal handler starts with the hand-off, so a signal during a
+		// shutdown already running reaches graceful_shutdown's own guard and
+		// nothing else.
 		const opening = '\tconst onPrimarySignal = (reason) => {\n';
 		const start = source.indexOf(opening);
 		expect(start, 'the primary has no signal handler').toBeGreaterThan(-1);
@@ -366,6 +380,10 @@ describe('a worker that fatal() or an uncaught exception ends', () => {
 		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) return;\n');
 		expect(guard, 'graceful_shutdown returns when one is already running').toBeGreaterThan(-1);
 	});
+});
+
+describe('a worker that fatal() or an uncaught exception ends', () => {
+	const source = entrySource;
 
 	it('aborts what is still in flight before fatal() exits', () => {
 		const start = source.indexOf('\t\tsetFatalSink({\n');
