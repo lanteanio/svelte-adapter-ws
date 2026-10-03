@@ -17,10 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and when the process exits with the request still in flight - the shutdown
   budget runs out, the shutdown sequence itself throws, or `fatal()` or an
   uncaught exception the application does not handle ends a worker - with an
-  `AbortError` whose message names the shutdown. A request whose response completes never sees it, and
-  neither does one whose client leaves after its body arrived, so a form
-  action that has its data finishes what it started. `createTestServer`'s
-  admin lane aborts it on a disconnect too.
+  `AbortError` whose message names the shutdown. A request whose response
+  completes never sees it, and neither does one whose client leaves after its
+  body arrived, so a form action that has its data finishes what it started.
+  `createTestServer`'s admin lane aborts it on a disconnect too.
 
 - **Server entries a Vite plugin adds to the build are bundled and run at
   startup.** A `__`-prefixed `.js` entry in the server build, such as the
@@ -62,11 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible ASCII in the WebSocket handshake's query is refused as a malformed
   handshake. A raw non-ASCII byte, which node's parser already refused, now
   gets the same `Bad Request` body as every other refused target, and a HEAD
-  its length alone. A static
-  file whose name a browser percent-encodes is served for that spelling
-  decoded as `decodeURI` decodes it, so an encoded `/` no longer reaches into
-  a directory, and a name written decomposed is found for its composed
-  spelling too.
+  its length alone. A static file whose name a browser percent-encodes is
+  served for that spelling decoded as `decodeURI` decodes it, so an encoded
+  `/` no longer reaches into a directory, and a name written decomposed is
+  found for its composed spelling too.
 - **The request id and the connection permit cross the upgrade on keys only
   the runtime can name.** `createTestServer` and `vite dev` carried a
   connection's request id to `open` on a string key, and every surface
@@ -143,12 +142,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listener, which answered `404` off the path and `405` to a `POST` on it and
   closed the connection. It is now an ordinary request, answered as it would
   be without the upgrade headers - by the liveness probe, a built asset or the
-  application - on a connection that stays open, as on the family's native
-  tier, on the runtime and in `createTestServer`. A key that is not 24 bytes
-  long is refused `400` by the GET answer on the WebSocket path, which keeps
-  the connection. The WebSocket path and the waiting room's two pages answer
-  GET only: a HEAD to any of them reaches the application, and the `426`
-  upgrade hint no longer carries an `Upgrade` header.
+  application - as on the family's native tier, on the runtime and in
+  `createTestServer`. A key that is not 24 bytes long is refused `400` by the
+  GET answer on the WebSocket path. The WebSocket path and the waiting room's
+  two pages answer GET only: a HEAD to any of them reaches the application,
+  and the `426` upgrade hint no longer carries an `Upgrade` header.
 - The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
   UTF-16 code units, the `length` JavaScript reports, as the family's native
   tier counts them, where they counted UTF-8 bytes; binary frames are still

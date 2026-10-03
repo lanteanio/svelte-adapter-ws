@@ -4,7 +4,7 @@
 // and nothing else: a complete handshake on any other path, with any other
 // method, or with a key of another length is an ordinary request. It is
 // answered exactly as the same request without the upgrade headers, and the
-// connection serves the next request after it.
+// connection serves a request sent once that answer has arrived.
 
 import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

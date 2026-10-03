@@ -3,15 +3,15 @@
 // minted id, crossing to `open` on a key private to the runtime and gone from
 // userData before any hook reads it. The harness stamps it at two sites, the
 // fast path with no upgrade hook and the path behind one, so each has a case.
-// The key is a Symbol: an application's own userData property of the name the
-// id once crossed on reaches its hooks unchanged, and an accessor for that
-// name on Object.prototype is handed nothing.
+// The key is a Symbol: an application's own userData property named as
+// WS_REQUEST_ID_KEY spells it reaches its hooks unchanged, and an accessor for
+// that name on Object.prototype is handed nothing.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import WebSocket from 'ws';
 
-/** The string key the id crossed the upgrade on before it rode a Symbol. */
-const OLD_KEY = '__adapter_ws_request_id__';
+/** The name WS_REQUEST_ID_KEY spells, which no carry slot uses. */
+const REQUEST_ID_NAME = '__adapter_ws_request_id__';
 
 /** @type {any} */
 let server = null;
@@ -30,7 +30,7 @@ afterEach(async () => {
  */
 async function openOnce(extraHandler, headers) {
 	const { createTestServer } = await import('../src/testing.js');
-	/** @type {Array<{ requestId: unknown, keys: string[], symbols: string[], oldKey: unknown }>} */
+	/** @type {Array<{ requestId: unknown, keys: string[], symbols: string[], namedValue: unknown }>} */
 	const seen = [];
 	server = await createTestServer({
 		handler: {
@@ -41,7 +41,7 @@ async function openOnce(extraHandler, headers) {
 					requestId: ctx.platform.requestId,
 					keys: Object.keys(userData),
 					symbols: Object.getOwnPropertySymbols(userData).map((s) => String(s.description)),
-					oldKey: Object.hasOwn(userData, OLD_KEY) ? userData[OLD_KEY] : undefined
+					namedValue: Object.hasOwn(userData, REQUEST_ID_NAME) ? userData[REQUEST_ID_NAME] : undefined
 				});
 			},
 			...extraHandler
@@ -79,16 +79,16 @@ describe('createTestServer hands open the request id the upgrade carried', () =>
 });
 
 describe('createTestServer carries the id on a key no application can name', () => {
-	it("leaves an upgrade hook's own property of the old name to the application", async () => {
-		const seen = await openOnce({ upgrade: () => ({ [OLD_KEY]: 'mine' }) }, { 'x-request-id': 'harness-carry-own' });
+	it("leaves an upgrade hook's own property named as WS_REQUEST_ID_KEY spells it to the application", async () => {
+		const seen = await openOnce({ upgrade: () => ({ [REQUEST_ID_NAME]: 'mine' }) }, { 'x-request-id': 'harness-carry-own' });
 		expect(seen.requestId).toBe('harness-carry-own');
-		expect(seen.oldKey).toBe('mine');
+		expect(seen.namedValue).toBe('mine');
 	});
 
-	it('hands an accessor for the old name on Object.prototype nothing', async () => {
+	it('hands an accessor for that name on Object.prototype nothing', async () => {
 		/** @type {unknown[]} */
 		const taken = [];
-		Object.defineProperty(Object.prototype, OLD_KEY, {
+		Object.defineProperty(Object.prototype, REQUEST_ID_NAME, {
 			configurable: true,
 			get() { return undefined; },
 			set(value) { taken.push(value); }
@@ -97,7 +97,7 @@ describe('createTestServer carries the id on a key no application can name', () 
 			const seen = await openOnce({ upgrade: () => ({ role: 'hooked' }) }, { 'x-request-id': 'harness-carry-proto' });
 			expect(seen.requestId).toBe('harness-carry-proto');
 		} finally {
-			delete (/** @type {any} */ (Object.prototype))[OLD_KEY];
+			delete (/** @type {any} */ (Object.prototype))[REQUEST_ID_NAME];
 		}
 		expect(taken).toEqual([]);
 	});
