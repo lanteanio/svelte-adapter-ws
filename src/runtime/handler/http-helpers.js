@@ -238,14 +238,15 @@ const FORBIDDEN_405_RAW =
 	'Method Not Allowed';
 
 // The runtime's own 400, as send400 writes it, for a target node's parser
-// refuses: the bytes after it can no longer be read, so it also closes.
-const BAD_TARGET_400_RAW =
+// refuses: the bytes after it can no longer be read, so it also closes. A HEAD
+// gets the head alone, the length included.
+const BAD_TARGET_400_HEAD_RAW =
 	'HTTP/1.1 400 Bad Request\r\n' +
 	'content-type: text/plain\r\n' +
 	'content-length: 11\r\n' +
 	'connection: close\r\n' +
-	'\r\n' +
-	'Bad Request';
+	'\r\n';
+const BAD_TARGET_400_RAW = BAD_TARGET_400_HEAD_RAW + 'Bad Request';
 
 /**
  * Answer the forbidden methods node never hands to the request listener.
@@ -257,7 +258,8 @@ const BAD_TARGET_400_RAW =
  * Allow, so the raw request line is read off the failed packet and answered
  * that way. A request target with a byte outside visible ASCII, which
  * RFC 9112 does not allow and node's parser refuses before any listener runs,
- * gets the 400 every lane writes for a target it refuses, body included.
+ * gets the 400 every lane writes for a target it refuses, body included, or
+ * for a HEAD its length alone.
  * Every other parser failure keeps node's own answer: 431 for a
  * header block past the limit, 408 for a request that timed out, 413 for
  * chunk extensions past the limit, 400 otherwise, written only when no
@@ -306,7 +308,8 @@ export function refuseUnparsedForbiddenMethods(server) {
 		}
 		const code = err && err.code;
 		if (code === 'HPE_INVALID_URL') {
-			answerAndClose(socket, BAD_TARGET_400_RAW);
+			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(0, 5).toString('latin1') === 'HEAD ';
+			answerAndClose(socket, headOnly ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
 			return;
 		}
 		const status = code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large'

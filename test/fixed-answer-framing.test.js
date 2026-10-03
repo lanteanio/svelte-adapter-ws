@@ -1079,6 +1079,23 @@ describe('a waiting-room renderer header node refuses', () => {
 	});
 });
 
+describe("the 400 for a target node's parser refuses", () => {
+	it('carries its body to a GET and its length alone to a HEAD', async () => {
+		const ask = (/** @type {string} */ method) => exchange(
+			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+			[`${method} /café HTTP/1.1`, 'Host: 127.0.0.1']
+		);
+		for (const [method, body] of [['GET', 'Bad Request'], ['HEAD', '']]) {
+			const answer = await ask(method);
+			const first = splitFirst(answer.buffer);
+			expect(first.status, method).toBe('HTTP/1.1 400 Bad Request');
+			expect(header(first.lines, 'content-length'), method).toEqual(['11']);
+			expect(first.rest, method).toBe(body);
+			expect(answer.how, method).toBe('end');
+		}
+	});
+});
+
 describe('the upgrade-capacity answers are length-framed', () => {
 	it('on the admitting poll', async () => {
 		expectLengthFramed(await pipeline(open.rt.port, [['GET /__admit-check HTTP/1.1'], OK]), {
