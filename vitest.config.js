@@ -10,7 +10,7 @@ const EXCLUDE = ['source/**', '**/node_modules/**', 'bench/**', 'test/e2e/**', '
 // hands its resolve options to rolldown's native binding, which refuses a
 // RegExp made in another realm - and a vm pool evaluates every module, Vite
 // included, inside the test file's own context. These run in plain forks.
-const VITE_DEV_SUITES = ['test/dev-dashboard.test.js', 'test/vite-dev-request-shape.test.js', 'test/vite-origin-parity.test.js'];
+const VITE_DEV_SUITES = ['test/dev-dashboard.test.js', 'test/vite-dev-request-shape.test.js', 'test/vite-origin-parity.test.js', 'test/vite-dev-request-id-carry.test.js'];
 
 export default defineConfig({
 	// Dependency discovery and pre-bundling buy nothing here: modules load

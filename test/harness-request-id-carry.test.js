@@ -3,9 +3,15 @@
 // minted id, crossing to `open` on a key private to the runtime and gone from
 // userData before any hook reads it. The harness stamps it at two sites, the
 // fast path with no upgrade hook and the path behind one, so each has a case.
+// The key is a Symbol: an application's own userData property of the name the
+// id once crossed on reaches its hooks unchanged, and an accessor for that
+// name on Object.prototype is handed nothing.
 
 import { describe, it, expect, afterEach } from 'vitest';
 import WebSocket from 'ws';
+
+/** The string key the id crossed the upgrade on before it rode a Symbol. */
+const OLD_KEY = '__adapter_ws_request_id__';
 
 /** @type {any} */
 let server = null;
@@ -24,7 +30,7 @@ afterEach(async () => {
  */
 async function openOnce(extraHandler, headers) {
 	const { createTestServer } = await import('../src/testing.js');
-	/** @type {Array<{ requestId: unknown, keys: string[], symbols: string[] }>} */
+	/** @type {Array<{ requestId: unknown, keys: string[], symbols: string[], oldKey: unknown }>} */
 	const seen = [];
 	server = await createTestServer({
 		handler: {
@@ -34,7 +40,8 @@ async function openOnce(extraHandler, headers) {
 				seen.push({
 					requestId: ctx.platform.requestId,
 					keys: Object.keys(userData),
-					symbols: Object.getOwnPropertySymbols(userData).map((s) => String(s.description))
+					symbols: Object.getOwnPropertySymbols(userData).map((s) => String(s.description)),
+					oldKey: Object.hasOwn(userData, OLD_KEY) ? userData[OLD_KEY] : undefined
 				});
 			},
 			...extraHandler
@@ -68,5 +75,30 @@ describe('createTestServer hands open the request id the upgrade carried', () =>
 	it('mints one when the upgrade sent none', async () => {
 		const seen = await openOnce({});
 		expect(seen.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	});
+});
+
+describe('createTestServer carries the id on a key no application can name', () => {
+	it("leaves an upgrade hook's own property of the old name to the application", async () => {
+		const seen = await openOnce({ upgrade: () => ({ [OLD_KEY]: 'mine' }) }, { 'x-request-id': 'harness-carry-own' });
+		expect(seen.requestId).toBe('harness-carry-own');
+		expect(seen.oldKey).toBe('mine');
+	});
+
+	it('hands an accessor for the old name on Object.prototype nothing', async () => {
+		/** @type {unknown[]} */
+		const taken = [];
+		Object.defineProperty(Object.prototype, OLD_KEY, {
+			configurable: true,
+			get() { return undefined; },
+			set(value) { taken.push(value); }
+		});
+		try {
+			const seen = await openOnce({ upgrade: () => ({ role: 'hooked' }) }, { 'x-request-id': 'harness-carry-proto' });
+			expect(seen.requestId).toBe('harness-carry-proto');
+		} finally {
+			delete (/** @type {any} */ (Object.prototype))[OLD_KEY];
+		}
+		expect(taken).toEqual([]);
 	});
 });
