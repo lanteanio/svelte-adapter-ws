@@ -1238,7 +1238,9 @@ export async function handleUpgrade(req, socket, head) {
 	const pathname = q === -1 ? url : url.slice(0, q);
 	const query = q === -1 ? '' : url.slice(q + 1);
 	if (pathname !== WS_PATH) {
-		// A target RFC 9112 does not allow - `/ws#x` misses the path as spelled -
+		// Only a node that ignores the server's shouldUpgradeCallback (before
+		// 22.21 and 24.9) hands this listener a request on another path. A
+		// target RFC 9112 does not allow - `/ws#x` misses the path as spelled -
 		// gets the 400 every lane writes for it, as on the request edge.
 		if (invalidRequestTarget(pathname, query)) refuseUpgrade(socket, 400, 'Bad Request');
 		else refuseUpgrade(socket, 404, 'Not Found');
@@ -2913,7 +2915,7 @@ export function serveWsPathGet(req, res, pathname, search) {
 	// a browser 'upgrade required' and then refuse the upgrade it just asked
 	// for. At normal and elevated the live gate stays the source of truth.
 	if (postureLevel() !== 'siege' && admission.hasCapacity()) {
-		endText(res, 426, { 'content-type': 'text/plain', upgrade: 'websocket' }, 'WebSocket upgrade required');
+		endText(res, 426, { 'content-type': 'text/plain' }, 'WebSocket upgrade required');
 		return true;
 	}
 	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {

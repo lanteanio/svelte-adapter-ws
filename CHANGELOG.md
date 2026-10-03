@@ -135,6 +135,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain GET to the WebSocket path, and an upgrade to another protocol such as
   `h2c`, now reach the application instead of a `426`; with a ceiling a
   navigation still gets the upgrade hint or the capacity answer.
+- **Only a GET to the WebSocket path is taken as a handshake.** A complete
+  handshake on any other path or with any other method went to the upgrade
+  listener, which answered `404` off the path and `405` to a `POST` on it and
+  closed the connection. It is now an ordinary request, answered as it would
+  be without the upgrade headers - by the liveness probe, a built asset or the
+  application - on a connection that stays open, as on the family's native
+  tier, on the runtime and in `createTestServer`. A key that is not 24 bytes
+  long is refused `400` by the GET answer on the WebSocket path, which keeps
+  the connection. The WebSocket path and the waiting room's two pages answer
+  GET only: a HEAD to any of them reaches the application, and the `426`
+  upgrade hint no longer carries an `Upgrade` header.
 - The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
   UTF-16 code units, the `length` JavaScript reports, as the family's native
   tier counts them, where they counted UTF-8 bytes; binary frames are still

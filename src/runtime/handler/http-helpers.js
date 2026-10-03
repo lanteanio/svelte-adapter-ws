@@ -3,6 +3,7 @@
 // byte already left; the caller owns deciding whether that situation is fatal.
 
 import { STATUS_CODES, validateHeaderName, validateHeaderValue } from 'node:http';
+import { firstHeaderValue } from '../utils/request-headers.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
@@ -314,4 +315,28 @@ export function refuseUnparsedForbiddenMethods(server) {
 					: '400 Bad Request';
 		answerAndClose(socket, 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
 	});
+}
+
+/**
+ * Whether a request is the WebSocket route's, and so the 'upgrade' listener's:
+ * a GET on the WebSocket path as spelled, whose first Sec-WebSocket-Key line
+ * is 24 bytes long. That is what the family's native tier routes to its
+ * handshake. Everything else asking to upgrade is an ordinary request for the
+ * HTTP routes, which answer it as they would without the upgrade headers: an
+ * upgrade to another protocol, a handshake on another path or with another
+ * method, and an attempt with a key of any other length, which the GET answer
+ * on the WebSocket path refuses 400.
+ *
+ * node asks this only of a request that names `Connection: upgrade` and
+ * carries an Upgrade header.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} wsPath
+ */
+export function takesWebSocketRoute(req, wsPath) {
+	if (req.method !== 'GET') return false;
+	const url = req.url || '/';
+	const q = url.indexOf('?');
+	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
+		firstHeaderValue(req.rawHeaders, 'sec-websocket-key').length === 24;
 }

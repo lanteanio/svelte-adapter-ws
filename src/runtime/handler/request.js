@@ -184,11 +184,15 @@ export function handleRequest(req, res) {
 		// an attempted handshake is refused, and with an admission ceiling a
 		// browser NAVIGATION gets the answer the upgrade door would have given.
 		// Anything else goes on to the application.
-		if (pathname === realtimeRoutes.wsPath && isGetLike && realtimeRoutes.serveWsPathGet(req, res, pathname, search)) return;
+		//
+		// GET only, here and for the waiting room's pages below: the family
+		// mounts these three paths for GET, and every other method on them,
+		// HEAD included, is the application's.
+		if (pathname === realtimeRoutes.wsPath && method === 'GET' && realtimeRoutes.serveWsPathGet(req, res, pathname, search)) return;
 		// The waiting room's poll and holding page. Both are read-only and
 		// answer before the static index so a same-named asset can never
 		// shadow the queue a browser is sitting in.
-		if (isGetLike && realtimeRoutes.tryWaitingRoomRoute(req, res, pathname, search)) return;
+		if (method === 'GET' && realtimeRoutes.tryWaitingRoomRoute(req, res, pathname, search)) return;
 		if (realtimeRoutes.tryAuthenticateRoute(req, res, pathname, state)) return;
 		// The reserved admin prefix, last of the realtime routes and above the
 		// static lane. The exact realtime routes above beat it - the WebSocket

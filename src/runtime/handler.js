@@ -11,9 +11,8 @@
 /* global WARMUP_PATHS */
 /* global WS_ENABLED */
 import './_init.js';
-import { refuseUnparsedForbiddenMethods } from './handler/http-helpers.js';
+import { refuseUnparsedForbiddenMethods, takesWebSocketRoute } from './handler/http-helpers.js';
 import http from 'node:http';
-import { isWebSocketUpgradeAttempt, readRawHandshake } from './utils/ws-handshake.js';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
 import { env } from './env.js';
@@ -201,15 +200,14 @@ console.log(`[svelte-adapter-ws] Static files indexed in ${(monotonicNow() - _t_
 const tlsModule = is_tls ? await import('./handler/tls.js') : null;
 
 /**
- * Which requests the 'upgrade' listener takes: a WebSocket handshake attempt,
- * and only while one is listening. node otherwise hands it every request
- * that names `Connection: upgrade`, and an upgrade to another protocol is an
- * ordinary request the application answers. A node without the option
- * ignores it.
+ * Which requests the 'upgrade' listener takes: the WebSocket route's, see
+ * `takesWebSocketRoute`, and only in a build that serves one. node otherwise
+ * hands it every request that names `Connection: upgrade`. A node without the
+ * option (before 22.21 and 24.9) ignores it.
  *
  * @param {import('node:http').IncomingMessage} req
  */
-const shouldUpgradeCallback = (req) => server.listenerCount('upgrade') > 0 && isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders));
+const shouldUpgradeCallback = (req) => realtime !== null && takesWebSocketRoute(req, realtime.wsPath());
 
 export const server = tlsModule
 	? tlsModule.createTlsServer(handleRequest, shouldUpgradeCallback)
