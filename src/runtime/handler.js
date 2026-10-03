@@ -250,7 +250,8 @@ if (WS_ENABLED) {
 		tryAuthenticateRoute: realtime.tryAuthenticateRoute,
 		serveWsPathGet: realtime.serveWsPathGet,
 		tryWaitingRoomRoute: realtime.tryWaitingRoomRoute,
-		tryAdminRoute: admin.tryAdminRoute
+		tryAdminRoute: admin.tryAdminRoute,
+		exactPaths: realtime.exactPaths()
 	});
 	if (realtime.AUTH_ENDPOINT !== null) {
 		console.log(`[svelte-adapter-ws] WebSocket auth endpoint registered at ${realtime.AUTH_ENDPOINT}`);

@@ -1205,10 +1205,6 @@
 			{
 				"lead": "//     route with a non-ASCII name redirected with raw UTF-8 bytes in the header;\n",
 				"ours": "//     route with a non-ASCII name redirected with a raw Latin-1 byte in the\n//     header, or threw;\n"
-			},
-			{
-				"lead": "\tit('encodes a raw-byte target the same way, and the redirect lands where the lookup matched', async () => {\n\t\t// A client that sends the name's UTF-8 bytes raw in the request line.\n\t\t// uWS hands them to the runtime as the decoded characters, and the header\n\t\t// used to carry those characters' bytes back out unencoded.\n\t\tconst target = Buffer.concat([Buffer.from('/prerendered/caf'), E_ACUTE, Buffer.from('/?x='), E_ACUTE]);\n\t\tconst redirect = await exchange(port, request('GET', target));\n\t\texpect(redirect.status).toBe(308);\n\t\texpect(redirect.headers.location).toBe('/prerendered/caf%C3%A9?x=%C3%A9');\n\t\texpect(/[^\\x00-\\x7f]/.test(redirect.head)).toBe(false);\n\n\t\tconst landed = await exchange(port, request('GET', redirect.headers.location.split('?')[0]));\n\t\texpect(landed.status).toBe(200);\n\t\texpect(landed.body.toString()).toContain('data-testid=\"prerendered-non-ascii\"');\n\t}, 30000);\n\n",
-				"ours": "\tit('refuses a raw-byte target at the parser, and the encoded spelling redirects where the lookup matched', async () => {\n\t\t// A client that sends the name's UTF-8 bytes raw in the request line.\n\t\t// node's HTTP parser answers 400 before any lane reads it - a request\n\t\t// target is ASCII (RFC 9112 3.2), and no node:http option, the insecure\n\t\t// parser included, admits the bytes - where uWS hands the runtime the\n\t\t// decoded characters.\n\t\tconst target = Buffer.concat([Buffer.from('/prerendered/caf'), E_ACUTE, Buffer.from('/?x='), E_ACUTE]);\n\t\tconst refused = await exchange(port, request('GET', target));\n\t\texpect(refused.status).toBe(400);\n\n\t\tconst redirect = await exchange(port, request('GET', '/prerendered/caf%C3%A9/?x=%C3%A9'));\n\t\texpect(redirect.status).toBe(308);\n\t\texpect(redirect.headers.location).toBe('/prerendered/caf%C3%A9?x=%C3%A9');\n\t\texpect(/[^\\x00-\\x7f]/.test(redirect.head)).toBe(false);\n\n\t\tconst landed = await exchange(port, request('GET', redirect.headers.location.split('?')[0]));\n\t\texpect(landed.status).toBe(200);\n\t\texpect(landed.body.toString()).toContain('data-testid=\"prerendered-non-ascii\"');\n\t}, 30000);\n\n"
 			}
 		]
 	},
@@ -2216,5 +2212,20 @@
 	},
 	{
 		"file": "test/upgrade-carry-real.test.js"
+	},
+	{
+		"file": "src/runtime/utils/request-target.js",
+		"adaptations": [
+			{
+				"lead": " * @param {string} path what uWS's `getUrl()` returns\n * @param {string | undefined} query what `getQuery()` returns\n",
+				"ours": " * @param {string} path the target's path, as the request line carries it\n * @param {string | undefined} query the target's query, without its `?`\n"
+			}
+		]
+	},
+	{
+		"file": "test/request-target-real.test.js"
+	},
+	{
+		"file": "test/fixture/static/maß.txt"
 	}
 ]

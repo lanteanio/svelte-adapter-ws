@@ -96,6 +96,7 @@ import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_
 import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
+import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from '../utils/hook-boundary.js';
@@ -1235,8 +1236,12 @@ export async function handleUpgrade(req, socket, head) {
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	const pathname = q === -1 ? url : url.slice(0, q);
+	const query = q === -1 ? '' : url.slice(q + 1);
 	if (pathname !== WS_PATH) {
-		refuseUpgrade(socket, 404, 'Not Found');
+		// A target RFC 9112 does not allow - `/ws#x` misses the path as spelled -
+		// gets the 400 every lane writes for it, as on the request edge.
+		if (invalidRequestTarget(pathname, query)) refuseUpgrade(socket, 400, 'Bad Request');
+		else refuseUpgrade(socket, 404, 'Not Found');
 		return;
 	}
 	// The decision clock starts once the path is known to be the WebSocket path,
@@ -1257,8 +1262,14 @@ export async function handleUpgrade(req, socket, head) {
 
 	// The handshake itself, also ahead of every capacity answer: one no one
 	// could complete is refused as what it is rather than answered, or counted,
-	// as load. Read off the raw header lines, where a repeated one shows.
-	const handshakeRefusal = webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
+	// as load. Read off the raw header lines, where a repeated one shows. The
+	// handshake's target is part of it (RFC 6455 4.2.1), refused 400 as on
+	// every route. The path was matched above as sent, so with the path
+	// configured in visible ASCII a `#` in it is a 404 there, and what this
+	// answers for is the query.
+	const handshakeRefusal = invalidRequestTarget(pathname, query)
+		? 400
+		: webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
 	if (handshakeRefusal !== null) {
 		noteUpgradeRejection(undefined, 'malformed_handshake', req);
 		if (handshakeRefusal === 426) refuseUpgrade(socket, 426, 'Upgrade Required', [['Sec-WebSocket-Version', WEBSOCKET_VERSION]]);
@@ -2783,6 +2794,23 @@ export async function fireInitOnce(workerData = null) {
 /** @returns {string} the configured WebSocket path (for the 426 route) */
 export function wsPath() {
 	return WS_PATH;
+}
+
+/**
+ * The paths the realtime routes answer exactly as spelled: the auth path, the
+ * waiting-room pages, and the WebSocket path while an admission ceiling
+ * answers its GETs. Without a ceiling the path's pages are the application's,
+ * and so are their data requests and any spelling that resolves onto it.
+ *
+ * @returns {string[]}
+ */
+export function exactPaths() {
+	/** @type {string[]} */
+	const paths = [];
+	if (AUTH_ENDPOINT !== null) paths.push(AUTH_ENDPOINT);
+	if (WAITING_ROOM !== null) paths.push(WAITING_ROOM.admitCheckPath, WAITING_ROOM.path);
+	if (ADMISSION_ARMED) paths.push(WS_PATH);
+	return paths;
 }
 
 /**

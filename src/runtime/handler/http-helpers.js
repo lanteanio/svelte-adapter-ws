@@ -153,6 +153,16 @@ const FORBIDDEN_405_RAW =
 	'\r\n' +
 	'Method Not Allowed';
 
+// The runtime's own 400, as send400 writes it, for a target node's parser
+// refuses: the bytes after it can no longer be read, so it also closes.
+const BAD_TARGET_400_RAW =
+	'HTTP/1.1 400 Bad Request\r\n' +
+	'content-type: text/plain\r\n' +
+	'content-length: 11\r\n' +
+	'connection: close\r\n' +
+	'\r\n' +
+	'Bad Request';
+
 /**
  * Answer the forbidden methods node never hands to the request listener.
  * llhttp knows TRACE, so it reaches the method gate above; CONNECT is routed
@@ -161,7 +171,10 @@ const FORBIDDEN_405_RAW =
  * `clientError` handling answers 400 and closes.
  * The family answers the three fetch-forbidden methods alike, 405 with
  * Allow, so the raw request line is read off the failed packet and answered
- * that way. Every other parser failure keeps node's own answer: 431 for a
+ * that way. A request target with a byte outside visible ASCII, which
+ * RFC 9112 does not allow and node's parser refuses before any listener runs,
+ * gets the 400 every lane writes for a target it refuses, body included.
+ * Every other parser failure keeps node's own answer: 431 for a
  * header block past the limit, 408 for a request that timed out, 413 for
  * chunk extensions past the limit, 400 otherwise, written only when no
  * response is in flight on the socket, and a bare destroy for a socket that
@@ -208,6 +221,10 @@ export function refuseUnparsedForbiddenMethods(server) {
 			}
 		}
 		const code = err && err.code;
+		if (code === 'HPE_INVALID_URL') {
+			answerAndClose(socket, BAD_TARGET_400_RAW);
+			return;
+		}
 		const status = code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large'
 			: code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout'
 				: code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW' ? '413 Content Too Large'

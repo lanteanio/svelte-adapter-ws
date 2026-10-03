@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A request target RFC 9112 does not allow is refused with `400`, and so is
+  one that resolves onto one of the adapter's own paths.** A `#` in a target
+  stayed part of the path, so `/healthz#frag` missed the probe and reached the
+  app's router as `/healthz`, as did `/x/../healthz`, `/%68ealthz` and
+  `/healthz/__data.json`. Each is now refused with `400`, as on the family's
+  native tier, for the probes, the auth path, the waiting-room pages and the
+  WebSocket path while a ceiling answers its GETs, and a `#` or a byte outside
+  visible ASCII in the WebSocket handshake's query is refused as a malformed
+  handshake. A raw non-ASCII byte, which node's parser already refused, now
+  gets the same `Bad Request` body as every other refused target. A static
+  file whose name a browser percent-encodes is served for that spelling
+  decoded as `decodeURI` decodes it, so an encoded `/` no longer reaches into
+  a directory, and a name written decomposed is found for its composed
+  spelling too.
 - **The request id and the connection permit cross the upgrade on keys only
   the runtime can name.** `createTestServer` and `vite dev` carried a
   connection's request id to `open` on a string key, and every surface

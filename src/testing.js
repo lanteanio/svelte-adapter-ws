@@ -5,6 +5,7 @@ import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-boundary.js';
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
+import { invalidRequestTarget } from './runtime/utils/request-target.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength, stageHeaders } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -61,6 +62,17 @@ const guardFramingMirror = (handler) => (res, req) => {
 			res.writeHeader('content-type', 'text/plain');
 			res.writeHeader('connection', 'close');
 			res.end('Bad Request');
+		});
+		return;
+	}
+	// And the target, as production reads it on every route.
+	if (invalidRequestTarget(req.getUrl(), req.getQuery())) {
+		const headOnly = req.getMethod() === 'head';
+		res.cork(() => {
+			res.writeStatus('400 Bad Request');
+			res.writeHeader('content-type', 'text/plain');
+			if (headOnly) res.endWithoutBody('Bad Request'.length);
+			else res.end('Bad Request');
 		});
 		return;
 	}
@@ -3182,9 +3194,11 @@ export async function createTestServer(options = {}) {
 				return;
 			}
 
-			// Mirrors production: the handshake itself, also ahead of every
-			// capacity answer, read off the raw header lines.
-			const handshakeRefusal = webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
+			// Mirrors production: the handshake itself, its target included, also
+			// ahead of every capacity answer, read off the raw header lines.
+			const handshakeRefusal = invalidRequestTarget(req.getUrl(), req.getQuery())
+				? 400
+				: webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
 			if (handshakeRefusal !== null) {
 				mUpgradeRejectedT?.inc({ reason: 'malformed_handshake' });
 				res.cork(() => {
