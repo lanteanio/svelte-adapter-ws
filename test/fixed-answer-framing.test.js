@@ -103,6 +103,9 @@ export class Server {
 			}), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		if (p === '/refused-cancel-state') return new Response(String(globalThis.__refusedCancelled), { headers: text });
+		if (p === '/refused-empty-stream') {
+			return new Response(new ReadableStream({ start(c) { c.close(); } }), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+		}
 		// A slow render with a refused header, which concurrent anonymous GETs share.
 		if (p === '/refused-shared') {
 			globalThis.__refusedRenders = (globalThis.__refusedRenders || 0) + 1;
@@ -679,7 +682,9 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// Credentialed, so the dedup leader does not read the body first.
 		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['HEAD /refused-cancel HTTP/1.1', 'Cookie: s=1'], OK]));
 		const first = expectBodyless(result, { status: '500', length: 21 });
-		expect(failures.map((record) => record.attributes?.requestId)).toEqual(header(first.lines, 'x-request-id'));
+		const ids = header(first.lines, 'x-request-id');
+		expect(ids).toHaveLength(1);
+		expect(failures.map((record) => record.attributes?.requestId)).toEqual(ids);
 		const state = await pipeline(open.rt.port, [['GET /refused-cancel-state HTTP/1.1']]);
 		expect(splitFirst(state).rest).toBe('true');
 	});
@@ -689,6 +694,11 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expectPageFailure(result, failures);
 		const state = await pipeline(open.rt.port, [['GET /refused-cancel-state HTTP/1.1']]);
 		expect(splitFirst(state).rest).toBe('true');
+	});
+
+	it('answers the same way on a body that turns out empty', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /refused-empty-stream HTTP/1.1', 'Cookie: s=1'], OK]));
+		expectPageFailure(result, failures);
 	});
 
 	it('answers each request sharing one render the same way, each with its own id and event', async () => {
