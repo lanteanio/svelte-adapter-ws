@@ -9,7 +9,7 @@
 import { emitOperationalDiagnostic, listenFailureDiagnostic } from '../utils/operational-diagnostic.js';
 import { ADAPTER_ERROR_IDS, adapterConsoleLine } from '../error-registry.js';
 import { monotonicNow, setTimer, clearTimer } from '../runtime.js';
-import { counters } from './state.js';
+import { counters, requestSignals } from './state.js';
 import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
 import { platform } from './platform.js';
@@ -103,6 +103,49 @@ export function requestDone() {
 	if (drainResolvers.length > 0 && counters.inFlightCount === 0) {
 		for (const resolve of drainResolvers.splice(0)) resolve();
 	}
+}
+
+/**
+ * The AbortController an SSR or admin request's `request.signal` comes from,
+ * registered while the request is in flight. It aborts when the client goes
+ * away before its request body has arrived in full - always, for a request
+ * without one - which is when SvelteKit's own Node adapter aborts it, and
+ * when shutdown stops waiting for the request. An application that awaits
+ * slow work can pass the signal on and stop with it.
+ *
+ * The client going away is the response closing before it finished; the
+ * request body has arrived in full once the reader saw its end, which
+ * `state.bodyReceived` records.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {{ bodyReceived?: boolean, signal?: AbortSignal | null }} state
+ * @returns {AbortController}
+ */
+export function openRequestSignal(res, state) {
+	const controller = new AbortController();
+	requestSignals.add(controller);
+	state.signal = controller.signal;
+	res.once('close', () => {
+		if (!res.writableFinished && !state.bodyReceived) controller.abort();
+	});
+	return controller;
+}
+
+/** @param {AbortController} controller */
+export function closeRequestSignal(controller) {
+	requestSignals.delete(controller);
+}
+
+/**
+ * Abort the `request.signal` of every request still in flight. Shutdown calls
+ * this when its drain budget runs out: those requests are about to be dropped,
+ * and a handler that passed the signal on - to a fetch, a query, a stream - can
+ * stop instead of running on against a connection that is going away.
+ */
+export function abortInFlightRequests() {
+	const reason = new DOMException('The server shut down before the request finished', 'AbortError');
+	for (const controller of requestSignals) controller.abort(reason);
+	requestSignals.clear();
 }
 
 /**

@@ -14,6 +14,7 @@
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
 import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders } from './http-helpers.js';
 import { buildRequest } from './ssr.js';
+import { openRequestSignal, closeRequestSignal } from './lifecycle.js';
 import { collectRequestHeaders, isFramingHeader } from '../utils/request-headers.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -261,14 +262,18 @@ export function tryAdminRoute(req, res, pathname, state) {
 		}
 	}
 
+	// Opened here, past every early answer above, so a request refused before
+	// it reaches the handler never registers one. Aborted as the SSR lane
+	// aborts it: on a disconnect before the body arrived.
+	const controller = openRequestSignal(res, state);
 	if (!tracingEnabled) {
-		void bridgeAdminRequest(req, res, baseOrigin, headers, state, null);
+		void bridgeAdminRequest(req, res, baseOrigin, headers, state, null).finally(() => closeRequestSignal(controller));
 		return true;
 	}
 	void traceOperation('adapter.http.admin', {
 		kind: 'server',
 		parent: extractTraceContext(headers),
 		attributes: { 'http.request.method': method, 'http.route.type': 'admin' }
-	}, (span) => bridgeAdminRequest(req, res, baseOrigin, headers, state, span));
+	}, (span) => bridgeAdminRequest(req, res, baseOrigin, headers, state, span).finally(() => closeRequestSignal(controller)));
 	return true;
 }

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`event.request.signal` aborts when the client disconnects and when
+  shutdown stops waiting.** The Request handed to SvelteKit, and to an
+  `admin()` handler, carried no signal, so it never fired. It now aborts
+  when the client goes away before its request body has arrived in full -
+  always, for a request without one - as under SvelteKit's Node adapter,
+  and when the shutdown budget runs out, with an `AbortError` whose message
+  names the shutdown. A request whose response completes never sees it, and
+  neither does one whose client leaves after its body arrived, so a form
+  action that has its data finishes what it started. `createTestServer`'s
+  admin lane aborts it on a disconnect too.
+
 - **Server entries a Vite plugin adds to the build are bundled and run at
   startup.** A `__`-prefixed `.js` entry in the server build, such as the
   registry `svelte-realtime` emits, is now bundled with the server and

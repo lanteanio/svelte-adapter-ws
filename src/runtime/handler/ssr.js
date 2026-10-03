@@ -64,7 +64,8 @@ const COMPRESSIBLE_TYPES = new Set([
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {number} limit - bytes, or Infinity
- * @param {{ aborted: boolean }} state
+ * @param {{ aborted: boolean, bodyReceived?: boolean }} state - `bodyReceived`
+ *   is set once the last chunk of the body has arrived
  * @returns {ReadableStream<Uint8Array>}
  */
 export function readBody(req, limit, state) {
@@ -105,6 +106,7 @@ export function readBody(req, limit, state) {
 			req.on('end', () => {
 				if (done) return;
 				done = true;
+				state.bodyReceived = true;
 				controller.close();
 			});
 			req.on('error', (err) => {
@@ -130,7 +132,8 @@ export function readBody(req, limit, state) {
  * @param {import('node:http').IncomingMessage} req
  * @param {string} baseOrigin
  * @param {Record<string, string>} headers - the collected lowercase headers
- * @param {{ aborted: boolean }} state
+ * @param {{ aborted: boolean, bodyReceived?: boolean, signal?: AbortSignal | null }} state -
+ *   `signal` becomes the Request's own
  * @returns {Request | null} null when the declared length already exceeds the limit
  */
 export function buildRequest(req, baseOrigin, headers, state) {
@@ -145,6 +148,7 @@ export function buildRequest(req, baseOrigin, headers, state) {
 		method,
 		headers,
 		body,
+		signal: state.signal ?? undefined,
 		// @ts-expect-error
 		duplex: 'half'
 	});

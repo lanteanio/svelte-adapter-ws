@@ -482,7 +482,7 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
 | `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
 | `BODY_SIZE_LIMIT` | `512K` | Request body cap (413 above it). |
-| `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). A request still open when it runs out has its `request.signal` aborted before it is dropped. |
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
 | `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |
@@ -587,7 +587,13 @@ HTTP/2 and the entire observability ecosystem
    chunked, a HEAD takes the length the app declared, and a 204 or 304
    carries only the length RFC 9110 8.6 allows. Health and readiness probes
    answering GET and HEAD, readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
-   resolution and a managed drain of in-flight requests are in.
+   resolution and a managed drain of in-flight requests are in. Each SSR
+   and admin request's `request.signal` aborts when its client disconnects
+   before the request body has arrived in full - always, for a request
+   without one - as under SvelteKit's Node adapter, and, with a reason
+   naming the shutdown, when the shutdown budget runs out and the request is
+   about to be dropped, so a handler that passes the signal to a `fetch` or a
+   query can stop.
    `PROXY_PROTOCOL` refuses the boot loudly rather than half-working.
 
 3. **JSON realtime**: the upgrade path with async admission, origin

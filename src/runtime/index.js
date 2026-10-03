@@ -1678,6 +1678,8 @@ if (is_primary) {
 		// and other control traffic is buffered and replayed in arrival order
 		// once boot completes, never dispatched into a half-built graph.
 		const handler = await import('./handler.js');
+		// The same instance the handler graph above loaded.
+		const { abortInFlightRequests } = await import('./handler/lifecycle.js');
 		const role = workerData?.role ?? 'io';
 		let booted = false;
 		/** @type {any[]} */
@@ -1757,6 +1759,12 @@ if (is_primary) {
 				// a genuinely wedged loop cannot process it and the primary
 				// terminates the thread as the fallback. A plain Node worker
 				// holds no native socket handles, so a direct exit is clean.
+				//
+				// Ahead of the exit, which would drop them with a bare
+				// disconnect: a request cut off here is cut off by the
+				// shutdown, and its signal says so whichever timer - this
+				// worker's budget or the primary's - ran out first.
+				abortInFlightRequests();
 				process.exit(typeof msg.code === 'number' ? msg.code : 0);
 			} else if (action === 'dispatch') {
 				dispatchControl(msg);

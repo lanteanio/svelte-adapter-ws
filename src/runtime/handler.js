@@ -28,7 +28,7 @@ import { declareSingleValuedProxyHeaders } from './utils/request-headers.js';
 import { cacheDir, clientDir, prerenderedDir, _t_static } from './handler/static-assets.js';
 import { staticCache } from './handler/state.js';
 import { handleRequest, installRealtimeRoutes } from './handler/request.js';
-import { start as lifecycleStart, shutdown as lifecycleShutdown, drain as drainRequests, closeConnections, whenAborted, beginDrain, lifecycleState, isDraining } from './handler/lifecycle.js';
+import { start as lifecycleStart, shutdown as lifecycleShutdown, drain as drainRequests, closeConnections, whenAborted, beginDrain, lifecycleState, isDraining, abortInFlightRequests } from './handler/lifecycle.js';
 import { platform } from './handler/platform.js';
 import { stopPressureSampler } from './handler/pressure.js';
 import { reconnect_dispersal_ms, ADMIN_PATH } from './handler/config.js';
@@ -117,6 +117,11 @@ async function runShutdown(opts) {
 			drainRequests().then(() => true),
 			whenAborted(signal).then(() => false)
 		]);
+		// Tell every request still open that it is about to be dropped, so a
+		// handler that passed its signal on can stop: the stragglers of a drain
+		// that ran out of budget. Ahead of closing the connections, whose closing
+		// sockets would abort them with a bare disconnect.
+		abortInFlightRequests();
 		// The listener's own close does not fire while any accepted socket is
 		// open, and closeAllConnections leaves a socket that took the upgrade
 		// event alone - so the wait on it is bounded by the same signal, and a

@@ -31,6 +31,13 @@ import { createDivergenceDiagnosticStore } from '../divergence-diagnostics.js';
 export const staticCache = new Map();
 
 /**
+ * The AbortController behind each in-flight SSR and admin request's
+ * `request.signal`. Shutdown aborts whatever is still here when its drain budget
+ * runs out. @type {Set<AbortController>}
+ */
+export const requestSignals = new Set();
+
+/**
  * Prerendered pages whose canonical form carries a trailing slash
  * (directory-style output, `trailingSlash: 'always'`), keyed by the bare path.
  * @type {Set<string>}

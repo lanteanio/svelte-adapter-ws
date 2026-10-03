@@ -2228,5 +2228,8 @@
 	},
 	{
 		"file": "test/ws-handshake-real.test.js"
+	},
+	{
+		"file": "test/request-signal-real.test.js"
 	}
 ]

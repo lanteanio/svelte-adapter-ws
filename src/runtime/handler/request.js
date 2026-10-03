@@ -12,7 +12,7 @@ import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500 } from '.
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
-import { lifecycleState, requestDone } from './lifecycle.js';
+import { lifecycleState, requestDone, openRequestSignal, closeRequestSignal } from './lifecycle.js';
 import { monotonicNow } from '../runtime.js';
 import { ADMIN_PATH } from './config.js';
 import { adminMounted } from './admin.js';
@@ -66,7 +66,8 @@ export function handleRequest(req, res) {
 	// the wire, after which no error response can be sent; `closedByServer`
 	// marks an abort this runtime caused (a source that failed mid-body), so
 	// the failure is still reported where a client-initiated abort stays silent.
-	const state = { aborted: false, responseStarted: false, closedByServer: false };
+	/** @type {{ aborted: boolean, responseStarted: boolean, closedByServer: boolean, bodyReceived: boolean, signal: AbortSignal | null }} */
+	const state = { aborted: false, responseStarted: false, closedByServer: false, bodyReceived: false, signal: null };
 	// The RED observation rides the SAME terminal hook as the in-flight
 	// accounting, so probes, realtime routes, static assets and SSR are all
 	// counted through one funnel with the aborted/finished distinction already
@@ -351,10 +352,15 @@ export function handleRequest(req, res) {
 	Object.defineProperty(req, 'headers', { value: headers, configurable: true });
 
 	const direct = req.socket?.remoteAddress || '';
+	// The application's `request.signal`, aborted when the client goes away
+	// before its request body has arrived in full, as SvelteKit's Node adapter
+	// does - a form action that has its data finishes what it started. Only
+	// the SSR lane pays for it - every lane above answered without one.
+	const controller = openRequestSignal(res, state);
 	// handleSSR contains its own error handling; this catch covers only a
 	// throw from that handling itself, which must never become an unhandled
 	// rejection that kills the process.
 	handleSSR(req, res, headers, direct, state, direct).catch(() => {
 		try { send500(res); } catch { /* exchange already gone */ }
-	});
+	}).finally(() => closeRequestSignal(controller));
 }
