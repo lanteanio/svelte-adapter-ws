@@ -667,12 +667,8 @@
 				"ours": " * Create a lightweight test server backed by a real node:http + ws server.\n"
 			},
 			{
-				"lead": "// `WS_REQUEST_ID_KEY` is a string (not a Symbol): uWebSockets.js strips\n// Symbol-keyed properties from the userData object passed to\n// `res.upgrade()`, so the upgrade->open carrier slot has to be a string\n// key. The `open` hook moves the value into the Symbol-keyed\n// `WS_PLATFORM` slot and deletes the string key, so test code reading\n// userData after `open` should read `WS_PLATFORM`, not the string key.\n",
-				"ours": "// `WS_REQUEST_ID_KEY` is a string (not a Symbol), the family harness's\n// upgrade->open carrier shape. The `open` hook moves the value into the\n// Symbol-keyed `WS_PLATFORM` slot and deletes the string key, so test\n// code reading userData after `open` should read `WS_PLATFORM`, not the\n// string key.\n"
-			},
-			{
-				"lead": " * across the upgrade->open transition. uWebSockets.js strips Symbol keys\n * from the userData object handed to `res.upgrade()`, so the carrier has\n * to be a string. The `open` hook deletes this slot after promoting the\n * value into the `WS_PLATFORM` Symbol slot, so it never appears in\n * userData while a hook is running.\n",
-				"ours": " * across the upgrade->open transition, the family harness's carrier\n * shape. The `open` hook deletes this slot after promoting the value\n * into the `WS_PLATFORM` Symbol slot, so it never appears in userData\n * while a hook is running.\n"
+				"lead": " * `res.upgrade()` on. Nothing is stamped on it any more: uWS copies upgrade\n * userData with plain assignments, which an accessor on `Object.prototype`\n * for a nameable key can intercept, so the id now crosses on a key private\n * to the runtime. Read `userData[WS_PLATFORM].requestId` instead.\n",
+				"ours": " * `res.upgrade()` on. Nothing is stamped on it any more: a carrier that\n * copies upgrade userData with plain assignments, as the family's native\n * tier does, hands a nameable key to an accessor on `Object.prototype`, so\n * the id now crosses on a key private to the runtime. Read\n * `userData[WS_PLATFORM].requestId` instead.\n"
 			},
 			{
 				"lead": "export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';\n",
@@ -686,14 +682,6 @@
 	{
 		"file": "src/vite.js",
 		"adaptations": [
-			{
-				"lead": "WS_PLATFORM, WS_REQUEST_ID_KEY, WS_CAPS",
-				"ours": "WS_PLATFORM, WS_CAPS"
-			},
-			{
-				"lead": "import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from './runtime/error-registry.js';\n",
-				"ours": "import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from './runtime/error-registry.js';\n\n// The per-connection requestId hand-off slot, set in the upgrade callback\n// and promoted-then-deleted in the connection handler before any app hook\n// reads userData. Module-local: no other surface reads it, and this\n// runtime has no boundary that would strip a Symbol key anyway.\nconst WS_REQUEST_ID_KEY = '__adapter_uws_request_id__';\n"
-			},
 			{
 				"lead": " * Uses the same subscribe/unsubscribe/publish protocol as the production\n * uWS handler, so the client store works identically in dev and prod.",
 				"ours": " * Uses the same subscribe/unsubscribe/publish protocol as the production\n * handler, so the client store works identically in dev and prod."
@@ -2104,13 +2092,7 @@
 		"file": "src/runtime/utils/unsubscribe-hook.js"
 	},
 	{
-		"file": "test/error-registry-unsubscribe-hook.test.js",
-		"adaptations": [
-			{
-				"lead": "const ws = { getUserData: () => ({ __adapter_uws_request_id__: 'req-42' }) };",
-				"ours": "const ws = { getUserData: () => ({ __adapter_ws_request_id__: 'req-42' }) };"
-			}
-		]
+		"file": "test/error-registry-unsubscribe-hook.test.js"
 	},
 	{
 		"file": "test/shared-cohort-accounting.test.js"
@@ -2231,5 +2213,8 @@
 	},
 	{
 		"file": "test/request-signal-real.test.js"
+	},
+	{
+		"file": "test/upgrade-carry-real.test.js"
 	}
 ]

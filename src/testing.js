@@ -6,7 +6,7 @@ import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-bo
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength, stageHeaders } from './runtime/handler/http-helpers.js';
-import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
+import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
 import { mergeSamples } from './runtime/utils/metrics-merge.js';
@@ -41,13 +41,6 @@ import { runtimeVersionInfo } from './runtime/version-info.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from './runtime/error-registry.js';
 import { emitOperationalEvent, formatDiagnostic, diagnosticError } from './runtime/diagnostic.js';
 import { createDivergenceDiagnosticStore } from './runtime/divergence-diagnostics.js';
-
-// The upgrade->open requestId carrier. A string key rather than a Symbol for
-// family-surface parity: the harness dispatch stamps it on the userData handed
-// to res.upgrade and the open dispatch promotes the value into the
-// Symbol-keyed platform clone, then deletes the string slot - so it never
-// appears in userData while an app hook is running.
-const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';
 
 /**
  * The production runtime refuses a request whose Transfer-Encoding names
@@ -3420,7 +3413,7 @@ export async function createTestServer(options = {}) {
 					if (fastPathAborted) return;
 					try {
 						res.cork(() => {
-							upgradeWithConnectionPermit({ remoteAddress: rawIp, [WS_REQUEST_ID_KEY]: wsRequestId });
+							upgradeWithConnectionPermit({ remoteAddress: rawIp, [CARRY_REQUEST_ID]: wsRequestId });
 						});
 						mUpgradeAdmittedT?.inc();
 					} finally {
@@ -3485,7 +3478,7 @@ export async function createTestServer(options = {}) {
 						userData = result || {};
 					}
 					if (!userData.remoteAddress) userData.remoteAddress = rawIp;
-					userData[WS_REQUEST_ID_KEY] = wsRequestId;
+					userData[CARRY_REQUEST_ID] = wsRequestId;
 					const pacingOutcome = admission.admit(() => {
 						if (aborted) { releaseInFlight(); return; }
 						try {
@@ -3559,14 +3552,14 @@ export async function createTestServer(options = {}) {
 				if (!permitRestored) return;
 			}
 			userData[WS_SUBSCRIPTIONS] = new Set();
-			// Promote the upgrade-time requestId into a Symbol-keyed
-			// per-connection platform clone (parity with the production
-			// handler surface: the string slot is the upgrade->open
-			// carrier and is deleted once promoted).
+			// Promote the upgrade-time requestId into a per-connection platform
+			// clone and drop the carry slot, as the production handler does.
 			const wsPlatform = Object.create(platform);
-			wsPlatform.requestId = userData[WS_REQUEST_ID_KEY];
+			const carriedRequestId = userData[CARRY_REQUEST_ID];
+			assert(typeof carriedRequestId === 'string', 'ws.request-id-carry', null);
+			wsPlatform.requestId = typeof carriedRequestId === 'string' ? carriedRequestId : randomUuid();
 			userData[WS_PLATFORM] = wsPlatform;
-			delete userData[WS_REQUEST_ID_KEY];
+			delete userData[CARRY_REQUEST_ID];
 			// Attribution parity with the production handler: resolved once, before
 			// the app open hook, fail-closed. A test server that admitted what
 			// production refuses would certify a resolver production closes on.

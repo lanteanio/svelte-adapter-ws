@@ -159,7 +159,7 @@ describe('bounded upgrade deferral', () => {
 		// while checking no code at all.
 		const start = source.indexOf('export function createUpgradeAdmission');
 		expect(start, 'createUpgradeAdmission must stay findable by name').toBeGreaterThan(-1);
-		const end = source.indexOf('export const WS_CONNECTION_PERMIT_KEY', start);
+		const end = source.indexOf('\nexport ', start + 1);
 		expect(end, 'the closing anchor moved, so this carve no longer spans the queue').toBeGreaterThan(start);
 		expect(source.slice(start, end)).not.toContain('.shift(');
 	});

@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The request id and the connection permit cross the upgrade on keys only
+  the runtime can name.** `createTestServer` and `vite dev` carried a
+  connection's request id to `open` on a string key, and every surface
+  carried its `maxConnections` permit on one, so an accessor on
+  `Object.prototype` for such a key could take the value. Each now rides a
+  private Symbol, as on the family's native tier, and an application's own
+  upgrade userData property of the old request-id name reaches its hooks
+  unchanged instead of being overwritten and deleted. `WS_REQUEST_ID_KEY` from
+  `svelte-adapter-ws/testing` is still exported with the same value and
+  marked deprecated: no slot uses it, and the id is read from
+  `userData[WS_PLATFORM].requestId`.
 - **The flow-control window narrows along a ramp as memory fills, not in one
   step.** Past a `heap_used_ratio` of 0.7 a flow-controlled connection's
   window fell from the full 256 requests to under a third at once; it now
