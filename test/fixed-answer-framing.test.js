@@ -266,6 +266,10 @@ export function admin(request) {
 	if (new URL(request.url).pathname === '/__realtime/relayed-te') {
 		return new Response('admin relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
 	}
+	if (adminPath === '/__realtime/empty') return new Response('', { headers: { 'content-type': 'text/plain' } });
+	if (adminPath === '/__realtime/empty-declared') {
+		return new Response('', { headers: { 'content-type': 'text/plain', 'content-length': '5' } });
+	}
 	return new Response('admin', { headers: { 'content-type': 'text/plain' } });
 }
 `;
@@ -820,6 +824,15 @@ describe('the admin lane frames what it writes', () => {
 			body: 'admin relayed'
 		});
 	});
+
+	it('answers an empty body by the bodyless rule: zero to a GET, the declared length or none to a HEAD', async () => {
+		// An empty body is no body to frame, so a HEAD names what the handler
+		// declared, as it does for a null body, rather than a length of zero.
+		expectBodyless(await pipeline(open.rt.port, [['HEAD /__realtime/empty HTTP/1.1'], OK]), { status: '200', length: null });
+		expectBodyless(await pipeline(open.rt.port, [['HEAD /__realtime/empty-declared HTTP/1.1'], OK]), { status: '200', length: 5 });
+		expectBodyless(await pipeline(open.rt.port, [['GET /__realtime/empty HTTP/1.1'], OK]), { status: '200', length: 0 });
+		expectBodyless(await pipeline(open.rt.port, [['GET /__realtime/empty-declared HTTP/1.1'], OK]), { status: '200', length: 0 });
+	});
 });
 
 describe('the request-dedup leader reads a body the way the writer does', () => {
@@ -1045,6 +1058,28 @@ describe('createTestServer', () => {
 		}
 	});
 
+	it('answers an empty admin body by the bodyless rule, as the runtime does', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin(request) {
+					const declared = new URL(request.url).pathname === '/__realtime/empty-declared';
+					return new Response('', { headers: declared ? { 'content-length': '5' } : {} });
+				}
+			}
+		});
+		try {
+			const follower = ['GET /healthz HTTP/1.1'];
+			expectBodyless(await pipeline(mirror.port, [['HEAD /__realtime/empty HTTP/1.1'], follower]), { status: '200', length: null });
+			expectBodyless(await pipeline(mirror.port, [['HEAD /__realtime/empty-declared HTTP/1.1'], follower]), { status: '200', length: 5 });
+			expectBodyless(await pipeline(mirror.port, [['GET /__realtime/empty HTTP/1.1'], follower]), { status: '200', length: 0 });
+			expectBodyless(await pipeline(mirror.port, [['GET /__realtime/empty-declared HTTP/1.1'], follower]), { status: '200', length: 0 });
+		} finally {
+			await mirror.close();
+		}
+	});
+
 	it('answers a header node refuses in its admin mirror, as the runtime does', async () => {
 		const { createTestServer } = await import('../src/testing.js');
 		const mirror = await createTestServer({
@@ -1100,9 +1135,10 @@ describe('createTestServer', () => {
 	});
 });
 
-describe('a close-delimited body that fails mid-stream over TLS', () => {
-	// A TLS socket cannot be reset the way a TCP one can, so the cut must still
-	// close the exchange rather than leave it open with nothing to answer.
+describe('a body that fails mid-stream over TLS', () => {
+	// The same cut as over TCP: a chunked answer ends before its terminal chunk,
+	// so the client can tell the body is short, and a close-delimited HTTP/1.0
+	// answer is closed rather than left open with nothing more to send.
 	const prefix = 'SAW_FAF_TLS_';
 	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
 	/** @type {any} */ let secure;
@@ -1121,18 +1157,31 @@ describe('a close-delimited body that fails mid-stream over TLS', () => {
 		secure?.payload.cleanup();
 	});
 
-	it('closes the exchange, cancels the source, and lets shutdown drain', async () => {
-		delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
-		for (const target of ['/fail-mid', '/refuse-mid']) {
-			const answer = await exchange(
-				(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
-				[`GET ${target} HTTP/1.0`, 'Host: 127.0.0.1', 'Cookie: s=1']
-			);
-			expect(answer.buffer.startsWith('HTTP/1.1 200'), target + ': ' + answer.buffer.slice(0, 40)).toBe(true);
-			expect(header(splitFirst(answer.buffer).lines, 'content-length'), target).toEqual([]);
-			expect(answer.how, target + ' is closed, not left open').not.toBe('timeout');
+	it('cuts the chunked body before its terminal chunk, closes, cancels the source, and lets shutdown drain', async () => {
+		for (const version of ['1.1', '1.0']) {
+			for (const target of ['/fail-mid', '/refuse-mid']) {
+				const label = `HTTP/${version} ${target}`;
+				delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+				const answer = await exchange(
+					(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
+					[`GET ${target} HTTP/${version}`, 'Host: 127.0.0.1', 'Cookie: s=1']
+				);
+				const first = splitFirst(answer.buffer);
+				expect(first.status, label).toBe('HTTP/1.1 200 OK');
+				expect(header(first.lines, 'content-length'), label).toEqual([]);
+				expect(first.rest, label).toContain('part1|');
+				if (version === '1.1') {
+					expect(header(first.lines, 'transfer-encoding'), label).toEqual(['chunked']);
+					expect(answer.buffer.endsWith('0\r\n\r\n'), label + ': no terminal chunk').toBe(false);
+				} else {
+					expect(header(first.lines, 'transfer-encoding'), label).toEqual([]);
+				}
+				expect(answer.how, label + ' is closed, not left open').not.toBe('timeout');
+				if (target === '/refuse-mid') {
+					expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, label + ': the refused source was cancelled').toBe(true);
+				}
+			}
 		}
-		expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, 'the refused source was cancelled').toBe(true);
 		expect(await secure.rt.handler.shutdown({ timeoutMs: 2000 }), 'nothing is left in flight').toBe(true);
 	});
 });
