@@ -232,16 +232,19 @@ describe('the production upgrade path counts each refusal on the right accumulat
 	});
 
 	it('answers a browser navigation to the WebSocket path the way the upgrade door answers', () => {
-		// Without the posture test a sieged server hands a navigation
-		// `426 upgrade required` and then refuses the upgrade it just asked for.
-		// The siege test sits OUTSIDE the armed guard because the upgrade
-		// short-circuit refuses on posture alone: gating it behind
-		// ADMISSION_ARMED reinstates the mismatch for a deployment that pins
-		// siege and configures no ceiling. Both halves are driven live in
-		// test/protection-posture-live.test.js; this pins the shape that makes
-		// the unarmed case reachable at all.
-		expect(block(realtimeSource, 'export function serveWsPathGet(', '\n}'))
-			.toContain("if (postureLevel() !== 'siege' && (!ADMISSION_ARMED || admission.hasCapacity())) {");
+		// Without the posture test a sieged server with a ceiling hands a
+		// navigation `426 upgrade required` and then refuses the upgrade it just
+		// asked for. Without a ceiling the route yields to the application
+		// before the posture is read, as the lead's does, and an attempted
+		// upgrade is refused ahead of both. Driven live in
+		// test/protection-posture-live.test.js; this pins the order.
+		const route = block(realtimeSource, 'export function serveWsPathGet(', '\n}');
+		const attempt = route.indexOf('if (isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))) {');
+		const unarmed = route.indexOf('if (!ADMISSION_ARMED) return false;');
+		const posture = route.indexOf("if (postureLevel() !== 'siege' && admission.hasCapacity()) {");
+		expect(attempt, 'the attempted-upgrade refusal').toBeGreaterThan(-1);
+		expect(unarmed, 'the yield without a ceiling').toBeGreaterThan(attempt);
+		expect(posture, 'the posture test').toBeGreaterThan(unarmed);
 	});
 
 	it('holds the waiting room at siege and doubles the poll cadence it serves', () => {

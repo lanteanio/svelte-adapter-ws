@@ -6,16 +6,17 @@
 //
 // The lead cannot reach this. Its accept primitive either opens the connection
 // or throws, so marking the transfer around the call is sound there. The `ws`
-// library has a THIRD outcome: for a non-GET, a missing or malformed
-// Sec-WebSocket-Key, a version other than 8 or 13, a rejected shouldHandle, an
+// library has a THIRD outcome: for a non-GET, a rejected shouldHandle, an
 // unparseable subprotocol or a bad permessage-deflate offer, it answers the
-// peer itself and returns, calling nothing and throwing nothing.
+// peer itself and returns, calling nothing and throwing nothing. A malformed
+// key or version is refused by the handshake rule before ws sees it.
 //
 // Every case below is reachable by an unauthenticated peer with no hook
 // configured, which is what makes an unreturned permit a denial of service
 // rather than an accounting slip.
 
 import { EventEmitter } from 'node:events';
+import net from 'node:net';
 import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
@@ -55,6 +56,27 @@ async function bootWithAdmission(upgradeAdmission, extraWsOpts = {}) {
 }
 
 
+/**
+ * Write a raw handshake and resolve the whole answer, so a case can tell whose
+ * refusal it got from the body.
+ *
+ * @param {number} port
+ * @param {string[]} lines - request line and headers, without the blank line
+ * @returns {Promise<string>}
+ */
+function rawExchange(port, lines) {
+	return new Promise((resolve) => {
+		const socket = net.connect(port, '127.0.0.1', () => {
+			socket.write(lines.join('\r\n') + '\r\n\r\n');
+		});
+		let data = '';
+		socket.on('data', (chunk) => { data += chunk.toString(); });
+		socket.on('close', () => resolve(data));
+		socket.on('error', () => resolve(data));
+		setTimeout(() => { socket.destroy(); resolve(data); }, 1500);
+	});
+}
+
 /** Does a legitimate client still get in? */
 function healthyHandshake(port, headers) {
 	return new Promise((resolve) => {
@@ -71,18 +93,23 @@ describe('a handshake that never becomes a connection returns its permit', () =>
 	it('survives handshakes the ws library answers itself, which call nothing and throw nothing', async () => {
 		const rt = await bootWithAdmission({ maxConnections: 2 });
 		try {
-			// Two permits' worth of malformed handshakes. Each is answered 400
-			// by ws before our accept callback would have run.
+			// Two permits' worth of handshakes the handshake rule passes and ws
+			// refuses: an unparseable subprotocol list. Each is answered 400 by
+			// ws before our accept callback would have run, and the body is
+			// ws's own, so this is the outcome the comment above names and not
+			// an earlier refusal of ours.
 			for (let i = 0; i < 2; i++) {
-				const status = await rawUpgrade(rt.port, [
+				const response = await rawExchange(rt.port, [
 					'GET /ws HTTP/1.1',
 					`Host: 127.0.0.1:${rt.port}`,
 					'Upgrade: websocket',
 					'Connection: Upgrade',
 					'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
-					'Sec-WebSocket-Version: 7'
+					'Sec-WebSocket-Version: 13',
+					'Sec-WebSocket-Protocol: a,,b'
 				]);
-				expect(status).toContain('400');
+				expect(response.split('\r\n')[0]).toBe('HTTP/1.1 400 Bad Request');
+				expect(response).toContain('Invalid Sec-WebSocket-Protocol header');
 			}
 			// If those took permits, the ceiling is now exhausted for good.
 			const healthy = await healthyHandshake(rt.port);

@@ -6,6 +6,7 @@
 // the opt-out navigation gets a minimal accessible 503, and the poll endpoint
 // reports capacity without ever taking a gate slot.
 
+import net from 'node:net';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 
@@ -121,6 +122,30 @@ function closeAll(results) {
 			else ws.terminate();
 		} catch { /* socket already gone */ }
 	}
+}
+
+/**
+ * Write one request raw and resolve the status line it drew.
+ *
+ * @param {number} port
+ * @param {string[]} lines - request line and headers, without the blank line
+ * @returns {Promise<string>}
+ */
+function rawStatusLine(port, lines) {
+	return new Promise((resolve) => {
+		const socket = net.connect(port, '127.0.0.1', () => {
+			socket.write(lines.join('\r\n') + '\r\n\r\n');
+		});
+		let data = '';
+		const done = () => { socket.destroy(); resolve(data.split('\r\n')[0] || ''); };
+		socket.on('data', (chunk) => {
+			data += chunk.toString();
+			if (data.includes('\r\n')) done();
+		});
+		socket.on('close', done);
+		socket.on('error', done);
+		setTimeout(done, 1500);
+	});
 }
 
 /** GET the poll endpoint as plain HTTP and parse the JSON body. */
@@ -566,6 +591,22 @@ describe('upgrade waiting room on createTestServer', () => {
 			expect(roomBody).not.toContain('/__admit-check');
 
 			closeAll(results);
+		});
+
+		it('answers a plain GET and an upgrade to another protocol on the WS path as a route miss', async () => {
+			const { createTestServer } = await import('../src/testing.js');
+			server = await createTestServer();
+			const port = Number(new URL(server.url).port);
+
+			// Raw, because fetch refuses to send Connection and Upgrade. Only a
+			// WebSocket attempt belongs to the upgrade listener; an h2c upgrade
+			// handed to it would be refused as a malformed handshake instead.
+			const unrouted = await rawStatusLine(port, ['GET /__no_such_page__ HTTP/1.1', 'Host: 127.0.0.1']);
+			const plain = await rawStatusLine(port, ['GET /ws HTTP/1.1', 'Host: 127.0.0.1']);
+			const h2c = await rawStatusLine(port, ['GET /ws HTTP/1.1', 'Host: 127.0.0.1', 'Connection: Upgrade', 'Upgrade: h2c']);
+			expect(unrouted).toBe('HTTP/1.1 404 Not Found');
+			expect(plain).toBe(unrouted);
+			expect(h2c).toBe(unrouted);
 		});
 	});
 

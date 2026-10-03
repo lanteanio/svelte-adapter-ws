@@ -65,6 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream that enqueues strings or ArrayBuffers is written like one that
   enqueues bytes, except that a whole body of one string chunk goes out
   uncompressed, as the native tier sends it.
+- **A malformed WebSocket handshake is refused with `400`, and an unsupported
+  version with `426`.** One rule now applies on the runtime, `createTestServer`
+  and `vite dev`, as on the family's native tier: `400` unless there is exactly
+  one `Upgrade` line naming `websocket`, a `Connection` that lists `upgrade`,
+  exactly one key that is the base64 of 16 bytes, and at most one version
+  line; `426` with `Sec-WebSocket-Version: 13` for any version but 13. Letter
+  case is ignored and only spaces and tabs are trimmed. The refusal comes
+  before the capacity, origin, rate-limit and application checks, so it is
+  never answered or counted as load; it is counted as
+  `upgrade_rejected_total{reason="malformed_handshake"}`. A GET to the
+  WebSocket path that carries a key or a websocket `Upgrade` without the rest
+  of the handshake is refused the same way. Without an admission ceiling, a
+  plain GET to the WebSocket path, and an upgrade to another protocol such as
+  `h2c`, now reach the application instead of a `426`; with a ceiling a
+  navigation still gets the upgrade hint or the capacity answer.
 - The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
   UTF-16 code units, the `length` JavaScript reports, as the family's native
   tier counts them, where they counted UTF-8 bytes; binary frames are still

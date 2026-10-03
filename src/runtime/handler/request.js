@@ -44,7 +44,7 @@ const ADMIN_PREFIX = ADMIN_PATH === false ? null : ADMIN_PATH + '/';
  * @type {{
  *   wsPath: string,
  *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean,
- *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => void,
+ *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
  *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
  *   tryAdminRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean
  * } | null}
@@ -149,15 +149,11 @@ export function handleRequest(req, res) {
 	}
 
 	if (realtimeRoutes !== null) {
-		// A plain GET on the WebSocket path is a client that forgot (or was
-		// stripped of) its upgrade headers - answer with the status that says
-		// so instead of rendering the app's 404. Under a full upgrade gate the
-		// same URL is a browser NAVIGATION into a queue, so the answer is the
-		// capacity refusal the upgrade door would have given.
-		if (pathname === realtimeRoutes.wsPath && isGetLike) {
-			realtimeRoutes.serveWsPathGet(req, res, pathname, search);
-			return;
-		}
+		// A GET on the WebSocket path that the upgrade listener did not take:
+		// an attempted handshake is refused, and with an admission ceiling a
+		// browser NAVIGATION gets the answer the upgrade door would have given.
+		// Anything else goes on to the application.
+		if (pathname === realtimeRoutes.wsPath && isGetLike && realtimeRoutes.serveWsPathGet(req, res, pathname, search)) return;
 		// The waiting room's poll and holding page. Both are read-only and
 		// answer before the static index so a same-named asset can never
 		// shadow the queue a browser is sitting in.

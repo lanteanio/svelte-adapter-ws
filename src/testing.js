@@ -4,6 +4,7 @@ import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtim
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-boundary.js';
 import { closeFrameReason } from './runtime/utils/close-frame.js';
+import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength, stageHeaders } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY as RUNTIME_WS_REQUEST_ID_KEY, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -201,7 +202,11 @@ function stripMappedV4(ip) {
 }
 
 function createNodeApp() {
-	const httpServer = createHttpServer();
+	// As production: only a WebSocket attempt goes to the 'upgrade' listener;
+	// an upgrade to another protocol is an ordinary request.
+	const httpServer = createHttpServer({
+		shouldUpgradeCallback: (req) => isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))
+	});
 	// A method node's parser refuses is answered like the ones it accepts,
 	// as on the production server.
 	refuseUnparsedForbiddenMethods(httpServer);
@@ -3184,6 +3189,26 @@ export async function createTestServer(options = {}) {
 				return;
 			}
 
+			// Mirrors production: the handshake itself, also ahead of every
+			// capacity answer, read off the raw header lines.
+			const handshakeRefusal = webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
+			if (handshakeRefusal !== null) {
+				mUpgradeRejectedT?.inc({ reason: 'malformed_handshake' });
+				res.cork(() => {
+					if (handshakeRefusal === 426) {
+						res.writeStatus('426 Upgrade Required');
+						res.writeHeader('sec-websocket-version', WEBSOCKET_VERSION);
+						res.writeHeader('content-type', 'text/plain');
+						res.end('Upgrade Required');
+					} else {
+						res.writeStatus('400 Bad Request');
+						res.writeHeader('content-type', 'text/plain');
+						res.end('Bad Request');
+					}
+				});
+				return;
+			}
+
 			// Cursor-only upgrade lane (the worker's second WebSocket).
 			// Mirrors the production handler: route through the reserved
 			// cursor sub-budget only when a lane is configured.
@@ -4235,12 +4260,14 @@ export async function createTestServer(options = {}) {
 		}
 	});
 
-	// app.ws handles real handshakes; a keyless GET falls through to the
-	// routes, so browser NAVIGATION lands here. Mirrors the production handler: register
-	// for every enabled ceiling (including perTickBudget), serving the
-	// holding page when the waiting room is on and the accessible 503 when it
-	// is opted out.
-	if (admission.maxConcurrent > 0 || admission.maxConnections > 0 || ADMISSION_PER_TICK_BUDGET > 0) {
+	// app.ws handles real handshakes; a GET the upgrade listener did not take
+	// falls through to the routes. Mirrors the production handler: an
+	// attempted upgrade among those is refused 400, always, and a browser
+	// NAVIGATION gets the holding page or the accessible 503 at capacity when a
+	// ceiling (perTickBudget included) is enabled. Without one it is answered
+	// as any route this server does not serve.
+	{
+		const admissionCeiling = admission.maxConcurrent > 0 || admission.maxConnections > 0 || ADMISSION_PER_TICK_BUDGET > 0;
 		// Mirrors the production handler: the navigation refusal backs off
 		// exactly like the upgrade refusal, one number per condition.
 		const navigationRetryAfter = () => {
@@ -4251,6 +4278,23 @@ export async function createTestServer(options = {}) {
 				: jitterRetryAfter(REFUSAL_RETRY_AFTER_SECONDS, spread);
 		};
 		app.get(wsPath, (res, req) => {
+			if (isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))) {
+				mUpgradeRejectedT?.inc({ reason: 'malformed_handshake' });
+				res.cork(() => {
+					res.writeStatus('400 Bad Request');
+					res.writeHeader('content-type', 'text/plain');
+					res.end('Bad Request');
+				});
+				return;
+			}
+			if (!admissionCeiling) {
+				res.cork(() => {
+					res.writeStatus('404 Not Found');
+					res.writeHeader('content-type', 'text/plain');
+					res.end('Not Found');
+				});
+				return;
+			}
 			res.onAborted(() => {});
 			const atCapacity = postureLevelT() === 'siege' || !admission.hasCapacity();
 			if (!atCapacity) {

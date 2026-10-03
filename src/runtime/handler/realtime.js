@@ -95,6 +95,7 @@ import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders } from './http-helpers.js';
+import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { readBody } from './ssr.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from '../utils/hook-boundary.js';
@@ -1254,6 +1255,17 @@ export async function handleUpgrade(req, socket, head) {
 		return;
 	}
 
+	// The handshake itself, also ahead of every capacity answer: one no one
+	// could complete is refused as what it is rather than answered, or counted,
+	// as load. Read off the raw header lines, where a repeated one shows.
+	const handshakeRefusal = webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
+	if (handshakeRefusal !== null) {
+		noteUpgradeRejection(undefined, 'malformed_handshake', req);
+		if (handshakeRefusal === 426) refuseUpgrade(socket, 426, 'Upgrade Required', [['Sec-WebSocket-Version', WEBSOCKET_VERSION]]);
+		else refuseUpgrade(socket, 400, 'Bad Request');
+		return;
+	}
+
 	if (isDraining()) {
 		refuseUpgrade(socket, 503, 'Service Unavailable');
 		return;
@@ -1556,15 +1568,16 @@ export async function handleUpgrade(req, socket, head) {
 			// unless the accept lands - but the TRANSFER is only real once ws
 			// has actually handed us a socket. `handleUpgrade` has a third
 			// outcome besides accept and throw: it answers the peer itself and
-			// returns, calling nothing, for a non-GET, a missing or malformed
-			// Sec-WebSocket-Key, a version that is not 8 or 13, a rejected
+			// returns, calling nothing, for a non-GET, a rejected
 			// shouldHandle, an unparseable subprotocol, a bad
 			// permessage-deflate offer, or a socket that stopped being
-			// readable. Marking the transfer before the call meant every one
-			// of those took a permit that nothing could ever hand back - two
-			// unauthenticated packets each, until the ceiling was gone and the
-			// process needed a restart. The lead cannot reach this: its accept
-			// primitive either opens or throws.
+			// readable. (A malformed key or version never gets this far: the
+			// handshake rule above refuses it first.) Marking the transfer
+			// before the call meant every one of those took a permit that
+			// nothing could ever hand back - two unauthenticated packets each,
+			// until the ceiling was gone and the process needed a restart. The
+			// lead cannot reach this: its accept primitive either opens or
+			// throws.
 			if (connectionPermitHeld) carrier = connectionPermitCarrier.install(merged);
 			try {
 				wss.handleUpgrade(req, socket, head, (ws) => {
@@ -1609,7 +1622,7 @@ export async function handleUpgrade(req, socket, head) {
 				throw error;
 			}
 			// handleUpgrade has a third outcome: it answers the peer itself and
-			// calls nothing back (a non-GET, a bad key, an unsupported version).
+			// calls nothing back (a non-GET, an unparseable subprotocol).
 			// That is a refusal, and a no-op once the accept above stamped.
 			observeUpgradeOutcome(socket, 'rejected');
 		} finally {
@@ -2833,33 +2846,41 @@ function httpRefusalResponse(res) {
 }
 
 /**
- * The GET answer on the WebSocket path. A browser NAVIGATION to the socket URL
- * lands here rather than on the upgrade listener, so the two doors have to
- * negotiate a full gate identically: below capacity it is the ordinary
- * upgrade-required hint, at capacity it is the holding page (or the accessible
- * 503 when the room is opted out) for an HTML navigation and the bare 503 for
- * everything else.
+ * The GET answer on the WebSocket path, for a request the upgrade listener did
+ * not take.
+ *
+ * An ATTEMPTED upgrade among those - a key without the rest of the handshake,
+ * or a websocket Upgrade with no key - is a handshake no one could complete,
+ * and is refused 400 as the upgrade listener refuses the rest of the
+ * malformed set, with or without a ceiling.
+ *
+ * A plain GET is a browser NAVIGATION. With an admission ceiling enabled the
+ * two doors have to negotiate a full gate identically: below capacity it is
+ * the ordinary upgrade-required hint, at capacity it is the holding page (or
+ * the accessible 503 when the room is opted out) for an HTML navigation and
+ * the bare 503 for everything else. Without one it, and an upgrade to another
+ * protocol, goes on to the application.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {string} pathname
  * @param {string} search - the query string including its leading '?', or ''
- * @returns {void}
+ * @returns {boolean} true when the request was answered here
  */
 export function serveWsPathGet(req, res, pathname, search) {
+	if (isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))) {
+		noteUpgradeRejection(undefined, 'malformed_handshake', req);
+		send400(res);
+		return true;
+	}
+	if (!ADMISSION_ARMED) return false;
 	// Siege answers this navigation the same way the upgrade door answers the
 	// handshake behind it; without the posture test a sieged server would hand
 	// a browser 'upgrade required' and then refuse the upgrade it just asked
 	// for. At normal and elevated the live gate stays the source of truth.
-	//
-	// The siege test sits OUTSIDE the armed guard on purpose: the upgrade
-	// short-circuit refuses on posture alone, with no ceiling configured, so
-	// gating this one behind ADMISSION_ARMED would reinstate exactly the
-	// mismatch above for a deployment that pins `protection: 'siege'` and
-	// configures no `upgradeAdmission` at all.
-	if (postureLevel() !== 'siege' && (!ADMISSION_ARMED || admission.hasCapacity())) {
+	if (postureLevel() !== 'siege' && admission.hasCapacity()) {
 		endText(res, 426, { 'content-type': 'text/plain', upgrade: 'websocket' }, 'WebSocket upgrade required');
-		return;
+		return true;
 	}
 	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {
 		if (WAITING_ROOM !== null) {
@@ -2869,7 +2890,7 @@ export function serveWsPathGet(req, res, pathname, search) {
 				undefined,
 				createWaitingRoomRequest(waitingRoomRequestFacade(req, pathname, search.slice(1)))
 			));
-			return;
+			return true;
 		}
 		sendWaitingRoomPage(httpRefusalResponse(res), {
 			body: buildAccessibleCapacityRefusalPage(),
@@ -2878,9 +2899,10 @@ export function serveWsPathGet(req, res, pathname, search) {
 			headers: [['retry-after', String(refusalRetryAfter())]],
 			varyAcceptLanguage: false
 		}, '503 Service Unavailable');
-		return;
+		return true;
 	}
 	endText(res, 503, { 'content-type': 'text/plain', 'retry-after': String(refusalRetryAfter()) }, 'Server is at upgrade capacity, please retry');
+	return true;
 }
 
 /**

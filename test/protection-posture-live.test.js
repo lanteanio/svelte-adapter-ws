@@ -96,22 +96,27 @@ describe('the protection posture on the built runtime', () => {
 	});
 
 	it('answers a navigation to the WebSocket path the same way it answers the handshake', async () => {
-		// Without the posture test outside the armed guard this returns 426
-		// 'upgrade required' and then refuses the upgrade it just asked for.
-		const res = await fetch(`${siege.rt.origin}/ws`, { headers: { accept: 'text/html' } });
+		// The gate has 8 free slots, so a 503 here can only be the posture:
+		// without the siege test this returns 426 'upgrade required' and then
+		// refuses the upgrade it just asked for.
+		expect(await upgradeStatus(siegeGated.rt.port)).toContain('503');
+		const res = await fetch(`${siegeGated.rt.origin}/ws`);
 		expect(res.status).toBe(503);
 		expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+	});
+
+	it('leaves a navigation to the WebSocket path to the application under siege with no ceiling', async () => {
+		// With no ceiling the GET route has no capacity answer to give and
+		// yields before the posture is read, as the lead's route does; the
+		// handshake behind it is still refused.
+		const res = await fetch(`${siege.rt.origin}/ws`, { headers: { accept: 'text/html' } });
+		expect(res.status).toBe(200);
+		expect(await res.text()).toBe('SSR:/ws');
 	});
 
 	it('opens the same handshake at the default posture', async () => {
 		const line = await upgradeStatus(normal.rt.port);
 		expect(line).toContain('101');
-	});
-
-	it('serves the upgrade hint at the default posture', async () => {
-		const res = await fetch(`${normal.rt.origin}/ws`);
-		expect(res.status).toBe(426);
-		expect(res.headers.get('upgrade')).toBe('websocket');
 	});
 
 	it('keeps the admit-check busy under siege and thins its own poll rate', async () => {

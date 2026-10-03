@@ -993,7 +993,13 @@
 		"file": "test/dev-batch-options.test.js"
 	},
 	{
-		"file": "test/dev-dashboard.test.js"
+		"file": "test/dev-dashboard.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tmiddlewares: {\n\t\t\tuse(path, fn) { middleware.push({ path, fn }); }\n\t\t},\n\t\tconfig: {\n",
+				"ours": "\t\tmiddlewares: {\n\t\t\t// Connect also takes `use(fn)`, mounted at the empty route, which is\n\t\t\t// how the plugin registers its WebSocket-path handshake check.\n\t\t\tuse(path, fn) {\n\t\t\t\tif (typeof path === 'function') middleware.push({ path: '', fn: path });\n\t\t\t\telse middleware.push({ path, fn });\n\t\t\t}\n\t\t},\n\t\tconfig: {\n"
+			}
+		]
 	},
 	{
 		"file": "test/divergence-diagnostics.test.js"
@@ -1386,7 +1392,13 @@
 		"file": "test/sim-swarm.test.js"
 	},
 	{
-		"file": "test/sim.test.js"
+		"file": "test/sim.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\texpect(r.finalState.topicCounts).toEqual({ allowed: 1 });\n\t});\n});\n\ndescribe('runSim - the socket double closes as uWS does', () => {\n",
+				"ours": "\t\texpect(r.finalState.topicCounts).toEqual({ allowed: 1 });\n\t});\n\n\tit('synthesizes a conforming handshake, and a caller\\'s own headers still reach the handshake rule', async () => {\n\t\t/** @type {Array<{ state: string, status: string | null }>} */\n\t\tconst outcomes = [];\n\t\tawait runSim({\n\t\t\tseed: 'handshake',\n\t\t\tclients: 0,\n\t\t\tscenario: async (api) => {\n\t\t\t\tconst plain = api.connect();\n\t\t\t\tconst badKey = api.connect({ headers: { 'sec-websocket-key': 'not-a-key' } });\n\t\t\t\tconst oldVersion = api.connect({ headers: { 'Sec-WebSocket-Version': '8' } });\n\t\t\t\tawait api.advance();\n\t\t\t\tfor (const c of [plain, badKey, oldVersion]) {\n\t\t\t\t\toutcomes.push({ state: c.state, status: c.rejection ? String(c.rejection.status).slice(0, 3) : null });\n\t\t\t\t}\n\t\t\t}\n\t\t});\n\t\texpect(outcomes).toEqual([\n\t\t\t{ state: 'open', status: null },\n\t\t\t{ state: 'rejected', status: '400' },\n\t\t\t{ state: 'rejected', status: '426' }\n\t\t]);\n\t});\n});\n\ndescribe('runSim - the socket double closes as uWS does', () => {\n"
+			}
+		]
 	},
 	{
 		"file": "test/smooth-authority.test.js"
@@ -2210,5 +2222,11 @@
 	},
 	{
 		"file": "test/envelope-data.test.js"
+	},
+	{
+		"file": "src/runtime/utils/ws-handshake.js"
+	},
+	{
+		"file": "test/ws-handshake-real.test.js"
 	}
 ]

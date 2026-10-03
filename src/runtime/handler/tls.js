@@ -53,9 +53,10 @@ function certPairs() {
  * Build the https server and arm the hot-reload watch.
  *
  * @param {import('node:http').RequestListener} handleRequest
+ * @param {(req: import('node:http').IncomingMessage) => boolean} shouldUpgradeCallback
  * @returns {import('node:https').Server}
  */
-export function createTlsServer(handleRequest) {
+export function createTlsServer(handleRequest, shouldUpgradeCallback) {
 	const pairs = certPairs();
 	if (pairs.length === 0) {
 		throw new Error(
@@ -75,6 +76,7 @@ export function createTlsServer(handleRequest) {
 
 	const server = https.createServer({
 		...baseOptions,
+		shouldUpgradeCallback,
 		SNICallback: (servername, callback) => {
 			const name = servername.toLowerCase();
 			let context = sniContexts.get(name);

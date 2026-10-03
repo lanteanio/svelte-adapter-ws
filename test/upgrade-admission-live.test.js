@@ -3,6 +3,7 @@
 // (upgrade-admission-wiring, upgrade-waiting-room) prove the same composition
 // on createTestServer; this one proves the production upgrade listener and the
 // HTTP routing spine carry it too, because those are separate code.
+import net from 'node:net';
 import WebSocket from 'ws';
 import { describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
@@ -269,20 +270,51 @@ describe('production upgrade admission', () => {
 		}
 	});
 
-	it('leaves an unconfigured gate wide open and the WS path on its upgrade hint', async () => {
+	it('length-frames the WS-path upgrade hint rather than answering chunked', async () => {
+		// A browser navigation to the socket URL below capacity lands here, and
+		// node falls back to chunked whenever the writer leaves the length off -
+		// which would frame this answer differently from every other fixed-shape
+		// refusal the adapter writes. Raw socket, because fetch does not surface
+		// the framing headers and the framing is the subject.
+		const rt = await bootWithAdmission({ maxConnections: 4 });
+		try {
+			const raw = await new Promise((resolve, reject) => {
+				const socket = net.connect(rt.port, '127.0.0.1', () => {
+					socket.write('GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+				});
+				let out = '';
+				socket.on('data', (chunk) => { out += chunk.toString(); });
+				socket.on('end', () => resolve(out));
+				socket.on('error', reject);
+				socket.setTimeout(5000, () => { socket.destroy(); resolve(out); });
+			});
+			const [statusLine, ...lines] = raw.slice(0, raw.indexOf('\r\n\r\n')).toLowerCase().split('\r\n');
+			expect(statusLine).toBe('http/1.1 426 upgrade required');
+			expect(lines, 'the 426 answered chunked').not.toContain('transfer-encoding: chunked');
+			// A whole header line: a substring match would accept a declared
+			// length that is a numeric extension of the true one.
+			expect(lines, 'the 426 declared no length, or the wrong one')
+				.toContain(`content-length: ${Buffer.byteLength('WebSocket upgrade required')}`);
+		} finally {
+			await rt.cleanup();
+		}
+	});
+
+	it('leaves an unconfigured gate wide open and a navigation to the WS path to the app', async () => {
 		const rt = await bootWithAdmission(undefined);
 		try {
 			const results = await Promise.all(Array.from({ length: 8 }, () => attemptUpgrade(rt.port)));
 			expect(results.every((r) => r.opened)).toBe(true);
 			for (const r of results) r.ws.close();
 
-			const hint = await fetch(rt.origin + '/ws');
-			expect(hint.status).toBe(426);
-			await hint.text();
+			// With no ceiling there is no capacity answer to give, so a plain
+			// GET of the socket path is the application's to answer.
+			const navigation = await fetch(rt.origin + '/ws', { headers: { accept: HTML_ACCEPT } });
+			expect(navigation.status).toBe(200);
+			expect(await navigation.text()).toBe('SSR:/ws');
 
 			// No ceiling means no room to resolve, so neither room route is
-			// mounted and both paths belong to the app. The 426 above cannot
-			// see this: the WS path answers it before it ever reads the room.
+			// mounted and both paths belong to the app.
 			const admit = await fetch(rt.origin + '/__admit-check');
 			expect(admit.status).toBe(200);
 			expect(String(admit.headers.get('content-type'))).toContain('text/html');

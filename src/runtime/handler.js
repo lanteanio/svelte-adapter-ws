@@ -13,6 +13,7 @@
 import './_init.js';
 import { refuseUnparsedForbiddenMethods } from './handler/http-helpers.js';
 import http from 'node:http';
+import { isWebSocketUpgradeAttempt, readRawHandshake } from './utils/ws-handshake.js';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
 import { env } from './env.js';
@@ -194,9 +195,20 @@ console.log(`[svelte-adapter-ws] Static files indexed in ${(monotonicNow() - _t_
 // module reference is retained for the message-driven reload below.
 const tlsModule = is_tls ? await import('./handler/tls.js') : null;
 
+/**
+ * Which requests the 'upgrade' listener takes: a WebSocket handshake attempt,
+ * and only while one is listening. node otherwise hands it every request
+ * that names `Connection: upgrade`, and an upgrade to another protocol is an
+ * ordinary request the application answers. A node without the option
+ * ignores it.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+const shouldUpgradeCallback = (req) => server.listenerCount('upgrade') > 0 && isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders));
+
 export const server = tlsModule
-	? tlsModule.createTlsServer(handleRequest)
-	: http.createServer(handleRequest);
+	? tlsModule.createTlsServer(handleRequest, shouldUpgradeCallback)
+	: http.createServer({ shouldUpgradeCallback }, handleRequest);
 // A method node's parser refuses is answered like the ones it accepts.
 refuseUnparsedForbiddenMethods(server);
 
