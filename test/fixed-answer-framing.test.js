@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+import { setOperationalEventSink } from '../src/runtime/diagnostic.js';
 
 const BASE_WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -37,14 +38,14 @@ const BASE_WS_OPTS = {
 	unsafeSameOriginWithoutHostPin: false
 };
 
-// Every route answers with a shape whose framing is the writer's decision,
-// never the Response's own Content-Length. `vary` keeps the request-dedup
-// leader from buffering the streamed body into one chunk.
 // A download name past ASCII. node re-encodes a content-disposition stored
 // after a content-length as latin1, so this header shows whether a writer
 // stages it ahead of the length it sets.
 const DISPOSITION_SRC = "const DISPOSITION = 'attachment; filename=\"' + String.fromCharCode(220) + 'bersicht.pdf\"';";
 
+// Every route answers with a shape whose framing is the writer's decision,
+// never the Response's own Content-Length. `vary` keeps the request-dedup
+// leader from buffering the streamed body into one chunk.
 const SERVER = `
 ${DISPOSITION_SRC}
 export class Server {
@@ -77,6 +78,38 @@ export class Server {
 		if (p === '/refused-header') {
 			return new Response('x', { headers: { 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
+		// A refused header in front of a body the writer never reads in full: one
+		// that never ends, and one whose second chunk comes too late to be one
+		// write. Each records whether its source was cancelled.
+		if (p === '/refused-cancel') {
+			globalThis.__refusedCancelled = false;
+			return new Response(new ReadableStream({
+				pull(c) { c.enqueue(new TextEncoder().encode('never read')); },
+				cancel() { globalThis.__refusedCancelled = true; }
+			}), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+		}
+		if (p === '/refused-stream') {
+			globalThis.__refusedCancelled = false;
+			const enc = new TextEncoder();
+			return new Response(new ReadableStream({
+				start(c) { c.enqueue(enc.encode('first|')); },
+				pull(c) {
+					return new Promise((r) => setTimeout(() => {
+						try { c.enqueue(enc.encode('later')); } catch { /* cancelled */ }
+						r(undefined);
+					}, 200));
+				},
+				cancel() { globalThis.__refusedCancelled = true; }
+			}), { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+		}
+		if (p === '/refused-cancel-state') return new Response(String(globalThis.__refusedCancelled), { headers: text });
+		// A slow render with a refused header, which concurrent anonymous GETs share.
+		if (p === '/refused-shared') {
+			globalThis.__refusedRenders = (globalThis.__refusedRenders || 0) + 1;
+			await new Promise((r) => setTimeout(r, 150));
+			return new Response('x', { headers: { ...text, 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
+		}
+		if (p === '/refused-renders') return new Response(String(globalThis.__refusedRenders || 0), { headers: text });
 		if (p === '/locked') {
 			const consumed = new Response('consumed');
 			await consumed.text();
@@ -457,6 +490,41 @@ function readChunked(raw, status) {
 }
 
 const OK = ['GET /ok HTTP/1.1'];
+
+/**
+ * Run `fn` and return what it resolved with, and the page lane's failure
+ * events emitted meanwhile.
+ *
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<{ result: T, failures: any[] }>}
+ */
+async function withSsrFailures(fn) {
+	/** @type {any[]} */
+	const events = [];
+	const dispose = setOperationalEventSink((record) => { events.push(record); });
+	try {
+		const result = await fn();
+		return { result, failures: events.filter((record) => record.event === 'runtime.ssr.failed') };
+	} finally {
+		dispose();
+	}
+}
+
+/**
+ * The length-framed 500 the page lane answers a failure with, and its one
+ * failure event, which names the request id the answer carries.
+ *
+ * @param {string} raw
+ * @param {any[]} failures
+ */
+function expectPageFailure(raw, failures) {
+	const first = expectLengthFramed(raw, { status: '500', body: 'Internal Server Error' });
+	const ids = header(first.lines, 'x-request-id');
+	expect(ids).toHaveLength(1);
+	expect(failures.map((record) => record.attributes?.requestId)).toEqual(ids);
+	return first;
+}
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
 
 // A waiting-room renderer whose one header node refuses to write, on a URL
@@ -602,12 +670,36 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		});
 	});
 
-	it('answers a header node refuses to write with the length-framed 500 and the request id', async () => {
-		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /refused-header HTTP/1.1'], OK]), {
-			status: '500',
-			body: 'Internal Server Error'
-		});
-		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+	it('answers a header node refuses to write with the length-framed 500, the request id and its event', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /refused-header HTTP/1.1'], OK]));
+		expectPageFailure(result, failures);
+	});
+
+	it('answers the same way on a HEAD, with the length alone, and cancels the body it never reads', async () => {
+		// Credentialed, so the dedup leader does not read the body first.
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['HEAD /refused-cancel HTTP/1.1', 'Cookie: s=1'], OK]));
+		const first = expectBodyless(result, { status: '500', length: 21 });
+		expect(failures.map((record) => record.attributes?.requestId)).toEqual(header(first.lines, 'x-request-id'));
+		const state = await pipeline(open.rt.port, [['GET /refused-cancel-state HTTP/1.1']]);
+		expect(splitFirst(state).rest).toBe('true');
+	});
+
+	it('answers the same way on a body it would have streamed, and cancels that body', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /refused-stream HTTP/1.1', 'Cookie: s=1'], OK]));
+		expectPageFailure(result, failures);
+		const state = await pipeline(open.rt.port, [['GET /refused-cancel-state HTTP/1.1']]);
+		expect(splitFirst(state).rest).toBe('true');
+	});
+
+	it('answers each request sharing one render the same way, each with its own id and event', async () => {
+		const renders = async () => Number(splitFirst(await pipeline(open.rt.port, [['GET /refused-renders HTTP/1.1']])).rest);
+		const before = await renders();
+		const { result, failures } = await withSsrFailures(() => Promise.all([0, 1, 2].map(() =>
+			pipeline(open.rt.port, [['GET /refused-shared HTTP/1.1'], OK]))));
+		const ids = result.map((raw) => header(expectLengthFramed(raw, { status: '500', body: 'Internal Server Error' }).lines, 'x-request-id')[0]);
+		expect(new Set(ids).size).toBe(3);
+		expect(failures.map((record) => record.attributes?.requestId).sort()).toEqual([...ids].sort());
+		expect(await renders() - before, 'one render shared by all three').toBe(1);
 	});
 
 	it('drops a Transfer-Encoding the Response carries, and frames the body by its length', async () => {
@@ -656,22 +748,16 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
 	});
 
-	it('answers a Set-Cookie value node refuses to write with the length-framed 500 and the request id', async () => {
+	it('answers a Set-Cookie value node refuses to write with the length-framed 500, the request id and its event', async () => {
 		// Credentialed, so the dedup leader leaves the Response to this writer.
-		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /bad-cookie HTTP/1.1', 'Cookie: s=1'], OK]), {
-			status: '500',
-			body: 'Internal Server Error'
-		});
-		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /bad-cookie HTTP/1.1', 'Cookie: s=1'], OK]));
+		const first = expectPageFailure(result, failures);
 		expect(header(first.lines, 'set-cookie')).toEqual([]);
 	});
 
 	it('answers a Response carrying a status node cannot write the same way', async () => {
-		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /status-error HTTP/1.1', 'Cookie: s=1'], OK]), {
-			status: '500',
-			body: 'Internal Server Error'
-		});
-		expect(header(first.lines, 'x-request-id')).toHaveLength(1);
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /status-error HTTP/1.1', 'Cookie: s=1'], OK]));
+		const first = expectPageFailure(result, failures);
 		expect(header(first.lines, 'content-type')).toEqual(['text/plain']);
 	});
 
