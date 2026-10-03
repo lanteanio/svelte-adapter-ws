@@ -2866,7 +2866,10 @@ function httpRefusalResponse(res) {
 				return facade;
 			}
 			res.writeHead(status, statusText || undefined);
-			res.end(text);
+			// As bytes: node writes the header block together with a string body
+			// in the body's encoding, which would encode a header value that
+			// stageHeaders already spelled as its UTF-8 bytes a second time.
+			res.end(Buffer.from(text));
 			return facade;
 		}
 	};

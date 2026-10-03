@@ -441,7 +441,11 @@ function createNodeApp() {
 					stageHeaders(nodeRes, [...pendingHeaders].filter(([k]) => k !== 'trailer'));
 					nodeRes.writeHead(statusCode, statusText || undefined);
 					if (body === undefined || body === null) nodeRes.end();
-					else if (typeof body === 'string' || Buffer.isBuffer(body)) nodeRes.end(body);
+					// A string goes as bytes: node writes the header block together
+					// with a string body in the body's encoding, which would encode a
+					// header value stageHeaders spelled as UTF-8 bytes a second time.
+					else if (typeof body === 'string') nodeRes.end(Buffer.from(body));
+					else if (Buffer.isBuffer(body)) nodeRes.end(body);
 					else nodeRes.end(Buffer.from(body));
 				} catch (err) { unstage(err); }
 				return res;

@@ -48,6 +48,18 @@ export function endText(res, status, headers, text) {
 }
 
 /**
+ * A header value as the bytes the native tier puts on the wire. uWS writes
+ * text as its UTF-8 bytes; node's HTTP/1.1 writer takes one byte per
+ * character and refuses one past U+00FF, so a value past ASCII goes to node
+ * as its UTF-8 bytes, one character each.
+ *
+ * @param {string} value
+ */
+export function wireValue(value) {
+	return /[^\x00-\x7f]/.test(value) ? Buffer.from(value, 'utf8').toString('latin1') : value;
+}
+
+/**
  * Stage the headers a relayed Response carries, one setHeader at a time,
  * before anything commits the status. node's writeHead commits the status -
  * and, for a 204 or 304, that no body follows - before it validates the
@@ -58,11 +70,16 @@ export function endText(res, status, headers, text) {
  * headers back out would change that answer too, since node stops sending
  * Date once `date` is removed and forgets a `connection: close`.
  *
+ * Values go out as `wireValue` spells them, so a value past ASCII reaches the
+ * wire as its UTF-8 bytes on every lane that relays one.
+ *
  * @param {import('node:http').ServerResponse} res
  * @param {Iterable<[string, string | string[]]>} entries
  */
 export function stageHeaders(res, entries) {
-	const list = [...entries];
+	/** @type {Array<[string, string | string[]]>} */
+	const list = [];
+	for (const [name, value] of entries) list.push([name, Array.isArray(value) ? value.map(wireValue) : wireValue(value)]);
 	for (const [name, value] of list) {
 		validateHeaderName(name);
 		if (Array.isArray(value)) for (const one of value) validateHeaderValue(name, one);

@@ -148,6 +148,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A header value past ASCII goes out as its UTF-8 bytes.** node writes a
+  header value one byte per character, so `x-note: café` went out as the
+  single byte `e9`, and a character past U+00FF was answered with a `500`.
+  Every lane that relays an app header - pages, the auth endpoint, the admin
+  route, the waiting-room renderer and `createTestServer` - now writes the
+  value's UTF-8 bytes, as the family's native tier does. A control character
+  is still refused.
 - **A failing `open`, `drain` or `close` hook costs one connection, not the
   process.** These hooks are called from a transport callback and never
   awaited. A synchronous throw was caught and printed with a line of this

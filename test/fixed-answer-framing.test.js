@@ -97,6 +97,9 @@ export class Server {
 			}), { headers: text });
 		}
 		if (p === '/head-cancel-state') return new Response(String(globalThis.__headCancelled), { headers: text });
+		if (p === '/wide-header') {
+			return new Response('x', { headers: { ...text, 'x-note': String.fromCharCode(99, 97, 102, 233) } });
+		}
 		if (p === '/bad-cookie') {
 			return new Response('x', { headers: { ...text, 'set-cookie': 'a=' + String.fromCharCode(127) } });
 		}
@@ -231,8 +234,8 @@ const WS_HANDLER = `
 export function message() {}
 export function authenticate({ headers, cookies }) {
 	const mode = headers['x-mode'];
-	if (mode === 'bad-cookie') {
-		// A cookie name past U+00FF, which node refuses to write.
+	if (mode === 'wide-cookie') {
+		// A cookie name past U+00FF, which goes out as its UTF-8 bytes.
 		cookies.set(String.fromCharCode(256), 'v', { path: '/' });
 		return undefined;
 	}
@@ -267,6 +270,9 @@ export function admin(request) {
 		return new Response('admin relayed', { headers: { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' } });
 	}
 	if (adminPath === '/__realtime/empty') return new Response('', { headers: { 'content-type': 'text/plain' } });
+	if (adminPath === '/__realtime/wide-header') {
+		return new Response('x', { headers: { 'content-type': 'text/plain', 'x-note': String.fromCharCode(99, 97, 102, 233) } });
+	}
 	if (adminPath === '/__realtime/empty-declared') {
 		return new Response('', { headers: { 'content-type': 'text/plain', 'content-length': '5' } });
 	}
@@ -430,9 +436,20 @@ function readChunked(raw, status) {
 const OK = ['GET /ok HTTP/1.1'];
 const AUTH = (...extra) => ['POST /__ws/auth HTTP/1.1', 'x-requested-with: XMLHttpRequest', 'Content-Length: 0', ...extra];
 
-// A waiting-room renderer whose one header node refuses to write.
+// A waiting-room renderer whose one header node refuses to write, and on a
+// URL carrying `wide` one past U+00FF, which goes out as its UTF-8 bytes.
 const BAD_RENDERER = `
 export default function renderer(context) {
+	if (String(context && context.request && context.request.url).includes('wide')) {
+		return {
+			body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+				'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+				'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+			lang: 'en',
+			dir: 'ltr',
+			headers: { 'x-note': [99, 97, 102, 233, 32, 9731].map((c) => String.fromCharCode(c)).join('') }
+		};
+	}
 	if (String(context && context.request && context.request.url).includes('trailer')) {
 		return {
 			body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
@@ -757,12 +774,13 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
 	});
 
-	it('on a cookie node refuses beside the implicit 204, with a 500 that carries its body', async () => {
-		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: bad-cookie'), OK]), {
-			status: '500',
-			body: 'Internal Server Error'
-		});
-		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+	it('on a cookie past U+00FF beside the implicit 204, which goes out as its UTF-8 bytes', async () => {
+		// The cookie API refuses every control character itself, so a name past
+		// U+00FF was the one cookie node refused; it is written as its UTF-8
+		// bytes now, and the implicit 204 stays bodyless.
+		const first = expectBodyless(await pipeline(open.rt.port, [AUTH('x-mode: wide-cookie'), OK]), { status: '204', length: null });
+		const wire = Buffer.from(String.fromCharCode(256) + '=v', 'utf8').toString('latin1');
+		expect(header(first.lines, 'set-cookie').some((c) => c.startsWith(wire))).toBe(true);
 	});
 
 	it('on a relayed Trailer, which it drops', async () => {
@@ -907,6 +925,78 @@ describe('bodylessLength', () => {
 			expect(bodylessLength(304, declared, false), declared).toBe(null);
 		}
 		expect(bodylessLength(304, '12', false)).toBe(12);
+	});
+});
+
+describe('a header value past ASCII goes out as its UTF-8 bytes', () => {
+	// As the native tier writes it: node takes one byte per character and refuses
+	// one past U+00FF, so every lane that relays an app header hands node the
+	// value's UTF-8 bytes, one character each - which is how a latin1 read of
+	// the wire spells them.
+	// A Response header is a ByteString, so it carries at most U+00FF - `é`,
+	// which uWS writes as `c3 a9`; a renderer's plain headers can carry more.
+	const WIDE = Buffer.from(String.fromCharCode(99, 97, 102, 233), 'utf8').toString('latin1');
+	const WIDER = Buffer.from(String.fromCharCode(99, 97, 102, 233, 32, 9731), 'utf8').toString('latin1');
+
+	it('on a page', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /wide-header HTTP/1.1', 'Cookie: s=1'], OK]), { status: '200', body: 'x' });
+		expect(header(first.lines, 'x-note')).toEqual([WIDE]);
+	});
+
+	it('on the admin route', async () => {
+		const first = expectLengthFramed(await pipeline(open.rt.port, [['GET /__realtime/wide-header HTTP/1.1'], OK]), { status: '200', body: 'x' });
+		expect(header(first.lines, 'x-note')).toEqual([WIDE]);
+	});
+
+	it('on the runtime holding page', async () => {
+		const raw = await pipeline(waiting.rt.port, [['GET /__waiting-room?wide HTTP/1.1', 'Accept: text/html'], OK]);
+		readLengthFramed(raw, '200');
+		expect(header(splitFirst(raw).lines, 'x-note')).toEqual([WIDER]);
+	});
+
+	it('on the test server\'s holding page', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: { message() {} },
+			upgradeAdmission: {
+				maxConcurrent: 1,
+				waitingRoom: {
+					renderer: () => ({
+						body: '<!doctype html><html lang="en" dir="ltr"><head><title>Hold</title></head>' +
+							'<body><main><h1>Hold</h1><p role="status" aria-live="polite">wait</p>' +
+							'<form method="get"><button type="submit">Retry</button></form></main></body></html>',
+						lang: 'en',
+						dir: 'ltr',
+						headers: { 'x-note': String.fromCharCode(99, 97, 102, 233, 32, 9731) }
+					})
+				}
+			}
+		});
+		try {
+			const raw = await pipeline(mirror.port, [['GET /__waiting-room HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]);
+			readLengthFramed(raw, '200');
+			expect(header(splitFirst(raw).lines, 'x-note')).toEqual([WIDER]);
+		} finally {
+			await mirror.close();
+		}
+	});
+
+	it('on the test server\'s admin mirror', async () => {
+		const { createTestServer } = await import('../src/testing.js');
+		const mirror = await createTestServer({
+			handler: {
+				message() {},
+				admin() {
+					return new Response('x', { headers: { 'x-note': String.fromCharCode(99, 97, 102, 233) } });
+				}
+			}
+		});
+		try {
+			const first = expectLengthFramed(await pipeline(mirror.port, [['GET /__realtime/x HTTP/1.1'], ['GET /healthz HTTP/1.1']]), { status: '200', body: 'x' });
+			expect(header(first.lines, 'x-note')).toEqual([WIDE]);
+		} finally {
+			await mirror.close();
+		}
 	});
 });
 
