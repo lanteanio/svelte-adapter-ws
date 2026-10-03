@@ -147,6 +147,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GET answer on the WebSocket path. The WebSocket path and the waiting room's
   two pages answer GET only: a HEAD to any of them reaches the application,
   and the `426` upgrade hint no longer carries an `Upgrade` header.
+- **A second `SIGTERM` or `SIGINT` during shutdown no longer ends the process
+  at once.** It exited with status `1` and skipped whatever the shutdown had
+  left to do; the shutdown already running now keeps its `SHUTDOWN_TIMEOUT`
+  budget, as on the family's native tier, in a single process and on the
+  cluster primary alike.
 - The `bytesOut` and `bytesIn` a `close` hook reads count a text frame in
   UTF-16 code units, the `length` JavaScript reports, as the family's native
   tier counts them, where they counted UTF-8 bytes; binary frames are still

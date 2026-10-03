@@ -183,20 +183,11 @@ if (is_primary) {
 	let boot_signal = null;
 	let primary_booted = false;
 	let fleet_spawned = false;
-	// Declared here, ahead of the signal arming, because the handler below
-	// reads it and a signal can land during any await between the arming and
-	// the fleet spawn (primaryInit is unbounded app code).
 	let shutting_down = false;
 	/** @param {'SIGINT' | 'SIGTERM'} reason */
 	const onPrimarySignal = (reason) => {
-		// A second signal while already draining is the operator saying
-		// "now": exit immediately instead of waiting out the workers' hooks
-		// or the drain window - the same escape hatch single-process mode
-		// gives, and the README promise it carries.
-		if (shutting_down) {
-			console.error(`[svelte-adapter-ws] second ${reason} during shutdown; exiting immediately.`);
-			process.exit(1);
-		}
+		// A signal during a shutdown already running changes nothing:
+		// graceful_shutdown returns, and the run keeps its budget.
 		if (primary_booted) { graceful_shutdown(reason); return; }
 		if (boot_signal) return;
 		boot_signal = reason;
@@ -1658,13 +1649,8 @@ if (is_primary) {
 					beginDrainAnnounced(bootHandler);
 					return;
 				}
-				// A second signal while already draining is the operator
-				// saying "now": exit immediately instead of waiting out hooks
-				// or the drain window.
-				if (phase === 'shutting-down') {
-					console.error(`[svelte-adapter-ws] second ${signal} during shutdown; exiting immediately.`);
-					process.exit(1);
-				}
+				// A signal during a shutdown already running changes nothing:
+				// performShutdown returns, and the run keeps its budget.
 				void handlerPromise.then((handler) => dispatchShutdown(signal, handler));
 			});
 		}

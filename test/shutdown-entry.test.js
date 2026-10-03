@@ -272,6 +272,35 @@ export class Server {
 		expect(output.text).toContain('Shutdown complete');
 	}, 60000);
 
+	it('lets a second stop signal change nothing about the shutdown already running', async () => {
+		const payload = buildRuntime();
+		cleanups.push(() => payload.cleanup());
+		linkPackages(payload);
+		const entry = writeWrapper(payload.dir, { cleanupLog: true });
+		const port = await freePort();
+		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, (text) => text.includes('Ready for traffic'));
+		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
+
+		const held = new Promise((resolve) => {
+			const req = http.get({ host: '127.0.0.1', port, path: '/api/hold?ms=1500' }, (res) => {
+				let body = '';
+				res.on('data', (d) => { body += d; });
+				res.on('end', () => resolve(body));
+			});
+			req.on('error', () => resolve('reset'));
+		});
+		const t0 = Date.now();
+		while (!output.text.includes('[hold] holding') && Date.now() - t0 < 10000) await sleep(25);
+		expect(output.text, 'the held request never reached the server').toContain('[hold] holding');
+
+		requestShutdown(proc);
+		await sleep(200);
+		requestShutdown(proc);
+		expect(await whenExited(proc, 30000)).toBe(0);
+		expect(await held, 'the held request is answered').toBe('held');
+		expect(output.text, 'the cleanup listeners ran').toContain('CLEANUP RAN');
+	}, 60000);
+
 	it('bounds the hook and the cleanup listeners by ONE budget', async () => {
 		// The ws shutdown hook spends 1000ms of a 2000ms budget; the cleanup
 		// listener needs 1800ms more. Under one budget the listener is cut at

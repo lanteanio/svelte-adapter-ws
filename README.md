@@ -506,9 +506,10 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `CLUSTER_RELAY_MAX_FRAME_KB` | pending KB | Sender-side ceiling on one relayed envelope; `0` disables. |
 | `WORKER_BOOT_TIMEOUT_MS` | `60000` | Boot deadline for a worker that stops acking liveness mid-init; `0` disables. |
 
-A second `SIGTERM`/`SIGINT` during a drain exits immediately - the operator's
-"now". `PROXY_PROTOCOL` refuses the boot loudly rather than half-working, and
-so does every invalid cluster configuration (see Deployment).
+A `SIGTERM`/`SIGINT` during a shutdown already running changes nothing: that
+shutdown keeps its `SHUTDOWN_TIMEOUT` budget. `PROXY_PROTOCOL` refuses the boot
+loudly rather than half-working, and so does every invalid cluster
+configuration (see Deployment).
 
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
