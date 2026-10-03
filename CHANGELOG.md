@@ -148,6 +148,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Under `vite dev` over HTTPS the WebSocket, the auth endpoint and the
+  dashboard accept a browser's requests.** Under `server.https` the plugin
+  refused the browser's WebSocket, and over HTTP/2, which Vite 7.2 and later
+  always speak there, its auth and dashboard requests; the auth hook also got
+  `/` as its `url` and ran for `/__WS/AUTH` too. The dev auth lane now writes
+  a hook's Response as production does, and the auth and dashboard mounts
+  answer only their own paths.
 - **A header value past ASCII goes out as its UTF-8 bytes.** node writes a
   header value one byte per character, so `x-note: café` went out as the
   single byte `e9`, and a character past U+00FF was answered with a `500`.

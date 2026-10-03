@@ -2224,5 +2224,14 @@
 	},
 	{
 		"file": "test/host-header-proxy-real.test.js"
+	},
+	{
+		"file": "test/helpers/openssl.js"
+	},
+	{
+		"file": "test/helpers/vite-dev.js"
+	},
+	{
+		"file": "test/vite-dev-request-shape.test.js"
 	}
 ]
