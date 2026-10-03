@@ -98,7 +98,7 @@ const WS_OPTS = {
  * A wrapper entry: installs the cleanup listener the case asks for, arms the
  * stdin re-emit, then imports the payload's real entry.
  * @param {string} dir
- * @param {{ cleanupMs?: number, cleanupLog?: boolean, breakIdleClose?: boolean }} [opts]
+ * @param {{ cleanupMs?: number, cleanupLog?: boolean, breakIdleClose?: boolean, markSignals?: boolean }} [opts]
  */
 function writeWrapper(dir, opts = {}) {
 	const file = path.join(dir, 'entry.mjs');
@@ -117,7 +117,11 @@ function writeWrapper(dir, opts = {}) {
 		opts.cleanupLog
 			? "process.on('sveltekit:shutdown', () => { console.log('CLEANUP RAN'); });"
 			: '',
-		"process.stdin.on('data', (d) => { const s = String(d); if (s.includes('shutdown')) process.emit('SIGTERM'); if (s.includes('interrupt')) process.emit('SIGINT'); });",
+		// A marker for every SIGTERM the process receives, so a case can count
+		// them. Opt-in: on POSIX a listener replaces node's default disposition.
+		opts.markSignals ? "process.on('SIGTERM', () => { console.log('[wrapper] SIGTERM'); });" : '',
+		// One signal per line, however the lines arrive.
+		"process.stdin.on('data', (d) => { for (const line of String(d).split('\\n')) { if (line.includes('shutdown')) process.emit('SIGTERM'); if (line.includes('interrupt')) process.emit('SIGINT'); } });",
 		'process.stdin.unref();',
 		`await import(${JSON.stringify(pathToFileURL(path.join(dir, 'index.js')).href)});`,
 		''
@@ -276,7 +280,7 @@ export class Server {
 		const payload = buildRuntime();
 		cleanups.push(() => payload.cleanup());
 		linkPackages(payload);
-		const entry = writeWrapper(payload.dir, { cleanupLog: true });
+		const entry = writeWrapper(payload.dir, { cleanupLog: true, markSignals: true });
 		const port = await freePort();
 		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, (text) => text.includes('Ready for traffic'));
 		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
@@ -298,7 +302,12 @@ export class Server {
 		requestShutdown(proc);
 		expect(await whenExited(proc, 30000)).toBe(0);
 		expect(await held, 'the held request is answered').toBe('held');
-		expect(output.text, 'the cleanup listeners ran').toContain('CLEANUP RAN');
+		/** @param {RegExp} pattern */
+		const count = (pattern) => (output.text.match(pattern) || []).length;
+		expect(count(/\[wrapper\] SIGTERM/g), 'both signals arrived').toBe(2);
+		expect(count(/Received SIGTERM, shutting down gracefully/g), 'one shutdown ran').toBe(1);
+		expect(count(/CLEANUP RAN/g), 'the cleanup listeners ran once').toBe(1);
+		expect(output.text, 'the held request was not cut off').not.toContain('[hold] aborted');
 	}, 60000);
 
 	it('bounds the hook and the cleanup listeners by ONE budget', async () => {
@@ -341,6 +350,22 @@ describe('a worker that fatal() or an uncaught exception ends', () => {
 	// A worker runs only under CLUSTER_WORKERS, which needs Linux, so what the
 	// worker installs is pinned from its source.
 	const source = readFileSync(fileURLToPath(new URL('../src/runtime/index.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+
+	it('hands a primary\'s every stop signal to the one graceful shutdown', () => {
+		// The cluster primary runs only under CLUSTER_WORKERS too. Its signal
+		// handler starts with the hand-off, so a signal during a shutdown already
+		// running reaches graceful_shutdown's own guard and nothing else.
+		const opening = '\tconst onPrimarySignal = (reason) => {\n';
+		const start = source.indexOf(opening);
+		expect(start, 'the primary has no signal handler').toBeGreaterThan(-1);
+		const end = source.indexOf('\n\t};\n', start);
+		expect(end, 'the handler has no end').toBeGreaterThan(start);
+		const code = source.slice(start + opening.length, end).split('\n')
+			.map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('//'));
+		expect(code[0]).toBe('if (primary_booted) { graceful_shutdown(reason); return; }');
+		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) return;\n');
+		expect(guard, 'graceful_shutdown returns when one is already running').toBeGreaterThan(-1);
+	});
 
 	it('aborts what is still in flight before fatal() exits', () => {
 		const start = source.indexOf('\t\tsetFatalSink({\n');
