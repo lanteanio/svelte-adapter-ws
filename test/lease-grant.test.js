@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { leaseGrantSize, DEFAULT_GRANT } from '../src/runtime/wire.js';
+import { normalizePressureThresholds } from '../src/runtime/handler/pressure.js';
 
 const BASE = DEFAULT_GRANT.requestCount;
 
@@ -20,9 +21,36 @@ describe('leaseGrantSize', () => {
 		const deep = leaseGrantSize({ heapRatio: 0.95, subscriberRatio: 1 });
 		expect(mild).toBeLessThan(BASE);
 		expect(deep).toBeLessThan(mild);
-		// The window is base * (1 - heapRatio): heap headroom IS the scale.
-		expect(mild).toBe(Math.round(BASE * 0.25));
-		expect(deep).toBe(Math.round(BASE * 0.05));
+		// Above the knee the scale is the headroom left over the headroom the
+		// knee had, (1 - heapRatio) / (1 - 0.7): full at the knee, linear to
+		// the wall.
+		expect(mild).toBe(Math.round(BASE * (0.25 / 0.3)));
+		expect(deep).toBe(Math.round(BASE * (0.05 / 0.3)));
+	});
+
+	it('narrows along a ramp, never in a step', () => {
+		// A step at the knee handed out the full window at one reading and under
+		// a third of it a hair above, which no client pacing can follow. Across
+		// the whole range a thousandth of a ratio moves the window by at most
+		// what the ramp's slope allows, and never upward.
+		let previous = leaseGrantSize({ heapRatio: 0, subscriberRatio: 1 });
+		const slope = Math.ceil((BASE * 0.001) / 0.3) + 1;
+		for (let i = 1; i <= 1000; i++) {
+			const window = leaseGrantSize({ heapRatio: i / 1000, subscriberRatio: 1 });
+			expect(window, `at ${i / 1000}`).toBeLessThanOrEqual(previous);
+			expect(previous - window, `step at ${i / 1000}`).toBeLessThanOrEqual(slope);
+			previous = window;
+		}
+		expect(leaseGrantSize({ heapRatio: 0.7, subscriberRatio: 1 }), 'full at the knee').toBe(BASE);
+	});
+
+	it('has narrowed to half the base by the time the shipped MEMORY threshold fires', () => {
+		// The ramp starts before the alarm and is halfway down when it fires, so
+		// the band where windows are smaller while the surface still reads NONE
+		// is bounded. Read from the shipped defaults: moving either number
+		// moves this.
+		const threshold = /** @type {number} */ (normalizePressureThresholds(undefined).memoryHeapUsedRatio);
+		expect(leaseGrantSize({ heapRatio: threshold, subscriberRatio: 1 })).toBe(Math.round(BASE / 2));
 	});
 
 	it('scales by 25/ratio past the subscriber gate', () => {
@@ -34,7 +62,7 @@ describe('leaseGrantSize', () => {
 		const heapOnly = leaseGrantSize({ heapRatio: 0.8, subscriberRatio: 1 });
 		const subsOnly = leaseGrantSize({ heapRatio: 0.2, subscriberRatio: 50 });
 		const both = leaseGrantSize({ heapRatio: 0.8, subscriberRatio: 50 });
-		expect(both).toBe(Math.round(BASE * 0.2 * 0.5));
+		expect(both).toBe(Math.round(BASE * (0.2 / 0.3) * 0.5));
 		expect(both).toBeLessThan(heapOnly);
 		expect(both).toBeLessThan(subsOnly);
 	});

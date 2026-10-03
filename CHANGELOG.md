@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The flow-control window narrows along a ramp as memory fills, not in one
+  step.** Past a `heap_used_ratio` of 0.7 a flow-controlled connection's
+  window fell from the full 256 requests to under a third at once; it now
+  ramps down linearly, reaching half at the default 0.85 MEMORY threshold
+  and a twentieth near the wall, as on the family's native tier. Below 0.7
+  every window is the full base, as before, and between 0.7 and 0.985 every
+  window is larger than it was. The knee sits below the MEMORY threshold on
+  purpose: between the two, windows are already smaller while
+  `platform.pressure.reason` still reads `NONE`.
 - **Closing a socket refuses a code it cannot send and never splits a
   character in the reason.** `ws.end()` handed its code and reason to the
   `ws` library, which throws for a code outside the sendable ranges and for a
