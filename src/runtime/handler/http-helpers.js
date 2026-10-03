@@ -128,31 +128,38 @@ function spelledValue(name, value) {
  * Values go out as `wireValue` spells them, so a value past ASCII reaches the
  * wire as its UTF-8 bytes on every lane that relays one.
  *
+ * An array of entries is read in place, and a second list is made only for a
+ * set that has a value to spell: this runs once per relayed response, and most
+ * header sets are short and ASCII.
+ *
  * @param {import('node:http').ServerResponse} res
  * @param {Iterable<[string, string | string[]]>} entries
  */
 export function stageHeaders(res, entries) {
-	/** @type {string[]} */
-	const names = [];
-	/** @type {Array<string | number | Array<string | number>>} */
-	const values = [];
-	for (const [name, value] of entries) {
+	const list = Array.isArray(entries) ? entries : [...entries];
+	/** @type {Array<string | number | Array<string | number>> | null} */
+	let spelled = null;
+	for (let i = 0; i < list.length; i++) {
+		const name = list[i][0];
+		const value = list[i][1];
 		validateHeaderName(name);
+		let out = value;
 		if (Array.isArray(value)) {
-			let out = value;
-			for (let i = 0; i < value.length; i++) {
-				const one = value[i];
+			for (let j = 0; j < value.length; j++) {
+				const one = value[j];
 				if (typeof one === 'string' && !NEEDS_SPELLING.test(one)) continue;
 				if (out === value) out = value.slice();
-				out[i] = spelledValue(name, one);
+				out[j] = spelledValue(name, one);
 			}
-			values.push(out);
-		} else {
-			values.push(typeof value === 'string' && !NEEDS_SPELLING.test(value) ? value : spelledValue(name, value));
+		} else if (typeof value !== 'string' || NEEDS_SPELLING.test(value)) {
+			out = spelledValue(name, value);
 		}
-		names.push(name);
+		if (out !== value) {
+			if (spelled === null) spelled = list.map((entry) => entry[1]);
+			spelled[i] = out;
+		}
 	}
-	for (let i = 0; i < names.length; i++) res.setHeader(names[i], values[i]);
+	for (let i = 0; i < list.length; i++) res.setHeader(list[i][0], spelled === null ? list[i][1] : spelled[i]);
 }
 
 /**
