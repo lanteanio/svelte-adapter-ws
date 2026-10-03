@@ -2628,9 +2628,9 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 
 	// `get_origin` derives the base origin from the Host (and the configured
 	// PROTOCOL / HOST / PORT headers) when ORIGIN is unset, and THROWS on a
-	// value it cannot make an origin out of - a client-supplied PROTOCOL_HEADER
-	// or PORT_HEADER value on a deployment configured for one. Refused before
-	// any body is read, as the admin route refuses it.
+	// value it cannot make an origin out of - any Host value that is not an
+	// authority, or a configured proxy header's value that is not a host, port
+	// or scheme. Refused before any body is read, as the admin route refuses it.
 	let baseOrigin;
 	try {
 		baseOrigin = pinnedOrigin || get_origin(headers);

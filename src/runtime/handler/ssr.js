@@ -442,7 +442,16 @@ export function handleSSR(req, res, headers, remoteAddress, state, directAddress
 async function handleSSRTraced(req, res, headers, remoteAddress, state, directAddress, span) {
 	const requestId = resolveRequestId(headers['x-request-id']) || randomUuid();
 	try {
-		const base_origin = origin || get_origin(headers);
+		// A request whose Host (or configured proxy header) cannot be part of an
+		// origin is the client's fault, and refused before any body is read, as
+		// the admin and auth lanes refuse it.
+		let base_origin;
+		try {
+			base_origin = origin || get_origin(headers);
+		} catch {
+			send400(res);
+			return;
+		}
 
 		/** @type {Request | null} */
 		let request;

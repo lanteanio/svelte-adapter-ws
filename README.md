@@ -489,7 +489,7 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 |---|---|---|
 | `HOST` / `PORT` | `0.0.0.0` / `3000` | Listen address. |
 | `ORIGIN` | - | The app's public origin (behind a TLS-terminating proxy). |
-| `PROTOCOL_HEADER` / `HOST_HEADER` / `PORT_HEADER` | - | Proxy identity headers when `ORIGIN` is not pinned. |
+| `PROTOCOL_HEADER` / `HOST_HEADER` / `PORT_HEADER` | - | Proxy identity headers when `ORIGIN` is not pinned. Without `ORIGIN`, the URL your app, your `admin()` handler and your `authenticate` hook see is built from these or from the `Host` header, and each must be what it names: a host name, IPv4 address or bracketed IPv6 address with an optional port, a port number, and `http` or `https`. Anything else is answered `400` before your code runs, and a refused configured header prints one warning naming it. |
 | `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
 | `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
 | `BODY_SIZE_LIMIT` | `512K` | Request body cap (413 above it). |

@@ -4,9 +4,11 @@
 
 // Substituted by the adapter's build step; a free identifier until then.
 /* global WS_OPTIONS */
+/* global ENV_PREFIX */
 
 import { env } from '../env.js';
 import { parse_as_bytes, parse_origin } from '../utils/parse.js';
+import { originFromHeaders, OriginHeaderError, refusedHeaderSetting } from '../utils/origin.js';
 import { createTrustedProxyMatcher, createClientIpResolver } from '../utils/trusted-proxies.js';
 
 // Whether the app wired a `close` hook - the only place per-connection close
@@ -137,46 +139,45 @@ export const resolveClientIp = createClientIpResolver({
 	onUntrusted: (directIp) => warnUntrustedClaim(directIp, `${address_header} header`)
 });
 
+/** Where `get_origin` reads the origin from. Default scheme: 'https' with native TLS. */
+const ORIGIN_SOURCE = Object.freeze({
+	isTls: is_tls,
+	protocolHeader: protocol_header,
+	hostHeader: host_header,
+	portHeader: port_header
+});
+
+let warnedRefusedProxyHeader = false;
+
 /**
- * Construct the origin from request headers.
+ * Construct the origin from request headers. Throws an `OriginHeaderError`
+ * for a value that cannot be part of one, and every lane that calls this
+ * answers that 400.
  *
  * WARNING: PROTOCOL_HEADER / HOST_HEADER / PORT_HEADER are trusted as-is.
  * Only use these behind a trusted reverse proxy that overwrites the headers.
  * Never expose them when the adapter is directly internet-facing.
  *
- * @param {Record<string, string | string[] | undefined>} headers
+ * @param {Record<string, string>} headers
  * @returns {string}
  */
 export function get_origin(headers) {
-	// Default protocol matches the server type: 'https' with native TLS.
-	const default_protocol = is_tls ? 'https' : 'http';
-	const protocol = protocol_header
-		? decodeURIComponent(/** @type {string} */ (headers[protocol_header]) || default_protocol)
-		: default_protocol;
-
-	if (protocol !== 'http' && protocol !== 'https') {
-		throw new Error(
-			`The ${protocol_header} header specified '${protocol}' which is not a valid protocol. Only 'http' and 'https' are supported.`
-		);
+	try {
+		return originFromHeaders(headers, ORIGIN_SOURCE);
+	} catch (err) {
+		// A refused CONFIGURED header is most often the proxy writing it
+		// wrong, and then every request is answered 400 - say so once, with
+		// the setting that names it. A refused Host header is only the client's.
+		if (!warnedRefusedProxyHeader && err instanceof OriginHeaderError) {
+			const setting = refusedHeaderSetting(err.header, ORIGIN_SOURCE, ENV_PREFIX);
+			if (setting !== null) {
+				warnedRefusedProxyHeader = true;
+				console.warn(`[svelte-adapter-ws] Answered a request 400 Bad Request: ${err.message} ` +
+					`${setting} names it; if every request is refused, check what the proxy in front writes into it.`);
+			}
+		}
+		throw err;
 	}
-
-	const host = (host_header && /** @type {string} */ (headers[host_header])) || /** @type {string} */ (headers['host']);
-	if (!host) {
-		throw new Error('Could not determine host. The request must have a host header.');
-	}
-
-	const port = port_header ? /** @type {string} */ (headers[port_header]) : undefined;
-	if (port && isNaN(+port)) {
-		throw new Error(
-			`The ${port_header} header specified ${port} which is an invalid port.`
-		);
-	}
-
-	// Strip existing port from host before appending PORT_HEADER value
-	// (the Host header often includes the port, e.g. "example.com:3000")
-	const hostWithoutPort = port ? host.replace(/:\d+$/, '') : host;
-
-	return port ? `${protocol}://${hostWithoutPort}:${port}` : `${protocol}://${host}`;
 }
 
 // Whether a WebSocket permessage-deflate compressor is configured (any non-DISABLED

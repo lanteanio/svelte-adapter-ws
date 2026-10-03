@@ -237,10 +237,11 @@ describe('the authenticate endpoint', () => {
 	});
 
 	it('refuses a declared body past the cap before building the Request', async () => {
-		// A Host the URL parser refuses would be the Request-build 400; the
-		// declared length is judged first.
+		// A Host that is an authority but one the URL parser refuses - a port
+		// past 65535 - would be the Request-build 400; the declared length is
+		// judged first.
 		const port = plain.rt.port;
-		const answer = await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`], { host: 'a b' }));
+		const answer = await exchange(port, post(port, [`Content-Length: ${64 * 1024 + 1}`], { host: '127.0.0.1:99999' }));
 		expect(answer.status).toContain('413');
 		expect(answer.body).toBe('Content Too Large');
 	});

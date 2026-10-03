@@ -5,7 +5,7 @@ import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-boundary.js';
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
-import { invalidRequestTarget } from './runtime/utils/request-target.js';
+import { invalidRequestTarget, invalidHost } from './runtime/utils/request-target.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, refuseUnparsedForbiddenMethods, bodylessLength, stageHeaders } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
@@ -4425,7 +4425,6 @@ export async function createTestServer(options = {}) {
 			const adminHeaders = {};
 			const ambiguousAdminHeader = collectRequestHeaders(req.rawHeaders, adminHeaders);
 			const adminUrl = query ? `${pathname}?${query}` : pathname;
-			const base = 'http://' + (adminHeaders.host || 'localhost');
 
 			let adminAborted = false;
 			// Mirrors production: the handler's request.signal aborts when the client
@@ -4459,9 +4458,16 @@ export async function createTestServer(options = {}) {
 			// - outside the prefix that was routed and outside the namespace the
 			// handler dispatches on. Refused here, as production does, and
 			// before any body is read.
+			// The Host value is the URL's authority, so one carrying a path or a
+			// query would pick the pathname checked below. Refused as production
+			// refuses it; node's parser has already refused a request with no Host.
+			if (invalidHost(adminHeaders.host)) {
+				failAdmin(400);
+				return;
+			}
 			let adminParsed;
 			try {
-				adminParsed = new URL(base + adminUrl);
+				adminParsed = new URL('http://' + adminHeaders.host + adminUrl);
 			} catch { failAdmin(400); return; }
 			if (adminParsed.pathname !== adminPath &&
 				!adminParsed.pathname.startsWith(adminPath + '/')) {

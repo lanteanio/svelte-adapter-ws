@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `Host` value that is not an authority is refused with `400`.** With no
+  `ORIGIN` set the request URL is the `Host` value plus the target, so
+  `Host: a/__realtime/introspect?` had SvelteKit route to a path the request
+  line never named, inside the admin prefix. A `Host` that is not
+  `host[:port]`, and a configured `HOST_HEADER`, `PORT_HEADER` or
+  `PROTOCOL_HEADER` value that is not a host, a port or a scheme, are now
+  refused with `400` on the page, admin and auth lanes and in
+  `createTestServer`'s admin mirror, as on the family's native tier; pages
+  answered them with a `500` and an error event before. A refused configured
+  header prints one warning naming the setting.
 - **A request target RFC 9112 does not allow is refused with `400`, and so is
   one that resolves onto one of the adapter's own paths.** A `#` in a target
   stayed part of the path, so `/healthz#frag` missed the probe and reached the

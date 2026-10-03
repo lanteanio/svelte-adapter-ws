@@ -182,8 +182,8 @@ if (!origin && !host_header && !protocol_header && !is_tls) {
 // Tell the shared header collector which names THIS deployment reads as a
 // single value, before anything listens. Repeated lines of a header the
 // collector does not know about are comma-joined, which is right for a chain
-// and wrong for these: `get_origin` throws on a joined protocol or builds an
-// unparseable URL from a joined host, and the client-IP resolver takes a
+// and wrong for these: `get_origin` refuses a joined protocol, host or port
+// (every request would answer 400), and the client-IP resolver takes a
 // joined address header's LEADING bytes, which are the client's rather than
 // the proxy's. The names are operator-chosen, so only this layer knows them.
 declareSingleValuedProxyHeaders([protocol_header, host_header, port_header, address_header]);
