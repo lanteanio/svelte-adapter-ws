@@ -2229,5 +2229,8 @@
 	},
 	{
 		"file": "test/vite-dev-request-shape.test.js"
+	},
+	{
+		"file": "test/fd-limit.test.js"
 	}
 ]
