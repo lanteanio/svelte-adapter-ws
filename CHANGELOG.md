@@ -162,6 +162,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   topic and event; such calls now share one slot. A socket that closes with
   values queued drops the whole queue at the next flush instead of keeping
   it.
+- **Section 15 of `PROTOCOL.md` carries empty messages and WebSocket
+  closes.** The WebTransport reliable-stream binding, which this runtime does
+  not serve, carries an empty WebSocket message as a zero-length record and a
+  close as a close record (`kind` `0x02`) holding the close frame's code and
+  reason. The `x-webtransport` block of `protocol.schema.json` and
+  `test-vectors/webtransport-stream.json`, now an eight-record transcript
+  whose every refusal names its `check`, change with it. The WebSocket wire
+  is unchanged, and section 15 stays provisional until its wire-status line
+  reads frozen. Appendix D no longer links a separate protocol-compatibility
+  page.
 
 ### Fixed
 
