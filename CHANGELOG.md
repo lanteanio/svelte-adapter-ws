@@ -175,8 +175,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending bound counts unsent bytes; an endpoint may also cap pending records
   at no fewer than 65,536, and a server bounds bytes sent but not yet
   acknowledged at no less than 1 MiB. A receiver limit is never below 125
-  bytes, a server may refuse with `STREAM_LIMIT` a stream that arrived before
-  its successful response, and `NO_ERROR` (`0x00`) joins the stream errors.
+  bytes. A client opens the stream only after the successful CONNECT
+  response, and a server may refuse with `STREAM_LIMIT` one that arrived
+  before it. `NO_ERROR` (`0x00`) joins the stream errors.
   The description and `x-webtransport` block of `protocol.schema.json` and
   `test-vectors/webtransport-stream.json`, now an eight-record transcript
   whose every refusal names its `check`, change with it. The WebSocket wire
