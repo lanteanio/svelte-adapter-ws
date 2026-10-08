@@ -742,6 +742,10 @@
 				"ours": "[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |"
 			},
 			{
+				"lead": "https://github.com/lanteanio/svelte-adapter-ws/blob/dev/test/protocol-schema.test.js",
+				"ours": "https://github.com/lanteanio/svelte-adapter-ws/blob/main/test/protocol-schema.test.js"
+			},
+			{
 				"lead": "Return to the [conformance index](../docs/protocol-conformance.md) to choose a",
 				"ours": "Return to the [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) to choose a"
 			}
