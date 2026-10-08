@@ -1,7 +1,7 @@
 # Test vectors - the Lantean protocol, revision 1
 
 [README](../README.md) | [wire protocol](../PROTOCOL.md) |
-[conformance index](../docs/protocol-conformance.md) |
+[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |
 [protocol schema](../protocol.schema.json) |
 [release history](../CHANGELOG.md)
 
@@ -57,7 +57,7 @@ A third-party implementer can validate captured frames against the
 [protocol schema](../protocol.schema.json) with any JSON Schema validator, and replay these
 vectors through an encoder/decoder to check conformance.
 
-Return to the [conformance index](../docs/protocol-conformance.md) to choose a
+Return to the [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) to choose a
 claim class, find the minimal client and reference surfaces, and run the
 executable proof. These vectors are examples and rejection fixtures; the
 [wire protocol](../PROTOCOL.md) remains normative.

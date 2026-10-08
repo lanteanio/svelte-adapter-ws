@@ -735,7 +735,17 @@
 		]
 	},
 	{
-		"file": "test-vectors/README.md"
+		"file": "test-vectors/README.md",
+		"adaptations": [
+			{
+				"lead": "[conformance index](../docs/protocol-conformance.md) |",
+				"ours": "[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |"
+			},
+			{
+				"lead": "Return to the [conformance index](../docs/protocol-conformance.md) to choose a",
+				"ours": "Return to the [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) to choose a"
+			}
+		]
 	},
 	{
 		"file": "test-vectors/binary.json"
@@ -1991,6 +2001,10 @@
 			{
 				"lead": "on purpose: four surfaces speak this protocol (the uWS production runtime, the",
 				"ours": "on purpose: four surfaces speak this protocol (the reference uWS production runtime, the"
+			},
+			{
+				"lead": "The [conformance index](./docs/protocol-conformance.md) is the task-oriented",
+				"ours": "The [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) is the task-oriented"
 			}
 		]
 	},
@@ -2232,5 +2246,14 @@
 	},
 	{
 		"file": "test/fd-limit.test.js"
+	},
+	{
+		"file": "test/protocol-schema.test.js",
+		"adaptations": [
+			{
+				"lead": "const uWS = hasUWS ? (await import('uWebSockets.js')).default : null;\n",
+				"ours": ""
+			}
+		]
 	}
 ]

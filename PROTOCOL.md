@@ -2109,7 +2109,7 @@ These non-choices are deliberate and are recorded so they are not relitigated:
 
 ## Appendix F. Companion artifacts
 
-The [conformance index](./docs/protocol-conformance.md) is the task-oriented
+The [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) is the task-oriented
 entry point for these artifacts and their executable proofs. Three
 machine-checkable artifact families live beside this document and are validated
 in CI against the reference implementation, so the spec cannot drift from the

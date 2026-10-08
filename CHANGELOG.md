@@ -484,6 +484,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cohort fan-out, so a `no_subscribers` on a shared topic answers for one
   cohort and not for the publish; the README and the type documentation now
   say so.
+- The conformance-index links in `PROTOCOL.md` appendix F and in
+  `test-vectors/README.md` open the page on svelte-adapter-uws. They pointed
+  at `docs/protocol-conformance.md`, which this package does not ship. The
+  protocol contract test the vectors README names now runs in this
+  repository too.
 
 ## [0.0.1] - 2026-09-22
 
