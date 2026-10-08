@@ -213,7 +213,7 @@ function createNodeApp() {
 	const httpServer = createHttpServer({
 		shouldUpgradeCallback: (req) => {
 			if (wss !== null && takesWebSocketRoute(req, wsPathN)) return true;
-			resumeAfterDeclinedUpgrade(req.socket);
+			resumeAfterDeclinedUpgrade(req);
 			return false;
 		}
 	});

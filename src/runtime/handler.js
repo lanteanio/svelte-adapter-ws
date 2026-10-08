@@ -210,7 +210,7 @@ const tlsModule = is_tls ? await import('./handler/tls.js') : null;
  */
 const shouldUpgradeCallback = (req) => {
 	if (realtime !== null && takesWebSocketRoute(req, realtime.wsPath())) return true;
-	resumeAfterDeclinedUpgrade(req.socket);
+	resumeAfterDeclinedUpgrade(req);
 	return false;
 };
 

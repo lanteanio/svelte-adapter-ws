@@ -506,11 +506,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered.** A request that asks to upgrade but is not the WebSocket
   route's - an `h2c` upgrade, a handshake on another path or with another
   method - is answered as an ordinary one, but node dropped whatever the
-  client had sent behind it in the same packet: that request was never
-  answered, and the connection sat idle until it timed out. The rest of the
-  packet now goes back to node's parser, so each request is answered in
-  order and the connection stays open, as on the family's native tier, in
-  the runtime, over TLS, and in `createTestServer`.
+  client had pipelined behind it in the same packet as that request's last
+  bytes: the request behind it was never answered, and the connection sat
+  idle until it timed out. Those bytes now go back to node's parser, so each
+  request is answered in order and the connection stays open, as on the
+  family's native tier, in the runtime, over TLS, and in `createTestServer`.
 
 ## [0.0.1] - 2026-09-22
 
