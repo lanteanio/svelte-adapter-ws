@@ -11,7 +11,7 @@
 /* global WARMUP_PATHS */
 /* global WS_ENABLED */
 import './_init.js';
-import { refuseUnparsedForbiddenMethods, takesWebSocketRoute } from './handler/http-helpers.js';
+import { refuseUnparsedForbiddenMethods, resumeAfterDeclinedUpgrade, takesWebSocketRoute } from './handler/http-helpers.js';
 import http from 'node:http';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
@@ -203,11 +203,16 @@ const tlsModule = is_tls ? await import('./handler/tls.js') : null;
  * Which requests the 'upgrade' listener takes: the WebSocket route's, see
  * `takesWebSocketRoute`, and only in a build that serves one. node otherwise
  * hands it every request that names `Connection: upgrade`. A node without the
- * option (before 22.21 and 24.9) ignores it.
+ * option (before 22.21 and 24.9) ignores it. A declined request is answered as
+ * an ordinary one, and so is whatever the client pipelined behind it.
  *
  * @param {import('node:http').IncomingMessage} req
  */
-const shouldUpgradeCallback = (req) => realtime !== null && takesWebSocketRoute(req, realtime.wsPath());
+const shouldUpgradeCallback = (req) => {
+	if (realtime !== null && takesWebSocketRoute(req, realtime.wsPath())) return true;
+	resumeAfterDeclinedUpgrade(req.socket);
+	return false;
+};
 
 export const server = tlsModule
 	? tlsModule.createTlsServer(handleRequest, shouldUpgradeCallback)

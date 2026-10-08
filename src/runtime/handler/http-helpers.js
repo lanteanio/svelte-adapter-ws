@@ -3,6 +3,7 @@
 // byte already left; the caller owns deciding whether that situation is fatal.
 
 import { STATUS_CODES, validateHeaderName, validateHeaderValue } from 'node:http';
+import { createRequire } from 'node:module';
 import { firstHeaderValue } from '../utils/request-headers.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
@@ -349,4 +350,92 @@ export function takesWebSocketRoute(req, wsPath) {
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
 		firstHeaderValue(req.rawHeaders, 'sec-websocket-key').length === 24;
+}
+
+// node's HTTP parser binding, for resumeAfterDeclinedUpgrade. Where a node
+// does not have it in this shape the function does nothing.
+const HTTPParser = (() => {
+	try {
+		return createRequire(import.meta.url)('_http_common').HTTPParser;
+	} catch {
+		return undefined;
+	}
+})();
+const kOnExecute = typeof HTTPParser?.kOnExecute === 'number' ? HTTPParser.kOnExecute : -1;
+const nodeExecute = HTTPParser?.prototype?.execute;
+const DECLINED = Symbol('adapter-ws.declinedUpgrade');
+const HOOKED = Symbol('adapter-ws.declinedUpgradeHook');
+const noop = () => {};
+
+/**
+ * Keep parsing a read past a request whose upgrade shouldUpgradeCallback
+ * declined. node's parser stops each read at the end of a request that names
+ * an upgrade, and hands the rest of the read on only when the request was
+ * upgraded, so a request pipelined behind a declined one in the same read was
+ * dropped, never answered, and its connection idled until it timed out. The
+ * family's native tier answers it. Call this from shouldUpgradeCallback when
+ * it declines.
+ *
+ * A connection reads on node's consumed path, where the read never reaches
+ * JS: the hook runs when node reports the read parsed, and hands the rest of
+ * it back through the socket, which moves the connection to node's JS read
+ * path. There `parser.execute` resumes after every declined upgrade in place.
+ * A connection that never declines an upgrade is not touched.
+ *
+ * @param {import('node:net').Socket} socket
+ */
+export function resumeAfterDeclinedUpgrade(socket) {
+	const parser = /** @type {any} */ (socket).parser;
+	if (!parser || kOnExecute < 0 || typeof nodeExecute !== 'function') return;
+	if (!parser._consumed) {
+		parser[DECLINED] = true;
+		resumeExecuteAfterDeclines(socket, parser);
+		return;
+	}
+	if (parser[HOOKED]) return;
+	const onExecute = parser[kOnExecute];
+	if (typeof onExecute !== 'function') return;
+	parser[HOOKED] = true;
+	parser[kOnExecute] = (/** @type {unknown} */ ret) => {
+		parser[kOnExecute] = onExecute;
+		parser[HOOKED] = false;
+		// A read that ended on an upgrade node took is node's to hand on.
+		if (typeof ret === 'number' && !parser.incoming?.upgrade) {
+			const read = parser.getCurrentBuffer();
+			if (ret < read.length && !socket.readableEnded) {
+				resumeExecuteAfterDeclines(socket, parser);
+				// A 'data' listener is node's own switch to the JS read path.
+				socket.on('data', noop);
+				socket.removeListener('data', noop);
+				socket.unshift(read.subarray(ret));
+			}
+		}
+		return onExecute(ret);
+	};
+}
+
+/**
+ * @param {import('node:net').Socket} socket
+ * @param {any} parser
+ */
+function resumeExecuteAfterDeclines(socket, parser) {
+	if (Object.hasOwn(parser, 'execute')) return;
+	parser.execute = function execute(/** @type {Buffer} */ data) {
+		let offset = 0;
+		for (;;) {
+			this[DECLINED] = false;
+			const ret = nodeExecute.call(this, offset === 0 ? data : data.subarray(offset));
+			if (typeof ret !== 'number') {
+				if (offset !== 0 && typeof ret?.bytesParsed === 'number') ret.bytesParsed += offset;
+				return ret;
+			}
+			offset += ret;
+			if (!this[DECLINED] || offset >= data.length) return offset;
+		}
+	};
+	// node pools its parsers; this one goes back without the wrapper unless
+	// another connection already holds it.
+	socket.once('close', () => {
+		if (!parser.socket || parser.socket === socket) delete parser.execute;
+	});
 }
