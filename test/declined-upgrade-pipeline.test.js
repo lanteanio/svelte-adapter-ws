@@ -5,7 +5,9 @@
 // family's native tier answers both; node's parser stops the read at the end
 // of the declined request and hands the rest on only for an upgrade it took.
 
+import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
@@ -427,93 +429,204 @@ describe('createTestServer answers a request pipelined behind a declined upgrade
 });
 
 describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
-	/** @param {(socket: import('node:net').Socket) => void} [onConnection] */
-	async function serve(onConnection) {
-		const server = http.createServer({
-			shouldUpgradeCallback: (req) => {
-				resumeAfterDeclinedUpgrade(req);
-				return false;
-			}
-		}, (req, res) => {
+	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
+
+	/**
+	 * @param {{
+	 *   secure?: boolean,
+	 *   onConnection?: (socket: import('node:net').Socket) => void,
+	 *   onRequest?: (req: import('node:http').IncomingMessage, socket: import('node:net').Socket) => void,
+	 *   onUpgrade?: (req: import('node:http').IncomingMessage, socket: import('node:net').Socket, head: Buffer) => void
+	 * }} [opts]
+	 */
+	async function serve(opts = {}) {
+		/** @param {import('node:http').IncomingMessage} req */
+		const shouldUpgradeCallback = (req) => {
+			if (opts.onUpgrade && req.url === '/ws') return true;
+			resumeAfterDeclinedUpgrade(req);
+			return false;
+		};
+		/** @type {import('node:http').RequestListener} */
+		const answer = (req, res) => {
+			opts.onRequest?.(req, req.socket);
 			req.resume();
 			req.on('end', () => {
 				if (req.url === '/slow') setTimeout(() => res.end('answered /slow'), 200);
 				else if (req.url === '/wide') res.end('w'.repeat(64 * 1024));
 				else res.end(`answered ${req.url}`);
 			});
-		});
-		if (onConnection) server.on('connection', onConnection);
+		};
+		const server = opts.secure
+			? https.createServer({
+				key: fs.readFileSync(path.join(certs, 'localhost.key')),
+				cert: fs.readFileSync(path.join(certs, 'localhost.crt')),
+				shouldUpgradeCallback
+			}, answer)
+			: http.createServer({ shouldUpgradeCallback }, answer);
+		if (opts.onConnection) server.on(opts.secure ? 'secureConnection' : 'connection', opts.onConnection);
+		if (opts.onUpgrade) server.on('upgrade', opts.onUpgrade);
 		await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));
 		return server;
 	}
+
+	/** @param {import('node:net').Socket} socket @param {boolean[]} into */
+	function recordPauseAtHandBack(socket, into) {
+		const unshift = socket.unshift;
+		socket.unshift = function (chunk) {
+			into.push(/** @type {any} */ (socket)._paused === true);
+			return unshift.call(this, chunk);
+		};
+	}
+
+	/** @param {string} line @param {string[]} [extra] */
+	const wire = (line, extra = []) => [`${line} HTTP/1.1`, 'Host: x', ...extra].join('\r\n') + '\r\n\r\n';
+
+	/**
+	 * Writes in order, each after its delay, then the answers once `count`
+	 * have arrived or at the wait.
+	 *
+	 * @param {() => import('node:net').Socket} connect
+	 * @param {[number, string][]} writes
+	 * @param {number} count
+	 */
+	function exchangeTimed(connect, writes, count) {
+		const methods = new Array(count).fill('GET');
+		return new Promise((resolve) => {
+			const socket = connect();
+			let got = '';
+			const finish = () => { clearTimeout(timer); socket.destroy(); resolve(parseAnswers(got, methods)); };
+			const timer = setTimeout(finish, 3000);
+			socket.once(socket instanceof tls.TLSSocket ? 'secureConnect' : 'connect', () => {
+				for (const [at, text] of writes) setTimeout(() => socket.write(Buffer.from(text, 'latin1')), at);
+			});
+			socket.on('data', (chunk) => {
+				got += chunk.toString('latin1');
+				if (parseAnswers(got, methods).length === count) finish();
+			});
+			socket.on('error', finish);
+			socket.on('close', finish);
+		});
+	}
+
+	/** @param {Answer[]} answers */
+	const shown = (answers) => answers.map((a) => (a.body.startsWith('w') ? `wide ${a.body.length}` : a.body));
 
 	it('keeps the order on a connection node pauses behind queued answers', async () => {
 		// A wide answer queued behind a slow one makes node pause the connection
 		// when the declined request is parsed, so the rest of that read waits on
 		// a paused socket, and a request sent during the pause comes after it.
 		/** @type {boolean[]} */
-		const pausedAtHandBack = [];
-		const server = await serve((socket) => {
-			const unshift = socket.unshift;
-			socket.unshift = function (chunk) {
-				pausedAtHandBack.push(/** @type {any} */ (socket)._paused === true);
-				return unshift.call(this, chunk);
-			};
-		});
+		const paused = [];
+		const server = await serve({ onConnection: (socket) => recordPauseAtHandBack(socket, paused) });
 		try {
 			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
-			/** @param {string} line @param {string[]} [extra] */
-			const wire = (line, extra = []) => [`${line} HTTP/1.1`, 'Host: x', ...extra].join('\r\n') + '\r\n\r\n';
-			const methods = ['GET', 'GET', 'GET', 'GET', 'GET'];
-			const raw = await new Promise((resolve) => {
-				const socket = net.connect(port, '127.0.0.1');
-				let got = '';
-				const finish = () => { clearTimeout(timer); socket.destroy(); resolve(got); };
-				const timer = setTimeout(finish, 3000);
-				socket.on('connect', () => {
-					socket.write(wire('GET /slow') + wire('GET /wide'));
-					setTimeout(() => socket.write(wire('GET /a', H2C) + wire('GET /b')), 50);
-					setTimeout(() => socket.write(wire('GET /c')), 120);
-				});
-				socket.on('data', (chunk) => {
-					got += chunk.toString('latin1');
-					if (parseAnswers(got, methods).length === methods.length) finish();
-				});
-				socket.on('error', finish);
-			});
-			expect(pausedAtHandBack, 'the rest of the read was handed back while node had paused the connection').toEqual([true]);
-			const answers = parseAnswers(/** @type {string} */ (raw), methods);
-			expect(answers.map((a) => (a.body.startsWith('w') ? `wide ${a.body.length}` : a.body))).toEqual([
-				'answered /slow', `wide ${64 * 1024}`, 'answered /a', 'answered /b', 'answered /c'
-			]);
+			const answers = await exchangeTimed(tcp(port), [
+				[0, wire('GET /slow') + wire('GET /wide')],
+				[50, wire('GET /a', H2C) + wire('GET /b')],
+				[120, wire('GET /c')]
+			], 5);
+			expect(paused, 'the rest of the read was handed back while node had paused the connection').toEqual([true]);
+			expect(shown(answers)).toEqual(['answered /slow', `wide ${64 * 1024}`, 'answered /a', 'answered /b', 'answered /c']);
 		} finally {
 			server.closeAllConnections();
 			server.close();
 		}
 	});
 
-	it('leaves no wrapper on a parser of the consumed path', async () => {
-		/** @type {any[]} */
-		const parsers = [];
-		const server = await serve((socket) => { parsers.push(/** @type {any} */ (socket).parser); });
+	it('keeps the order over TLS when one read carries the next record too', async () => {
+		// One write that TLS cuts into a 16384-byte record ending right after
+		// the pipelined request, and a second record. node feeds both records of
+		// the read to the parser; the second must wait behind the handed-back one.
+		/** @type {boolean[]} */
+		const paused = [];
+		const server = await serve({ secure: true, onConnection: (socket) => recordPauseAtHandBack(socket, paused) });
+		try {
+			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+			const declined = wire('GET /a', [...H2C, `X-Pad: ${'p'.repeat(8000)}`]);
+			const behind = (/** @type {number} */ pad) => wire('GET /b', [`X-Pad: ${'q'.repeat(pad)}`]);
+			const record = declined + behind(16384 - declined.length - behind(0).length);
+			expect(record.length).toBe(16384);
+			const answers = await exchangeTimed(
+				() => tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false }),
+				[[0, wire('GET /slow') + wire('GET /wide')], [50, record + wire('GET /c')]],
+				5
+			);
+			expect(paused, 'the rest of the read was handed back while node had paused the connection').toEqual([true]);
+			expect(shown(answers)).toEqual(['answered /slow', `wide ${64 * 1024}`, 'answered /a', 'answered /b', 'answered /c']);
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
+
+	it('returns its parser to the pool as node made it, with one close listener', async () => {
+		/** @type {any} */ let parser;
+		/** @type {Promise<unknown>} */ let closed = Promise.resolve();
+		let baseline = 0;
+		let added = -1;
+		const server = await serve({
+			onConnection: (socket) => {
+				parser = /** @type {any} */ (socket).parser;
+				closed = new Promise((resolve) => socket.once('close', resolve));
+				baseline = socket.listenerCount('close');
+			},
+			// node adds one of its own for each in-flight response.
+			onRequest: (req, socket) => {
+				if (req.url === '/b') added = socket.listeners('close').filter((f) => f.name !== 'onServerResponseClose').length - baseline;
+			}
+		});
 		try {
 			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
 			const answers = await pipelined(tcp(port), port, [
 				{ lines: ['GET /a HTTP/1.1', ...H2C] },
 				{ lines: ['GET /a2 HTTP/1.1', ...H2C] },
+				{ lines: ['GET /a3 HTTP/1.1', ...H2C] },
 				{ lines: ['GET /b HTTP/1.1'] }
 			]);
-			expect(bodies(answers)).toEqual(['answered /a', 'answered /a2', 'answered /b', 'answered /healthz']);
-			expect(parsers).toHaveLength(1);
-			expect(Object.hasOwn(parsers[0], 'execute'), 'node pools the parser; it must go back as node made it').toBe(false);
+			expect(bodies(answers)).toEqual(['answered /a', 'answered /a2', 'answered /a3', 'answered /b', 'answered /healthz']);
+			expect(added, 'three declines on one connection add one close listener').toBe(1);
+			await closed;
+			expect(Object.hasOwn(parser, 'execute'), 'node pools the parser; it must go back as node made it').toBe(false);
 		} finally {
 			server.closeAllConnections();
 			server.close();
 		}
 	});
 
+	it('returns the parser clean when a paused connection is destroyed before node resumes it', async () => {
+		/** @type {any} */ let parser;
+		/** @type {Promise<unknown>} */ let closed = Promise.resolve();
+		/** @type {boolean[]} */
+		const paused = [];
+		const server = await serve({
+			onConnection: (socket) => {
+				parser = /** @type {any} */ (socket).parser;
+				closed = new Promise((resolve) => socket.once('close', resolve));
+				recordPauseAtHandBack(socket, paused);
+			}
+		});
+		try {
+			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+			const socket = net.connect(port, '127.0.0.1');
+			socket.on('error', () => {});
+			await new Promise((resolve) => socket.once('connect', resolve));
+			socket.write(wire('GET /slow') + wire('GET /wide'));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			socket.write(wire('GET /a', H2C) + wire('GET /b'));
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			// Well before the slow answer, so node never resumes the connection.
+			server.closeAllConnections();
+			await closed;
+			socket.destroy();
+			expect(paused).toEqual([true]);
+			expect(Object.hasOwn(parser, 'execute')).toBe(false);
+		} finally {
+			server.close();
+		}
+	});
+
 	it('resumes on a connection something else moved to the JS read path', async () => {
-		const server = await serve((socket) => { socket.on('data', () => {}); });
+		const server = await serve({ onConnection: (socket) => { socket.on('data', () => {}); } });
 		try {
 			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
 			const answers = await pipelined(tcp(port), port, [
@@ -521,6 +634,45 @@ describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
 				{ lines: ['GET /b HTTP/1.1'] }
 			], { splitAfter: '\r\n\r\nhe' });
 			expect(bodies(answers)).toEqual(['answered /p', 'answered /b', 'answered /healthz']);
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
+
+	it('hands a later handshake on such a connection its own bytes, its parser unwrapped', async () => {
+		// The declined request ends in node's own execute there, so it stays on
+		// record; the handshake in the next read must still stop the parse. The
+		// bytes after the handshake read as the start of a request, which a
+		// parse carried on past the handshake would take from its head.
+		const after = 'GET /x HTTP/1.1\r\n';
+		/** @type {any} */ let parser;
+		/** @type {string[]} */
+		const heads = [];
+		/** @type {boolean[]} */
+		const wrappedAtUpgrade = [];
+		const server = await serve({
+			onConnection: (socket) => {
+				socket.on('data', () => {});
+				parser = /** @type {any} */ (socket).parser;
+			},
+			onUpgrade: (req, socket, head) => {
+				heads.push(head.toString('latin1'));
+				wrappedAtUpgrade.push(Object.hasOwn(parser, 'execute'));
+				socket.destroy();
+			}
+		});
+		try {
+			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+			// The upgrade listener ends the socket without an answer, so the
+			// exchange ends on that close with one answer.
+			const answers = await exchangeTimed(tcp(port), [
+				[0, wire('GET /a', H2C)],
+				[100, wire('GET /ws', HANDSHAKE) + after]
+			], 2);
+			expect(bodies(answers)).toEqual(['answered /a']);
+			expect(heads).toEqual([after]);
+			expect(wrappedAtUpgrade, 'node frees the parser into its pool for the upgrade').toEqual([false]);
 		} finally {
 			server.closeAllConnections();
 			server.close();

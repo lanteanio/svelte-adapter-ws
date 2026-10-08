@@ -366,6 +366,14 @@ const nodeExecute = HTTPParser?.prototype?.execute;
 // On the socket, which node never pools. Registered, so that every copy of
 // this module in a process reads the same slot.
 const DECLINED = Symbol.for('svelte-adapter-ws.declinedUpgrade');
+const noop = () => {};
+/** @this {any} */
+function restartReads() {
+	if (this._handle && !this._handle.reading) {
+		this._handle.reading = true;
+		this._handle.readStart();
+	}
+}
 
 /**
  * Keep parsing past a request whose upgrade shouldUpgradeCallback declined.
@@ -377,12 +385,14 @@ const DECLINED = Symbol.for('svelte-adapter-ws.declinedUpgrade');
  * Call this from shouldUpgradeCallback when it declines.
  *
  * Both servers read on node's consumed path, where a read never reaches JS: a
- * hook on the parser waits for the read in which the declined request ends and
- * unshifts the rest of it onto the socket. node's own 'data' listener parses
- * it there through `parser.execute`, which resumes after each further declined
- * request in place. The bytes are parsed ahead of any later read: at once, or
- * on a paused socket in the tick node resumes it, before the reads it starts
- * then. A connection that never declines an upgrade is not touched.
+ * hook on the parser waits for the read in which the declined request ends,
+ * moves the connection to node's JS read path and unshifts the rest of that
+ * read onto the socket, so every later byte queues behind it. Over TLS one
+ * read can carry several records, and on the consumed path node hands each to
+ * the parser even while it has paused the connection; on the JS read path
+ * they wait in the socket. There `parser.execute` resumes after each further
+ * declined request in place. A connection that never declines an upgrade is
+ * not touched.
  *
  * @param {import('node:http').IncomingMessage} req
  */
@@ -392,9 +402,9 @@ export function resumeAfterDeclinedUpgrade(req) {
 	if (!parser || kOnExecute < 0 || typeof nodeExecute !== 'function') return;
 	socket[DECLINED] = req;
 	if (!parser._consumed) {
-		// Something else moved the connection to the JS read path: the wrapper
-		// resumes there, from the next read when this one is still in node's
-		// own execute.
+		// On the JS read path the wrapper resumes in place. Where something
+		// else moved the connection there, this read is still in node's own
+		// execute and the wrapper takes over from the next one.
 		wrapExecute(socket, parser);
 		return;
 	}
@@ -410,6 +420,13 @@ export function resumeAfterDeclinedUpgrade(req) {
 		if (declined && typeof ret === 'number' && !parser.incoming?.upgrade) {
 			const read = parser.getCurrentBuffer();
 			if (ret < read.length) {
+				// A 'data' listener is node's own switch to the JS read path. It
+				// drops the 'resume' listener that restarts a consumed
+				// connection's reads, which node stops while it pauses one, so
+				// a paused connection restarts them here when node resumes it.
+				socket.on('data', noop);
+				socket.removeListener('data', noop);
+				if (!socket._handle?.reading) socket.once('resume', restartReads);
 				wrapExecute(socket, parser);
 				socket.unshift(read.subarray(ret));
 			}
@@ -433,19 +450,20 @@ function executeAfterDeclines(data) {
 	/** @type {unknown} */
 	let result;
 	for (;;) {
+		const before = socket?.[DECLINED];
+		const pending = before !== undefined && !before.complete;
 		const ret = nodeExecute.call(this, offset === 0 ? data : data.subarray(offset));
 		if (typeof ret !== 'number') { result = ret; break; }
 		offset += ret;
 		result = offset;
+		// Only a declined request that ended in this pass stopped it early.
 		const declined = socket?.[DECLINED];
-		if (!declined?.complete) break;
+		if (!declined?.complete || (declined === before && !pending)) break;
 		socket[DECLINED] = undefined;
-		if (offset >= data.length || this.incoming?.upgrade) break;
+		if (offset >= data.length) break;
 	}
-	// node pools its parsers, so none leaves a connection still wrapped: on
-	// the consumed path this was the rest of one read, now parsed, and a
-	// parser that took an upgrade is about to go back to the pool.
-	if (this._consumed || this.incoming?.upgrade) delete this.execute;
+	// node frees a parser that took an upgrade into its pool right after this.
+	if (this.incoming?.upgrade) delete this.execute;
 	return result;
 }
 
@@ -456,8 +474,8 @@ function executeAfterDeclines(data) {
 function wrapExecute(socket, parser) {
 	if (Object.hasOwn(parser, 'execute')) return;
 	parser.execute = executeAfterDeclines;
-	if (parser._consumed) return;
-	// On the JS read path it stays for the connection's later reads.
+	// node pools its parsers; this one goes back without the wrapper unless
+	// another connection already holds it.
 	socket.once('close', () => {
 		if (!parser.socket || parser.socket === socket) delete parser.execute;
 	});
