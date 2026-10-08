@@ -165,8 +165,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Section 15 of `PROTOCOL.md` carries empty messages and WebSocket
   closes.** The WebTransport reliable-stream binding, which this runtime does
   not serve, carries an empty WebSocket message as a zero-length record and a
-  close as a close record (`kind` `0x02`) holding the close frame's code and
-  reason. The `x-webtransport` block of `protocol.schema.json` and
+  close as a close record (`kind` `0x02`) holding the close frame's payload:
+  empty, or a code and a UTF-8 reason of at most 123 bytes. A byte after a
+  close record is a `PROTOCOL_ERROR`. A well-formed record whose inner
+  message is malformed is now handled as on WebSocket instead of resetting
+  the lane. A sender holding a message larger than it may emit resets with
+  `RECORD_TOO_LARGE`, except a live relayed `game` event, which is not
+  delivered, and recovery answers such a message with a truncation. The
+  pending bound counts unsent bytes; an endpoint may also cap pending records
+  at no fewer than 65,536, and a server bounds bytes sent but not yet
+  acknowledged at no less than 1 MiB. A receiver limit is never below 125
+  bytes, a server may refuse with `STREAM_LIMIT` a stream that arrived before
+  its successful response, and `NO_ERROR` (`0x00`) joins the stream errors.
+  The description and `x-webtransport` block of `protocol.schema.json` and
   `test-vectors/webtransport-stream.json`, now an eight-record transcript
   whose every refusal names its `check`, change with it. The WebSocket wire
   is unchanged, and section 15 stays provisional until its wire-status line
