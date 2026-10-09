@@ -245,16 +245,30 @@ export function send505(res) {
 	endText(res, 505, { 'content-type': 'text/plain', connection: 'close' }, 'HTTP Version Not Supported');
 }
 
-// The requests of one connection in the order it carried them, on the socket.
+/**
+ * Whether an HTTP/1.1 request names no Host, which the native tier refuses
+ * 400 as it reads the headers. The servers are built with
+ * `requireHostHeader: false`, so such a request reaches the listener and the
+ * connection's line rather than node's own 400, which never waits its turn.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+export function missesHost(req) {
+	return req.headers.host === undefined && req.httpVersion === '1.1';
+}
+
+// The requests of one connection in the order it carried them, on the socket,
+// and on each response handed out, the line it belongs to.
 const LINE = Symbol('svelte-adapter-ws.pipeline');
 
+// What a line keeps of an answer once it has finished, in place of the
+// response, so an idle connection holds no response alive.
+const FINISHED = Object.freeze({ writableEnded: true, _last: false });
+const FINISHED_CLOSING = Object.freeze({ writableEnded: true, _last: true });
+
 /**
- * @typedef {{
- *   ahead: import('node:http').ServerResponse | null,
- *   waiting: Array<{ req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse }>,
- *   serve: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void,
- *   scheduled: boolean
- * }} Line
+ * @typedef {{ req: import('node:http').IncomingMessage | null, res: import('node:http').ServerResponse | null, serve: (req: any, res: any) => void }} Waiting
+ * @typedef {{ ahead: any, waiting: Waiting[], serve: (req: any, res: any) => void, scheduled: boolean }} Line
  */
 
 /**
@@ -262,12 +276,13 @@ const LINE = Symbol('svelte-adapter-ws.pipeline');
  * the family's native tier serves pipelined requests. It reads the next
  * request only once the one ahead has been handed to the application and the
  * ticks and microtasks that queued have run. If the answer ahead is still
- * waiting then, it closes the connection and neither request gets a byte; RFC
- * 9112 9.3.2 has a client retry what a closed connection left unanswered. It
- * never reads past an answer that ends the connection. node parses on and
- * queues each response behind the last, so a request with an answer ahead
- * still open is decided once the turn is over, by `setImmediate`; one with
- * nothing ahead, or an answer ahead that has ended, is served at once.
+ * waiting then, it closes the connection and neither request gets a byte it
+ * did not already have; RFC 9112 9.3.2 has a client retry what a closed
+ * connection left unanswered. It reads nothing behind an answer that ends the
+ * connection, a 505 or a refusal that closes it. node parses on
+ * and queues each response behind the last, so a request with an answer
+ * ahead still open is decided once the turn is over, by `setImmediate`; one
+ * with nothing ahead, or an answer ahead that has ended, is served at once.
  *
  * A request held here or dropped is not handed to `serve`, so nothing counts
  * it: node never ends a response it queued when the connection goes.
@@ -284,15 +299,31 @@ export function servePipelined(req, res, serve) {
 		line = { ahead: null, waiting: [], serve, scheduled: false };
 		socket[LINE] = line;
 	}
-	const ahead = /** @type {any} */ (line.ahead);
+	const ahead = line.ahead;
 	if (line.waiting.length === 0 && (ahead === null || ahead.writableEnded)) {
 		if (ahead !== null && ahead._last) return;
-		line.ahead = res;
+		handOut(line, res);
 		serve(req, res);
 		return;
 	}
-	line.waiting.push({ req, res });
+	line.waiting.push({ req, res, serve: line.serve });
 	if (!line.scheduled) nextInLine(socket, line);
+}
+
+/**
+ * @param {Line} line
+ * @param {import('node:http').ServerResponse} res
+ */
+function handOut(line, res) {
+	line.ahead = res;
+	/** @type {any} */ (res)[LINE] = line;
+	res.on('finish', aheadFinished);
+}
+
+/** @this {any} */
+function aheadFinished() {
+	const line = this[LINE];
+	if (line.ahead === this) line.ahead = this._last ? FINISHED_CLOSING : FINISHED;
 }
 
 /**
@@ -303,74 +334,125 @@ function nextInLine(socket, line) {
 	line.scheduled = true;
 	setImmediateTimer(() => {
 		line.scheduled = false;
-		const ahead = /** @type {any} */ (line.ahead);
+		const ahead = line.ahead;
 		const next = line.waiting[0];
 		if (socket.destroyed || next === undefined) {
 			line.waiting.length = 0;
 			return;
 		}
-		if (ahead !== null && (!ahead.writableEnded || ahead._last)) {
+		if (ahead !== null && !ahead.writableEnded) {
 			line.waiting.length = 0;
-			if (!ahead.writableEnded) closeBehindWaitingAnswer(next.req);
+			if (next.req === null) socket.destroy();
+			else closeBehindWaitingAnswer(next.req);
+			return;
+		}
+		if (ahead !== null && ahead._last) {
+			line.waiting.length = 0;
 			return;
 		}
 		line.waiting.shift();
-		line.ahead = next.res;
-		line.serve(next.req, next.res);
+		if (next.res !== null) handOut(line, next.res);
+		next.serve(next.req, next.res);
 		if (line.waiting.length > 0) nextInLine(socket, line);
 	});
 }
 
 /**
- * Whether a handshake has to go through its connection's line rather than
- * be taken: a request is still waiting there, or the answer ahead ends the
- * connection. A handshake behind an answer that is merely still open is
- * taken, and the upgrade listener decides on it once the turn is over, see
- * answerAheadOf.
+ * Whether a handshake is refused before it is taken: the answer ahead of it
+ * ends the connection, and nothing behind it is read. Any other handshake is
+ * taken and waits its turn in the upgrade listener, see upgradeTurn.
  *
  * @param {import('node:http').IncomingMessage} req
  */
-export function behindAnswer(req) {
+export function behindClosingAnswer(req) {
 	/** @type {Line | undefined} */
 	const line = /** @type {any} */ (req.socket)?.[LINE];
 	if (line === undefined) return false;
-	const ahead = /** @type {any} */ (line.ahead);
-	return line.waiting.length > 0 || (ahead !== null && ahead.writableEnded && ahead._last === true);
+	return line.waiting.length === 0 && line.ahead !== null && line.ahead.writableEnded && line.ahead._last === true;
 }
 
 /**
- * For the upgrade listener: the answer still open ahead of a handshake on its
- * connection, or null. The native tier reads the handshake only once the turn
- * that answer's request was handed over in is done; the listener waits for
- * `setImmediate`, then upgrades if the answer has ended and closes the
- * connection, answering neither, if it has not.
+ * For the upgrade listener: null when a handshake can go ahead at once, or a
+ * promise of whether it may. The native tier reads a handshake only in its
+ * connection's order, once the request ahead has been handed over and its turn
+ * has run, and closes the connection if that answer is still waiting then; the
+ * handshake waits in the line for the same decision. It then waits for node to
+ * write every HTTP answer still queued on the connection, so the 101 follows
+ * them on the wire. False when the connection closed meanwhile.
  *
+ * @param {import('node:http').IncomingMessage} req
  * @param {import('node:stream').Duplex} socket
- * @returns {import('node:http').ServerResponse | null}
+ * @returns {Promise<boolean> | null}
  */
-export function answerAheadOf(socket) {
+export function upgradeTurn(req, socket) {
 	/** @type {Line | undefined} */
 	const line = /** @type {any} */ (socket)[LINE];
-	const ahead = line === undefined ? null : /** @type {any} */ (line.ahead);
-	return ahead !== null && !ahead.writableEnded ? ahead : null;
+	const inLine = line !== undefined && (line.waiting.length > 0 || (line.ahead !== null && !line.ahead.writableEnded));
+	if (!inLine && /** @type {any} */ (socket)._httpMessage == null) return null;
+	return new Promise((resolve) => {
+		socket.once('close', () => resolve(false));
+		const written = () => afterHttpAnswers(socket, resolve);
+		if (!inLine) {
+			written();
+			return;
+		}
+		/** @type {Line} */ (line).waiting.push({ req, res: null, serve: written });
+		if (!(/** @type {Line} */ (line).scheduled)) nextInLine(socket, /** @type {Line} */ (line));
+	});
+}
+
+/**
+ * @param {any} socket
+ * @param {(ok: boolean) => void} resolve
+ */
+function afterHttpAnswers(socket, resolve) {
+	const holder = socket._httpMessage;
+	if (holder == null) {
+		resolve(true);
+		return;
+	}
+	// node hands the socket to the next queued answer as this one finishes.
+	holder.once('finish', () => afterHttpAnswers(socket, resolve));
+}
+
+/**
+ * For bytes node's parser refused after a request that closes the
+ * connection: the native tier reads them as the next request once that one has
+ * been handed over and its turn has run, and closes the connection unanswered
+ * if its answer is still waiting then. False when the connection has no line
+ * to wait in.
+ *
+ * @param {any} socket
+ */
+function closeAfterLastTurn(socket) {
+	/** @type {Line | undefined} */
+	const line = socket[LINE];
+	if (line === undefined || (line.waiting.length === 0 && (line.ahead === null || line.ahead.writableEnded))) return false;
+	line.waiting.push({ req: null, res: null, serve: () => {} });
+	if (!line.scheduled) nextInLine(socket, line);
+	return true;
 }
 
 /**
  * Close a connection on which a request was parsed while an earlier one is
  * still waiting for its answer, as the family's native tier does: neither gets
- * a byte, and the waiting one sees its client go. A request in another version
- * than HTTP/1.1 gets its 505 first, which the native tier writes as soon as it
- * reads the request line.
+ * a byte, and the waiting one sees its client go. A request line the native
+ * tier does not read gets its 505 first, and an HTTP/1.1 request without a
+ * Host its 400, which the native tier writes as soon as it reads them.
  *
  * @param {import('node:http').IncomingMessage} req
  */
 function closeBehindWaitingAnswer(req) {
 	const socket = req.socket;
-	if (acceptsRequestLine(req) || !socket.writable) {
+	const head = req.method === 'HEAD';
+	const refusal = !acceptsRequestLine(req)
+		? (head ? VERSION_505_HEAD_RAW : VERSION_505_RAW)
+		: missesHost(req) ? (head ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW) : null;
+	if (refusal === null || !socket.writable) {
 		socket.destroy();
 		return;
 	}
-	socket.end(req.method === 'HEAD' ? VERSION_505_HEAD_RAW : VERSION_505_RAW, () => socket.destroy());
+	socket.end(refusal, () => socket.destroy());
 }
 
 /** @param {import('node:http').ServerResponse} res */
@@ -515,20 +597,15 @@ export function refuseUnparsedForbiddenMethods(server) {
 		// A response already on its way (a pipelined bad request behind a
 		// streaming reply) gets no second status line written into its body;
 		// the socket is destroyed as node would destroy it.
+		// Bytes after a request that closes the connection: the native tier
+		// reads them as the next request once that one has been handed over
+		// and its turn has run, and closes the connection unanswered if its
+		// answer is still waiting then. An answer done by then goes out, and
+		// node ends the connection after it.
+		if (err && err.code === 'HPE_CLOSED_CONNECTION' && socket.writable && closeAfterLastTurn(socket)) return;
 		const inFlight = /** @type {any} */ (socket)._httpMessage;
 		if (!socket.writable || (err && err.code === 'ECONNRESET') || (inFlight && inFlight._headerSent)) {
 			socket.destroy(err);
-			return;
-		}
-		// Bytes after a request that closes the connection, while that request
-		// still waits for its answer: the native tier reads them as the next
-		// request once the turn is over, and closes the connection unanswered if
-		// the answer is still waiting then, as servePipelined does. An answer
-		// done by then goes out, and node ends the connection after it.
-		if (err && err.code === 'HPE_CLOSED_CONNECTION' && inFlight && !inFlight.writableEnded) {
-			setImmediateTimer(() => {
-				if (!inFlight.writableEnded) socket.destroy();
-			});
 			return;
 		}
 		// The request line first, as on the native tier: an HTTP/1.0 TRACK or
@@ -580,7 +657,7 @@ export function refuseUnparsedForbiddenMethods(server) {
  * @param {string} wsPath
  */
 export function takesWebSocketRoute(req, wsPath) {
-	if (req.method !== 'GET' || !acceptsRequestLine(req) || behindAnswer(req)) return false;
+	if (req.method !== 'GET' || !acceptsRequestLine(req) || behindClosingAnswer(req)) return false;
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&

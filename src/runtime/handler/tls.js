@@ -77,6 +77,8 @@ export function createTlsServer(handleRequest, shouldUpgradeCallback) {
 	const server = https.createServer({
 		...baseOptions,
 		shouldUpgradeCallback,
+		// The listener refuses a request without a Host itself, in its turn.
+		requireHostHeader: false,
 		SNICallback: (servername, callback) => {
 			const name = servername.toLowerCase();
 			let context = sniContexts.get(name);

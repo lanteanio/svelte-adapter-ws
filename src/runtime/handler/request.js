@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, servePipelined, acceptsRequestLine } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, send400, send405, send500, send505, servePipelined } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -99,6 +99,13 @@ function serveRequest(req, res) {
 	// observed as a request. Every lane below answers HTTP/1.1 only.
 	if (!acceptsRequestLine(req)) {
 		send505(res);
+		return;
+	}
+	// An HTTP/1.1 request without a Host is refused 400 and closes, as the
+	// native tier refuses it while reading the headers. The server leaves this
+	// to the listener, so the refusal waits its turn like any answer.
+	if (missesHost(req)) {
+		send400(res, true);
 		return;
 	}
 

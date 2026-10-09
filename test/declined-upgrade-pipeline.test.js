@@ -236,10 +236,10 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime 
 
 	it('behind a complete handshake on a path the WebSocket route does not take', async () => {
 		const answers = await pipelined(tcp(open.rt.port), open.rt.port, [
-			{ lines: ['GET /healthz HTTP/1.1', ...HANDSHAKE] },
-			{ lines: ['GET /api/tiny HTTP/1.1'] }
+			{ lines: ['GET /api/tiny HTTP/1.1', ...HANDSHAKE] },
+			{ lines: ['GET /healthz HTTP/1.1'] }
 		]);
-		expect(bodies(answers)).toEqual(['OK', 'ok', 'OK']);
+		expect(bodies(answers)).toEqual(['ok', 'OK', 'OK']);
 	});
 
 	it('behind a declined POST, reading past its body', async () => {

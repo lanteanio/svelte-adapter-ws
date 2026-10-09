@@ -170,6 +170,35 @@ describe('the built runtime', () => {
 		await expectNothingInFlight();
 	});
 
+	it('decides at the end of the turn: an answer waiting on a timer closes, one done within it is kept', async () => {
+		const timer = await converse(open.rt.port, [[0, get('/api/hold?ms=0') + get('/api/tiny')]]);
+		expect(timer.raw, 'behind an answer due on a timer').toBe('');
+		expect(timer.closed).toBe(true);
+		const closing = await converse(open.rt.port, [[0, get('/api/tiny', 'Connection: close\r\n') + get('/api/tiny')]]);
+		expect(statusLines(closing.raw), 'an answer done within the turn ahead of bytes after its close').toEqual(['HTTP/1.1 200 OK']);
+		expect(closing.closed).toBe(true);
+		const handshake = await converse(open.rt.port, [[0, get('/api/hold?ms=0') + get('/ws', HANDSHAKE)]]);
+		expect(handshake.raw, 'a handshake behind an answer due on a timer').toBe('');
+	});
+
+	it('upgrades a handshake third in line once the answers ahead are written', async () => {
+		const { raw } = await converse(open.rt.port, [[0, get('/healthz') + get('/api/tiny') + get('/ws', HANDSHAKE)]], 600);
+		expect(statusLines(raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
+	});
+
+	it('writes the refusal a request line or a missing Host earns at once behind a waiting answer', async () => {
+		const head = await converse(open.rt.port, [[0, get('/api/slow') + 'HEAD / HTTP/1.0\r\n\r\n']]);
+		expect(statusLines(head.raw)).toEqual(['HTTP/1.1 505 HTTP Version Not Supported']);
+		expect(head.raw.endsWith('\r\n\r\n'), 'a HEAD gets the head alone').toBe(true);
+		const hostless = await converse(open.rt.port, [[0, get('/api/slow') + 'GET / HTTP/1.1\r\n\r\n']]);
+		expect(statusLines(hostless.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(hostless.closed).toBe(true);
+		const alone = await converse(open.rt.port, [[0, 'GET / HTTP/1.1\r\n\r\n']]);
+		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(alone.closed).toBe(true);
+		await expectNothingInFlight();
+	});
+
 	it('waits for the head of the request behind before closing', async () => {
 		// Its head never ends, so it is never parsed: the waiting answer goes out.
 		const { raw } = await converse(open.rt.port, [[0, get('/api/slow') + 'GET /api/tiny HTTP/1.1\r\nHost: x\r\n']], 800);
@@ -247,5 +276,9 @@ describe('createTestServer', () => {
 		expect(behindWaiting.closed).toBe(true);
 		const behindAnswered = await converse(mirror.port, [[0, get('/healthz') + get('/ws', HANDSHAKE)]], 600);
 		expect(statusLines(behindAnswered.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
+		// Every HTTP answer queued ahead goes out before the 101, none inside
+		// the WebSocket stream.
+		const third = await converse(mirror.port, [[0, get('/healthz') + get('/healthz') + get('/ws', HANDSHAKE)]], 600);
+		expect(statusLines(third.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
 	});
 });

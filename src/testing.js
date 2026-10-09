@@ -1,4 +1,4 @@
-import { now, monotonicNow, setTimer, setImmediateTimer, clearTimer, randomUuid } from './runtime/runtime.js';
+import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
@@ -6,7 +6,7 @@ import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-bo
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { invalidRequestTarget, invalidHost } from './runtime/utils/request-target.js';
-import { ALLOW_HEADER, FORBIDDEN_METHODS, answerAheadOf, applyShouldUpgradeCallback, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send505, servePipelined, acceptsRequestLine, stageHeaders, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
+import { ALLOW_HEADER, FORBIDDEN_METHODS, upgradeTurn, applyShouldUpgradeCallback, missesHost, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send400, send505, servePipelined, acceptsRequestLine, stageHeaders, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
@@ -216,7 +216,7 @@ function createNodeApp() {
 		resumeAfterDeclinedUpgrade(req);
 		return false;
 	};
-	const httpServer = createHttpServer({ shouldUpgradeCallback });
+	const httpServer = createHttpServer({ shouldUpgradeCallback, requireHostHeader: false });
 	applyShouldUpgradeCallback(httpServer, shouldUpgradeCallback);
 	// A method node's parser refuses is answered like the ones it accepts,
 	// as on the production server.
@@ -499,6 +499,10 @@ function createNodeApp() {
 			send505(nodeRes);
 			return;
 		}
+		if (missesHost(nodeReq)) {
+			send400(nodeRes, true);
+			return;
+		}
 		const url = nodeReq.url || '/';
 		const qi = url.indexOf('?');
 		const pathname = qi === -1 ? url : url.slice(0, qi);
@@ -694,16 +698,15 @@ function createNodeApp() {
 				res.end('Internal Server Error');
 			}
 		};
-		// As production: a handshake behind an answer still open is read once
-		// the turn is over, and the connection closes if that answer has not
-		// ended by then.
-		const ahead = answerAheadOf(socket);
-		if (ahead === null) {
+		// As production: a handshake waits its turn in the connection's line
+		// and goes ahead once every HTTP answer before it is on the wire.
+		const turn = upgradeTurn(nodeReq, socket);
+		if (turn === null) {
 			dispatch();
 			return;
 		}
-		setImmediateTimer(() => {
-			if (ahead.writableEnded) dispatch();
+		turn.then((ok) => {
+			if (ok) dispatch();
 			else socket.destroy();
 		});
 	});

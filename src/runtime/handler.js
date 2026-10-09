@@ -216,7 +216,7 @@ const shouldUpgradeCallback = (req) => {
 
 export const server = tlsModule
 	? tlsModule.createTlsServer(handleRequest, shouldUpgradeCallback)
-	: http.createServer({ shouldUpgradeCallback }, handleRequest);
+	: http.createServer({ shouldUpgradeCallback, requireHostHeader: false }, handleRequest);
 // The same routing on a node that ignores the option, before 22.21 and 24.9.
 applyShouldUpgradeCallback(server, shouldUpgradeCallback);
 // A method node's parser refuses is answered like the ones it accepts.

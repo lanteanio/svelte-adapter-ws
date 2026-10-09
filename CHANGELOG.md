@@ -69,7 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client go, as for any disconnect, and the one behind it never reaches a
   route. A WebSocket handshake behind a waiting request is decided the same
   way, a request after `Connection: close` behind one closes the connection
-  too, and an HTTP/1.0 request behind one gets its `505` at once. Nothing
+  too, and an HTTP/1.0 request behind one gets its `505` at once, an
+  HTTP/1.1 request without a `Host` its `400`. A handshake later in a
+  pipeline is upgraded once every answer before it is on the wire. Nothing
   behind an answer that ends the connection - a `505`, the `400` for an
   ambiguous body framing - is read: such a request ran the application
   before and its answer was dropped. A request queued behind another was

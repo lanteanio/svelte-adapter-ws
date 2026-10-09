@@ -63,7 +63,7 @@ import {
 	createLeaseState, leaseGrantFrame, leaseReportedSaturation,
 	controlFrameTooLargeFrame, DEFAULT_GRANT
 } from '../wire.js';
-import { now, monotonicNow, processMonotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setImmediateTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
+import { now, monotonicNow, processMonotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorDefinition, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
@@ -94,7 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, answerAheadOf, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { PayloadTooLargeError, upgradeTurn, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -1233,16 +1233,14 @@ export async function handleUpgrade(req, socket, head) {
 	const onSocketError = () => socket.destroy();
 	socket.on('error', onSocketError);
 
-	// A handshake pipelined behind an answer still open is read once the turn
-	// is over, as on the native tier: upgraded if that answer has ended by
-	// then, the connection closed unanswered if it has not.
-	const ahead = answerAheadOf(socket);
-	if (ahead !== null) {
-		await new Promise((resolve) => setImmediateTimer(resolve));
-		if (!ahead.writableEnded) {
-			socket.destroy();
-			return;
-		}
+	// A handshake pipelined behind other requests waits its turn in the
+	// connection's line, as on the native tier, and goes ahead once every HTTP
+	// answer before it is on the wire; the line closes the connection instead
+	// if an answer ahead is still waiting at its turn.
+	const turn = upgradeTurn(req, socket);
+	if (turn !== null && !(await turn)) {
+		socket.destroy();
+		return;
 	}
 
 	const url = req.url || '/';

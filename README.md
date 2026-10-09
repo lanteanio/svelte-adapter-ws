@@ -741,11 +741,14 @@ nginx before 1.29.7, which proxies with HTTP/1.0 by default, needs
 `proxy_http_version 1.1;` on every location that proxies to it, and a load
 balancer's health check has to probe in HTTP/1.1. Pipelined
 requests are answered while each response is written before the next request
-on the connection is parsed. If a request is still waiting on its answer -
-any route that awaits, such as an endpoint doing I/O - when the next one is
-parsed, the connection closes and neither request gets a byte, the native
-tier's rule; RFC 9112 9.3.2 has a client retry requests a closed connection
-left unanswered, and browsers do not pipeline. `vite dev` runs on Vite's own
+on the connection is parsed, which the native tier does once the request
+ahead has been handed to the application and the ticks and microtasks it
+queued have run. If its answer is still waiting then - on I/O or a timer,
+as an endpoint doing I/O does - the connection closes and neither request
+gets a byte it did not already have, the native tier's rule; nothing behind
+an answer that ends the connection is read. RFC 9112 9.3.2 has a client
+retry requests a closed connection left unanswered, and browsers do not
+pipeline. `vite dev` runs on Vite's own
 server, which serves HTTP/1.0 and queues pipelined requests instead.
 `test/http-pipelining-real.test.js` pins both halves on the built runtime.
 
