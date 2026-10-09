@@ -83,9 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tier length-frame it. It now waits for the second read: a body that ends
   after one chunk is length-framed, and compressed when it qualifies,
   however late its end comes, and a streamed page sends its first byte
-  together with its second chunk. A stream cut by a chunk the writer cannot
-  send, right after the ones before it, now delivers those first; the close
-  in the same tick dropped them.
+  together with its second chunk - and an SSE stream its first event with
+  its second. A source that fails on that second read is now answered `500`
+  with its request id, where it was a `200` cut after the first chunk; a
+  first or second chunk that is not a string or bytes ends the connection
+  with nothing written, as the native tier does, where it was answered
+  `500` or cut after the first chunk.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request
@@ -155,9 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   static lookup; other methods reach the app's router, as they do on every
   other platform and on the family's native tier.
 - The SSR lane frames what it writes rather than what the Response declares,
-  as the family's native tier does. A body whose end follows its first chunk
-  at once - a rendered page, an endpoint's string or buffer - goes out whole
-  with its real length; one that keeps streaming goes out
+  as the family's native tier does. A body that ends after its first chunk -
+  a rendered page, an endpoint's string or buffer - goes out whole with its
+  real length; one that keeps streaming goes out
   `Transfer-Encoding: chunked` even when the app declared a
   `Content-Length`, which was written through before. A Transfer-Encoding the
   Response itself carries, as one relayed from `fetch()` does, is dropped
@@ -236,6 +239,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An SSR stream that fails in the same tick as its last writes delivers
+  them before the cut.** A source that errors, or hands over a chunk that is
+  not bytes, right after chunks the writer had just written had its
+  connection closed while node still held those writes, so the client got
+  nothing at all, not even the status line. The bytes written before the
+  failure now go out first, and the chunked answer is cut before its
+  terminal chunk, as on the family's native tier.
 - **Under `vite dev` over HTTPS the WebSocket, the auth endpoint and the
   dashboard accept a browser's requests.** Under `server.https` the plugin
   refused the browser's WebSocket, and over HTTP/2, which Vite 7.2 and later

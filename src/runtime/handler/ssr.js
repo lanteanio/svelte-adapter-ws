@@ -185,13 +185,14 @@ function compressWhole(response, body, acceptEncoding) {
 
 /**
  * Write a Response onto the node response, framed the way uWS frames what it
- * is handed: a body that turns out to be one chunk (the common SSR shape) goes
- * out whole with its length, compressed first when the client negotiated a
- * coding; a body that keeps streaming goes out chunked from its first byte and
- * is never buffered or compressed, so an SSE stream is never parked; a
- * bodyless answer says what bodylessLength allows. The Response's own
- * Content-Length never passes through. The whole write is awaited, so a body
- * that fails mid-stream surfaces here as a throw.
+ * is handed. The second read decides, as on the family's native tier: a body
+ * that ends after one chunk (the common SSR shape) goes out whole with its
+ * length, compressed first when the client negotiated a coding; a body with a
+ * second chunk goes out chunked once that chunk exists, the first two
+ * together, and is never buffered or compressed, so an SSE stream's first
+ * event waits for its second; a bodyless answer says what bodylessLength
+ * allows. The Response's own Content-Length never passes through. The whole
+ * write is awaited, so a body that fails surfaces here as a throw.
  *
  * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
  * without `streamDone`, and the exchange is then closed abruptly rather than
@@ -258,14 +259,29 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			res.end();
 			return;
 		}
-		const firstBytes = chunkBytes(first.value);
 		// The second read decides single-chunk vs streaming, as on the family's
 		// native tier: a body whose end follows its first chunk is one
 		// length-framed answer, compressed when it qualifies, however late that
 		// end arrives.
 		const second = await reader.read();
 		if (state.aborted) return;
-		if (second.done) {
+		// The native tier writes the headers and these chunks as one batch, so
+		// a chunk it cannot send ends the connection with nothing written,
+		// where a failed read is still answered 500.
+		/** @type {Uint8Array} */
+		let firstBytes;
+		/** @type {Uint8Array | null} */
+		let secondBytes = null;
+		try {
+			firstBytes = chunkBytes(first.value);
+			if (!second.done) secondBytes = chunkBytes(second.value);
+		} catch (err) {
+			state.responseStarted = true;
+			state.closedByServer = true;
+			res.destroy();
+			throw err;
+		}
+		if (secondBytes === null) {
 			// A string chunk goes out as is: the family's native tier decides
 			// on the chunk's own byteLength, and a string has none.
 			const whole = compressWhole(response, firstBytes, typeof first.value === 'string' ? '' : acceptEncoding || '');
@@ -274,29 +290,22 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			return;
 		}
 
-		// The second chunk is read as one only once the first is out, as the
-		// native tier writes them, so a value it refuses cuts a stream already
-		// under way.
-		/** @type {unknown[]} */
-		const ready = [firstBytes, second.value];
 		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
+		// The first two chunks go out together, as the native tier writes them.
 		writeHeaders(res, response, state, null, '', true);
 		streaming = true;
+		res.write(firstBytes);
+		let value = secondBytes;
 		for (;;) {
-			let value;
-			if (ready.length > 0) {
-				value = chunkBytes(ready.shift());
-			} else {
-				const read = await reader.read();
-				if (read.done) { streamDone = true; break; }
-				value = chunkBytes(read.value);
-			}
 			if (state.aborted) break;
 			if (!res.write(value)) {
 				const drained = await waitForDrain(res, 30000);
 				if (!drained) break;
 				if (state.aborted) break;
 			}
+			const read = await reader.read();
+			if (read.done) { streamDone = true; break; }
+			value = chunkBytes(read.value);
 		}
 	} finally {
 		if (streaming && !state.aborted) {

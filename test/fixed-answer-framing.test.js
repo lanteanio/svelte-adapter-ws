@@ -82,8 +82,8 @@ export class Server {
 			return new Response('x', { headers: { 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
 		// A refused header in front of a body the writer never reads in full: one
-		// that never ends, and one whose second chunk comes too late to be one
-		// write. Each records whether its source was cancelled.
+		// that never ends, and one whose second chunk comes after a delay. Each
+		// records whether its source was cancelled.
 		if (p === '/refused-cancel') {
 			globalThis.__refusedCancelled = false;
 			return new Response(new ReadableStream({
@@ -218,8 +218,8 @@ export class Server {
 			}), { headers: { ...text, trailer: 'x-foo' } });
 		}
 		if (p === '/refuse-mid') {
-			// A chunk the writer refuses, after one it sent: the source is still
-			// open, so the writer has to cancel it.
+			// A second chunk the writer cannot send: the source is still open,
+			// so the writer has to cancel it.
 			const enc = new TextEncoder();
 			return new Response(new ReadableStream({
 				async start(c) {
@@ -250,6 +250,37 @@ export class Server {
 					c.close();
 				}
 			}), { headers: text });
+		}
+		if (p === '/refuse-third' || p === '/fail-third') {
+			// Two chunks and then, in the same tick as their writes, a value that
+			// is not a chunk or a failed read.
+			const enc = new TextEncoder();
+			let pulls = 0;
+			return new Response(new ReadableStream({
+				pull(c) {
+					pulls++;
+					if (pulls === 1) c.enqueue(enc.encode('part1|'));
+					else if (pulls === 2) c.enqueue(enc.encode('part2|'));
+					else if (p === '/refuse-third') c.enqueue(42);
+					else c.error(new Error('source failed'));
+				},
+				cancel() { globalThis.__fafRefuseCancelled = true; }
+			}), { headers: text });
+		}
+		if (p === '/late-fail') {
+			// One chunk, then a read that fails well after it.
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(new TextEncoder().encode('shell|'));
+					await new Promise((r) => setTimeout(r, 50));
+					c.error(new Error('late failure'));
+				}
+			}), { headers: text });
+		}
+		if (p === '/huge') {
+			// Larger than the loopback can hold while its client is not reading,
+			// so its response keeps the connection and the next one waits behind it.
+			return new Response('h'.repeat(32 * 1024 * 1024), { headers: text });
 		}
 		if (p === '/fail-mid') {
 			const enc = new TextEncoder();
@@ -847,9 +878,10 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 	});
 
 	it('cuts a chunked body that failed mid-stream before its terminal chunk', async () => {
-		// A source that errors, and one that hands over a value that is no
-		// chunk right after the writer sent the first.
-		for (const target of ['/fail-mid', '/refuse-mid']) {
+		// A source that errors later, and two that fail or hand over a value
+		// that is no chunk in the same tick as the writes before it.
+		for (const [target, sent] of [['/fail-mid', ['part1|']], ['/fail-third', ['part1|', 'part2|']], ['/refuse-third', ['part1|', 'part2|']]]) {
+			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
 			const chunked = await exchange(
 				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
 				[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
@@ -857,10 +889,50 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 			// The cut leaves out the terminal chunk, and the close is a plain one,
 			// so the client keeps every byte sent before it.
 			expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding'), target).toEqual(['chunked']);
-			expect(chunked.buffer, target).toContain('part1|');
+			for (const part of sent) expect(chunked.buffer, target).toContain(part);
 			expect(chunked.buffer.endsWith('0\r\n\r\n'), target + ': no terminal chunk').toBe(false);
 			expect(chunked.how, target).toBe('end');
+			if (target === '/refuse-third') expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the source was cancelled').toBe(true);
 		}
+	});
+
+	it('ends the connection with nothing written for a second chunk it cannot send', async () => {
+		// The native tier writes the headers and the first two chunks as one
+		// batch, so the refusal leaves the client nothing at all.
+		delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+		const { result, failures } = await withSsrFailures(() => exchange(
+			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+			['GET /refuse-mid HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1']
+		));
+		expect(result.buffer).toBe('');
+		expect(result.how).toBe('end');
+		expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, 'the source was cancelled').toBe(true);
+		expect(failures).toHaveLength(1);
+	});
+
+	it('answers a failure on the second read with the length-framed 500', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /late-fail HTTP/1.1', 'Cookie: s=1'], OK]));
+		expectPageFailure(result, failures);
+	});
+
+	it('cuts a stream queued behind another answer on its connection, reporting the source\'s own failure', async () => {
+		// The answer ahead is too large for the loopback while the client is
+		// not reading, so the failing stream behind it holds no socket yet.
+		const { result, failures } = await withSsrFailures(() => new Promise((resolve) => {
+			let bytes = 0;
+			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
+				socket.write('GET /huge HTTP/1.1\r\nHost: x\r\nCookie: s=1\r\n\r\nGET /fail-third HTTP/1.1\r\nHost: x\r\nCookie: s=1\r\n\r\n');
+				socket.pause();
+				setTimeout(() => socket.resume(), 500);
+			});
+			socket.on('data', (chunk) => { bytes += chunk.length; });
+			socket.on('close', () => resolve(bytes));
+			socket.on('error', () => {});
+			setTimeout(() => socket.destroy(), 8000);
+		}));
+		expect(/** @type {number} */ (result), 'the answer ahead went out').toBeGreaterThan(32 * 1024 * 1024);
+		expect(failures).toHaveLength(1);
+		expect(JSON.stringify(failures[0].attributes?.error)).toContain('source failed');
 	});
 
 	it('length-frames a body whose end comes late after its one chunk, on either path', async () => {
@@ -1521,12 +1593,14 @@ describe('a body that fails mid-stream over TLS', () => {
 	});
 
 	it('cuts the chunked body before its terminal chunk, closes, cancels the source, and lets shutdown drain', async () => {
-		for (const target of ['/fail-mid', '/refuse-mid']) {
+		/** @param {string} target */
+		const ask = (target) => exchange(
+			(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
+			[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
+		);
+		for (const target of ['/fail-mid', '/fail-third', '/refuse-third']) {
 			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
-			const answer = await exchange(
-				(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
-				[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
-			);
+			const answer = await ask(target);
 			const first = splitFirst(answer.buffer);
 			expect(first.status, target).toBe('HTTP/1.1 200 OK');
 			expect(header(first.lines, 'content-length'), target).toEqual([]);
@@ -1534,10 +1608,17 @@ describe('a body that fails mid-stream over TLS', () => {
 			expect(header(first.lines, 'transfer-encoding'), target).toEqual(['chunked']);
 			expect(answer.buffer.endsWith('0\r\n\r\n'), target + ': no terminal chunk').toBe(false);
 			expect(answer.how, target + ' is closed, not left open').not.toBe('timeout');
-			if (target === '/refuse-mid') {
+			if (target !== '/fail-mid') expect(first.rest, target).toContain('part2|');
+			if (target === '/refuse-third') {
 				expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the refused source was cancelled').toBe(true);
 			}
 		}
+		// A second chunk it cannot send ends the connection with nothing written.
+		delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+		const refused = await ask('/refuse-mid');
+		expect(refused.buffer).toBe('');
+		expect(refused.how, 'closed, not left open').not.toBe('timeout');
+		expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, 'the refused source was cancelled').toBe(true);
 		expect(await secure.rt.handler.shutdown({ timeoutMs: 2000 }), 'nothing is left in flight').toBe(true);
 	});
 });
