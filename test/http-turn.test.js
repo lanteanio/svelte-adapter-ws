@@ -5,14 +5,34 @@
 // buffer. On the line alone, with stand-in sockets.
 
 import { describe, expect, it } from 'vitest';
-import { inOwnTurn, releaseTurnIfFull, servePipelined } from '../src/runtime/handler/http-helpers.js';
+import { inOwnTurn, lineAhead, releaseTurnIfFull, servePipelined, upgradeTurn } from '../src/runtime/handler/http-helpers.js';
 
 function connection() {
-	const socket = /** @type {any} */ ({ corked: 0, writableLength: 0, destroyed: false, cork() { this.corked++; }, uncork() { if (this.corked > 0) this.corked--; } });
+	/** @type {Record<string, Function[]>} */
+	const socketListeners = {};
+	const socket = /** @type {any} */ ({
+		corked: 0, writableLength: 0, destroyed: false, _httpMessage: null,
+		cork() { this.corked++; }, uncork() { if (this.corked > 0) this.corked--; },
+		once(/** @type {string} */ event, /** @type {Function} */ fn) { (socketListeners[event] ??= []).push(fn); },
+		emit(/** @type {string} */ event) { for (const fn of socketListeners[event] ?? []) fn(); }
+	});
 	Object.defineProperty(socket, 'writableCorked', { get() { return this.corked; } });
 	const req = /** @type {any} */ ({ socket });
-	const res = /** @type {any} */ ({ socket, writableEnded: false, _last: false, on() {} });
+	/** @type {Record<string, Function[]>} */
+	const resListeners = {};
+	const res = /** @type {any} */ ({
+		socket, writableEnded: false, _last: false,
+		on(/** @type {string} */ event, /** @type {Function} */ fn) { (resListeners[event] ??= []).push(fn); },
+		emit(/** @type {string} */ event) { for (const fn of resListeners[event] ?? []) fn.call(res); }
+	});
 	return { socket, req, res };
+}
+
+/** A response node is still writing on the socket: resolves its finish. */
+function holder() {
+	/** @type {Function[]} */
+	const finish = [];
+	return { once(/** @type {string} */ event, /** @type {Function} */ fn) { if (event === 'finish') finish.push(fn); }, finish() { for (const fn of finish.splice(0)) fn(); } };
 }
 
 describe('a request\'s turn', () => {
@@ -46,6 +66,50 @@ describe('a request\'s turn', () => {
 		expect(c.socket.corked).toBe(0);
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(c.socket.corked, 'the turn\'s end does not uncork twice').toBe(0);
+	});
+
+	it('keeps no finished answer alive in the line', () => {
+		const e = connection();
+		servePipelined(e.req, e.res, () => {});
+		expect(lineAhead(e.socket)).toBe(e.res);
+		e.res.writableEnded = true;
+		e.res.emit('finish');
+		const kept = lineAhead(e.socket);
+		expect(kept, 'the response is replaced by a frozen stand-in').not.toBe(e.res);
+		expect(kept.writableEnded).toBe(true);
+		expect(Object.isFrozen(kept)).toBe(true);
+	});
+
+	it('lets a handshake go ahead only once every answer node is writing has finished', async () => {
+		const f = connection();
+		const first = holder();
+		const second = holder();
+		f.socket._httpMessage = first;
+		const turn = upgradeTurn(f.req, f.socket);
+		expect(turn, 'an answer still being written holds the handshake').not.toBeNull();
+		let settled = /** @type {boolean | null} */ (null);
+		/** @type {Promise<boolean>} */ (turn).then((ok) => { settled = ok; });
+		await Promise.resolve();
+		expect(settled).toBeNull();
+		// node hands the socket to the next queued answer as this one finishes.
+		f.socket._httpMessage = second;
+		first.finish();
+		await Promise.resolve();
+		expect(settled, 'a second queued answer holds it again').toBeNull();
+		f.socket._httpMessage = null;
+		second.finish();
+		await Promise.resolve();
+		expect(settled).toBe(true);
+		// Nothing in the way: at once.
+		expect(upgradeTurn(f.req, f.socket)).toBeNull();
+	});
+
+	it('settles a waiting handshake as refused when the connection closes', async () => {
+		const g = connection();
+		g.socket._httpMessage = holder();
+		const turn = /** @type {Promise<boolean>} */ (upgradeTurn(g.req, g.socket));
+		g.socket.emit('close');
+		expect(await turn).toBe(false);
 	});
 
 	it('does nothing for a response outside its turn', async () => {

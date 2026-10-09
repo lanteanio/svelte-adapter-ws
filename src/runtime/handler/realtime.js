@@ -94,7 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, upgradeTurn, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { PayloadTooLargeError, upgradeTurn, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -1240,6 +1240,13 @@ export async function handleUpgrade(req, socket, head) {
 	const turn = upgradeTurn(req, socket);
 	if (turn !== null && !(await turn)) {
 		socket.destroy();
+		return;
+	}
+	// The native tier refuses a request without a Host as it reads the
+	// headers, a handshake included; node's own check never reaches an
+	// upgrade.
+	if (missesHost(req)) {
+		refuseUpgrade(socket, 400, 'Bad Request');
 		return;
 	}
 

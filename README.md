@@ -749,8 +749,9 @@ on the connection is parsed, which the native tier does once the request
 ahead has been handed to the application and the ticks and microtasks it
 queued have run. If its answer is still waiting then - on I/O or a timer,
 as an endpoint doing I/O does - the connection closes and neither request
-gets a byte it did not already have, the native tier's rule; nothing behind
-an answer that ends the connection is read. RFC 9112 9.3.2 has a client
+gets a byte it did not already have, the native tier's rule. Nothing behind
+an answer that ends the connection is read here: node ends the connection
+once that answer is written. RFC 9112 9.3.2 has a client
 retry requests a closed connection left unanswered, and browsers do not
 pipeline. `vite dev` runs on Vite's own
 server, which serves HTTP/1.0 and queues pipelined requests instead.

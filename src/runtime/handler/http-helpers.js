@@ -748,6 +748,42 @@ export function refuseUnparsedForbiddenMethods(server) {
 }
 
 /**
+ * node answers a request's Expect before the listener runs: 100 Continue for
+ * `100-continue`, 417 for anything else. The native tier reads the Host
+ * first and refuses a request without one before any of that, so both
+ * answers go through `listener` for a Host-less request, which refuses it in
+ * its turn; every other request gets node's own answer, as without these
+ * listeners.
+ *
+ * @param {import('node:http').Server} server
+ * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void} listener
+ */
+export function answerExpectations(server, listener) {
+	server.on('checkContinue', (req, res) => {
+		if (!missesHost(req)) res.writeContinue();
+		listener(req, res);
+	});
+	server.on('checkExpectation', (req, res) => {
+		if (missesHost(req)) {
+			listener(req, res);
+			return;
+		}
+		res.writeHead(417);
+		res.end();
+	});
+}
+
+/**
+ * What the connection's line holds as the answer ahead: for tests, which
+ * check that a finished answer is not kept alive by it.
+ *
+ * @param {any} socket
+ */
+export function lineAhead(socket) {
+	return socket[LINE]?.ahead ?? null;
+}
+
+/**
  * Whether a request is the WebSocket route's, and so the 'upgrade' listener's:
  * an HTTP/1.1 GET on the WebSocket path as spelled, whose first
  * Sec-WebSocket-Key line is 24 bytes long. That is what the family's native

@@ -419,6 +419,24 @@ describe('the built runtime over TLS', () => {
 		const split = await converse(connect, [[0, 'GET / HTTP/1.1\r\nHost: x\r\n'], [150, 'Bad Header: x\r\n\r\n']], ['GET']);
 		expect(split.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 	});
+
+	it('refuses a request without a Host over TLS too', async () => {
+		const connect = () => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false });
+		const hostless = await converse(connect, [[0, 'GET /api/tiny HTTP/1.1\r\n\r\n']], ['GET']);
+		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+		expect(hostless.closed).toBe(true);
+		// In its turn: behind an answered request, after that answer, where
+		// node's own check would have written the 400 before it.
+		const behind = await converse(connect, [[0, 'GET /api/tiny HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\n\r\n']], ['GET', 'GET']);
+		expect(behind.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request']);
+		expect(behind.closed).toBe(true);
+		// Behind a waiting answer the line writes the 400 at once and ends
+		// the connection, taking the waiting answer along; node's own check
+		// would queue the 400 behind it.
+		const waiting = await converse(connect, [[0, 'GET /api/slow HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\n\r\n']], ['GET', 'GET']);
+		expect(waiting.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(waiting.closed).toBe(true);
+	});
 });
 
 describe('createTestServer', () => {

@@ -11,7 +11,7 @@
 /* global WARMUP_PATHS */
 /* global WS_ENABLED */
 import './_init.js';
-import { applyShouldUpgradeCallback, refuseUnparsedForbiddenMethods, resumeAfterDeclinedUpgrade, takesWebSocketRoute } from './handler/http-helpers.js';
+import { applyShouldUpgradeCallback, answerExpectations, refuseUnparsedForbiddenMethods, resumeAfterDeclinedUpgrade, takesWebSocketRoute } from './handler/http-helpers.js';
 import http from 'node:http';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
@@ -221,6 +221,8 @@ export const server = tlsModule
 applyShouldUpgradeCallback(server, shouldUpgradeCallback);
 // A method node's parser refuses is answered like the ones it accepts.
 refuseUnparsedForbiddenMethods(server);
+// A request's Expect is answered after its Host is checked, in its turn.
+answerExpectations(server, handleRequest);
 
 /**
  * Message-driven certificate reload: the cluster primary watches the cert

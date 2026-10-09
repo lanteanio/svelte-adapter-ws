@@ -182,8 +182,36 @@ describe('the built runtime', () => {
 	});
 
 	it('upgrades a handshake third in line once the answers ahead are written', async () => {
-		const { raw } = await converse(open.rt.port, [[0, get('/healthz') + get('/api/tiny') + get('/ws', HANDSHAKE)]], 600);
+		// Both answers ahead come through the application, so the second is
+		// still waiting in the line when the handshake is parsed; the
+		// handshake waits its turn behind it rather than being refused.
+		const { raw } = await converse(open.rt.port, [[0, get('/api/tiny') + get('/api/tiny') + get('/ws', HANDSHAKE)]], 600);
 		expect(statusLines(raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
+	});
+
+	it('refuses a handshake without a Host, alone and behind an answered request', async () => {
+		const alone = await converse(open.rt.port, [[0, 'GET /ws HTTP/1.1\r\n' + HANDSHAKE + '\r\n']]);
+		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(alone.closed).toBe(true);
+		const behind = await converse(open.rt.port, [[0, get('/api/tiny')], [30, 'GET /ws HTTP/1.1\r\n' + HANDSHAKE + '\r\n']]);
+		expect(statusLines(behind.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request']);
+		expect(behind.closed).toBe(true);
+	});
+
+	it('refuses a request without a Host before answering its Expect', async () => {
+		// node answers an Expect ahead of the listener; the native tier reads
+		// the Host first.
+		const cont = await converse(open.rt.port, [[0, 'POST /api/tiny HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n']]);
+		expect(statusLines(cont.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(cont.closed).toBe(true);
+		const other = await converse(open.rt.port, [[0, 'GET /api/tiny HTTP/1.1\r\nExpect: foo\r\n\r\n']]);
+		expect(statusLines(other.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(other.closed).toBe(true);
+		// With a Host, node's own answers stand.
+		const okCont = await converse(open.rt.port, [[0, 'POST /api/tiny HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nhello']], 400);
+		expect(statusLines(okCont.raw)).toEqual(['HTTP/1.1 100 Continue', 'HTTP/1.1 200 OK']);
+		const okOther = await converse(open.rt.port, [[0, 'GET /api/tiny HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n']], 400);
+		expect(statusLines(okOther.raw)).toEqual(['HTTP/1.1 417 Expectation Failed']);
 	});
 
 	it('writes the refusal a request line or a missing Host earns at once behind a waiting answer', async () => {
@@ -193,6 +221,9 @@ describe('the built runtime', () => {
 		const hostless = await converse(open.rt.port, [[0, get('/api/slow') + 'GET / HTTP/1.1\r\n\r\n']]);
 		expect(statusLines(hostless.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(hostless.closed).toBe(true);
+		const hostlessHead = await converse(open.rt.port, [[0, get('/api/slow') + 'HEAD / HTTP/1.1\r\n\r\n']]);
+		expect(statusLines(hostlessHead.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(hostlessHead.raw.endsWith('\r\n\r\n'), 'a HEAD gets the head alone').toBe(true);
 		const alone = await converse(open.rt.port, [[0, 'GET / HTTP/1.1\r\n\r\n']]);
 		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(alone.closed).toBe(true);
@@ -257,6 +288,9 @@ describe('createTestServer', () => {
 	/** @type {any} */ let mirror;
 	let adminRuns = 0;
 
+	/** A mirror whose admin answers within its turn, through a promise. */
+	/** @type {any} */ let quick;
+
 	beforeAll(async () => {
 		const { createTestServer } = await import('../src/testing.js');
 		mirror = await createTestServer({
@@ -268,10 +302,28 @@ describe('createTestServer', () => {
 				}
 			}
 		});
+		quick = await createTestServer({ handler: { admin: async () => new Response('quick') } });
 	});
 
 	afterAll(async () => {
 		await mirror?.close();
+		await quick?.close();
+	});
+
+	it('refuses a request without a Host, alone, behind an admin answer and on a handshake', async () => {
+		const alone = await converse(quick.port, [[0, 'GET /healthz HTTP/1.1\r\n\r\n']]);
+		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(alone.closed).toBe(true);
+		const behind = await converse(quick.port, [[0, get('/__realtime/status') + 'GET /healthz HTTP/1.1\r\n\r\n']]);
+		expect(statusLines(behind.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request']);
+		expect(behind.closed).toBe(true);
+		const handshake = await converse(quick.port, [[0, 'GET /ws HTTP/1.1\r\n' + HANDSHAKE + '\r\n']]);
+		expect(statusLines(handshake.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(handshake.closed).toBe(true);
+		const cont = await converse(quick.port, [[0, 'POST /healthz HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n']]);
+		expect(statusLines(cont.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
+		const other = await converse(quick.port, [[0, 'GET /healthz HTTP/1.1\r\nExpect: foo\r\n\r\n']]);
+		expect(statusLines(other.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 	});
 
 	it('closes without an answer when a request is parsed behind one still waiting', async () => {
@@ -294,8 +346,9 @@ describe('createTestServer', () => {
 		const behindAnswered = await converse(mirror.port, [[0, get('/healthz') + get('/ws', HANDSHAKE)]], 600);
 		expect(statusLines(behindAnswered.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
 		// Every HTTP answer queued ahead goes out before the 101, none inside
-		// the WebSocket stream.
-		const third = await converse(mirror.port, [[0, get('/healthz') + get('/healthz') + get('/ws', HANDSHAKE)]], 600);
+		// the WebSocket stream, and a handshake parsed while the second answer
+		// is still waiting in the line waits its turn behind it.
+		const third = await converse(quick.port, [[0, get('/__realtime/status') + get('/__realtime/status') + get('/ws', HANDSHAKE)]], 600);
 		expect(statusLines(third.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 200 OK', 'HTTP/1.1 101 Switching Protocols']);
 	});
 });
