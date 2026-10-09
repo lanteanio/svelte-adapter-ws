@@ -22,7 +22,7 @@
  * or corrupts. Floats use big-endian IEEE-754 single precision, matching the
  * big-endian convention of the upload frame builders.
  *
- * @module svelte-adapter-uws/src/runtime/wire
+ * @module svelte-adapter-ws/src/runtime/wire
  */
 
 /** Leading byte of a binary topic-PAYLOAD frame. */

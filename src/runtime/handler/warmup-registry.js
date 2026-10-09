@@ -2,13 +2,17 @@
 //
 // A warmup render is tagged by object identity so it cannot be forged from the
 // wire (a header any client could send). platform.js reads the tag through
-// isWarmupRequest to expose it to app hooks; warmup.js writes it. This module
-// never touches a byte and effectively never changes.
+// isWarmupRequest to expose it to app hooks; warmup.js writes it. Keeping the
+// WeakSet here - a dependency-free leaf both import - is deliberate: platform.js
+// sits inside the sealed byte-copy authority graph, so importing the whole
+// warmup module (with its render engine and timers) into that graph would churn
+// the graph's syntax seal on every unrelated warmup edit. This module never
+// touches a byte and effectively never changes.
 
 /** @type {WeakSet<Request>} */
 const warmupRequests = new WeakSet();
 
-/** @param {Request} request Tag a request as a synthetic boot-warmup render. */
+/** Tag a request as a synthetic boot-warmup render. */
 export function tagWarmupRequest(request) {
 	warmupRequests.add(request);
 }

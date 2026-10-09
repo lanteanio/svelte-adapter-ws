@@ -1,0 +1,198 @@
+[
+	{
+		"file": ".gitattributes",
+		"reason": "this repository's own configuration"
+	},
+	{
+		"file": ".gitignore",
+		"reason": "this repository's own configuration"
+	},
+	{
+		"file": "CHANGELOG.md",
+		"reason": "this adapter's own documentation"
+	},
+	{
+		"file": "README.md",
+		"reason": "this adapter's own documentation"
+	},
+	{
+		"file": "docs/errors.md",
+		"reason": "this adapter's own documentation"
+	},
+	{
+		"file": "package.json",
+		"reason": "this repository's own configuration"
+	},
+	{
+		"file": "scripts/check-determinism.js",
+		"reason": "this repository's own configuration"
+	},
+	{
+		"file": "scripts/check-types.js",
+		"reason": "this repository's own configuration"
+	},
+	{
+		"file": "src/index.d.ts",
+		"reason": "declares the surface this runtime ships, spelled as the lead spells it"
+	},
+	{
+		"file": "src/index.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/_init.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/error-registry.js",
+		"reason": "the lead's registry with the ids this runtime raises"
+	},
+	{
+		"file": "src/runtime/handler.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/admin.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/config.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/http-helpers.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/lifecycle.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/platform.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/relay.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/request.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/seq-bound.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/ssr-dedup.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/ssr.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/state.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/static-assets.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/handler/warmup.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/index.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/relay-ring.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/sim-inmemory.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/utils.js",
+		"reason": "the lead's barrel plus the subscribe-policy, dot-path and seq-bound modules this runtime keeps under utils/"
+	},
+	{
+		"file": "src/runtime/utils/request-headers.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/utils/request-id.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/utils/tls-reload.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/utils/trusted-proxies.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/utils/ws-symbols.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/runtime/worker-watchdog.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "src/testing.js",
+		"reason": "implements the lead's module on node:http"
+	},
+	{
+		"file": "test/close-path-ordering.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/cluster-sequence-policy.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/platform-parity.test.js",
+		"reason": "the parity gate itself; holds protocol.schema.json byte-equal"
+	},
+	{
+		"file": "test/recover-ref-contract.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/relay-ring.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/tls-reload.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/trusted-proxies.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/upgrade-admission-deferred.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/upgrade-admission-wiring.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/upgrade-waiting-room.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "test/wire-value.test.js",
+		"reason": "this runtime's own test of the module it implements"
+	},
+	{
+		"file": "vitest.config.js",
+		"reason": "this repository's own configuration"
+	}
+]

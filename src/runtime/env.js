@@ -51,7 +51,7 @@ if (ENV_PREFIX) {
 }
 
 // IMPORTANT: process.env property access crosses the V8-to-OS boundary on every
-// call (uv_os_getenv() behind a global mutex - it is NOT a cached Map lookup).
+// call (uv_os_getenv() behind a global mutex  - it is NOT a cached Map lookup).
 // All env() calls must be at module level, never inside request handlers or
 // per-message callbacks. One access per call; the `in` + property pattern
 // would cost two OS round-trips.

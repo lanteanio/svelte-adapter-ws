@@ -1,6 +1,70 @@
 [
 	{
+		"file": "LICENSE"
+	},
+	{
+		"file": "PROTOCOL.md",
+		"adaptations": [
+			{
+				"lead": "`svelte-adapter-ws` is the reference implementation; `svelte-realtime` is",
+				"ours": "`svelte-adapter-uws` is the reference implementation; `svelte-realtime` is"
+			},
+			{
+				"lead": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-ws` repository.",
+				"ours": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-uws` repository."
+			},
+			{
+				"lead": "- **Applies to:** `svelte-adapter-ws` 0.6.0 and later, its bundled client, and",
+				"ours": "- **Applies to:** `svelte-adapter-uws` 0.6.0 and later, its bundled client, and"
+			},
+			{
+				"lead": "The reference `svelte-adapter-ws` runtime does not terminate QUIC and does",
+				"ours": "The reference `svelte-adapter-uws` runtime does not terminate QUIC and does"
+			},
+			{
+				"lead": "`svelte-adapter-ws` runtime does not terminate QUIC; this section is",
+				"ours": "`svelte-adapter-uws` runtime does not terminate QUIC; this section is"
+			},
+			{
+				"lead": "https://github.com/lanteanio/svelte-adapter-ws/blob/dev/test/minimal-client.test.js",
+				"ours": "https://github.com/lanteanio/svelte-adapter-uws/blob/dev/test/minimal-client.test.js"
+			},
+			{
+				"lead": "[README](./README.md) | [migration guide](./MIGRATION.md) |",
+				"ours": "[README](./README.md) | [migration guide](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/MIGRATION.md) |"
+			},
+			{
+				"lead": "[conformance index](./docs/protocol-conformance.md) |",
+				"ours": "[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |"
+			},
+			{
+				"lead": "A [minimal dependency-free Core client](./examples/minimal-client.mjs) (~40",
+				"ours": "A [minimal dependency-free Core client](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/examples/minimal-client.mjs) (~40"
+			},
+			{
+				"lead": "on purpose: four surfaces speak this protocol (the uWS production runtime, the",
+				"ours": "on purpose: four surfaces speak this protocol (the reference uWS production runtime, the"
+			},
+			{
+				"lead": "The [conformance index](./docs/protocol-conformance.md) is the task-oriented",
+				"ours": "The [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) is the task-oriented"
+			}
+		]
+	},
+	{
+		"file": "scripts/check-source-bytes.js"
+	},
+	{
+		"file": "scripts/check-tracked-imports.js"
+	},
+	{
 		"file": "scripts/sim-git-commit.js"
+	},
+	{
+		"file": "src/build-config.js"
+	},
+	{
+		"file": "src/build-rollup-lifecycle.js"
 	},
 	{
 		"file": "src/client-runtime.js"
@@ -13,6 +77,12 @@
 	},
 	{
 		"file": "src/config-guards.js"
+	},
+	{
+		"file": "src/connection.d.ts"
+	},
+	{
+		"file": "src/connection.js"
 	},
 	{
 		"file": "src/dev-dashboard.js",
@@ -397,6 +467,9 @@
 		"file": "src/runtime/auditor.js"
 	},
 	{
+		"file": "src/runtime/cookies.js"
+	},
+	{
 		"file": "src/runtime/diagnostic-format.js"
 	},
 	{
@@ -421,10 +494,53 @@
 		"file": "src/runtime/divergence-diagnostics.js"
 	},
 	{
+		"file": "src/runtime/env.js",
+		"adaptations": [
+			{
+				"lead": "/* global ENV_PREFIX */\n\nconst expected = new Set([",
+				"ours": "/* global ENV_PREFIX */\n\n// The full family env surface, shared with svelte-adapter-uws so a prefixed\n// deployment can swap adapters without its environment tripping the conflict\n// check. Vars a given adapter does not consume are simply unread.\nconst expected = new Set(["
+			}
+		]
+	},
+	{
+		"file": "src/runtime/handler/cluster-sequence-policy.js"
+	},
+	{
+		"file": "src/runtime/handler/codec-registry.js"
+	},
+	{
 		"file": "src/runtime/handler/cohort.js"
 	},
 	{
+		"file": "src/runtime/handler/control-egress.js",
+		"adaptations": [
+			{
+				"lead": "import { bumpOut } from './pressure-metrics.js';",
+				"ours": "import { bumpOut } from './conn-stats.js';"
+			},
+			{
+				"lead": "\tbumpOut(ws, payload);",
+				"ours": "\tbumpOut(ws.getUserData(), payload);"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/handler/egress-budget.js"
+	},
+	{
+		"file": "src/runtime/handler/envelope-cache.js"
+	},
+	{
+		"file": "src/runtime/handler/game-ingress.js"
+	},
+	{
+		"file": "src/runtime/handler/ingress.js",
+		"adaptations": [
+			{
+				"lead": "Symbol.for('svelte-adapter-ws.ingress-registry')",
+				"ours": "Symbol.for('svelte-adapter-uws.ingress-registry')"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/handler/metrics-snapshot.js"
@@ -459,7 +575,29 @@
 		]
 	},
 	{
+		"file": "src/runtime/handler/resume-buffer.js",
+		"adaptations": [
+			{
+				"lead": "import { bumpOut } from './pressure-metrics.js';",
+				"ours": "import { bumpOut } from './conn-stats.js';"
+			},
+			{
+				"lead": "\t\tbumpOut(ws, payload);",
+				"ours": "\t\tbumpOut(ws.getUserData(), payload);"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/handler/shared-wire-id.js"
+	},
+	{
+		"file": "src/runtime/handler/warmup-registry.js"
+	},
+	{
+		"file": "src/runtime/handler/wire-fanout.js"
+	},
+	{
+		"file": "src/runtime/handler/wire-state.js"
 	},
 	{
 		"file": "src/runtime/invariants.js",
@@ -471,10 +609,16 @@
 		]
 	},
 	{
+		"file": "src/runtime/keydict.js"
+	},
+	{
 		"file": "src/runtime/leak-detect.js"
 	},
 	{
 		"file": "src/runtime/leak-probes.js"
+	},
+	{
+		"file": "src/runtime/manifest-bridge.js"
 	},
 	{
 		"file": "src/runtime/metrics-bridge.js"
@@ -487,6 +631,18 @@
 	},
 	{
 		"file": "src/runtime/posture-collector.js"
+	},
+	{
+		"file": "src/runtime/relay-spill-policy.js"
+	},
+	{
+		"file": "src/runtime/restart-supervisor.js"
+	},
+	{
+		"file": "src/runtime/runtime.js"
+	},
+	{
+		"file": "src/runtime/shims.js"
 	},
 	{
 		"file": "src/runtime/sim-cluster.js",
@@ -513,6 +669,12 @@
 		"file": "src/runtime/steadystate.js"
 	},
 	{
+		"file": "src/runtime/tracing-bridge.js"
+	},
+	{
+		"file": "src/runtime/tracing.js"
+	},
+	{
 		"file": "src/runtime/transport-metrics.js"
 	},
 	{
@@ -529,10 +691,41 @@
 		]
 	},
 	{
+		"file": "src/runtime/utils/assertions.js",
+		"adaptations": [
+			{
+				"lead": "'adapter-uws ",
+				"ours": "'adapter-ws ",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/runtime/utils/attribution.js"
+	},
+	{
+		"file": "src/runtime/utils/backpressure.js"
+	},
+	{
+		"file": "src/runtime/utils/byte-budget.js"
+	},
+	{
 		"file": "src/runtime/utils/byte-range.js"
 	},
 	{
+		"file": "src/runtime/utils/caps.js",
+		"adaptations": [
+			{
+				"lead": " * subscription is not only a Set entry: it is a native uWS topic-tree entry\n * as well, measured at about 700 bytes of resident memory each on the test\n * server, so one admitted connection at a million subscriptions would hold\n * about 700 MB that `upgradeAdmission.maxConnections` cannot see. 65,536 is\n * about 46 MB at worst per connection and sixty-four times a thousand-topic\n * client, which is already far past any healthy single-connection use; a\n * capped client is answered loudly and keeps everything it has.\n",
+				"ours": " * subscription is not only a Set entry: it is a topic-registry entry as\n * well, measured on the family's native tier at about 700 bytes of resident\n * memory each, so one admitted connection at a million subscriptions would\n * hold about 700 MB that `upgradeAdmission.maxConnections` cannot see. 65,536\n * is about 46 MB at worst per connection and sixty-four times a\n * thousand-topic client, which is already far past any healthy\n * single-connection use; a capped client is answered loudly and keeps\n * everything it has.\n"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/utils/chaos.js"
+	},
+	{
+		"file": "src/runtime/utils/close-frame.js"
 	},
 	{
 		"file": "src/runtime/utils/connection-permit.js"
@@ -550,10 +743,19 @@
 		"file": "src/runtime/utils/cookies-string.js"
 	},
 	{
+		"file": "src/runtime/utils/dot-path.js"
+	},
+	{
 		"file": "src/runtime/utils/egress-account.js"
 	},
 	{
 		"file": "src/runtime/utils/epoch.js"
+	},
+	{
+		"file": "src/runtime/utils/fd-limit.js"
+	},
+	{
+		"file": "src/runtime/utils/hook-boundary.js"
 	},
 	{
 		"file": "src/runtime/utils/location-target.js",
@@ -565,10 +767,19 @@
 		]
 	},
 	{
+		"file": "src/runtime/utils/memory-wall.js"
+	},
+	{
+		"file": "src/runtime/utils/message-admission.js"
+	},
+	{
 		"file": "src/runtime/utils/metrics-merge.js"
 	},
 	{
 		"file": "src/runtime/utils/metrics.js"
+	},
+	{
+		"file": "src/runtime/utils/mime.js"
 	},
 	{
 		"file": "src/runtime/utils/observability-privacy.js"
@@ -583,13 +794,40 @@
 		]
 	},
 	{
+		"file": "src/runtime/utils/origin.js"
+	},
+	{
+		"file": "src/runtime/utils/os-pressure.js"
+	},
+	{
+		"file": "src/runtime/utils/parse.js"
+	},
+	{
 		"file": "src/runtime/utils/posture-export.js"
 	},
 	{
 		"file": "src/runtime/utils/pressure.js"
 	},
 	{
+		"file": "src/runtime/utils/rate-limiter.js"
+	},
+	{
+		"file": "src/runtime/utils/request-target.js",
+		"adaptations": [
+			{
+				"lead": " * @param {string} path what uWS's `getUrl()` returns\n * @param {string | undefined} query what `getQuery()` returns\n",
+				"ours": " * @param {string} path the target's path, as the request line carries it\n * @param {string | undefined} query the target's query, without its `?`\n"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/utils/revalidation-headers.js"
+	},
+	{
+		"file": "src/runtime/utils/sd-notify.js"
+	},
+	{
+		"file": "src/runtime/utils/seq-bound.js"
 	},
 	{
 		"file": "src/runtime/utils/static-headers.js"
@@ -598,7 +836,22 @@
 		"file": "src/runtime/utils/subscribe-policy.js"
 	},
 	{
+		"file": "src/runtime/utils/topic.js"
+	},
+	{
+		"file": "src/runtime/utils/unsubscribe-hook.js"
+	},
+	{
 		"file": "src/runtime/utils/upgrade-admission.js"
+	},
+	{
+		"file": "src/runtime/utils/upgrade-headers.js",
+		"adaptations": [
+			{
+				"lead": "'[adapter-uws] Set-Cookie",
+				"ours": "'[adapter-ws] Set-Cookie"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/waiting-room-template.js"
@@ -613,7 +866,41 @@
 		]
 	},
 	{
+		"file": "src/runtime/utils/ws-handshake.js"
+	},
+	{
+		"file": "src/runtime/version-info.js",
+		"adaptations": [
+			{
+				"lead": "svelte-adapter-ws-extensions",
+				"ours": "svelte-adapter-uws-extensions",
+				"all": true
+			}
+		]
+	},
+	{
 		"file": "src/runtime/waiting-room-renderer-bridge.js"
+	},
+	{
+		"file": "src/runtime/wire-bits.js"
+	},
+	{
+		"file": "src/runtime/wire-stream.js"
+	},
+	{
+		"file": "src/runtime/wire-value.js"
+	},
+	{
+		"file": "src/runtime/wire.js",
+		"adaptations": [
+			{
+				"lead": " * Both pairs are pinned in test/pressure-sampler-isolation.test.js, which drives\n * the SHIPPED sizer against the SHIPPED threshold rather than restating either,\n * and which also fails when a reading joins the object below without a\n * calibration of its own. The subscriber pair's shared basis - one counter,\n * one LIVE connection-count denominator, for this gate and the sampler both -\n * is pinned on a real worker in test/pressure-calibration-real.test.js.\n * A change to a producer's basis or to a threshold below must move with them.\n",
+				"ours": " * Both pairs are pinned in test/lease-grant.test.js, which drives the SHIPPED\n * sizer against these thresholds rather than restating either. A change to a\n * producer's basis or to a threshold below must move with them.\n"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/ws-handler-bridge.js"
 	},
 	{
 		"file": "src/safe-url.d.ts"
@@ -638,6 +925,15 @@
 				"ours": "// that runs over the real node:http + ws transport, but over an in-memory app\n// under a virtual clock and a\n"
 			}
 		]
+	},
+	{
+		"file": "src/static-scan.js"
+	},
+	{
+		"file": "src/subscriptions.d.ts"
+	},
+	{
+		"file": "src/subscriptions.js"
 	},
 	{
 		"file": "src/testing.d.ts",
@@ -675,6 +971,21 @@
 				"ours": "export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';\n"
 			}
 		]
+	},
+	{
+		"file": "src/trace-context.js"
+	},
+	{
+		"file": "src/upgrade-response.d.ts",
+		"adaptations": [
+			{
+				"lead": " * makes the failure useful: uWS refuses a non-string only after the 101 status\n * line has already been corked, so the client would otherwise be left holding a\n * half-written handshake instead of getting a clean refusal.\n",
+				"ours": " * makes the failure useful: an invalid field would otherwise surface as a write\n * error after the 101 status line is already on the wire, leaving the client a\n * half-written handshake instead of a clean refusal.\n"
+			}
+		]
+	},
+	{
+		"file": "src/upgrade-response.js"
 	},
 	{
 		"file": "src/vite.d.ts"
@@ -780,6 +1091,24 @@
 		]
 	},
 	{
+		"file": "test/admin-prefix-entry-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
+				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
+			}
+		]
+	},
+	{
+		"file": "test/admin-prefix-unmounted-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
+				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
+			}
+		]
+	},
+	{
 		"file": "test/admin-route.test.js",
 		"adaptations": [
 			{
@@ -846,6 +1175,18 @@
 		"file": "test/auditor.test.js"
 	},
 	{
+		"file": "test/auth-throttle-real.test.js"
+	},
+	{
+		"file": "test/batch-sequence-mirror-parity.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
+				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
+			}
+		]
+	},
+	{
 		"file": "test/channels.test.js"
 	},
 	{
@@ -884,6 +1225,12 @@
 		"file": "test/client.test.js"
 	},
 	{
+		"file": "test/close-frame-real.test.js"
+	},
+	{
+		"file": "test/close-frame.test.js"
+	},
+	{
 		"file": "test/cluster-relay-attach-gate.test.js",
 		"adaptations": [
 			{
@@ -891,6 +1238,9 @@
 				"ours": "\t\t\t// No acceptor mode on this runtime: the ready branch is the one transition.\n\t\t\tINDEX_SOURCE.indexOf(\"msg.type === 'ready'\"),\n"
 			}
 		]
+	},
+	{
+		"file": "test/coalesced-drain-real.test.js"
 	},
 	{
 		"file": "test/codec-relay.test.js",
@@ -913,11 +1263,23 @@
 		"file": "test/connection-permit-carrier.test.js"
 	},
 	{
+		"file": "test/connection-slot-declaration.test.js"
+	},
+	{
 		"file": "test/content-coding.test.js",
 		"adaptations": [
 			{
 				"lead": "// The defect this replaces was substring matching: `acceptEncoding.includes('br')`\n// read `br;q=0` - a refusal - as an acceptance, and read no preference at all,\n// so `gzip;q=1, br;q=0.5` got brotli. The cases below are RFC 9110 12.5.3 read\n// literally, each one a header shape a real client sends.\n",
 				"ours": "// The cases below are RFC 9110 12.5.3 read literally, each one a header shape\n// a real client sends.\n"
+			}
+		]
+	},
+	{
+		"file": "test/control-egress.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\texpectStatementBlock(read('../src/runtime/handler.js'), [\n\t\t\t'const runIngressApplicationWork = (ws, context) =>',\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler.js');\n",
+				"ours": "\t\texpectStatementBlock(read('../src/runtime/handler/realtime.js'), [\n\t\t\t'const runIngressApplicationWork = (facade, context) =>',\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler/realtime.js');\n"
 			}
 		]
 	},
@@ -998,6 +1360,21 @@
 		"file": "test/dev-dashboard.test.js"
 	},
 	{
+		"file": "test/diagnostic-format.test.js",
+		"adaptations": [
+			{
+				"lead": "['[adapter-uws",
+				"ours": "['[adapter-ws",
+				"all": true
+			},
+			{
+				"lead": "'svelte-adapter-ws-extensions'",
+				"ours": "'svelte-adapter-uws-extensions'",
+				"all": true
+			}
+		]
+	},
+	{
 		"file": "test/divergence-diagnostics.test.js"
 	},
 	{
@@ -1011,6 +1388,67 @@
 	},
 	{
 		"file": "test/egress-ceilings.test.js"
+	},
+	{
+		"file": "test/envelope-data.test.js"
+	},
+	{
+		"file": "test/error-registry-claims.test.js"
+	},
+	{
+		"file": "test/error-registry-hook-crash.test.js"
+	},
+	{
+		"file": "test/error-registry-resume-divergence.test.js"
+	},
+	{
+		"file": "test/error-registry-shutdown-failed.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
+				"ours": "\t\treturn true;"
+			}
+		]
+	},
+	{
+		"file": "test/error-registry-ssr.test.js"
+	},
+	{
+		"file": "test/error-registry-subscribe-batch.test.js"
+	},
+	{
+		"file": "test/error-registry-subscribe-hook.test.js"
+	},
+	{
+		"file": "test/error-registry-tls.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\texpect(source).toMatch(/if \\(primaryCertWatcher\\) \\{ primaryCertWatcher\\.stop\\(\\);/);\n",
+				"ours": "\t\t\t// One watcher per certificate here, so the shutdown stops each of them.\n\t\t\texpect(source).toMatch(/for \\(const watcher of primaryCertWatchers\\) watcher\\.stop\\(\\);/);\n\t\t\texpect(source).not.toMatch(/primaryCertWatchers = primaryCertWatchers\\.filter/);\n"
+			}
+		]
+	},
+	{
+		"file": "test/error-registry-unsubscribe-hook.test.js"
+	},
+	{
+		"file": "test/extra-entry-imports.test.js"
+	},
+	{
+		"file": "test/fatal-sites.test.js",
+		"adaptations": [
+			{
+				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
+				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
+			},
+			{
+				"lead": "new RegExp('adapter-uws fatal: '",
+				"ours": "new RegExp('adapter-ws fatal: '"
+			}
+		]
+	},
+	{
+		"file": "test/fd-limit.test.js"
 	},
 	{
 		"file": "test/fixture/package.json"
@@ -1091,10 +1529,25 @@
 		"file": "test/fixture/src/routes/__leak/+server.js"
 	},
 	{
+		"file": "test/fixture/src/routes/__realtime/[...rest]/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/__realtime/pinned/+page.js"
+	},
+	{
+		"file": "test/fixture/src/routes/__realtime/pinned/+page.svelte"
+	},
+	{
+		"file": "test/fixture/src/routes/big-shared/+server.js"
+	},
+	{
 		"file": "test/fixture/src/routes/compressible/+page.svelte"
 	},
 	{
 		"file": "test/fixture/src/routes/cursors/+page.svelte"
+	},
+	{
+		"file": "test/fixture/src/routes/head-declared/+server.js"
 	},
 	{
 		"file": "test/fixture/src/routes/metrics-direct/+server.js"
@@ -1124,6 +1577,9 @@
 		"file": "test/fixture/src/routes/ssr-stream-fail/+server.js"
 	},
 	{
+		"file": "test/fixture/src/routes/stream-big/+server.js"
+	},
+	{
 		"file": "test/fixture/src/tracing.invalid.js"
 	},
 	{
@@ -1142,6 +1598,9 @@
 		"file": "test/fixture/static/deep/.hidden.txt"
 	},
 	{
+		"file": "test/fixture/static/maß.txt"
+	},
+	{
 		"file": "test/fixture/static/test.txt"
 	},
 	{
@@ -1152,6 +1611,37 @@
 	},
 	{
 		"file": "test/fixture/vite.config.js"
+	},
+	{
+		"file": "test/game-cluster-policy.test.js",
+		"adaptations": [
+			{
+				"lead": "const handlerSource = read('../src/runtime/handler.js');",
+				"ours": "const handlerSource = read('../src/runtime/handler/realtime.js');"
+			},
+			{
+				"lead": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/**\\n\\t * Unsubscribe');",
+				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\tget assertions()');"
+			}
+		]
+	},
+	{
+		"file": "test/grant-model.test.js",
+		"adaptations": [
+			{
+				"lead": "// The production dispatch (src/runtime/handler.js, handler/platform.js) is",
+				"ours": "// The production dispatch (src/runtime/handler/realtime.js, handler/platform.js) is"
+			},
+			{
+				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
+				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
+			},
+			{
+				"lead": "pendingUd",
+				"ours": "userData",
+				"all": true
+			}
+		]
 	},
 	{
 		"file": "test/groups-wire-policy.test.js",
@@ -1170,6 +1660,18 @@
 		"file": "test/groups.test.js"
 	},
 	{
+		"file": "test/harness-metrics-surface.test.js",
+		"adaptations": [
+			{
+				"lead": "api: { options: { kit: { adapter: { name: 'adapter-uws', websocketMetrics: metricsPath } } } }",
+				"ours": "api: { options: { kit: { adapter: { name: 'adapter-ws', websocketMetrics: metricsPath } } } }"
+			}
+		]
+	},
+	{
+		"file": "test/head-and-204-framing-real.test.js"
+	},
+	{
 		"file": "test/helpers/fixture-build.js"
 	},
 	{
@@ -1183,6 +1685,9 @@
 	},
 	{
 		"file": "test/helpers/metrics-snapshot-worker.mjs"
+	},
+	{
+		"file": "test/helpers/openssl.js"
 	},
 	{
 		"file": "test/helpers/real-runtime.js",
@@ -1205,7 +1710,48 @@
 		"file": "test/helpers/restore-globals.js"
 	},
 	{
+		"file": "test/helpers/source-pins.js"
+	},
+	{
 		"file": "test/helpers/stop-leaked-runtimes.js"
+	},
+	{
+		"file": "test/helpers/vite-dev.js"
+	},
+	{
+		"file": "test/host-header-proxy-real.test.js"
+	},
+	{
+		"file": "test/host-header-real.test.js"
+	},
+	{
+		"file": "test/http-error-request-id.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { calls.push(['cork']); fn(); },\n\t\t\twriteStatus(value) { calls.push(['status', value]); },\n\t\t\twriteHeader(name, value) { calls.push(['header', name, value]); },\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n",
+				"ours": "\t\t// node:http's response: one writeHead carries the status and the headers.\n\t\tconst res = {\n\t\t\twriteHead(status, headers) {\n\t\t\t\tcalls.push(['status', status]);\n\t\t\t\tfor (const [name, value] of Object.entries(headers)) calls.push(['header', name, value]);\n\t\t\t},\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n"
+			},
+			{
+				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { fn(); },\n\t\t\twriteStatus() {},\n\t\t\twriteHeader(name, value) { headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n",
+				"ours": "\t\tconst res = {\n\t\t\twriteHead(status, h) { for (const [name, value] of Object.entries(h)) headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n"
+			},
+			{
+				"lead": "\t\texpect(headers).toEqual([['content-type', 'text/plain']]);\n",
+				"ours": "\t\t// content-length is node:http framing for the fixed body, not an invented header.\n\t\texpect(headers).toEqual([['content-type', 'text/plain'], ['content-length', '21']]);\n"
+			}
+		]
+	},
+	{
+		"file": "test/http-forbidden-methods.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\texpect(status(propfind), 'an unlisted method still reaches the application')\n\t\t\t.not.toContain('405 Method Not Allowed');\n",
+				"ours": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\t// node:http writes the reason phrase on every status, so the adapter's\n\t\t// refusal is told apart by its fixed Allow list; the application's own\n\t\t// 405 names the methods of the route it matched instead.\n\t\texpect(header(propfind, 'allow'), 'an unlisted method still reaches the application')\n\t\t\t.not.toEqual(['GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS']);\n"
+			}
+		]
+	},
+	{
+		"file": "test/http-pipelining-real.test.js"
 	},
 	{
 		"file": "test/http-request-lanes.test.js",
@@ -1226,6 +1772,22 @@
 		"file": "test/leak-detect.test.js"
 	},
 	{
+		"file": "test/lifecycle-hook-boundary.test.js"
+	},
+	{
+		"file": "test/lifecycle-readiness.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
+				"ours": "\t\treturn true;"
+			},
+			{
+				"lead": "describeUWS('a cluster worker drained while it is still booting'",
+				"ours": "describeSignal('a cluster worker drained while it is still booting'"
+			}
+		]
+	},
+	{
 		"file": "test/location-target.test.js",
 		"adaptations": [
 			{
@@ -1238,6 +1800,47 @@
 		"file": "test/lock.test.js"
 	},
 	{
+		"file": "test/message-admission-lanes.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": ""
+			},
+			{
+				"lead": "describeUWS('established-message application lanes', () => {\n",
+				"ours": "describe('established-message application lanes', () => {\n"
+			},
+			{
+				"lead": "\t\tfile: new URL('../src/runtime/handler.js', import.meta.url),\n",
+				"ours": "\t\tfile: new URL('../src/runtime/handler/realtime.js', import.meta.url),\n"
+			}
+		]
+	},
+	{
+		"file": "test/message-admission.test.js"
+	},
+	{
+		"file": "test/message-envelope-shape-real.test.js"
+	},
+	{
+		"file": "test/message-hook-containment.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\t['src/runtime/handler.js', 2],",
+				"ours": "\t\t\t['src/runtime/handler/realtime.js', 2],"
+			}
+		]
+	},
+	{
+		"file": "test/metrics-label-contract.test.js",
+		"adaptations": [
+			{
+				"lead": "\t'src/runtime/handler.js',",
+				"ours": "\t'src/runtime/handler/realtime.js',"
+			}
+		]
+	},
+	{
 		"file": "test/metrics-snapshot.test.js"
 	},
 	{
@@ -1248,6 +1851,9 @@
 	},
 	{
 		"file": "test/os-posture.test.js"
+	},
+	{
+		"file": "test/platform-type-surface.test.js"
 	},
 	{
 		"file": "test/plugin-cluster-authority.test.js",
@@ -1300,6 +1906,15 @@
 		]
 	},
 	{
+		"file": "test/protocol-schema.test.js",
+		"adaptations": [
+			{
+				"lead": "const uWS = hasUWS ? (await import('uWebSockets.js')).default : null;\n",
+				"ours": ""
+			}
+		]
+	},
+	{
 		"file": "test/queue.test.js"
 	},
 	{
@@ -1317,6 +1932,9 @@
 				"ours": "// Not at the default (the test server's 404 - route absent there)."
 			}
 		]
+	},
+	{
+		"file": "test/relay-frame-ceiling.test.js"
 	},
 	{
 		"file": "test/relay-gap.test.js",
@@ -1342,10 +1960,109 @@
 		]
 	},
 	{
+		"file": "test/relay-spill-policy.test.js"
+	},
+	{
+		"file": "test/relay-spill-quarantine-policy.test.js"
+	},
+	{
 		"file": "test/replay.test.js"
 	},
 	{
+		"file": "test/request-framing-real.test.js",
+		"adaptations": [
+			{
+				"lead": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// The vendored parser reads the PRESENCE of Transfer-Encoding, not its value:\n// `xchunked`, `gzip`, `chunked, chunked` and `chunked, gzip` are all decoded as\n// chunked, and an empty Content-Length is accepted as a bodyless request.\n// (Measured against uWebSockets.js v20.69.0; the malformed Content-Length\n// spellings it does refuse - `0x6`, `+6`, `6abc` - are refused before any of\n// this runs, and a request carrying both Transfer-Encoding and Content-Length\n// is refused there too.) A conformant intermediary in front reads the same\n// bytes differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses these shapes itself.\n//\n// Two oracles, and the second is the one that matters:\n//\n",
+				"ours": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// node's parser refuses most of these shapes itself, with a 400 and a closed\n// connection: an unknown or doubled coding, `chunked, gzip`, an empty or\n// repeated Content-Length, and a request carrying both framing headers. It\n// decodes a coding list that ENDS in chunked (`gzip, chunked`) as chunked,\n// though, and hands a request with an EMPTY Transfer-Encoding to the listener\n// as a bodyless one. A conformant intermediary in front reads the same bytes\n// differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses the shapes that reach it.\n//\n// Two oracles, and the second is the one that matters:\n//\n"
+			},
+			{
+				"lead": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// Measured, so the cases below read correctly: uWS ends the connection when a\n// response is finished with its close flag, but a request it has ALREADY\n// parsed out of the same segment is still answered first. So these probes go\n// one request at a time and watch for the server's own hangup, rather than\n// pipelining a follower and asserting silence.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n",
+				"ours": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// These probes go one request at a time and watch for the server's own\n// hangup, rather than pipelining a follower and asserting silence: a refusal\n// ends the connection once its answer is flushed, whether the parser or a\n// lane wrote it.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n"
+			},
+			{
+				"lead": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. uWS\n\t\t// emits it itself for a response finished with its close flag, so a\n\t\t// refusal that writes one as well puts the field on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n",
+				"ours": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. node\n\t\t// writes the field a refusal sets and adds none of its own, so a\n\t\t// second writer would put it on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n"
+			},
+			{
+				"lead": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length on the fast path').toBe('200');\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// A repeated Content-Length, not a Transfer-Encoding shape: the one\n\t\t\t// lookup in front of every route reads the first value of a repeat\n\t\t\t// and sees nothing wrong, so this reaches the authenticate door,\n\t\t\t// which builds the header set and refuses there. A Transfer-Encoding\n\t\t\t// probe would be answered by the wrapper and this case would stay\n\t\t\t// green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Content-Length: 2',\n\t\t\t\t'Content-Length: 3'\n\t\t\t], 'AA');\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n",
+				"ours": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\t// node's own parser refuses a repeated Content-Length before any lane\n\t\t\t// reads the request, on every lane alike, and closes the connection.\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length never reaches the fast path').toBe('400');\n\t\t\texpect(repeated.closedByServer).toBe(true);\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// An EMPTY Transfer-Encoding: the one lookup in front of every route\n\t\t\t// reads it as absent and sees nothing wrong, so this reaches the\n\t\t\t// authenticate door, which builds the header set and refuses there.\n\t\t\t// A repeated Content-Length never gets that far on node, whose\n\t\t\t// parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t\t// would be answered in front of the door; either would keep this\n\t\t\t// case green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Transfer-Encoding:'\n\t\t\t]);\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n"
+			},
+			{
+				"lead": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503 and KEEPS its connection. That is what the framing answer has to come\n\t// before: delete the lookup at the top of the upgrade callback and this\n\t// case reads 503 on an open connection instead of 400 on a closed one.\n\tlet server;\n\tlet port;\n\tconst held = [];\n",
+				"ours": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503. That is what the framing answer has to come before: delete the\n\t// lookup at the top of the upgrade listener and this case reads 503 instead\n\t// of 400. node hands an upgrade over with its HTTP parser detached from the\n\t// socket, so every refusal written there closes the connection, the 503\n\t// included.\n\tlet server;\n\tlet port;\n\tconst held = [];\n"
+			},
+			{
+				"lead": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n",
+				"ours": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n"
+			},
+			{
+				"lead": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. A repeated Content-Length is the probe,\n\t\t// because the one lookup in front of every route cannot see a repeat -\n\t\t// it reads the first value - so this reaches the admin handler, which\n\t\t// builds the header set and refuses there. A Transfer-Encoding shape\n\t\t// would be answered by the wrapper before this lane ever ran, and the\n\t\t// case would pass without the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n",
+				"ours": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. An EMPTY Transfer-Encoding is the probe,\n\t\t// because the one lookup in front of every route reads it as absent, so\n\t\t// this reaches the admin handler, which builds the header set and\n\t\t// refuses there. A repeated Content-Length never gets that far on node,\n\t\t// whose parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t// would be answered in front of this lane; either would pass without\n\t\t// the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n"
+			},
+			{
+				"lead": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t'AA'\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n",
+				"ours": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Transfer-Encoding:'],\n\t\t\t''\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n"
+			},
+			{
+				"lead": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503\n\t\t// and KEEPS the connection, so a handshake whose framing this server and\n\t\t// the one in front of it read differently has to be answered first.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n",
+				"ours": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503,\n\t\t// so a handshake whose framing this server and the one in front of it\n\t\t// read differently has to be answered first. Like production's, every\n\t\t// refusal the mirror writes on an upgrade closes the connection.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n"
+			},
+			{
+				"lead": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\t\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n",
+				"ours": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n"
+			}
+		]
+	},
+	{
+		"file": "test/request-headers.test.js"
+	},
+	{
+		"file": "test/request-signal-real.test.js"
+	},
+	{
+		"file": "test/request-target-real.test.js"
+	},
+	{
+		"file": "test/restart-supervisor.test.js"
+	},
+	{
+		"file": "test/resume-flush-caller-guard.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });",
+				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back, so a\n\t\t// spill in the same read would run before the subscribe's gate await\n\t\t// resumes and the capture window opens. A round trip in between puts the\n\t\t// spill in a later read, after that await has settled.\n\t\texpect(await answers(victim, 'window'), 'the liveness probe never worked').toBe(true);\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
+			},
+			{
+				"lead": "// it. uWS keeps `getUserData` working after `end()` and only throws on `send`\n// (measured against the bundled 20.69.0), and both sites the subscribe lane\n",
+				"ours": "// it. The facade keeps `getUserData` working after `end()` by design (it hands\n// back the stored userData unconditionally) and only throws on `send`, and both\n// sites the subscribe lane\n"
+			},
+			{
+				"lead": "// WHY THIS EXISTS. The flush reads uWS's DROPPED sentinel and, when even the\n",
+				"ours": "// WHY THIS EXISTS. The flush reads the facade's DROPPED sentinel and, when even the\n"
+			},
+			{
+				"lead": "// branch runs - not that a real uWS connection ever reaches it. Here the\n",
+				"ours": "// branch runs - not that a real connection ever reaches it. Here the\n"
+			}
+		]
+	},
+	{
+		"file": "test/resume-flush-refusal.test.js"
+	},
+	{
+		"file": "test/resume-grant-gate-real.test.js"
+	},
+	{
 		"file": "test/revalidation-headers.test.js"
+	},
+	{
+		"file": "test/rollup-lifecycle.test.js",
+		"adaptations": [
+			{
+				"lead": "'adapter-uws-rollup-close-'",
+				"ours": "'adapter-ws-rollup-close-'"
+			}
+		]
 	},
 	{
 		"file": "test/safe-url.test.js"
@@ -1360,10 +2077,46 @@
 		]
 	},
 	{
+		"file": "test/send-wire-batch-shed.test.js"
+	},
+	{
+		"file": "test/seq-registry-ceiling-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\tlet state;\n",
+				"ours": "\tlet state;\n\tlet registry;\n"
+			},
+			{
+				"lead": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n",
+				"ours": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n\t\tregistry = await import(`./fixture/${OUT}/handler/topic-registry.js`);\n"
+			},
+			{
+				"lead": "\t\treturn {\n\t\t\tsent,\n\t\t\tgetUserData() { return ud; },\n",
+				"ours": "\t\treturn {\n\t\t\tsent,\n\t\t\treadyState: 1,\n\t\t\tgetUserData() { return ud; },\n"
+			},
+			{
+				"lead": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t}\n",
+				"ours": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\t// The delivery walk here reads the topic registry and the facade map,\n\t\t\t// not the live set, so a scripted socket enters both as its own facade.\n\t\t\tregistry.registerSocket(ws);\n\t\t\tregistry.subscribeSocket(ws, topic);\n\t\t\tstate.wsWrappers.set(ws, ws);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t\tstate.wsWrappers.delete(ws);\n\t\t\t\tregistry.unregisterSocket(ws);\n\t\t\t}\n"
+			}
+		]
+	},
+	{
 		"file": "test/seq-stamp.test.js"
 	},
 	{
 		"file": "test/session.test.js"
+	},
+	{
+		"file": "test/shared-cohort-accounting.test.js"
+	},
+	{
+		"file": "test/shared-fanout.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
+				"ours": "// The binding probe would answer no here: this adapter runs on its own\n// transport, which is always present.\nconst describeUWS = describe;\nconst { createTestServer } = await import('../src/testing.js');\n"
+			}
+		]
 	},
 	{
 		"file": "test/sim-core.test.js"
@@ -1480,19 +2233,98 @@
 		"file": "test/smooth-wire.test.js"
 	},
 	{
+		"file": "test/source-pins.test.js"
+	},
+	{
 		"file": "test/state-convergence.test.js"
 	},
 	{
 		"file": "test/state-hash-detector.test.js"
 	},
 	{
+		"file": "test/static-assets-negotiate.test.js",
+		"adaptations": [
+			{
+				"lead": "function recorder() {\n\tconst rec = {\n\t\tstatus: '',\n\t\t/** @type {[string, string][]} */\n\t\theaders: [],\n\t\t/** @type {Buffer | null} */\n\t\tbody: null,\n\t\tbodyLength: -1,\n\t\tres: /** @type {any} */ (null)\n\t};\n\tconst res = {\n\t\tcork(/** @type {() => void} */ fn) { fn(); return res; },\n\t\twriteStatus(/** @type {string} */ status) { rec.status = status; return res; },\n\t\twriteHeader(/** @type {string} */ key, /** @type {string} */ value) { rec.headers.push([key, value]); return res; },\n\t\tend(/** @type {Buffer | undefined} */ body) { rec.body = body === undefined ? null : Buffer.from(body); return res; },\n\t\tendWithoutBody(/** @type {number} */ length) { rec.bodyLength = length; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
+				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\t// node's ServerResponse writes Date on every response itself.\n\t\t\tif (!rec.headers.some((h) => h[0] === 'date')) rec.headers.push(['date', new Date().toUTCString()]);\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
+			},
+			{
+				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
+				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
+			},
+			{
+				"lead": "\t\tuWS = (await import('uWebSockets.js')).default;\n\t\tconst { cacheDir, serveStatic }",
+				"ours": "\t\tconst { cacheDir, serveStatic }"
+			},
+			{
+				"lead": "\t\tconst route = (served) => (res, req) => {\n\t\t\tres.onAborted(() => {});\n\t\t\tserveStatic(\n\t\t\t\tres, served,\n\t\t\t\treq.getHeader('accept-encoding'),\n\t\t\t\treq.getHeader('if-none-match'),\n\t\t\t\tfalse,\n\t\t\t\treq.getHeader('range'),\n\t\t\t\treq.getHeader('if-range')\n\t\t\t);\n\t\t};\n\t\tconst app = uWS.App()\n\t\t\t.get('/wire-probe/asset.txt', route(entry))\n\t\t\t.get('/wire-probe/gz-asset.txt', route(gzEntry));\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.listen('127.0.0.1', 0, (socket) => {\n\t\t\t\tif (!socket) return reject(new Error('uWS failed to listen'));\n\t\t\t\tlistenSocket = socket;\n\t\t\t\tport = uWS.us_socket_local_port(socket);\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});",
+				"ours": "\t\tconst routes = new Map([['/wire-probe/asset.txt', entry], ['/wire-probe/gz-asset.txt', gzEntry]]);\n\t\tconst app = http.createServer((req, res) => {\n\t\t\tconst served = routes.get(String(req.url));\n\t\t\tif (!served) { res.writeHead(404); res.end(); return; }\n\t\t\tconst h = req.headers;\n\t\t\tserveStatic(\n\t\t\t\tres, served,\n\t\t\t\tString(h['accept-encoding'] || ''),\n\t\t\t\tString(h['if-none-match'] || ''),\n\t\t\t\tfalse,\n\t\t\t\tString(h['range'] || ''),\n\t\t\t\tString(h['if-range'] || '')\n\t\t\t);\n\t\t});\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.once('error', reject);\n\t\t\tapp.listen(0, '127.0.0.1', () => {\n\t\t\t\tlistenSocket = app;\n\t\t\t\tport = /** @type {import('node:net').AddressInfo} */ (app.address()).port;\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});"
+			},
+			{
+				"lead": "\t\t\ttry { uWS.us_listen_socket_close(listenSocket); } catch { /* already closed */ }",
+				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
+			},
+			{
+				"lead": "\t\t// `br;q=0` is a refusal; the substring test read it as an acceptance.\n",
+				"ours": "\t\t// `br;q=0` is a refusal.\n"
+			},
+			{
+				"lead": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity - and the substring test would have served brotli anyway.\n",
+				"ours": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity.\n"
+			}
+		]
+	},
+	{
+		"file": "test/static-preconditions.test.js",
+		"adaptations": [
+			{
+				"lead": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst res = {\n\t\tcork(fn) { fn(); return res; },\n\t\twriteStatus(s) { rec.status = s; return res; },\n\t\twriteHeader(k, v) { rec.headers.push([k, v]); return res; },\n\t\tend(b) { rec.body = b === undefined ? null : Buffer.from(b); return res; },\n\t\tendWithoutBody(n) { rec.bodyLength = n; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
+				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
+			},
+			{
+				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
+				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
+			}
+		]
+	},
+	{
 		"file": "test/steadystate.test.js"
+	},
+	{
+		"file": "test/subscribe-pending-cap.test.js"
+	},
+	{
+		"file": "test/subscription-accounting.test.js"
+	},
+	{
+		"file": "test/subscriptions-entry-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t\texpect(state.counters.totalSubscriptions).toBe(baseTotal);\n\t\t} finally {\n\t\t\tclient.close();\n\t\t}",
+				"ours": "\t\t\texpect(state.counters.totalSubscriptions).toBe(baseTotal);\n\t\t} finally {\n\t\t\t// The hand-written entry was never charged, so releasing it at the close\n\t\t\t// drives the counter below zero, and that soft assertion throws in a test\n\t\t\t// run out of the transport close event. Undo it first.\n\t\t\tfor (const ws of state.wsConnections) ws.getUserData()[SUBSCRIPTIONS]?.delete('__probe:raw');\n\t\t\tclient.close();\n\t\t}"
+			}
+		]
 	},
 	{
 		"file": "test/throttle.test.js"
 	},
 	{
+		"file": "test/topic-epoch-bump.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS = null;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
+				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
+			}
+		]
+	},
+	{
+		"file": "test/transport-metric-labels.test.js"
+	},
+	{
 		"file": "test/transport-metrics.test.js"
+	},
+	{
+		"file": "test/upgrade-carry-real.test.js"
 	},
 	{
 		"file": "test/version-info.test.js",
@@ -1505,6 +2337,9 @@
 		]
 	},
 	{
+		"file": "test/vite-dev-request-shape.test.js"
+	},
+	{
 		"file": "test/vite-grant-conjunct.test.js"
 	},
 	{
@@ -1512,6 +2347,9 @@
 	},
 	{
 		"file": "test/vite-origin-parity.test.js"
+	},
+	{
+		"file": "test/vite-upgrade-headers.test.js"
 	},
 	{
 		"file": "test/vite.test.js",
@@ -1522,6 +2360,18 @@
 				"all": true
 			}
 		]
+	},
+	{
+		"file": "test/waiting-renderer-build-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\tconst handler = readFileSync(join(out, 'handler.js'), 'utf8');\n",
+				"ours": "\t\tconst handler = readFileSync(join(out, 'handler', 'realtime.js'), 'utf8');\n"
+			}
+		]
+	},
+	{
+		"file": "test/waiting-room-template.test.js"
 	},
 	{
 		"file": "test/warmup.test.js"
@@ -1549,173 +2399,6 @@
 				"ours": "// The prerendered lookup, SvelteKit's router and `read()` all decode first,\n// so `/x%3Ay` names the same alternate-data-stream path as `/x:y` and is\n// refused with it. The predicate is pure"
 			}
 		]
-	},
-	{
-		"file": "test/ws-handler-resolution.test.js",
-		"adaptations": [
-			{
-				"lead": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see src/runtime/handler/subscribe-hooks.js), so a substitution\n// can disarm a gate the operator explicitly armed.\n",
-				"ours": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see the subscribe authorization in\n// src/runtime/handler/realtime.js), so a substitution can disarm a gate the\n// operator explicitly armed.\n"
-			},
-			{
-				"lead": "// The artifact test below therefore asserts on the BUILT BUNDLE, not on the\n// adapter's normalized options: the option object was always correct: it was\n// simply never read, so an options-level assertion stays green against the bug.\n",
-				"ours": "// An options-level assertion stays green against that bug on its own, because\n// the option object was always correct - it was simply never read. So what\n// these cases pin is the adapter PUBLISHING the option to the plugin, and the\n// guard that refuses a build whose bundle names a different module.\n"
-			},
-			{
-				"lead": "import { readFileSync } from 'node:fs';\n",
-				"ours": ""
-			},
-			{
-				"lead": "import { buildFixtureOnce } from './helpers/fixture-build.js';\nimport { hasUWS, REAL_BOOT_BUDGET_MS } from './helpers/real-runtime.js';\nimport { variantOut, FIXTURE_VARIANTS } from './fixture/variants.js';\n",
-				"ours": ""
-			},
-			{
-				"lead": "const fixtureDir = path.join(ROOT, 'test/fixture');\n",
-				"ours": ""
-			},
-			{
-				"lead": "\tit('publishes the configured module path on the adapter object', () => {\n\t\texpect(adapter({ websocket: { metrics: './src/m.js' } }).websocketMetrics).toBe('./src/m.js');\n\t});\n\n",
-				"ours": ""
-			},
-			{
-				"lead": "// The real proof. Everything above tests the guard; this tests that the option\n// actually reaches the build, which is what was broken.\nconst describeBuild = hasUWS ? describe : describe.skip;\n\ndescribeBuild('the built artifact honours websocket.handler through the Vite plugin', () => {\n\tit('bundles the module named on the adapter, not the auto-discovered one', () => {\n\t\t// The `grant` variant names its handler ONLY through the adapter's\n\t\t// `websocket.handler` (test/fixture/svelte.config.js); the fixture's\n\t\t// vite.config.js passes the plugin nothing. So if the plugin stops\n\t\t// honouring the adapter's option, auto-discovery picks up\n\t\t// src/hooks.ws.js and every assertion below flips.\n\t\texpect(FIXTURE_VARIANTS.grant.handler).toBe('./src/hooks.ws.grant.js');\n\n\t\tconst built = buildFixtureOnce('grant');\n\t\texpect(built, 'grant fixture variant failed to build').toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\n\t\t// A marker unique to the named module...\n\t\texpect(bundle).toContain('resume-topics');\n\t\t// ...and one unique to the module auto-discovery would have picked.\n\t\texpect(bundle).not.toContain('cork-test');\n\t\t// Reads a build rather than performing one on a warm tree, but the call\n\t\t// is the same one either way and a cold or contended tree pays for the\n\t\t// build here - which is more than vitest's default allows for.\n\t}, REAL_BOOT_BUDGET_MS);\n\n\tit('carries the named handler plugin hook, not the auto-discovered authorization hook', () => {\n\t\t// The named handler now wraps a real groups-plugin side-effect hook and\n\t\t// preserves its marker. Its export is expected and does not disarm the\n\t\t// grant model; the differential suite proves that behavior. These bundle\n\t\t// markers distinguish it from src/hooks.ws.js, whose app authorization\n\t\t// hook would stand the armed gate down.\n\t\texpect(buildFixtureOnce('grant')).toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\t\tconst exportList = /\\bexport\\s*\\{([^}]*)\\}/.exec(bundle);\n\t\texpect(exportList, 'bundled handler has no export statement to inspect').not.toBeNull();\n\n\t\tconst names = exportList[1]\n\t\t\t.split(',')\n\t\t\t.map((entry) => entry.trim().split(/\\s+as\\s+/).pop().trim())\n\t\t\t.filter(Boolean);\n\n\t\texpect(names).toContain('upgrade');\n\t\texpect(names).toContain('subscribe');\n\t\texpect(bundle).toContain('policy-lobby');\n\t\texpect(bundle).toContain('hook-entered');\n\t}, REAL_BOOT_BUDGET_MS);\n});\n",
-				"ours": ""
-			}
-		]
-	},
-	{
-		"file": "test/control-egress.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\texpectStatementBlock(read('../src/runtime/handler.js'), [\n\t\t\t'const runIngressApplicationWork = (ws, context) =>',\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler.js');\n",
-				"ours": "\t\texpectStatementBlock(read('../src/runtime/handler/realtime.js'), [\n\t\t\t'const runIngressApplicationWork = (facade, context) =>',\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler/realtime.js');\n"
-			}
-		]
-	},
-	{
-		"file": "test/connection-slot-declaration.test.js"
-	},
-	{
-		"file": "test/vite-upgrade-headers.test.js"
-	},
-	{
-		"file": "test/resume-grant-gate-real.test.js"
-	},
-	{
-		"file": "test/lifecycle-readiness.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
-				"ours": "\t\treturn true;"
-			},
-			{
-				"lead": "describeUWS('a cluster worker drained while it is still booting'",
-				"ours": "describeSignal('a cluster worker drained while it is still booting'"
-			}
-		]
-	},
-	{
-		"file": "test/error-registry-shutdown-failed.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;",
-				"ours": "\t\treturn true;"
-			}
-		]
-	},
-	{
-		"file": "test/error-registry-tls.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\texpect(source).toMatch(/if \\(primaryCertWatcher\\) \\{ primaryCertWatcher\\.stop\\(\\);/);\n",
-				"ours": "\t\t\t// One watcher per certificate here, so the shutdown stops each of them.\n\t\t\texpect(source).toMatch(/for \\(const watcher of primaryCertWatchers\\) watcher\\.stop\\(\\);/);\n\t\t\texpect(source).not.toMatch(/primaryCertWatchers = primaryCertWatchers\\.filter/);\n"
-			}
-		]
-	},
-	{
-		"file": "test/fixture/src/routes/__realtime/[...rest]/+server.js"
-	},
-	{
-		"file": "test/fixture/src/routes/__realtime/pinned/+page.js"
-	},
-	{
-		"file": "test/fixture/src/routes/__realtime/pinned/+page.svelte"
-	},
-	{
-		"file": "test/admin-prefix-entry-real.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
-				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
-			}
-		]
-	},
-	{
-		"file": "test/admin-prefix-unmounted-real.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tresolve({ status, body: buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4) });",
-				"ours": "\t\t\tconst status = Number(buf.split('\\r\\n')[0].split(' ')[1] || 0);\n\t\t\tconst head = buf.slice(0, buf.indexOf('\\r\\n\\r\\n'));\n\t\t\tlet body = buf.slice(buf.indexOf('\\r\\n\\r\\n') + 4);\n\t\t\t// node:http answers a streamed SSR body chunked, where the lead's\n\t\t\t// transport writes a length; the chunk framing is stripped so the\n\t\t\t// assertions read the same bytes on both.\n\t\t\tif (/transfer-encoding:\\s*chunked/i.test(head)) {\n\t\t\t\tlet out = '';\n\t\t\t\tlet at = 0;\n\t\t\t\tfor (;;) {\n\t\t\t\t\tconst lineEnd = body.indexOf('\\r\\n', at);\n\t\t\t\t\tif (lineEnd === -1) break;\n\t\t\t\t\tconst size = parseInt(body.slice(at, lineEnd), 16);\n\t\t\t\t\tif (!size) break;\n\t\t\t\t\tout += body.slice(lineEnd + 2, lineEnd + 2 + size);\n\t\t\t\t\tat = lineEnd + 2 + size + 2;\n\t\t\t\t}\n\t\t\t\tbody = out;\n\t\t\t}\n\t\t\tresolve({ status, body });"
-			}
-		]
-	},
-	{
-		"file": "test/helpers/source-pins.js"
-	},
-	{
-		"file": "test/subscription-accounting.test.js"
-	},
-	{
-		"file": "test/worker-attach-watchdog.test.js"
-	},
-	{
-		"file": "test/game-cluster-policy.test.js",
-		"adaptations": [
-			{
-				"lead": "const handlerSource = read('../src/runtime/handler.js');",
-				"ours": "const handlerSource = read('../src/runtime/handler/realtime.js');"
-			},
-			{
-				"lead": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\t/**\\n\\t * Unsubscribe');",
-				"ours": "const publish = carve('publishGame', '\\tpublishGame(', '\\n\\tget assertions()');"
-			}
-		]
-	},
-	{
-		"file": "test/grant-model.test.js",
-		"adaptations": [
-			{
-				"lead": "// The production dispatch (src/runtime/handler.js, handler/platform.js) is",
-				"ours": "// The production dispatch (src/runtime/handler/realtime.js, handler/platform.js) is"
-			},
-			{
-				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
-				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
-			},
-			{
-				"lead": "pendingUd",
-				"ours": "userData",
-				"all": true
-			}
-		]
-	},
-	{
-		"file": "src/build-rollup-lifecycle.js"
-	},
-	{
-		"file": "test/rollup-lifecycle.test.js",
-		"adaptations": [
-			{
-				"lead": "'adapter-uws-rollup-close-'",
-				"ours": "'adapter-ws-rollup-close-'"
-			}
-		]
-	},
-	{
-		"file": "scripts/check-source-bytes.js"
-	},
-	{
-		"file": "scripts/check-tracked-imports.js"
 	},
 	{
 		"file": "test/wire-batch-aliasing.test.js",
@@ -1760,658 +2443,45 @@
 		]
 	},
 	{
-		"file": "test/fatal-sites.test.js",
-		"adaptations": [
-			{
-				"lead": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler.js'), 'utf8');",
-				"ours": "const handlerSrc = readFileSync(path.join(ROOT, 'src/runtime/handler/realtime.js'), 'utf8');"
-			},
-			{
-				"lead": "new RegExp('adapter-uws fatal: '",
-				"ours": "new RegExp('adapter-ws fatal: '"
-			}
-		]
-	},
-	{
-		"file": "test/diagnostic-format.test.js",
-		"adaptations": [
-			{
-				"lead": "['[adapter-uws",
-				"ours": "['[adapter-ws",
-				"all": true
-			},
-			{
-				"lead": "'svelte-adapter-ws-extensions'",
-				"ours": "'svelte-adapter-uws-extensions'",
-				"all": true
-			}
-		]
-	},
-	{
-		"file": "test/request-headers.test.js"
-	},
-	{
-		"file": "test/subscribe-pending-cap.test.js"
-	},
-	{
-		"file": "test/error-registry-subscribe-hook.test.js"
-	},
-	{
-		"file": "test/error-registry-subscribe-batch.test.js"
-	},
-	{
-		"file": "test/error-registry-ssr.test.js"
-	},
-	{
-		"file": "test/message-admission-lanes.test.js",
-		"adaptations": [
-			{
-				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
-				"ours": ""
-			},
-			{
-				"lead": "describeUWS('established-message application lanes', () => {\n",
-				"ours": "describe('established-message application lanes', () => {\n"
-			},
-			{
-				"lead": "\t\tfile: new URL('../src/runtime/handler.js', import.meta.url),\n",
-				"ours": "\t\tfile: new URL('../src/runtime/handler/realtime.js', import.meta.url),\n"
-			}
-		]
-	},
-	{
-		"file": "test/waiting-renderer-build-real.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tconst handler = readFileSync(join(out, 'handler.js'), 'utf8');\n",
-				"ours": "\t\tconst handler = readFileSync(join(out, 'handler', 'realtime.js'), 'utf8');\n"
-			}
-		]
-	},
-	{
-		"file": "test/batch-sequence-mirror-parity.test.js",
-		"adaptations": [
-			{
-				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
-				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
-			}
-		]
-	},
-	{
-		"file": "test/error-registry-claims.test.js"
-	},
-	{
-		"file": "test/shared-fanout.test.js",
-		"adaptations": [
-			{
-				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\nconst { createTestServer } = uWS ? await import('../src/testing.js') : {};\n",
-				"ours": "// The binding probe would answer no here: this adapter runs on its own\n// transport, which is always present.\nconst describeUWS = describe;\nconst { createTestServer } = await import('../src/testing.js');\n"
-			}
-		]
-	},
-	{
-		"file": "test/http-error-request-id.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { calls.push(['cork']); fn(); },\n\t\t\twriteStatus(value) { calls.push(['status', value]); },\n\t\t\twriteHeader(name, value) { calls.push(['header', name, value]); },\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n",
-				"ours": "\t\t// node:http's response: one writeHead carries the status and the headers.\n\t\tconst res = {\n\t\t\twriteHead(status, headers) {\n\t\t\t\tcalls.push(['status', status]);\n\t\t\t\tfor (const [name, value] of Object.entries(headers)) calls.push(['header', name, value]);\n\t\t\t},\n\t\t\tend(value) { calls.push(['end', value]); }\n\t\t};\n"
-			},
-			{
-				"lead": "\t\tconst res = {\n\t\t\tcork(fn) { fn(); },\n\t\t\twriteStatus() {},\n\t\t\twriteHeader(name, value) { headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n",
-				"ours": "\t\tconst res = {\n\t\t\twriteHead(status, h) { for (const [name, value] of Object.entries(h)) headers.push([name, value]); },\n\t\t\tend() {}\n\t\t};\n"
-			},
-			{
-				"lead": "\t\texpect(headers).toEqual([['content-type', 'text/plain']]);\n",
-				"ours": "\t\t// content-length is node:http framing for the fixed body, not an invented header.\n\t\texpect(headers).toEqual([['content-type', 'text/plain'], ['content-length', '21']]);\n"
-			}
-		]
-	},
-	{
-		"file": "test/seq-registry-ceiling-real.test.js",
-		"adaptations": [
-			{
-				"lead": "\tlet state;\n",
-				"ours": "\tlet state;\n\tlet registry;\n"
-			},
-			{
-				"lead": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n",
-				"ours": "\t\tstate = await import(`./fixture/${OUT}/handler/state.js`);\n\t\tregistry = await import(`./fixture/${OUT}/handler/topic-registry.js`);\n"
-			},
-			{
-				"lead": "\t\treturn {\n\t\t\tsent,\n\t\t\tgetUserData() { return ud; },\n",
-				"ours": "\t\treturn {\n\t\t\tsent,\n\t\t\treadyState: 1,\n\t\t\tgetUserData() { return ud; },\n"
-			},
-			{
-				"lead": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t}\n",
-				"ours": "\t\t\tconst ws = scriptedWs(topic);\n\t\t\t// The delivery walk here reads the topic registry and the facade map,\n\t\t\t// not the live set, so a scripted socket enters both as its own facade.\n\t\t\tregistry.registerSocket(ws);\n\t\t\tregistry.subscribeSocket(ws, topic);\n\t\t\tstate.wsWrappers.set(ws, ws);\n\t\t\tstate.wsConnections.add(ws);\n\t\t\ttry {\n\t\t\t\tplatform.publishWireBatch(topic, 'update', entries, statefulWire);\n\t\t\t} finally {\n\t\t\t\tstate.wsConnections.delete(ws);\n\t\t\t\tstate.wsWrappers.delete(ws);\n\t\t\t\tregistry.unregisterSocket(ws);\n\t\t\t}\n"
-			}
-		]
-	},
-	{
-		"file": "test/relay-frame-ceiling.test.js"
-	},
-	{
-		"file": "test/topic-epoch-bump.test.js",
-		"adaptations": [
-			{
-				"lead": "let uWS = null;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst itUWS = uWS ? it : it.skip;\n",
-				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst itUWS = it;\n"
-			}
-		]
-	},
-	{
-		"file": "test/harness-metrics-surface.test.js",
-		"adaptations": [
-			{
-				"lead": "api: { options: { kit: { adapter: { name: 'adapter-uws', websocketMetrics: metricsPath } } } }",
-				"ours": "api: { options: { kit: { adapter: { name: 'adapter-ws', websocketMetrics: metricsPath } } } }"
-			}
-		]
-	},
-	{
-		"file": "test/http-forbidden-methods.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\texpect(status(propfind), 'an unlisted method still reaches the application')\n\t\t\t.not.toContain('405 Method Not Allowed');\n",
-				"ours": "\t\tconst propfind = await rawRequest(port, 'PROPFIND /');\n\t\t// node:http writes the reason phrase on every status, so the adapter's\n\t\t// refusal is told apart by its fixed Allow list; the application's own\n\t\t// 405 names the methods of the route it matched instead.\n\t\texpect(header(propfind, 'allow'), 'an unlisted method still reaches the application')\n\t\t\t.not.toEqual(['GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS']);\n"
-			}
-		]
-	},
-	{
-		"file": "test/static-preconditions.test.js",
-		"adaptations": [
-			{
-				"lead": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst res = {\n\t\tcork(fn) { fn(); return res; },\n\t\twriteStatus(s) { rec.status = s; return res; },\n\t\twriteHeader(k, v) { rec.headers.push([k, v]); return res; },\n\t\tend(b) { rec.body = b === undefined ? null : Buffer.from(b); return res; },\n\t\tendWithoutBody(n) { rec.bodyLength = n; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
-				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
-			},
-			{
-				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
-				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
-			}
-		]
-	},
-	{
-		"file": "test/static-assets-negotiate.test.js",
-		"adaptations": [
-			{
-				"lead": "function recorder() {\n\tconst rec = {\n\t\tstatus: '',\n\t\t/** @type {[string, string][]} */\n\t\theaders: [],\n\t\t/** @type {Buffer | null} */\n\t\tbody: null,\n\t\tbodyLength: -1,\n\t\tres: /** @type {any} */ (null)\n\t};\n\tconst res = {\n\t\tcork(/** @type {() => void} */ fn) { fn(); return res; },\n\t\twriteStatus(/** @type {string} */ status) { rec.status = status; return res; },\n\t\twriteHeader(/** @type {string} */ key, /** @type {string} */ value) { rec.headers.push([key, value]); return res; },\n\t\tend(/** @type {Buffer | undefined} */ body) { rec.body = body === undefined ? null : Buffer.from(body); return res; },\n\t\tendWithoutBody(/** @type {number} */ length) { rec.bodyLength = length; return res; }\n\t};\n\trec.res = res;\n\treturn rec;\n}",
-				"ours": "function recorder() {\n\tconst rec = { status: '', headers: /** @type {[string,string][]} */ ([]), body: null, bodyLength: -1, res: /** @type {any} */ (null) };\n\tconst reasons = {\"200\":\"OK\",\"206\":\"Partial Content\",\"304\":\"Not Modified\",\"308\":\"Permanent Redirect\",\"400\":\"Bad Request\",\"412\":\"Precondition Failed\",\"416\":\"Range Not Satisfiable\"};\n\tconst res = {\n\t\twriteHead(/** @type {number} */ status, /** @type {any} */ headers) {\n\t\t\trec.status = status + ' ' + reasons[status];\n\t\t\tif (Array.isArray(headers)) {\n\t\t\t\tfor (let i = 0; i < headers.length; i += 2) rec.headers.push([String(headers[i]), String(headers[i + 1])]);\n\t\t\t} else if (headers) {\n\t\t\t\tfor (const [k, v] of Object.entries(headers)) rec.headers.push([k, String(v)]);\n\t\t\t}\n\t\t\t// node's ServerResponse writes Date on every response itself.\n\t\t\tif (!rec.headers.some((h) => h[0] === 'date')) rec.headers.push(['date', new Date().toUTCString()]);\n\t\t\treturn res;\n\t\t},\n\t\tend(/** @type {Buffer | undefined} */ body) {\n\t\t\tif (body === undefined) {\n\t\t\t\tconst declared = rec.headers.find((h) => h[0] === 'content-length');\n\t\t\t\tif (declared && (status2xx(rec.status))) rec.bodyLength = Number(declared[1]);\n\t\t\t\trec.body = null;\n\t\t\t} else {\n\t\t\t\trec.body = Buffer.from(body);\n\t\t\t}\n\t\t\treturn res;\n\t\t}\n\t};\n\trec.res = res;\n\treturn rec;\n}\nconst status2xx = (/** @type {string} */ s) => s.startsWith('2');"
-			},
-			{
-				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
-				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
-			},
-			{
-				"lead": "\t\tuWS = (await import('uWebSockets.js')).default;\n\t\tconst { cacheDir, serveStatic }",
-				"ours": "\t\tconst { cacheDir, serveStatic }"
-			},
-			{
-				"lead": "\t\tconst route = (served) => (res, req) => {\n\t\t\tres.onAborted(() => {});\n\t\t\tserveStatic(\n\t\t\t\tres, served,\n\t\t\t\treq.getHeader('accept-encoding'),\n\t\t\t\treq.getHeader('if-none-match'),\n\t\t\t\tfalse,\n\t\t\t\treq.getHeader('range'),\n\t\t\t\treq.getHeader('if-range')\n\t\t\t);\n\t\t};\n\t\tconst app = uWS.App()\n\t\t\t.get('/wire-probe/asset.txt', route(entry))\n\t\t\t.get('/wire-probe/gz-asset.txt', route(gzEntry));\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.listen('127.0.0.1', 0, (socket) => {\n\t\t\t\tif (!socket) return reject(new Error('uWS failed to listen'));\n\t\t\t\tlistenSocket = socket;\n\t\t\t\tport = uWS.us_socket_local_port(socket);\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});",
-				"ours": "\t\tconst routes = new Map([['/wire-probe/asset.txt', entry], ['/wire-probe/gz-asset.txt', gzEntry]]);\n\t\tconst app = http.createServer((req, res) => {\n\t\t\tconst served = routes.get(String(req.url));\n\t\t\tif (!served) { res.writeHead(404); res.end(); return; }\n\t\t\tconst h = req.headers;\n\t\t\tserveStatic(\n\t\t\t\tres, served,\n\t\t\t\tString(h['accept-encoding'] || ''),\n\t\t\t\tString(h['if-none-match'] || ''),\n\t\t\t\tfalse,\n\t\t\t\tString(h['range'] || ''),\n\t\t\t\tString(h['if-range'] || '')\n\t\t\t);\n\t\t});\n\n\t\tawait new Promise((resolve, reject) => {\n\t\t\tapp.once('error', reject);\n\t\t\tapp.listen(0, '127.0.0.1', () => {\n\t\t\t\tlistenSocket = app;\n\t\t\t\tport = /** @type {import('node:net').AddressInfo} */ (app.address()).port;\n\t\t\t\tresolve(undefined);\n\t\t\t});\n\t\t});"
-			},
-			{
-				"lead": "\t\t\ttry { uWS.us_listen_socket_close(listenSocket); } catch { /* already closed */ }",
-				"ours": "\t\t\ttry { listenSocket.close(); } catch { /* already closed */ }"
-			},
-			{
-				"lead": "\t\t// `br;q=0` is a refusal; the substring test read it as an acceptance.\n",
-				"ours": "\t\t// `br;q=0` is a refusal.\n"
-			},
-			{
-				"lead": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity - and the substring test would have served brotli anyway.\n",
-				"ours": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity.\n"
-			}
-		]
-	},
-	{
-		"file": "PROTOCOL.md",
-		"adaptations": [
-			{
-				"lead": "`svelte-adapter-ws` is the reference implementation; `svelte-realtime` is",
-				"ours": "`svelte-adapter-uws` is the reference implementation; `svelte-realtime` is"
-			},
-			{
-				"lead": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-ws` repository.",
-				"ours": "- **Canonical location:** `PROTOCOL.md` in the `svelte-adapter-uws` repository."
-			},
-			{
-				"lead": "- **Applies to:** `svelte-adapter-ws` 0.6.0 and later, its bundled client, and",
-				"ours": "- **Applies to:** `svelte-adapter-uws` 0.6.0 and later, its bundled client, and"
-			},
-			{
-				"lead": "The reference `svelte-adapter-ws` runtime does not terminate QUIC and does",
-				"ours": "The reference `svelte-adapter-uws` runtime does not terminate QUIC and does"
-			},
-			{
-				"lead": "`svelte-adapter-ws` runtime does not terminate QUIC; this section is",
-				"ours": "`svelte-adapter-uws` runtime does not terminate QUIC; this section is"
-			},
-			{
-				"lead": "https://github.com/lanteanio/svelte-adapter-ws/blob/dev/test/minimal-client.test.js",
-				"ours": "https://github.com/lanteanio/svelte-adapter-uws/blob/dev/test/minimal-client.test.js"
-			},
-			{
-				"lead": "[README](./README.md) | [migration guide](./MIGRATION.md) |",
-				"ours": "[README](./README.md) | [migration guide](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/MIGRATION.md) |"
-			},
-			{
-				"lead": "[conformance index](./docs/protocol-conformance.md) |",
-				"ours": "[conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) |"
-			},
-			{
-				"lead": "A [minimal dependency-free Core client](./examples/minimal-client.mjs) (~40",
-				"ours": "A [minimal dependency-free Core client](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/examples/minimal-client.mjs) (~40"
-			},
-			{
-				"lead": "on purpose: four surfaces speak this protocol (the uWS production runtime, the",
-				"ours": "on purpose: four surfaces speak this protocol (the reference uWS production runtime, the"
-			},
-			{
-				"lead": "The [conformance index](./docs/protocol-conformance.md) is the task-oriented",
-				"ours": "The [conformance index](https://github.com/lanteanio/svelte-adapter-uws/blob/dev/docs/protocol-conformance.md) is the task-oriented"
-			}
-		]
-	},
-	{
-		"file": "test/message-hook-containment.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\t['src/runtime/handler.js', 2],",
-				"ours": "\t\t\t['src/runtime/handler/realtime.js', 2],"
-			}
-		]
-	},
-	{
-		"file": "test/metrics-label-contract.test.js",
-		"adaptations": [
-			{
-				"lead": "\t'src/runtime/handler.js',",
-				"ours": "\t'src/runtime/handler/realtime.js',"
-			}
-		]
-	},
-	{
-		"file": "src/runtime/handler/resume-buffer.js",
-		"adaptations": [
-			{
-				"lead": "import { bumpOut } from './pressure-metrics.js';",
-				"ours": "import { bumpOut } from './conn-stats.js';"
-			},
-			{
-				"lead": "\t\tbumpOut(ws, payload);",
-				"ours": "\t\tbumpOut(ws.getUserData(), payload);"
-			}
-		]
-	},
-	{
-		"file": "src/runtime/handler/wire-state.js"
-	},
-	{
-		"file": "src/runtime/handler/control-egress.js",
-		"adaptations": [
-			{
-				"lead": "import { bumpOut } from './pressure-metrics.js';",
-				"ours": "import { bumpOut } from './conn-stats.js';"
-			},
-			{
-				"lead": "\tbumpOut(ws, payload);",
-				"ours": "\tbumpOut(ws.getUserData(), payload);"
-			}
-		]
-	},
-	{
-		"file": "test/resume-flush-refusal.test.js"
-	},
-	{
-		"file": "test/resume-flush-caller-guard.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });",
-				"ours": "\t\tvictim.send({ type: 'subscribe', topic: TOPIC, ref: 1, recover: { offset: 0 } });\n\t\t// `ws` hands every frame of one TCP read to the handler back to back, so a\n\t\t// spill in the same read would run before the subscribe's gate await\n\t\t// resumes and the capture window opens. A round trip in between puts the\n\t\t// spill in a later read, after that await has settled.\n\t\texpect(await answers(victim, 'window'), 'the liveness probe never worked').toBe(true);\n\t\tvictim.send({ type: 'spill', topic: TOPIC, count: SPILL_FRAMES, bytes: SPILL_BYTES });"
-			},
-			{
-				"lead": "// it. uWS keeps `getUserData` working after `end()` and only throws on `send`\n// (measured against the bundled 20.69.0), and both sites the subscribe lane\n",
-				"ours": "// it. The facade keeps `getUserData` working after `end()` by design (it hands\n// back the stored userData unconditionally) and only throws on `send`, and both\n// sites the subscribe lane\n"
-			},
-			{
-				"lead": "// WHY THIS EXISTS. The flush reads uWS's DROPPED sentinel and, when even the\n",
-				"ours": "// WHY THIS EXISTS. The flush reads the facade's DROPPED sentinel and, when even the\n"
-			},
-			{
-				"lead": "// branch runs - not that a real uWS connection ever reaches it. Here the\n",
-				"ours": "// branch runs - not that a real connection ever reaches it. Here the\n"
-			}
-		]
-	},
-	{
-		"file": "test/error-registry-resume-divergence.test.js"
-	},
-	{
-		"file": "src/runtime/utils/unsubscribe-hook.js"
-	},
-	{
-		"file": "test/error-registry-unsubscribe-hook.test.js"
-	},
-	{
-		"file": "test/shared-cohort-accounting.test.js"
-	},
-	{
-		"file": "test/message-envelope-shape-real.test.js"
-	},
-	{
-		"file": "test/source-pins.test.js"
-	},
-	{
-		"file": "test/head-and-204-framing-real.test.js"
-	},
-	{
-		"file": "test/fixture/src/routes/head-declared/+server.js"
-	},
-	{
-		"file": "test/request-framing-real.test.js",
-		"adaptations": [
-			{
-				"lead": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// The vendored parser reads the PRESENCE of Transfer-Encoding, not its value:\n// `xchunked`, `gzip`, `chunked, chunked` and `chunked, gzip` are all decoded as\n// chunked, and an empty Content-Length is accepted as a bodyless request.\n// (Measured against uWebSockets.js v20.69.0; the malformed Content-Length\n// spellings it does refuse - `0x6`, `+6`, `6abc` - are refused before any of\n// this runs, and a request carrying both Transfer-Encoding and Content-Length\n// is refused there too.) A conformant intermediary in front reads the same\n// bytes differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses these shapes itself.\n//\n// Two oracles, and the second is the one that matters:\n//\n",
-				"ours": "// Where a request says its body ends, driven over raw sockets against the real\n// built runtime, because no HTTP client can be made to send these shapes.\n//\n// node's parser refuses most of these shapes itself, with a 400 and a closed\n// connection: an unknown or doubled coding, `chunked, gzip`, an empty or\n// repeated Content-Length, and a request carrying both framing headers. It\n// decodes a coding list that ENDS in chunked (`gzip, chunked`) as chunked,\n// though, and hands a request with an EMPTY Transfer-Encoding to the listener\n// as a bodyless one. A conformant intermediary in front reads the same bytes\n// differently - an unknown coding means it cannot frame the body, so the\n// request is bodyless and what follows is the NEXT request - and the two\n// readings disagree about where the request ends. That disagreement is the\n// whole of request smuggling, so the adapter refuses the shapes that reach it.\n//\n// Two oracles, and the second is the one that matters:\n//\n"
-			},
-			{
-				"lead": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// Measured, so the cases below read correctly: uWS ends the connection when a\n// response is finished with its close flag, but a request it has ALREADY\n// parsed out of the same segment is still answered first. So these probes go\n// one request at a time and watch for the server's own hangup, rather than\n// pipelining a follower and asserting silence.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n",
-				"ours": "//    about, so a 400 that keeps reading leaves the desync in place; a case\n//    asserting only the status would pass on a fix that fixes nothing.\n//\n// These probes go one request at a time and watch for the server's own\n// hangup, rather than pipelining a follower and asserting silence: a refusal\n// ends the connection once its answer is flushed, whether the parser or a\n// lane wrote it.\n//\n// The discriminator for the second oracle closes the first block below: a\n// repeated Authorization line is also refused 400, and its connection stays\n"
-			},
-			{
-				"lead": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. uWS\n\t\t// emits it itself for a response finished with its close flag, so a\n\t\t// refusal that writes one as well puts the field on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n",
-				"ours": "\t\tconst { statuses, raw, closedByServer } = await probe(port, lines, body);\n\t\texpect(statuses[0], 'the request is refused: ' + JSON.stringify(raw.slice(0, 80))).toBe('400');\n\t\texpect(closedByServer, 'the server ends a connection it can no longer read').toBe(true);\n\t\t// The header a client reads to learn the same thing, exactly once. node\n\t\t// writes the field a refusal sets and adds none of its own, so a\n\t\t// second writer would put it on the wire twice.\n\t\tconst headBlock = raw.split('\\r\\n\\r\\n')[0];\n\t\tconst closeHeaders = headBlock.split('\\r\\n')\n\t\t\t.filter((line) => line.toLowerCase().replace(/ /g, '') === 'connection:close');\n"
-			},
-			{
-				"lead": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length on the fast path').toBe('200');\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// A repeated Content-Length, not a Transfer-Encoding shape: the one\n\t\t\t// lookup in front of every route reads the first value of a repeat\n\t\t\t// and sees nothing wrong, so this reaches the authenticate door,\n\t\t\t// which builds the header set and refuses there. A Transfer-Encoding\n\t\t\t// probe would be answered by the wrapper and this case would stay\n\t\t\t// green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Content-Length: 2',\n\t\t\t\t'Content-Length: 3'\n\t\t\t], 'AA');\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n",
-				"ours": "\t\t\tconst emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');\n\t\t\texpect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');\n\n\t\t\t// node's own parser refuses a repeated Content-Length before any lane\n\t\t\t// reads the request, on every lane alike, and closes the connection.\n\t\t\tconst repeated = await probe(\n\t\t\t\tport,\n\t\t\t\t['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t\t'AA'\n\t\t\t);\n\t\t\texpect(repeated.statuses[0], 'a repeated Content-Length never reaches the fast path').toBe('400');\n\t\t\texpect(repeated.closedByServer).toBe(true);\n\t\t}, 30000);\n\n\t\tit('refuses on the authenticate path', async () => {\n\t\t\t// An EMPTY Transfer-Encoding: the one lookup in front of every route\n\t\t\t// reads it as absent and sees nothing wrong, so this reaches the\n\t\t\t// authenticate door, which builds the header set and refuses there.\n\t\t\t// A repeated Content-Length never gets that far on node, whose\n\t\t\t// parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t\t// would be answered in front of the door; either would keep this\n\t\t\t// case green with the door's own wiring deleted.\n\t\t\tawait expectRefusedAndClosed([\n\t\t\t\t'POST /__ws/auth HTTP/1.1',\n\t\t\t\t'x-requested-with: XMLHttpRequest',\n\t\t\t\t'Transfer-Encoding:'\n\t\t\t]);\n\t\t}, 30000);\n\n\t\tit('refuses on a lane that answers without reading a header set', async () => {\n"
-			},
-			{
-				"lead": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503 and KEEPS its connection. That is what the framing answer has to come\n\t// before: delete the lookup at the top of the upgrade callback and this\n\t// case reads 503 on an open connection instead of 400 on a closed one.\n\tlet server;\n\tlet port;\n\tconst held = [];\n",
-				"ours": "\t// The production ordering, on a build whose gate can actually be filled.\n\t// `waitingdefault` sets maxConnections to 2, so two held sockets shut the\n\t// gate for real, and the refusal that answers a third handshake writes a\n\t// 503. That is what the framing answer has to come before: delete the\n\t// lookup at the top of the upgrade listener and this case reads 503 instead\n\t// of 400. node hands an upgrade over with its HTTP parser detached from the\n\t// socket, so every refusal written there closes the connection, the 503\n\t// included.\n\tlet server;\n\tlet port;\n\tconst held = [];\n"
-			},
-			{
-				"lead": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n",
-				"ours": "\tit('answers the framing question before the capacity one', async () => {\n\t\tconst plain = await probe(port, HANDSHAKE, '');\n\t\texpect(plain.statuses[0], 'two held sockets shut the gate').toBe('503');\n\n\t\tconst framed = await probe(port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\texpect(framed.statuses[0], 'framing is answered ahead of capacity').toBe('400');\n"
-			},
-			{
-				"lead": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. A repeated Content-Length is the probe,\n\t\t// because the one lookup in front of every route cannot see a repeat -\n\t\t// it reads the first value - so this reaches the admin handler, which\n\t\t// builds the header set and refuses there. A Transfer-Encoding shape\n\t\t// would be answered by the wrapper before this lane ever ran, and the\n\t\t// case would pass without the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n",
-				"ours": "\n\tit('refuses through its own JSON writer and hangs up', async () => {\n\t\t// The lane has a writer of its own, and the rule has to be wired into\n\t\t// it rather than inherited. An EMPTY Transfer-Encoding is the probe,\n\t\t// because the one lookup in front of every route reads it as absent, so\n\t\t// this reaches the admin handler, which builds the header set and\n\t\t// refuses there. A repeated Content-Length never gets that far on node,\n\t\t// whose parser refuses it first, and a Transfer-Encoding naming a coding\n\t\t// would be answered in front of this lane; either would pass without\n\t\t// the lane being wired at all.\n\t\t//\n\t\t// The default build mounts no admin handler, which is why this block\n\t\t// boots the variant that does.\n"
-			},
-			{
-				"lead": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],\n\t\t\t'AA'\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n",
-				"ours": "\n\t\tconst { statuses, raw, closedByServer } = await probe(\n\t\t\tport,\n\t\t\t['GET /__realtime/introspect HTTP/1.1', 'Transfer-Encoding:'],\n\t\t\t''\n\t\t);\n\t\texpect(statuses[0]).toBe('400');\n\t\texpect(raw, 'the admin writer answers, not the request edge').toContain('bad request');\n"
-			},
-			{
-				"lead": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503\n\t\t// and KEEPS the connection, so a handshake whose framing this server and\n\t\t// the one in front of it read differently has to be answered first.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n",
-				"ours": "\n\tit('answers the framing question before the siege short-circuit', async () => {\n\t\t// The mirror's upgrade guard sits at the top of its upgrade callback for\n\t\t// the same reason production's does: the refusal below it writes a 503,\n\t\t// so a handshake whose framing this server and the one in front of it\n\t\t// read differently has to be answered first. Like production's, every\n\t\t// refusal the mirror writes on an upgrade closes the connection.\n\t\t//\n\t\t// Siege, not a full gate: it refuses every new upgrade at static-serve\n\t\t// cost while the gate still has free slots, and it is the FIRST refusal\n"
-			},
-			{
-				"lead": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\t\t\texpect(plain.closedByServer, 'and that refusal keeps its connection').toBe(false);\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n",
-				"ours": "\t\ttry {\n\t\t\tconst plain = await probe(sieged.port, HANDSHAKE, '');\n\t\t\texpect(plain.statuses[0], 'siege refuses every new upgrade').toBe('503');\n\n\t\t\tconst framed = await probe(sieged.port, [...HANDSHAKE, 'Transfer-Encoding: xchunked'], CHUNKED_AA);\n\t\t\texpect(framed.statuses[0], 'framing is answered before the posture').toBe('400');\n"
-			}
-		]
-	},
-	{
-		"file": "test/lifecycle-hook-boundary.test.js"
-	},
-	{
-		"file": "test/error-registry-hook-crash.test.js"
-	},
-	{
-		"file": "src/runtime/utils/close-frame.js"
-	},
-	{
-		"file": "test/close-frame.test.js"
-	},
-	{
-		"file": "test/close-frame-real.test.js"
-	},
-	{
-		"file": "test/coalesced-drain-real.test.js"
-	},
-	{
-		"file": "test/platform-type-surface.test.js"
-	},
-	{
-		"file": "test/send-wire-batch-shed.test.js"
-	},
-	{
-		"file": "test/transport-metric-labels.test.js"
-	},
-	{
-		"file": "test/auth-throttle-real.test.js"
-	},
-	{
-		"file": "src/subscriptions.js"
-	},
-	{
-		"file": "src/subscriptions.d.ts"
-	},
-	{
-		"file": "test/subscriptions-entry-real.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\texpect(state.counters.totalSubscriptions).toBe(baseTotal);\n\t\t} finally {\n\t\t\tclient.close();\n\t\t}",
-				"ours": "\t\t\texpect(state.counters.totalSubscriptions).toBe(baseTotal);\n\t\t} finally {\n\t\t\t// The hand-written entry was never charged, so releasing it at the close\n\t\t\t// drives the counter below zero, and that soft assertion throws in a test\n\t\t\t// run out of the transport close event. Undo it first.\n\t\t\tfor (const ws of state.wsConnections) ws.getUserData()[SUBSCRIPTIONS]?.delete('__probe:raw');\n\t\t\tclient.close();\n\t\t}"
-			}
-		]
-	},
-	{
-		"file": "test/extra-entry-imports.test.js"
-	},
-	{
-		"file": "test/envelope-data.test.js"
-	},
-	{
-		"file": "src/runtime/utils/ws-handshake.js"
-	},
-	{
-		"file": "test/ws-handshake-real.test.js"
-	},
-	{
-		"file": "test/request-signal-real.test.js"
-	},
-	{
-		"file": "test/upgrade-carry-real.test.js"
-	},
-	{
-		"file": "src/runtime/utils/request-target.js",
-		"adaptations": [
-			{
-				"lead": " * @param {string} path what uWS's `getUrl()` returns\n * @param {string | undefined} query what `getQuery()` returns\n",
-				"ours": " * @param {string} path the target's path, as the request line carries it\n * @param {string | undefined} query the target's query, without its `?`\n"
-			}
-		]
-	},
-	{
-		"file": "test/request-target-real.test.js"
-	},
-	{
-		"file": "test/fixture/static/maß.txt"
-	},
-	{
-		"file": "src/runtime/utils/origin.js"
-	},
-	{
-		"file": "test/host-header-real.test.js"
-	},
-	{
-		"file": "test/host-header-proxy-real.test.js"
-	},
-	{
-		"file": "test/helpers/openssl.js"
-	},
-	{
-		"file": "test/helpers/vite-dev.js"
-	},
-	{
-		"file": "test/vite-dev-request-shape.test.js"
-	},
-	{
-		"file": "test/fd-limit.test.js"
-	},
-	{
-		"file": "test/protocol-schema.test.js",
-		"adaptations": [
-			{
-				"lead": "const uWS = hasUWS ? (await import('uWebSockets.js')).default : null;\n",
-				"ours": ""
-			}
-		]
-	},
-	{
-		"file": "test/http-pipelining-real.test.js"
-	},
-	{
-		"file": "LICENSE"
-	},
-	{
-		"file": "src/build-config.js"
-	},
-	{
-		"file": "src/connection.d.ts"
-	},
-	{
-		"file": "src/connection.js"
-	},
-	{
-		"file": "src/runtime/cookies.js"
-	},
-	{
-		"file": "src/runtime/handler/cluster-sequence-policy.js"
-	},
-	{
-		"file": "src/runtime/handler/codec-registry.js"
-	},
-	{
-		"file": "src/runtime/handler/envelope-cache.js"
-	},
-	{
-		"file": "src/runtime/handler/game-ingress.js"
-	},
-	{
-		"file": "src/runtime/handler/ingress.js",
-		"adaptations": [
-			{
-				"lead": "Symbol.for('svelte-adapter-ws.ingress-registry')",
-				"ours": "Symbol.for('svelte-adapter-uws.ingress-registry')"
-			}
-		]
-	},
-	{
-		"file": "src/runtime/handler/wire-fanout.js"
-	},
-	{
-		"file": "src/runtime/keydict.js"
-	},
-	{
-		"file": "src/runtime/relay-spill-policy.js"
-	},
-	{
-		"file": "src/runtime/restart-supervisor.js"
-	},
-	{
-		"file": "src/runtime/shims.js"
-	},
-	{
-		"file": "src/runtime/tracing-bridge.js"
-	},
-	{
-		"file": "src/runtime/tracing.js"
-	},
-	{
-		"file": "src/runtime/utils/attribution.js"
-	},
-	{
-		"file": "src/runtime/utils/backpressure.js"
-	},
-	{
-		"file": "src/runtime/utils/byte-budget.js"
-	},
-	{
-		"file": "src/runtime/utils/dot-path.js"
-	},
-	{
-		"file": "src/runtime/utils/fd-limit.js"
-	},
-	{
-		"file": "src/runtime/utils/hook-boundary.js"
-	},
-	{
-		"file": "src/runtime/utils/memory-wall.js"
-	},
-	{
-		"file": "src/runtime/utils/message-admission.js"
-	},
-	{
-		"file": "src/runtime/utils/mime.js"
-	},
-	{
-		"file": "src/runtime/utils/os-pressure.js"
-	},
-	{
-		"file": "src/runtime/utils/parse.js"
-	},
-	{
-		"file": "src/runtime/utils/rate-limiter.js"
-	},
-	{
-		"file": "src/runtime/utils/sd-notify.js"
-	},
-	{
-		"file": "src/runtime/utils/seq-bound.js"
-	},
-	{
-		"file": "src/runtime/utils/topic.js"
-	},
-	{
-		"file": "src/runtime/version-info.js",
-		"adaptations": [
-			{
-				"lead": "svelte-adapter-ws-extensions",
-				"ours": "svelte-adapter-uws-extensions",
-				"all": true
-			}
-		]
-	},
-	{
-		"file": "src/runtime/wire-bits.js"
-	},
-	{
-		"file": "src/runtime/wire-stream.js"
-	},
-	{
-		"file": "src/runtime/wire-value.js"
-	},
-	{
-		"file": "src/static-scan.js"
-	},
-	{
-		"file": "src/trace-context.js"
-	},
-	{
-		"file": "src/upgrade-response.js"
-	},
-	{
-		"file": "test/fixture/src/routes/big-shared/+server.js"
-	},
-	{
-		"file": "test/fixture/src/routes/stream-big/+server.js"
-	},
-	{
-		"file": "test/message-admission.test.js"
-	},
-	{
-		"file": "test/relay-spill-policy.test.js"
-	},
-	{
-		"file": "test/relay-spill-quarantine-policy.test.js"
-	},
-	{
-		"file": "test/waiting-room-template.test.js"
+		"file": "test/worker-attach-watchdog.test.js"
 	},
 	{
 		"file": "test/worker-boot-deadline.test.js"
+	},
+	{
+		"file": "test/ws-handler-resolution.test.js",
+		"adaptations": [
+			{
+				"lead": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see src/runtime/handler/subscribe-hooks.js), so a substitution\n// can disarm a gate the operator explicitly armed.\n",
+				"ours": "// the app has, and an app-supplied `subscribe` hook stands the server-grant\n// model down (see the subscribe authorization in\n// src/runtime/handler/realtime.js), so a substitution can disarm a gate the\n// operator explicitly armed.\n"
+			},
+			{
+				"lead": "// The artifact test below therefore asserts on the BUILT BUNDLE, not on the\n// adapter's normalized options: the option object was always correct: it was\n// simply never read, so an options-level assertion stays green against the bug.\n",
+				"ours": "// An options-level assertion stays green against that bug on its own, because\n// the option object was always correct - it was simply never read. So what\n// these cases pin is the adapter PUBLISHING the option to the plugin, and the\n// guard that refuses a build whose bundle names a different module.\n"
+			},
+			{
+				"lead": "import { readFileSync } from 'node:fs';\n",
+				"ours": ""
+			},
+			{
+				"lead": "import { buildFixtureOnce } from './helpers/fixture-build.js';\nimport { hasUWS, REAL_BOOT_BUDGET_MS } from './helpers/real-runtime.js';\nimport { variantOut, FIXTURE_VARIANTS } from './fixture/variants.js';\n",
+				"ours": ""
+			},
+			{
+				"lead": "const fixtureDir = path.join(ROOT, 'test/fixture');\n",
+				"ours": ""
+			},
+			{
+				"lead": "\tit('publishes the configured module path on the adapter object', () => {\n\t\texpect(adapter({ websocket: { metrics: './src/m.js' } }).websocketMetrics).toBe('./src/m.js');\n\t});\n\n",
+				"ours": ""
+			},
+			{
+				"lead": "// The real proof. Everything above tests the guard; this tests that the option\n// actually reaches the build, which is what was broken.\nconst describeBuild = hasUWS ? describe : describe.skip;\n\ndescribeBuild('the built artifact honours websocket.handler through the Vite plugin', () => {\n\tit('bundles the module named on the adapter, not the auto-discovered one', () => {\n\t\t// The `grant` variant names its handler ONLY through the adapter's\n\t\t// `websocket.handler` (test/fixture/svelte.config.js); the fixture's\n\t\t// vite.config.js passes the plugin nothing. So if the plugin stops\n\t\t// honouring the adapter's option, auto-discovery picks up\n\t\t// src/hooks.ws.js and every assertion below flips.\n\t\texpect(FIXTURE_VARIANTS.grant.handler).toBe('./src/hooks.ws.grant.js');\n\n\t\tconst built = buildFixtureOnce('grant');\n\t\texpect(built, 'grant fixture variant failed to build').toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\n\t\t// A marker unique to the named module...\n\t\texpect(bundle).toContain('resume-topics');\n\t\t// ...and one unique to the module auto-discovery would have picked.\n\t\texpect(bundle).not.toContain('cork-test');\n\t\t// Reads a build rather than performing one on a warm tree, but the call\n\t\t// is the same one either way and a cold or contended tree pays for the\n\t\t// build here - which is more than vitest's default allows for.\n\t}, REAL_BOOT_BUDGET_MS);\n\n\tit('carries the named handler plugin hook, not the auto-discovered authorization hook', () => {\n\t\t// The named handler now wraps a real groups-plugin side-effect hook and\n\t\t// preserves its marker. Its export is expected and does not disarm the\n\t\t// grant model; the differential suite proves that behavior. These bundle\n\t\t// markers distinguish it from src/hooks.ws.js, whose app authorization\n\t\t// hook would stand the armed gate down.\n\t\texpect(buildFixtureOnce('grant')).toBe(true);\n\n\t\tconst bundle = readFileSync(\n\t\t\tpath.join(fixtureDir, variantOut('grant'), 'server/ws-handler.js'),\n\t\t\t'utf8'\n\t\t);\n\t\tconst exportList = /\\bexport\\s*\\{([^}]*)\\}/.exec(bundle);\n\t\texpect(exportList, 'bundled handler has no export statement to inspect').not.toBeNull();\n\n\t\tconst names = exportList[1]\n\t\t\t.split(',')\n\t\t\t.map((entry) => entry.trim().split(/\\s+as\\s+/).pop().trim())\n\t\t\t.filter(Boolean);\n\n\t\texpect(names).toContain('upgrade');\n\t\texpect(names).toContain('subscribe');\n\t\texpect(bundle).toContain('policy-lobby');\n\t\texpect(bundle).toContain('hook-entered');\n\t}, REAL_BOOT_BUDGET_MS);\n});\n",
+				"ours": ""
+			}
+		]
+	},
+	{
+		"file": "test/ws-handshake-real.test.js"
 	}
 ]

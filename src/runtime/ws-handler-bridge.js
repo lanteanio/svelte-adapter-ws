@@ -1,8 +1,8 @@
-// Placeholder bridge: `WS_HANDLER` is substituted by the adapter's build step
-// with a path relative to the runtime payload ROOT. Modules under handler/
-// import the app's WebSocket handler module through this root-level bridge so
-// they need no substitution of their own.
-
+// Re-export of the build-generated ws-handler module from a runtime/-root module,
+// so handler/* sub-modules can import it via ../ws-handler-bridge.js. The build
+// replace-map rewrites the WS_HANDLER placeholder to a root-relative path that
+// only resolves correctly from a file at the output root (this bridge), not from
+// the deeper handler/ directory.
 import * as wsModule from 'WS_HANDLER';
 
 export { wsModule };

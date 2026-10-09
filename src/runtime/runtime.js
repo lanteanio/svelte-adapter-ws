@@ -11,9 +11,9 @@
 import { performance } from 'node:perf_hooks';
 import { randomUUID, randomBytes as cryptoRandomBytes } from 'node:crypto';
 
-// The default clock keeps a 1Hz-cached wall clock (a single variable read per
-// call - the hot-path cost) plus a monotonic source for duration math. The
-// refresher is unref'd so it never holds the loop open.
+// The default clock keeps the proven 1Hz-cached wall clock (a single variable
+// read per call - the current hot-path cost) plus a monotonic source for
+// duration math. The refresher is unref'd so it never holds the loop open.
 let cachedNow = Date.now();
 const _refresher = setInterval(() => { cachedNow = Date.now(); }, 1000);
 if (_refresher && _refresher.unref) _refresher.unref();
@@ -55,7 +55,7 @@ const defaultEnv = Object.freeze({
 		clearInterval: (h) => clearInterval(h),
 		queueMicrotask: (cb) => queueMicrotask(cb)
 	}),
-	tz: undefined // effective timezone; undefined = real local TZ
+	tz: undefined // effective timezone for cron evaluation; undefined = real local TZ
 });
 
 let current = defaultEnv;
@@ -82,6 +82,8 @@ export const wallIso = () => new Date(current.clock.wallEpoch()).toISOString();
  * process started, not since the epoch, and it is NOT comparable across
  * processes (each has its own origin). Use `monotonicNow` for durations within
  * one worker and `now` / `wallEpoch` for anything a human or another host reads.
+ * This is strictly for the cross-thread ordering questions - "was this stream
+ * already running when I attached?" - that a per-thread anchor would blur.
  */
 export const processMonotonicNow = () => current.clock.processMonotonic();
 export const randomFloat = () => current.rng.float();
