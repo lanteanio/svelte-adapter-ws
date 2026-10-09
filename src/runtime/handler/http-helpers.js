@@ -5,7 +5,7 @@
 import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { createRequire } from 'node:module';
 import { firstHeaderValue } from '../utils/request-headers.js';
-import { setImmediateTimer } from '../runtime.js';
+import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
@@ -260,6 +260,10 @@ export function missesHost(req) {
 // The requests of one connection in the order it carried them, on the socket,
 // and on each response handed out, the line it belongs to.
 const LINE = Symbol('svelte-adapter-ws.pipeline');
+
+// On a socket whose forbidden method is answered once its head has ended:
+// the reader of the bytes node's parser reports after it gave up.
+const PENDING_HEAD = Symbol('svelte-adapter-ws.pending-head');
 
 // What a line keeps of an answer once it has finished, in place of the
 // response, so an idle connection holds no response alive.
@@ -594,15 +598,15 @@ function refusedFirstLine(err, socket) {
 }
 
 /**
- * Where node's parser starts the first request line: past the empty lines it
- * reads over. For the answers given on node's own parse of a line, the
- * method's 405 and a HEAD's bodyless 400.
+ * Where node's parser starts the first request line: past the CR and LF
+ * bytes it reads over. For the answers given on node's own parse of a line,
+ * the method's 405 and a HEAD's bodyless 400.
  *
  * @param {Buffer} packet
  */
 function firstLineAt(packet) {
 	let at = 0;
-	while (at + 1 < packet.length && packet[at] === 13 && packet[at + 1] === 10) at += 2;
+	while (at < packet.length && (packet[at] === 13 || packet[at] === 10)) at++;
 	return at;
 }
 
@@ -616,7 +620,9 @@ function firstLineAt(packet) {
  * before its line has ended, and so is a tab inside the method or the target,
  * a bare LF in front of the line, or a space in front of the method unless the
  * target follows it at once. A CR anywhere before the version is a line it
- * reads no answer from: it waits for more, and here node's answer stands.
+ * reads no answer from: it waits for more, and here node's answer stands -
+ * except a target ended by a CR where the head ends right after it, which
+ * it refuses at once.
  *
  * @param {Buffer} packet
  * @param {number} at
@@ -633,7 +639,7 @@ function refusedRequestLine(packet, at) {
 	if (packet[i] !== 47) return true;
 	while (i < length && packet[i] > 32) i++;
 	if (i === length) return false;
-	if (packet[i] === 13) return false;
+	if (packet[i] === 13) return length === i + 4 && packet[i + 1] === 10 && packet[i + 2] === 13 && packet[i + 3] === 10;
 	if (packet[i] !== 32) return true;
 	const end = packet.indexOf(10, i);
 	const version = packet.toString('latin1', i + 1, end === -1 ? length : end + 1);
@@ -654,10 +660,12 @@ function refusedRequestLine(packet, at) {
  * for a HEAD its length alone. Ahead of both, a request line the native tier
  * does not read gets the 505 the request listener writes for one, as the
  * native tier answers the line before anything else; a CONNECT gets it too
- * unless its target is in origin form and its version HTTP/1.1, and the 400
- * for a missing Host ahead of its method, as the native tier reads the line,
- * then the Host, then the method. A CONNECT
- * reads like any request in its connection's line: behind an answer that
+ * unless its target is in origin form and its version HTTP/1.1. The native
+ * tier reads the line, then the Host, then the method, so a CONNECT and a
+ * method node's parser refuses get the 400 for a missing Host ahead of their
+ * 405: node gives up on such a method before any header, so the head is read
+ * on to its end here and answered then, as the native tier answers it. A
+ * CONNECT reads like any request in its connection's line: behind an answer that
  * ends the connection it is dropped unanswered, behind one still waiting it
  * waits its turn and the line closes the connection if that answer is still
  * waiting then, and otherwise it is answered once every answer ahead of it
@@ -702,7 +710,49 @@ export function refuseUnparsedForbiddenMethods(server) {
 		if (turn === null) answer();
 		else turn.then((ok) => { if (ok) answer(); else socket.destroy(); });
 	});
+	/**
+	 * The 405 for a forbidden method, or the 400 for a missing Host ahead of
+	 * it, once the request's head has ended: node's parser stopped at the
+	 * method, and reports every later read on the socket as the same error,
+	 * so the rest of the head is gathered from those reports here, bounded by
+	 * node's header size and timeout.
+	 *
+	 * @param {any} socket
+	 * @param {Buffer} head
+	 * @param {number} timeoutMs
+	 */
+	const answerAfterHead = (socket, head, timeoutMs) => {
+		const limit = /** @type {any} */ (server).maxHeaderSize ?? 16384;
+		const settle = (/** @type {string} */ raw) => {
+			clearTimer(timer);
+			socket[PENDING_HEAD] = undefined;
+			answerAndClose(socket, raw);
+		};
+		const decide = () => {
+			const end = head.indexOf('\r\n\r\n');
+			if (end === -1) {
+				if (head.length > limit) settle('HTTP/1.1 431 Request Header Fields Too Large\r\nconnection: close\r\n\r\n');
+				return;
+			}
+			const hasHost = head.subarray(0, end).toString('latin1').split('\r\n').some((line) => /^host:/i.test(line));
+			settle(hasHost ? FORBIDDEN_405_RAW : BAD_TARGET_400_RAW);
+		};
+		const timer = setTimer(() => { socket[PENDING_HEAD] = undefined; socket.destroy(); }, timeoutMs);
+		socket.once('close', () => { clearTimer(timer); socket[PENDING_HEAD] = undefined; });
+		socket[PENDING_HEAD] = (/** @type {Buffer} */ chunk) => {
+			head = Buffer.concat([head, chunk]);
+			decide();
+		};
+		decide();
+	};
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
+		// More of a head whose forbidden method is waiting for its end.
+		const pending = /** @type {any} */ (socket)[PENDING_HEAD];
+		if (pending !== undefined) {
+			if (Buffer.isBuffer(err?.rawPacket)) pending(err.rawPacket);
+			else socket.destroy();
+			return;
+		}
 		// A response already on its way (a pipelined bad request behind a
 		// streaming reply) gets no second status line written into its body;
 		// the socket is destroyed as node would destroy it.
@@ -729,7 +779,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 			const line = err.rawPacket.subarray(at, at + 8).toString('latin1');
 			const method = line.slice(0, line.indexOf(' ') === -1 ? line.length : line.indexOf(' ')).toUpperCase();
 			if (FORBIDDEN_METHODS.has(method)) {
-				answerAndClose(socket, FORBIDDEN_405_RAW);
+				answerAfterHead(socket, err.rawPacket.subarray(at), server.headersTimeout || 60000);
 				return;
 			}
 		}

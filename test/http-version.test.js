@@ -179,6 +179,9 @@ const REFUSED = /** @type {Array<[string, string]>} */ ([
 	['a space and then an asterisk', ' * HTTP/1.1\r\nHost: x\r\n\r\n'],
 	['an empty method and two spaces before the version', ' /a  HTTP/1.1\r\nHost: x\r\n\r\n'],
 	['OPTIONS * without a Host', 'OPTIONS * HTTP/1.1\r\n\r\n'],
+	['a CONNECT in authority form without a Host', 'CONNECT x:1 HTTP/1.1\r\n\r\n'],
+	['an empty method and a target ended where the head ends', ' /\r\n\r\n'],
+	['an empty method and a longer target ended where the head ends', ' /abc\r\n\r\n'],
 	['a target in absolute form without a Host', 'GET http://x/api/tiny HTTP/1.1\r\n\r\n']
 ]);
 
@@ -255,6 +258,28 @@ describe('the built runtime', () => {
 	it('leaves an empty method followed by the target to the parser, which the native tier hands on', async () => {
 		const conversation = await converse(tcp(open.rt.port), [[0, ' / HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
 		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+	});
+
+	it('answers a forbidden method node\'s parser refuses once its head has ended: 400 without a Host, 405 with one', async () => {
+		// The native tier reads the line, the Host, then the method; node gives
+		// up at the method, so the rest of the head is read on here.
+		for (const [writes, status] of /** @type {Array<[Array<[number, string]>, string]>} */ ([
+			[[[0, 'TRACK / HTTP/1.1\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'track / HTTP/1.1\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'connect /x HTTP/1.1\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'trace / HTTP/1.1\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\n'], [100, '\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\n'], [100, 'Host: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
+			[[[0, '\rTRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed']
+		])) {
+			const conversation = await converse(tcp(open.rt.port), writes, ['GET']);
+			expect(conversation.answers[0]?.statusLine, JSON.stringify(writes)).toBe(status);
+			expect(conversation.closed, JSON.stringify(writes)).toBe(true);
+		}
+		// A head that never ends is answered by the parser's limit.
+		const overflow = await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.1\r\nX-Pad: ' + 'p'.repeat(20000)]], ['GET']);
+		expect(overflow.answers[0]?.statusLine).toBe('HTTP/1.1 431 Request Header Fields Too Large');
 	});
 
 	it('keeps the parser\'s answer for a line with a CR before its version, or DEL in it', async () => {
@@ -470,6 +495,13 @@ describe('createTestServer', () => {
 		const served = await converse(tcp(mirror.port), [[0, 'GET /__realtime/status HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n']], ['GET']);
 		expect(served.answers[0]?.statusLine).toBe('HTTP/1.1 200 OK');
 		expect(adminRuns).toBe(1);
+	});
+
+	it('answers a forbidden method node\'s parser refuses once its head has ended, as production does', async () => {
+		const hostless = await converse(tcp(mirror.port), [[0, 'TRACK / HTTP/1.1\r\n'], [100, '\r\n']], ['GET']);
+		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+		const allowed = await converse(tcp(mirror.port), [[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
+		expect(allowed.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
 	});
 
 	it('reads a CONNECT in its connection\'s line, as production does', async () => {

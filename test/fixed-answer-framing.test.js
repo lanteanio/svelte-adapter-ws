@@ -1609,7 +1609,7 @@ describe("the 400 for a target node's parser refuses", () => {
 			[`${ahead}${method} /café HTTP/1.1`, 'Host: 127.0.0.1']
 		);
 		// The method is read past the empty lines in front of the line too.
-		for (const [method, body, ahead] of [['GET', 'Bad Request', ''], ['HEAD', '', ''], ['HEAD', '', '\r\n\r\n']]) {
+		for (const [method, body, ahead] of [['GET', 'Bad Request', ''], ['HEAD', '', ''], ['HEAD', '', '\r\n\r\n'], ['HEAD', '', '\r']]) {
 			const answer = await ask(method, ahead);
 			const first = splitFirst(answer.buffer);
 			expect(first.status, method + ahead).toBe('HTTP/1.1 400 Bad Request');

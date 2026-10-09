@@ -59,11 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without reaching the `upgrade` hook. A `CONNECT` reads in its connection's
   line like any request: behind an answer that ends the connection it goes
   unanswered, behind one still waiting the connection closes, and otherwise
-  its `405` follows the answers ahead of it, and one without a Host gets
-  the `400` first. A line that starts with a space and the target has an
-  empty method, which the native tier hands on; node's parser refuses it
-  with `400`, and that answer stands, as it does for a line with a CR before
-  its version, which the native tier reads no answer from. Anything that talks
+  its `405` follows the answers ahead of it. A `CONNECT`, a `TRACK`, a
+  `TRACE` or a `CONNECT` spelled in lower case without a Host gets the
+  `400` ahead of its `405`, once its head has ended, as the native tier
+  reads the line, then the Host, then the method. A line that starts with a
+  space and the target has an empty method, which the native tier hands on;
+  node's parser refuses it with `400`, and that answer stands, as it does
+  for a line with a CR before its version, which the native tier reads no
+  answer from unless the head ends right after that line. Anything that talks
   HTTP/1.0 to the server directly stops working: nginx before 1.29.7 proxies
   with HTTP/1.0 unless `proxy_http_version 1.1` is set on every location that
   proxies to it, and a health check that defaults to HTTP/1.0, such as
