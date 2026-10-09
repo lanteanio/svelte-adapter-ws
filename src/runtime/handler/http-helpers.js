@@ -620,16 +620,47 @@ function refusedFirstLine(err, socket) {
 }
 
 /**
- * Where node's parser starts the first request line: past the CR and LF
+ * Where the request line node's parser gave up on starts in the refused
+ * packet: the line that holds the byte it stopped at, past the CR and LF
  * bytes it reads over. For the answers given on node's own parse of a line,
- * the method's 405 and a HEAD's bodyless 400.
+ * the method's 405 and a HEAD's bodyless 400, whichever request of the read
+ * they are for.
  *
- * @param {Buffer} packet
+ * @param {any} err
  */
-function firstLineAt(packet) {
-	let at = 0;
+function failingLineAt(err) {
+	/** @type {Buffer} */
+	const packet = err.rawPacket;
+	const parsed = typeof err.bytesParsed === 'number' ? Math.min(err.bytesParsed, packet.length) : 0;
+	let at = parsed > 0 ? packet.lastIndexOf(10, parsed - 1) + 1 : 0;
 	while (at < packet.length && (packet[at] === 13 || packet[at] === 10)) at++;
 	return at;
+}
+
+/**
+ * The answer to a forbidden method once its head has ended, read as the
+ * native tier reads a head: a bare LF or a header name that is not a token
+ * is refused 400 at once, a head past node's header limit is 431, and an
+ * ended head is 405 with a Host line and 400 without. Null while the head
+ * has not ended.
+ *
+ * @param {Buffer} head
+ * @param {number} limit
+ */
+function forbiddenHeadAnswer(head, limit) {
+	for (let i = head.indexOf(10); i !== -1; i = head.indexOf(10, i + 1)) {
+		if (i === 0 || head[i - 1] !== 13) return BAD_TARGET_400_RAW;
+	}
+	if (head.length > limit) return 'HTTP/1.1 431 Request Header Fields Too Large\r\nconnection: close\r\n\r\n';
+	const end = head.indexOf('\r\n\r\n');
+	if (end === -1) return null;
+	let host = false;
+	for (const line of head.subarray(0, end).toString('latin1').split('\r\n').slice(1)) {
+		const colon = line.indexOf(':');
+		if (colon <= 0 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(line.slice(0, colon))) return BAD_TARGET_400_RAW;
+		if (line.slice(0, colon).toLowerCase() === 'host') host = true;
+	}
+	return host ? FORBIDDEN_405_RAW : BAD_TARGET_400_RAW;
 }
 
 /**
@@ -734,10 +765,13 @@ export function refuseUnparsedForbiddenMethods(server) {
 	});
 	/**
 	 * The 405 for a forbidden method, or the 400 for a missing Host ahead of
-	 * it, once the request's head has ended: node's parser stopped at the
-	 * method, and reports every later read on the socket as the same error,
-	 * so the rest of the head is gathered from those reports here, bounded by
-	 * node's header size and timeout.
+	 * it, once the request's head has ended and been read as the native tier
+	 * reads it (forbiddenHeadAnswer): node's parser stopped at the method, and
+	 * reports every later read on the socket as the same error, so the rest of
+	 * the head is gathered from those reports here, bounded by node's header
+	 * size and timeout. The answer waits its turn in the connection's line
+	 * like a CONNECT's: nothing is written behind an answer still waiting, and
+	 * it follows the answers ahead of it.
 	 *
 	 * @param {any} socket
 	 * @param {Buffer} head
@@ -745,27 +779,40 @@ export function refuseUnparsedForbiddenMethods(server) {
 	 */
 	const answerAfterHead = (socket, head, timeoutMs) => {
 		const limit = /** @type {any} */ (server).maxHeaderSize ?? 16384;
-		const settle = (/** @type {string} */ raw) => {
-			clearTimer(timer);
-			socket[PENDING_HEAD] = undefined;
-			answerAndClose(socket, raw);
+		/** @type {string | null} */
+		let raw = null;
+		let allowed = false;
+		const cleanup = () => { clearTimer(timer); socket[PENDING_HEAD] = undefined; };
+		const finish = () => {
+			if (raw === null || !allowed) return;
+			cleanup();
+			if (socket.writable) answerAndClose(socket, raw);
+			else socket.destroy();
 		};
 		const decide = () => {
-			const end = head.indexOf('\r\n\r\n');
-			if (end === -1) {
-				if (head.length > limit) settle('HTTP/1.1 431 Request Header Fields Too Large\r\nconnection: close\r\n\r\n');
-				return;
-			}
-			const hasHost = head.subarray(0, end).toString('latin1').split('\r\n').some((line) => /^host:/i.test(line));
-			settle(hasHost ? FORBIDDEN_405_RAW : BAD_TARGET_400_RAW);
+			if (raw !== null) return;
+			raw = forbiddenHeadAnswer(head, limit);
+			finish();
 		};
-		const timer = setTimer(() => { socket[PENDING_HEAD] = undefined; socket.destroy(); }, timeoutMs);
-		socket.once('close', () => { clearTimer(timer); socket[PENDING_HEAD] = undefined; });
+		// What the line asks of a request: its line was read, a Host is what
+		// the head has shown so far.
+		const standIn = { socket, httpVersion: '1.1', url: '/', method: 'TRACK', headers: { get host() { return /^host:/im.test(head.toString('latin1')) ? 'x' : undefined; } } };
+		const timer = setTimer(() => { cleanup(); socket.destroy(); }, timeoutMs);
+		socket.once('close', cleanup);
 		socket[PENDING_HEAD] = (/** @type {Buffer} */ chunk) => {
 			head = Buffer.concat([head, chunk]);
 			decide();
 		};
 		decide();
+		const turn = upgradeTurn(/** @type {any} */ (standIn), socket);
+		if (turn === null) {
+			allowed = true;
+			finish();
+		} else {
+			turn.then((ok) => {
+				if (ok) { allowed = true; finish(); } else cleanup();
+			});
+		}
 	};
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
 		// More of a head whose forbidden method is waiting for its end.
@@ -797,7 +844,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
-			const at = firstLineAt(err.rawPacket);
+			const at = failingLineAt(err);
 			const line = err.rawPacket.subarray(at, at + 8).toString('latin1');
 			const method = line.slice(0, line.indexOf(' ') === -1 ? line.length : line.indexOf(' ')).toUpperCase();
 			if (FORBIDDEN_METHODS.has(method)) {
@@ -807,7 +854,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		}
 		const code = err && err.code;
 		if (code === 'HPE_INVALID_URL') {
-			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(firstLineAt(err.rawPacket)).subarray(0, 5).toString('latin1') === 'HEAD ';
+			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(failingLineAt(err)).subarray(0, 5).toString('latin1') === 'HEAD ';
 			answerAndClose(socket, headOnly ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
 			return;
 		}

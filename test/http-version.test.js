@@ -16,7 +16,9 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import http from 'node:http';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+import { refuseUnparsedForbiddenMethods } from '../src/runtime/handler/http-helpers.js';
 
 const WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -271,7 +273,19 @@ describe('the built runtime', () => {
 			[[[0, 'TRACK / HTTP/1.1\r\n'], [100, '\r\n']], 'HTTP/1.1 400 Bad Request'],
 			[[[0, 'TRACK / HTTP/1.1\r\n'], [100, 'Host: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
 			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
-			[[[0, '\rTRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed']
+			[[[0, '\rTRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHOST:x\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost:\r\n\r\n']], 'HTTP/1.1 405 Method Not Allowed'],
+			// The head is read as the native tier reads it: a bare LF or a
+			// header name that is not a token is refused at once, a Host named
+			// inside another header's value is no Host.
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\n\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\nX-A: b\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n'], [100, 'Bad Header: x\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nX-Note: host: y\r\n\r\n']], 'HTTP/1.1 400 Bad Request'],
+			[[[0, 'TRACK / HTTP/1.1\r\nHost: x\r\nX-Pad: ' + 'p'.repeat(20000) + '\r\n\r\n']], 'HTTP/1.1 431 Request Header Fields Too Large']
 		])) {
 			const conversation = await converse(tcp(open.rt.port), writes, ['GET']);
 			expect(conversation.answers[0]?.statusLine, JSON.stringify(writes)).toBe(status);
@@ -280,6 +294,27 @@ describe('the built runtime', () => {
 		// A head that never ends is answered by the parser's limit.
 		const overflow = await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.1\r\nX-Pad: ' + 'p'.repeat(20000)]], ['GET']);
 		expect(overflow.answers[0]?.statusLine).toBe('HTTP/1.1 431 Request Header Fields Too Large');
+	});
+
+	it('reads a forbidden method node\'s parser refuses in its connection\'s line', async () => {
+		// Behind an answer still waiting the connection closes with nothing
+		// written, in one write or a later one; behind an answered request the
+		// 405 follows that answer; a Host-less one gets its 400 at once.
+		for (const writes of /** @type {Array<Array<[number, string]>>} */ ([
+			[[0, 'GET /api/slow HTTP/1.1\r\nHost: x\r\n\r\n'], [100, 'TRACK / HTTP/1.1\r\nHost: x\r\n\r\n']],
+			[[0, 'GET /api/slow HTTP/1.1\r\nHost: x\r\n\r\nTRACK / HTTP/1.1\r\nHost: x\r\n\r\n']]
+		])) {
+			const closed = await converse(tcp(open.rt.port), writes, ['GET']);
+			expect(closed.answers, JSON.stringify(writes)).toEqual([]);
+			expect(closed.rest, JSON.stringify(writes)).toBe('');
+			expect(closed.closed, JSON.stringify(writes)).toBe(true);
+		}
+		const after = await converse(tcp(open.rt.port), [[0, 'GET /api/tiny HTTP/1.1\r\nHost: x\r\n\r\nTRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET', 'GET']);
+		expect(after.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 405 Method Not Allowed']);
+		expect(after.closed).toBe(true);
+		const hostless = await converse(tcp(open.rt.port), [[0, 'GET /api/slow HTTP/1.1\r\nHost: x\r\n\r\n'], [100, 'TRACK / HTTP/1.1\r\n\r\n']], ['GET']);
+		expect(hostless.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 400 Bad Request']);
+		expect(hostless.closed).toBe(true);
 	});
 
 	it('keeps the parser\'s answer for a line with a CR before its version, or DEL in it', async () => {
@@ -291,6 +326,7 @@ describe('the built runtime', () => {
 			'GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n',
 			'GET /abc\r\nBad Header: x\r\n\r\n',
 			'GETXYZ\r\n\r\n',
+			' /\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n',
 			'\r\n\r\nGET / HTTP/1.0\r\nBad Header: x\r\n\r\n',
 			'G\x7fT / HTTP/1.1\r\nHost: x\r\n\r\n',
 			'GET /a\x7fb HTTP/1.1\r\nHost: x\r\n\r\n'
@@ -415,6 +451,23 @@ describe('the built runtime', () => {
 		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 		const whole = await converse(tcp(open.rt.port), [[0, 'GET / HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n']], ['GET']);
 		expect(whole.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+	});
+});
+
+describe('a forbidden method whose head never ends', () => {
+	it('is destroyed at the server\'s headers timeout, with nothing written', async () => {
+		const server = http.createServer({ requireHostHeader: false }, () => {});
+		server.headersTimeout = 200;
+		refuseUnparsedForbiddenMethods(server);
+		await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+		const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+		const started = Date.now();
+		const conversation = await converse(tcp(port), [[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n']], ['GET']);
+		expect(conversation.answers).toEqual([]);
+		expect(conversation.rest).toBe('');
+		expect(conversation.closed).toBe(true);
+		expect(Date.now() - started).toBeLessThan(1500);
+		await new Promise((resolve) => server.close(() => resolve(undefined)));
 	});
 });
 

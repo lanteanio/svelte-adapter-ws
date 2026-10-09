@@ -59,10 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without reaching the `upgrade` hook. A `CONNECT` reads in its connection's
   line like any request: behind an answer that ends the connection it goes
   unanswered, behind one still waiting the connection closes, and otherwise
-  its `405` follows the answers ahead of it. A `CONNECT`, a `TRACK`, a
-  `TRACE` or a `CONNECT` spelled in lower case without a Host gets the
-  `400` ahead of its `405`, once its head has ended, as the native tier
-  reads the line, then the Host, then the method. A line that starts with a
+  its `405` follows the answers ahead of it, and so does a `TRACK`, a
+  `TRACE` or a `CONNECT` spelled in lower case, which node's parser refuses.
+  Those get the `400` for a missing Host ahead of the `405`, once their
+  head has ended, as the native tier reads the line, then the Host, then the
+  method; the head is read as the native tier reads it, so a bare LF or a
+  header name that is not a token in it is a `400` at once, and a head past
+  node's header limit a `431`. A line that starts with a
   space and the target has an empty method, which the native tier hands on;
   node's parser refuses it with `400`, and that answer stands, as it does
   for a line with a CR before its version, which the native tier reads no
