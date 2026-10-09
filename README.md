@@ -736,11 +736,13 @@ providing the cross-instance relay, presence and clustering primitives over
 Redis. Container fleets that scale by replicas need neither `reusePort` nor
 `CLUSTER_WORKERS` - the balancer already spreads connections across replicas.
 
-**Speak HTTP/1.1 to it.** The server answers HTTP/1.1 only: a request in any
-other version gets `505` and a closed connection, as on the native tier, so
-nginx before 1.29.7, which proxies with HTTP/1.0 by default, needs
-`proxy_http_version 1.1;` on every location that proxies to it, and a load
-balancer's health check has to probe in HTTP/1.1. Pipelined
+**Speak HTTP/1.1 to it, in origin form.** The server answers an HTTP/1.1
+request whose target is a path: a request in any other version, `OPTIONS *`,
+a target in absolute form or a request line with a control byte in it gets
+`505` and a closed connection, as on the native tier, so nginx before 1.29.7,
+which proxies with HTTP/1.0 by default, needs `proxy_http_version 1.1;` on
+every location that proxies to it, and a load balancer's health check has to
+probe a path in HTTP/1.1. Pipelined
 requests are answered while each response is written before the next request
 on the connection is parsed, which the native tier does once the request
 ahead has been handed to the application and the ticks and microtasks it

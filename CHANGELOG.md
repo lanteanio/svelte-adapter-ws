@@ -47,13 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   close-delimited unless the request asked for chunked. A request whose line
   is not a method, a target that starts with `/` and `HTTP/1.1` - HTTP/1.0, a
   line with no version, `HTTP/2.0` sent as text, a version in lower case,
-  `OPTIONS *`, a target in absolute form, a `CONNECT` to a host and port - is
-  now answered `505 HTTP Version Not Supported` and its connection closed
-  before its method, headers or route count, as on the family's native tier,
-  on the runtime and in `createTestServer`. The native tier sends an unframed
-  HTML page; this runtime sends a length-framed `text/plain` one. The refusal
-  is not counted as a request, and an HTTP/1.0 WebSocket handshake is refused
-  the same way without reaching the `upgrade` hook. Anything that talks
+  `OPTIONS *`, a target in absolute form, a `CONNECT` to a host and port, a
+  method or a target with a tab or another control byte inside it, a line
+  that starts with a bare LF - is now answered `505 HTTP Version Not
+  Supported` and its connection closed before its method, headers or route
+  count, as on the family's native tier, on the runtime and in
+  `createTestServer`. The native tier sends an unframed HTML page; this
+  runtime sends a length-framed `text/plain` one. The refusal is not counted
+  as a request, and an HTTP/1.0 WebSocket handshake is refused the same way
+  without reaching the `upgrade` hook. A `CONNECT` reads in its connection's
+  line like any request: behind an answer that ends the connection it goes
+  unanswered, behind one still waiting the connection closes, and otherwise
+  its `405` follows the answers ahead of it. A line that starts with a space
+  has an empty method, which the native tier hands on; node's parser refuses
+  it with `400`, and that answer stands. Anything that talks
   HTTP/1.0 to the server directly stops working: nginx before 1.29.7 proxies
   with HTTP/1.0 unless `proxy_http_version 1.1` is set on every location that
   proxies to it, and a health check that defaults to HTTP/1.0, such as

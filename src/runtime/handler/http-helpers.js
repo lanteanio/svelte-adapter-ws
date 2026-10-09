@@ -544,8 +544,8 @@ const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
  * 505 whatever else is wrong with it, see refusedRequestLine: the offset of
  * that line in the refused packet, or -1. The line is read only in the
  * connection's first read, which starts with the connection's first request
- * line, past any empty lines node's parser skips; a later read can begin
- * inside a request, and node's answer stands. A request refused behind
+ * line, past the empty lines the native tier reads over; a later read can
+ * begin inside a request, and node's answer stands. A request refused behind
  * another in that read leaves the first one's line to answer for: a line the
  * native tier reads keeps node's answer, and one it does not was answered 505
  * and ended the connection before this one was read.
@@ -556,32 +556,59 @@ const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
 function refusedFirstLine(err, socket) {
 	const packet = err?.rawPacket;
 	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return -1;
-	let at = 0;
-	while (at < packet.length && (packet[at] === 13 || packet[at] === 10)) at++;
+	const at = firstLineAt(packet);
 	return refusedRequestLine(packet, at) ? at : -1;
 }
 
 /**
+ * Where a connection's first request line starts: past the CRLF pairs the
+ * native tier reads over in front of it. A bare LF, or a CR followed by
+ * anything but LF, is the line's first byte, and refusedRequestLine reads it
+ * as a method ended before any space.
+ *
+ * @param {Buffer} packet
+ */
+function firstLineAt(packet) {
+	let at = 0;
+	while (at + 1 < packet.length && packet[at] === 13 && packet[at + 1] === 10) at += 2;
+	return at;
+}
+
+/**
  * Whether the request line at `at` is one the native tier refuses 505, as
- * far as its bytes go. It reads a method up to a space, a target that starts
- * with `/` up to the next space, then exactly `HTTP/1.1` and CRLF, and
- * refuses as soon as the bytes so far cannot become that: `GET / HTTP/1.0`
- * is refused before its line has ended.
+ * far as its bytes go. The native tier ends the method at the first byte that
+ * is a control character, a space or outside ASCII, and the target at the
+ * first control character or space; it then needs a space, a target starting
+ * with `/`, a space, and exactly `HTTP/1.1` and CRLF, and refuses as soon
+ * as the bytes so far cannot become that: `GET / HTTP/1.0` is refused before
+ * its line has ended, and so is a tab inside the method or the target. A line
+ * that starts with a space has an empty method, which the native tier hands
+ * on; node's parser refuses it, and that answer stands.
  *
  * @param {Buffer} packet
  * @param {number} at
  */
 function refusedRequestLine(packet, at) {
-	const end = packet.indexOf(10, at);
-	const line = packet.toString('latin1', at, end === -1 ? packet.length : end + 1);
-	const method = line.indexOf(' ');
-	if (method === -1) return end !== -1;
-	if (method === 0) return true;
-	if (method + 1 === line.length) return false;
-	if (line.charCodeAt(method + 1) !== 47) return true;
-	const target = line.indexOf(' ', method + 1);
-	if (target === -1) return end !== -1;
-	const version = line.slice(target + 1);
+	const length = packet.length;
+	let i = at;
+	while (i < length && packet[i] > 32 && packet[i] < 128) i++;
+	if (i === length) return false;
+	if (i === at) {
+		if (packet[i] === 32) return false;
+		// A lone CR may still become an empty line; firstLineAt read every
+		// pair, so one followed by any byte is the method's end.
+		if (packet[i] === 13) return i + 1 < length;
+		return true;
+	}
+	if (packet[i] !== 32) return true;
+	i++;
+	if (i === length) return false;
+	if (packet[i] !== 47) return true;
+	while (i < length && packet[i] > 32) i++;
+	if (i === length) return false;
+	if (packet[i] !== 32) return true;
+	const end = packet.indexOf(10, i);
+	const version = packet.toString('latin1', i + 1, end === -1 ? length : end + 1);
 	return end === -1 ? !'HTTP/1.1\r\n'.startsWith(version) : version !== 'HTTP/1.1\r\n';
 }
 
@@ -599,7 +626,12 @@ function refusedRequestLine(packet, at) {
  * for a HEAD its length alone. Ahead of both, a request line the native tier
  * does not read gets the 505 the request listener writes for one, as the
  * native tier answers the line before anything else; a CONNECT gets it too
- * unless its target is in origin form and its version HTTP/1.1.
+ * unless its target is in origin form and its version HTTP/1.1. A CONNECT
+ * reads like any request in its connection's line: behind an answer that
+ * ends the connection it is dropped unanswered, behind one still waiting it
+ * waits its turn and the line closes the connection if that answer is still
+ * waiting then, and otherwise it is answered once every answer ahead of it
+ * is on the wire.
  * Every other parser failure keeps node's own answer: 431 for a
  * header block past the limit, 408 for a request that timed out, 413 for
  * chunk extensions past the limit, 400 otherwise, written only when no
@@ -626,8 +658,19 @@ export function refuseUnparsedForbiddenMethods(server) {
 	// CONNECT parses, but node hands it to the 'connect' event rather than the
 	// request listener, and a server with no listener for it drops the socket.
 	server.on('connect', (/** @type {import('node:http').IncomingMessage} */ req, /** @type {import('node:net').Socket} */ socket) => {
-		if (socket.writable) answerAndClose(socket, acceptsRequestLine(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
-		else socket.destroy();
+		if (!socket.writable) {
+			socket.destroy();
+			return;
+		}
+		// Behind an answer that ends the connection, node has ended the socket
+		// by the time its turn comes, and nothing is written.
+		const answer = () => {
+			if (socket.writable) answerAndClose(socket, acceptsRequestLine(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
+			else socket.destroy();
+		};
+		const turn = upgradeTurn(req, socket);
+		if (turn === null) answer();
+		else turn.then((ok) => { if (ok) answer(); else socket.destroy(); });
 	});
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
 		// A response already on its way (a pipelined bad request behind a
@@ -652,7 +695,8 @@ export function refuseUnparsedForbiddenMethods(server) {
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
-			const line = err.rawPacket.subarray(0, 8).toString('latin1');
+			const at = firstLineAt(err.rawPacket);
+			const line = err.rawPacket.subarray(at, at + 8).toString('latin1');
 			const method = line.slice(0, line.indexOf(' ') === -1 ? line.length : line.indexOf(' ')).toUpperCase();
 			if (FORBIDDEN_METHODS.has(method)) {
 				answerAndClose(socket, FORBIDDEN_405_RAW);
@@ -661,7 +705,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		}
 		const code = err && err.code;
 		if (code === 'HPE_INVALID_URL') {
-			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(0, 5).toString('latin1') === 'HEAD ';
+			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(firstLineAt(err.rawPacket)).subarray(0, 5).toString('latin1') === 'HEAD ';
 			answerAndClose(socket, headOnly ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
 			return;
 		}
