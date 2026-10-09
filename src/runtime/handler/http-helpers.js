@@ -544,8 +544,7 @@ const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
  * 505 whatever else is wrong with it, see refusedRequestLine: the offset of
  * that line in the refused packet, or -1. The line is read only in the
  * connection's first read, which starts with the connection's first request
- * line, past the empty lines the native tier reads over; a later read can
- * begin inside a request, and node's answer stands. A request refused behind
+ * line; a later read can begin inside a request, and node's answer stands. A request refused behind
  * another in that read leaves the first one's line to answer for: a line the
  * native tier reads keeps node's answer, and one it does not was answered 505
  * and ended the connection before this one was read.
@@ -556,15 +555,13 @@ const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
 function refusedFirstLine(err, socket) {
 	const packet = err?.rawPacket;
 	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return -1;
-	const at = firstLineAt(packet);
-	return refusedRequestLine(packet, at) ? at : -1;
+	return refusedRequestLine(packet, 0) ? 0 : -1;
 }
 
 /**
- * Where a connection's first request line starts: past the CRLF pairs the
- * native tier reads over in front of it. A bare LF, or a CR followed by
- * anything but LF, is the line's first byte, and refusedRequestLine reads it
- * as a method ended before any space.
+ * Where node's parser starts the first request line: past the empty lines it
+ * reads over. For the answers given on node's own parse of a line, the
+ * method's 405 and a HEAD's bodyless 400.
  *
  * @param {Buffer} packet
  */
@@ -577,13 +574,14 @@ function firstLineAt(packet) {
 /**
  * Whether the request line at `at` is one the native tier refuses 505, as
  * far as its bytes go. The native tier ends the method at the first byte that
- * is a control character, a space or outside ASCII, and the target at the
- * first control character or space; it then needs a space, a target starting
- * with `/`, a space, and exactly `HTTP/1.1` and CRLF, and refuses as soon
- * as the bytes so far cannot become that: `GET / HTTP/1.0` is refused before
- * its line has ended, and so is a tab inside the method or the target. A line
- * that starts with a space has an empty method, which the native tier hands
- * on; node's parser refuses it, and that answer stands.
+ * is a space, a control character below it or outside ASCII, and the target at
+ * the first space or control character below it; it then needs a target
+ * starting with `/`, a space, and exactly `HTTP/1.1` and CRLF, and refuses as
+ * soon as the bytes so far cannot become that: `GET / HTTP/1.0` is refused
+ * before its line has ended, and so is a tab inside the method or the target,
+ * a bare LF in front of the line, or a space in front of the method unless the
+ * target follows it at once. A CR anywhere before the version is a line it
+ * reads no answer from: it waits for more, and here node's answer stands.
  *
  * @param {Buffer} packet
  * @param {number} at
@@ -593,19 +591,14 @@ function refusedRequestLine(packet, at) {
 	let i = at;
 	while (i < length && packet[i] > 32 && packet[i] < 128) i++;
 	if (i === length) return false;
-	if (i === at) {
-		if (packet[i] === 32) return false;
-		// A lone CR may still become an empty line; firstLineAt read every
-		// pair, so one followed by any byte is the method's end.
-		if (packet[i] === 13) return i + 1 < length;
-		return true;
-	}
+	if (packet[i] === 13) return false;
 	if (packet[i] !== 32) return true;
 	i++;
 	if (i === length) return false;
 	if (packet[i] !== 47) return true;
 	while (i < length && packet[i] > 32) i++;
 	if (i === length) return false;
+	if (packet[i] === 13) return false;
 	if (packet[i] !== 32) return true;
 	const end = packet.indexOf(10, i);
 	const version = packet.toString('latin1', i + 1, end === -1 ? length : end + 1);
@@ -626,7 +619,9 @@ function refusedRequestLine(packet, at) {
  * for a HEAD its length alone. Ahead of both, a request line the native tier
  * does not read gets the 505 the request listener writes for one, as the
  * native tier answers the line before anything else; a CONNECT gets it too
- * unless its target is in origin form and its version HTTP/1.1. A CONNECT
+ * unless its target is in origin form and its version HTTP/1.1, and the 400
+ * for a missing Host ahead of its method, as the native tier reads the line,
+ * then the Host, then the method. A CONNECT
  * reads like any request in its connection's line: behind an answer that
  * ends the connection it is dropped unanswered, behind one still waiting it
  * waits its turn and the line closes the connection if that answer is still
@@ -665,8 +660,8 @@ export function refuseUnparsedForbiddenMethods(server) {
 		// Behind an answer that ends the connection, node has ended the socket
 		// by the time its turn comes, and nothing is written.
 		const answer = () => {
-			if (socket.writable) answerAndClose(socket, acceptsRequestLine(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
-			else socket.destroy();
+			if (!socket.writable) socket.destroy();
+			else answerAndClose(socket, !acceptsRequestLine(req) ? VERSION_505_RAW : missesHost(req) ? BAD_TARGET_400_RAW : FORBIDDEN_405_RAW);
 		};
 		const turn = upgradeTurn(req, socket);
 		if (turn === null) answer();

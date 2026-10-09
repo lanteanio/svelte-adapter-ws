@@ -1,13 +1,15 @@
 // A request line the family's native tier does not read - any version but
-// HTTP/1.1, a target not in origin form, a method or target ended by a control
-// byte - is answered 505 and its connection closed, before the method, the
+// HTTP/1.1, a target not in origin form, a method or target ended by a
+// control byte, a space in front of the method unless the target follows it
+// at once - is answered 505 and its connection closed, before the method, the
 // headers or the route are looked at, as the native tier answers it: on the
 // BUILT runtime over TCP and TLS and on createTestServer, over raw sockets.
 // node parses HTTP/1.0, a line with no version, `HTTP/2.0`, `OPTIONS *` and an
 // absolute-form target into a request, and refuses the rest in its parser;
 // both paths give the same answer. An HTTP/1.1 request is answered as before,
-// and so is one node's parser refuses for anything else, an empty method
-// among them. A CONNECT reads in its connection's line like any request.
+// and so is one node's parser refuses for anything else; a line with a CR
+// before its version keeps node's answer, since the native tier reads none
+// from it. A CONNECT reads in its connection's line like any request.
 
 import net from 'node:net';
 import path from 'node:path';
@@ -167,12 +169,17 @@ const REFUSED = /** @type {Array<[string, string]>} */ ([
 	['a control byte ending the target', 'GET /a\x01 HTTP/1.1\r\nHost: x\r\n\r\n'],
 	['a vertical tab inside the target', 'GET /a\x0bb HTTP/1.1\r\nHost: x\r\n\r\n'],
 	['a form feed inside the target', 'GET /a\x0cb HTTP/1.1\r\nHost: x\r\n\r\n'],
-	['a line with no space at all', 'GETXYZ\r\n\r\n'],
-	['a line with no version, refused by the parser for a header', 'GET /abc\r\nBad Header: x\r\n\r\n'],
 	['a target in absolute form, refused by the parser for a header', 'GET http://x/api/tiny HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n'],
 	['a bare LF in front of the line', '\nGET / HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n'],
 	['a bare LF in front of a TRACK line', '\nTRACK / HTTP/1.1\r\nHost: x\r\n\r\n'],
-	['empty lines in front of an HTTP/1.0 line', '\r\n\r\nGET / HTTP/1.0\r\nBad Header: x\r\n\r\n']
+	['a space in front of the method', ' GET /a HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a space in front of a HEAD', ' HEAD / HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a space in front of an HTTP/1.0 line', ' GET / HTTP/1.0\r\n\r\n'],
+	['two spaces in front of the target', '  / HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a space and then an asterisk', ' * HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['an empty method and two spaces before the version', ' /a  HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['OPTIONS * without a Host', 'OPTIONS * HTTP/1.1\r\n\r\n'],
+	['a target in absolute form without a Host', 'GET http://x/api/tiny HTTP/1.1\r\n\r\n']
 ]);
 
 /** HTTP/1.0 requests that are wrong in some other way as well: the version is answered first. */
@@ -224,9 +231,17 @@ describe('the built runtime', () => {
 	it('refuses a line as soon as its bytes cannot become an HTTP/1.1 one', async () => {
 		expect505(await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.0'], [150, '\r\n\r\n'], [300, AFTER]], ['GET', 'GET']), 'TRACK in HTTP/1.0, its line unended');
 		// The same bytes in HTTP/1.1 can still become a line it reads: the
-		// method's own answer.
-		const allowed = await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.1'], [150, '\r\nHost: x\r\n\r\n']], ['GET']);
-		expect(allowed.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
+		// method's own answer, whichever case the method came in, and however
+		// early the parser gave up on it.
+		for (const writes of [
+			[[0, 'TRACK / HTTP/1.1'], [150, '\r\nHost: x\r\n\r\n']],
+			[[0, 'track / HTTP/1.1\r\nHost: x\r\n\r\n']],
+			[[0, 'track '], [100, '/ HTTP/1.1\r\nHost: x\r\n\r\n']],
+			[[0, 'track'], [100, ' / HTTP/1.1\r\nHost: x\r\n\r\n']]
+		]) {
+			const allowed = await converse(tcp(open.rt.port), /** @type {Array<[number, string]>} */ (writes), ['GET']);
+			expect(allowed.answers[0]?.statusLine, JSON.stringify(writes)).toBe('HTTP/1.1 405 Method Not Allowed');
+		}
 	});
 
 	it('reads past empty lines in front of a request line, as node\'s parser does', async () => {
@@ -237,8 +252,24 @@ describe('the built runtime', () => {
 		expect(track.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
 	});
 
-	it('leaves a line with an empty method to the parser, which the native tier hands on', async () => {
-		for (const request of [' GET / HTTP/1.1\r\nHost: x\r\n\r\n', ' / HTTP/1.1\r\nHost: x\r\n\r\n']) {
+	it('leaves an empty method followed by the target to the parser, which the native tier hands on', async () => {
+		const conversation = await converse(tcp(open.rt.port), [[0, ' / HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
+		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+	});
+
+	it('keeps the parser\'s answer for a line with a CR before its version, or DEL in it', async () => {
+		// The native tier reads no answer from a CR before the version, empty
+		// lines in front of the line included, and reads DEL as a method or
+		// target byte; node's parser refuses them, and that answer stands.
+		for (const request of [
+			'G\rT / HTTP/1.1\r\nHost: x\r\n\r\n',
+			'GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n',
+			'GET /abc\r\nBad Header: x\r\n\r\n',
+			'GETXYZ\r\n\r\n',
+			'\r\n\r\nGET / HTTP/1.0\r\nBad Header: x\r\n\r\n',
+			'G\x7fT / HTTP/1.1\r\nHost: x\r\n\r\n',
+			'GET /a\x7fb HTTP/1.1\r\nHost: x\r\n\r\n'
+		]) {
 			const conversation = await converse(tcp(open.rt.port), [[0, request]], ['GET']);
 			expect(conversation.answers[0]?.statusLine, JSON.stringify(request)).toBe('HTTP/1.1 400 Bad Request');
 		}
@@ -251,9 +282,12 @@ describe('the built runtime', () => {
 		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 431 Request Header Fields Too Large');
 	});
 
-	it('answers a CONNECT in origin form with the method\'s 405', async () => {
+	it('answers a CONNECT in origin form with the method\'s 405, and one without a Host with the 400', async () => {
 		const conversation = await converse(tcp(open.rt.port), [[0, 'CONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
 		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
+		const hostless = await converse(tcp(open.rt.port), [[0, 'CONNECT /x HTTP/1.1\r\n\r\n']], ['GET']);
+		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+		expect(hostless.closed).toBe(true);
 	});
 
 	it('reads a CONNECT in its connection\'s line', async () => {
@@ -309,7 +343,6 @@ describe('the built runtime', () => {
 	it('answers an HTTP/1.0 HEAD with the head alone, its length included', async () => {
 		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\n\r\n', 'HEAD'), 'HEAD', { head: true });
 		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\nBad Header: x\r\n\r\n', 'HEAD'), 'HEAD refused by the parser', { head: true });
-		expect505(await refusal(tcp(open.rt.port), '\r\nHEAD /api/tiny HTTP/1.0\r\nBad Header: x\r\n\r\n', 'HEAD'), 'HEAD after an empty line, refused by the parser', { head: true });
 	});
 
 	it('answers the version before the method, the target, the headers and the framing', async () => {
@@ -425,6 +458,8 @@ describe('createTestServer', () => {
 		expect505(await refusal(tcp(mirror.port), 'OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\nCONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n'), 'CONNECT behind OPTIONS *');
 		const conversation = await converse(tcp(mirror.port), [[0, 'CONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
 		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
+		const hostless = await converse(tcp(mirror.port), [[0, 'CONNECT /x HTTP/1.1\r\n\r\n']], ['GET']);
+		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 	});
 
 	afterAll(async () => {
