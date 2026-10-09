@@ -14,6 +14,7 @@ import { is_tls } from './config.js';
 import { runWarmup } from './warmup.js';
 import { platform } from './platform.js';
 import { runAppShutdownHook } from './app-shutdown-hook.js';
+import { onExchangeClosed } from './http-helpers.js';
 
 // Re-exported here as well as from handler.js: the reload record is read
 // against a built runtime through whichever of the two a caller reached for.
@@ -125,7 +126,7 @@ export function openRequestSignal(res, state) {
 	const controller = new AbortController();
 	requestSignals.add(controller);
 	state.signal = controller.signal;
-	res.once('close', () => {
+	onExchangeClosed(res.req, res, () => {
 		if (!res.writableFinished && !state.bodyReceived) controller.abort();
 	});
 	return controller;

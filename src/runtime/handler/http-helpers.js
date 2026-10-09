@@ -867,6 +867,31 @@ export function refuseUnparsedForbiddenMethods(server) {
 }
 
 /**
+ * Run `fn` once when an exchange is over: on the response's 'close', or on
+ * the connection's close while the response never had a socket. node hands
+ * the socket to the first response queued behind an answer as that answer
+ * tears down, so that one closes on its own; a response further back is
+ * never assigned and never closes, and nothing counted on it would settle.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {() => void} fn
+ */
+export function onExchangeClosed(req, res, fn) {
+	const socket = req.socket;
+	let done = false;
+	const settle = () => {
+		if (done) return;
+		done = true;
+		socket.off('close', unassigned);
+		fn();
+	};
+	const unassigned = () => { if (res.socket === null) settle(); };
+	res.once('close', settle);
+	socket.once('close', unassigned);
+}
+
+/**
  * node answers a request's Expect before the listener runs: 100 Continue for
  * `100-continue`, 417 for anything else. The native tier reads the Host
  * first and refuses a request without one before any of that, so a Host-less

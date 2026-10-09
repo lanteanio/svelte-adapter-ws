@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, send400, send405, send500, send505, servePipelined } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, onExchangeClosed, send400, send405, send500, send505, servePipelined } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -123,10 +123,11 @@ function serveRequest(req, res) {
 	// zero-config path at one property read and no clock call.
 	const metricsHook = counters.httpRequestHook;
 	const startedAt = metricsHook === null ? 0 : monotonicNow();
-	// 'close' fires exactly once per exchange - after a finished response AND
-	// after a torn-down one - so it is the single accounting point. A close
-	// before the response finished is a client abort.
-	res.on('close', () => {
+	// The exchange's end - a finished response, a torn-down one, or a
+	// connection gone under a response node never gave a socket - is the
+	// single accounting point, settled once. An end before the response
+	// finished is a client abort.
+	onExchangeClosed(req, res, () => {
 		if (!res.writableFinished) state.aborted = true;
 		counters.inFlightCount--;
 		requestDone();

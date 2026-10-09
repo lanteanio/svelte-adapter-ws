@@ -262,9 +262,9 @@ describe('the built runtime', () => {
 
 	it('leaves nothing counted when a client goes while its request sits behind an answer still being written', async () => {
 		// The answer ahead has ended but is not flushed to a client that is
-		// not reading, so the request behind it is served and its response
-		// is queued in node without a socket of its own. The client going
-		// settles that exchange like any other.
+		// not reading, so the request behind it is served while its response
+		// has no socket of its own; node hands it the socket as the answer
+		// ahead tears down, and it closes with the connection.
 		await new Promise((resolve) => {
 			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
 				socket.write(get('/api/bulk', 'Cookie: s=1\r\n') + get('/api/slow', 'Cookie: s=1\r\n'));
@@ -276,6 +276,28 @@ describe('the built runtime', () => {
 		await expectNothingInFlight();
 	});
 
+	// Windows hands the whole answer ahead to one overlapped send, so it has
+	// finished before any request behind it is served: the state below is
+	// never reached there, and the kernel's hold on a large answer is what the
+	// case needs.
+	it.skipIf(process.platform === 'win32')('leaves nothing counted when a client goes with a request two deep behind an answer still being written', async () => {
+		// node hands the socket only to the first response queued behind the
+		// answer ahead when the connection goes; one further back never gets
+		// one and never closes, so the exchange settles on the connection's
+		// close instead.
+		const socket = await new Promise((resolve) => {
+			const s = net.connect(open.rt.port, '127.0.0.1', () => {
+				s.write(get('/api/bulk', 'Cookie: s=1\r\n') + get('/api/tiny', 'Cookie: s=1\r\n') + get('/api/slow', 'Cookie: s=1\r\n'));
+				s.pause();
+				resolve(s);
+			});
+			s.on('error', () => {});
+		});
+		for (let i = 0; i < 50 && counters.inFlightCount < 2; i++) await new Promise((r) => setTimeout(r, 10));
+		expect(counters.inFlightCount, 'the request two deep was handed out behind the answer still being written').toBe(2);
+		socket.destroy();
+		await expectNothingInFlight();
+	});
 	it('leaves nothing counted in flight after such a close', async () => {
 		// A queued exchange that was counted and never ended would hold a
 		// shutdown's drain to its budget.
