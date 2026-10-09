@@ -193,12 +193,13 @@ async function boot(wsOptions) {
 
 /**
  * A CONNECT keeps its own answer and closes: node never asks the upgrade
- * decision about one.
+ * decision about one. In origin form, the one form the native tier reads, it
+ * is the method's 405.
  *
  * @param {number} port
  */
 async function expectConnectRefused(port) {
-	const [answer] = await exchange(port, [{ lines: ['CONNECT 127.0.0.1:9 HTTP/1.1'] }]);
+	const [answer] = await exchange(port, [{ lines: ['CONNECT /x HTTP/1.1'] }]);
 	expect(answer?.status).toBe('405');
 	expect(answer?.lines).toContain('connection: close');
 }

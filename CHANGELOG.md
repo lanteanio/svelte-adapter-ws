@@ -42,19 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A request in any HTTP version but 1.1 is refused with `505`, and its
-  connection ends.** HTTP/1.0 was served, close-delimited unless it asked for
-  chunked. Every request line that does not name HTTP/1.1 - HTTP/1.0, a line
-  with no version, `HTTP/2.0` sent as text, a version in lower case - is now
-  answered `505 HTTP Version Not Supported`, length-framed with
-  `Connection: close`, before its method, target, headers or route are looked
-  at, as on the family's native tier, on the runtime and in
-  `createTestServer`. An HTTP/1.0 WebSocket handshake is refused the same way
-  and never reaches the `upgrade` hook. Anything that talks HTTP/1.0 to the
-  server directly stops working: nginx needs `proxy_http_version 1.1` on every
-  location that proxies to it, not only the WebSocket one, and a health check
-  that defaults to HTTP/1.0, such as HAProxy's `option httpchk`, must be set
-  to HTTP/1.1. `vite dev` still serves HTTP/1.0.
+- **A request line the family's native tier does not read is refused with
+  `505`, and its connection ends.** HTTP/1.0 was served, a streamed answer
+  close-delimited unless the request asked for chunked. A request whose line
+  is not a method, a target that starts with `/` and `HTTP/1.1` - HTTP/1.0, a
+  line with no version, `HTTP/2.0` sent as text, a version in lower case,
+  `OPTIONS *`, a target in absolute form, a `CONNECT` to a host and port - is
+  now answered `505 HTTP Version Not Supported` and its connection closed
+  before its method, headers or route count, as on the family's native tier,
+  on the runtime and in `createTestServer`. The native tier sends an unframed
+  HTML page; this runtime sends a length-framed `text/plain` one. The refusal
+  is not counted as a request, and an HTTP/1.0 WebSocket handshake is refused
+  the same way without reaching the `upgrade` hook. Anything that talks
+  HTTP/1.0 to the server directly stops working: nginx before 1.29.7 proxies
+  with HTTP/1.0 unless `proxy_http_version 1.1` is set on every location that
+  proxies to it, and a health check that defaults to HTTP/1.0, such as
+  HAProxy's `option httpchk`, must be set to HTTP/1.1. `vite dev` still serves
+  HTTP/1.0.
 - **A request pipelined behind one still waiting for its answer closes the
   connection unanswered.** node queued it and answered both in order. Now,
   as on the family's native tier, the request behind is read once the turn

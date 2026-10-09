@@ -10,7 +10,7 @@
 import net from 'node:net';
 import path from 'node:path';
 import tls from 'node:tls';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 
@@ -150,7 +150,14 @@ const REFUSED = /** @type {Array<[string, string]>} */ ([
 	['HTTP/1.2', 'GET / HTTP/1.2\r\nHost: x\r\n\r\n'],
 	['a version in lower case', 'GET / http/1.1\r\nHost: x\r\n\r\n'],
 	['a space after the version', 'GET / HTTP/1.1 \r\nHost: x\r\n\r\n'],
-	['a request line ending in LF alone', 'GET / HTTP/1.1\nHost: x\r\n\r\n']
+	['a request line ending in LF alone', 'GET / HTTP/1.1\nHost: x\r\n\r\n'],
+	['OPTIONS * in HTTP/1.1', 'OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a target in absolute form', 'GET http://x/api/tiny HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a CONNECT target in authority form', 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a space inside the target', 'GET /a b HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a space in front of the method', ' GET / HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['a tab after the method', 'GET\t/ HTTP/1.1\r\nHost: x\r\n\r\n'],
+	['empty lines in front of an HTTP/1.0 line', '\r\n\r\nGET / HTTP/1.0\r\nBad Header: x\r\n\r\n']
 ]);
 
 /** HTTP/1.0 requests that are wrong in some other way as well: the version is answered first. */
@@ -193,9 +200,52 @@ describe('the built runtime', () => {
 		open?.payload.cleanup();
 	});
 
-	it('answers every version but HTTP/1.1 with 505 and ends the connection', async () => {
+	it('answers every request line the native tier does not read with 505 and ends the connection', async () => {
 		for (const [label, request] of REFUSED) {
 			expect505(await refusal(tcp(open.rt.port), request), label);
+		}
+	});
+
+	it('refuses a line as soon as its bytes cannot become an HTTP/1.1 one', async () => {
+		expect505(await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.0'], [150, '\r\n\r\n'], [300, AFTER]], ['GET', 'GET']), 'TRACK in HTTP/1.0, its line unended');
+		// The same bytes in HTTP/1.1 can still become a line it reads: the
+		// method's own answer.
+		const allowed = await converse(tcp(open.rt.port), [[0, 'TRACK / HTTP/1.1'], [150, '\r\nHost: x\r\n\r\n']], ['GET']);
+		expect(allowed.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
+	});
+
+	it('reads past empty lines in front of a request line, as node\'s parser does', async () => {
+		const conversation = await converse(tcp(open.rt.port), [[0, '\r\nGET / HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n']], ['GET']);
+		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
+	});
+
+	it('answers a CONNECT in origin form with the method\'s 405', async () => {
+		const conversation = await converse(tcp(open.rt.port), [[0, 'CONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
+		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 405 Method Not Allowed');
+	});
+
+	it('neither runs the application nor observes a request for a refused line', async () => {
+		const { counters } = await import(pathToFileURL(path.join(open.payload.dir, 'handler', 'state.js')).href);
+		/** @type {number[]} */
+		const observed = [];
+		const previous = counters.httpRequestHook;
+		counters.httpRequestHook = (/** @type {string} */ _method, /** @type {number} */ status) => { observed.push(status); };
+		try {
+			const before = /** @type {any} */ (globalThis).__renders ?? 0;
+			for (const request of [
+				'GET /api/counted HTTP/1.0\r\n\r\n',
+				'GET http://x/api/counted HTTP/1.1\r\nHost: x\r\n\r\n',
+				'GET /api/counted HTTP/1.0\r\nConnection: keep-alive\r\n\r\nGET /api/counted HTTP/1.1\r\nHost: x\r\n\r\n'
+			]) {
+				expect505(await refusal(tcp(open.rt.port), request), JSON.stringify(request.slice(0, 40)));
+			}
+			await new Promise((r) => setTimeout(r, 200));
+			expect(/** @type {any} */ (globalThis).__renders ?? 0, 'the application never ran').toBe(before);
+			expect(observed, 'no refused line is observed as a request').toEqual([]);
+			await converse(tcp(open.rt.port), [[0, 'GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n']], ['GET']);
+			expect(observed, 'an answered request is').toEqual([200]);
+		} finally {
+			counters.httpRequestHook = previous;
 		}
 	});
 
@@ -280,10 +330,27 @@ describe('the built runtime over TLS', () => {
 describe('createTestServer', () => {
 	/** @type {any} */ let mirror;
 	let upgrades = 0;
+	let adminRuns = 0;
 
 	beforeAll(async () => {
 		const { createTestServer } = await import('../src/testing.js');
-		mirror = await createTestServer({ handler: { upgrade: () => { upgrades++; return {}; } } });
+		mirror = await createTestServer({
+			handler: {
+				upgrade: () => { upgrades++; return {}; },
+				admin: () => { adminRuns++; return new Response('ok'); }
+			}
+		});
+	});
+
+	it('never runs the application for a refused line, nor for a request behind its 505', async () => {
+		for (const request of [
+			'GET /__realtime/status HTTP/1.0\r\n\r\n',
+			'GET /__realtime/status HTTP/1.0\r\nConnection: keep-alive\r\n\r\nGET /__realtime/status HTTP/1.1\r\nHost: x\r\n\r\n'
+		]) {
+			expect505(await refusal(tcp(mirror.port), request), JSON.stringify(request.slice(0, 40)));
+		}
+		await new Promise((r) => setTimeout(r, 100));
+		expect(adminRuns).toBe(0);
 	});
 
 	afterAll(async () => {

@@ -737,8 +737,9 @@ Redis. Container fleets that scale by replicas need neither `reusePort` nor
 
 **Speak HTTP/1.1 to it.** The server answers HTTP/1.1 only: a request in any
 other version gets `505` and a closed connection, as on the native tier, so
-nginx needs `proxy_http_version 1.1;` on every location that proxies to it,
-and a load balancer's health check has to probe in HTTP/1.1. Pipelined
+nginx before 1.29.7, which proxies with HTTP/1.0 by default, needs
+`proxy_http_version 1.1;` on every location that proxies to it, and a load
+balancer's health check has to probe in HTTP/1.1. Pipelined
 requests are answered while each response is written before the next request
 on the connection is parsed. If a request is still waiting on its answer -
 any route that awaits, such as an endpoint doing I/O - when the next one is

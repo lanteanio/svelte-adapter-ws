@@ -220,21 +220,23 @@ export function send400(res, closeConnection = false) {
 }
 
 /**
- * Whether a request speaks HTTP/1.1, the one version the family serves. Its
- * native tier answers every other request line with 505 and a close, ahead of
- * the method, the target, the headers and the route: HTTP/1.0, which nginx
- * sends by default, a line with no version, and `HTTP/2.0` sent as text. node
- * parses those three into a request; send505 answers it.
+ * Whether the family's native tier reads this request line. It takes a
+ * method, a space, a target that starts with `/`, a space and exactly
+ * `HTTP/1.1`, and answers any other line 505 and closes, before the method,
+ * the headers or the route count: HTTP/1.0, which nginx before 1.29.7 sends
+ * by default, a line with no version, `HTTP/2.0` sent as text, `OPTIONS *`, a
+ * target in absolute form. node parses those into a request; send505 answers
+ * it, and refusedRequestLine reads the lines node's parser refuses itself.
  *
  * @param {import('node:http').IncomingMessage} req
  */
-export function speaksHttp11(req) {
-	return req.httpVersion === '1.1';
+export function acceptsRequestLine(req) {
+	return req.httpVersion === '1.1' && typeof req.url === 'string' && req.url.charCodeAt(0) === 47;
 }
 
 /**
- * The 505 for a request whose version is not HTTP/1.1. The connection ends
- * with it, as on the native tier.
+ * The 505 for a request line the native tier does not read, see
+ * acceptsRequestLine. The connection ends with it, as on the native tier.
  *
  * @param {import('node:http').ServerResponse} res
  */
@@ -364,7 +366,7 @@ export function answerAheadOf(socket) {
  */
 function closeBehindWaitingAnswer(req) {
 	const socket = req.socket;
-	if (speaksHttp11(req) || !socket.writable) {
+	if (acceptsRequestLine(req) || !socket.writable) {
 		socket.destroy();
 		return;
 	}
@@ -420,23 +422,49 @@ const VERSION_505_HEAD_RAW =
 const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
 
 /**
- * Whether node's parser refused a request whose line names a version other
- * than HTTP/1.1, which the native tier answers 505 whatever else is wrong with
- * it. The line must end in exactly ` HTTP/1.1` and CRLF. It is read only in the
+ * Where node's parser refused a request whose line the native tier answers
+ * 505 whatever else is wrong with it, see refusedRequestLine: the offset of
+ * that line in the refused packet, or -1. The line is read only in the
  * connection's first read, which starts with the connection's first request
- * line; a later read can begin inside a request, and node's answer stands. A
- * request refused behind another in that read leaves the first one's line to
- * answer for: an HTTP/1.1 line keeps node's answer, and a request in another
- * version was refused 505 and ended the connection before this one was read.
+ * line, past any empty lines node's parser skips; a later read can begin
+ * inside a request, and node's answer stands. A request refused behind
+ * another in that read leaves the first one's line to answer for: a line the
+ * native tier reads keeps node's answer, and one it does not was answered 505
+ * and ended the connection before this one was read.
  *
  * @param {any} err
  * @param {any} socket
  */
-function refusedVersion(err, socket) {
+function refusedFirstLine(err, socket) {
 	const packet = err?.rawPacket;
-	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return false;
-	const end = packet.indexOf(10);
-	return end !== -1 && packet.toString('latin1', Math.max(0, end - 10), end + 1) !== ' HTTP/1.1\r\n';
+	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return -1;
+	let at = 0;
+	while (at < packet.length && (packet[at] === 13 || packet[at] === 10)) at++;
+	return refusedRequestLine(packet, at) ? at : -1;
+}
+
+/**
+ * Whether the request line at `at` is one the native tier refuses 505, as
+ * far as its bytes go. It reads a method up to a space, a target that starts
+ * with `/` up to the next space, then exactly `HTTP/1.1` and CRLF, and
+ * refuses as soon as the bytes so far cannot become that: `GET / HTTP/1.0`
+ * is refused before its line has ended.
+ *
+ * @param {Buffer} packet
+ * @param {number} at
+ */
+function refusedRequestLine(packet, at) {
+	const end = packet.indexOf(10, at);
+	const line = packet.toString('latin1', at, end === -1 ? packet.length : end + 1);
+	const method = line.indexOf(' ');
+	if (method === -1) return end !== -1;
+	if (method === 0) return true;
+	if (method + 1 === line.length) return false;
+	if (line.charCodeAt(method + 1) !== 47) return true;
+	const target = line.indexOf(' ', method + 1);
+	if (target === -1) return end !== -1;
+	const version = line.slice(target + 1);
+	return end === -1 ? !'HTTP/1.1\r\n'.startsWith(version) : version !== 'HTTP/1.1\r\n';
 }
 
 /**
@@ -450,10 +478,10 @@ function refusedVersion(err, socket) {
  * that way. A request target with a byte outside visible ASCII, which
  * RFC 9112 does not allow and node's parser refuses before any listener runs,
  * gets the 400 every lane writes for a target it refuses, body included, or
- * for a HEAD its length alone. Ahead of both, a request whose line names a
- * version other than HTTP/1.1 gets the 505 the request listener writes for
- * one, as the native tier answers the version before anything else; a CONNECT
- * in another version gets it too.
+ * for a HEAD its length alone. Ahead of both, a request line the native tier
+ * does not read gets the 505 the request listener writes for one, as the
+ * native tier answers the line before anything else; a CONNECT gets it too
+ * unless its target is in origin form and its version HTTP/1.1.
  * Every other parser failure keeps node's own answer: 431 for a
  * header block past the limit, 408 for a request that timed out, 413 for
  * chunk extensions past the limit, 400 otherwise, written only when no
@@ -480,7 +508,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 	// CONNECT parses, but node hands it to the 'connect' event rather than the
 	// request listener, and a server with no listener for it drops the socket.
 	server.on('connect', (/** @type {import('node:http').IncomingMessage} */ req, /** @type {import('node:net').Socket} */ socket) => {
-		if (socket.writable) answerAndClose(socket, speaksHttp11(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
+		if (socket.writable) answerAndClose(socket, acceptsRequestLine(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
 		else socket.destroy();
 	});
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
@@ -503,10 +531,11 @@ export function refuseUnparsedForbiddenMethods(server) {
 			});
 			return;
 		}
-		// The version first, as on the native tier: an HTTP/1.0 TRACK or bad
-		// target is a 505.
-		if (refusedVersion(err, socket)) {
-			answerAndClose(socket, err.rawPacket.subarray(0, 5).toString('latin1') === 'HEAD ' ? VERSION_505_HEAD_RAW : VERSION_505_RAW);
+		// The request line first, as on the native tier: an HTTP/1.0 TRACK or
+		// bad target is a 505.
+		const refusedAt = refusedFirstLine(err, socket);
+		if (refusedAt !== -1) {
+			answerAndClose(socket, err.rawPacket.toString('latin1', refusedAt, refusedAt + 5) === 'HEAD ' ? VERSION_505_HEAD_RAW : VERSION_505_RAW);
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
@@ -551,7 +580,7 @@ export function refuseUnparsedForbiddenMethods(server) {
  * @param {string} wsPath
  */
 export function takesWebSocketRoute(req, wsPath) {
-	if (req.method !== 'GET' || !speaksHttp11(req) || behindAnswer(req)) return false;
+	if (req.method !== 'GET' || !acceptsRequestLine(req) || behindAnswer(req)) return false;
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&

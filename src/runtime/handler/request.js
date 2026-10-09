@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, servePipelined, speaksHttp11 } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, servePipelined, acceptsRequestLine } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -92,6 +92,16 @@ export function handleRequest(req, res) {
  * @param {import('node:http').ServerResponse} res
  */
 function serveRequest(req, res) {
+	// A request line the native tier does not read - any version but HTTP/1.1,
+	// a target not in origin form - is refused 505 ahead of everything else, the
+	// framing check included, and the connection ends with it. The native tier
+	// writes it before any handler runs, so it is neither counted in flight nor
+	// observed as a request. Every lane below answers HTTP/1.1 only.
+	if (!acceptsRequestLine(req)) {
+		send505(res);
+		return;
+	}
+
 	counters.inFlightCount++;
 	// `responseStarted` flips once any byte of the real response has reached
 	// the wire, after which no error response can be sent; `closedByServer`
@@ -117,14 +127,6 @@ function serveRequest(req, res) {
 			metricsHook(req.method || '', res.statusCode, state.aborted, (monotonicNow() - startedAt) / 1000);
 		}
 	});
-
-	// Any version but HTTP/1.1 is refused 505 ahead of everything else, the
-	// framing check included, and the connection ends with it, as on the
-	// family's native tier. Every lane below therefore answers HTTP/1.1 only.
-	if (!speaksHttp11(req)) {
-		send505(res);
-		return;
-	}
 
 	// A Transfer-Encoding naming anything but chunked is refused ahead of every
 	// lane, the probes and the realtime routes included. The lanes that answer
