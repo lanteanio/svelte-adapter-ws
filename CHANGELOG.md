@@ -101,15 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chunk that is not a string or bytes, or a source that fails after the
   writer has started, ends the connection with what the native tier's close
   leaves the client: in the request's own turn - the handler and the ticks
-  and microtasks it queues, which the native tier holds in one cork - nothing,
-  not even the status line; in a later turn the bytes written before the
+  and microtasks it queues, which the native tier holds in one cork of
+  16 KB - nothing, not even the status line, while the turn's writes fit
+  that cork; past it, and in a later turn, the bytes written before the
   failure, so a refused second chunk leaves the headers and the first chunk,
-  and the chunked answer is cut before its terminal chunk. A first chunk
-  that is refused leaves nothing in either turn. A chunk of `undefined`
-  writes nothing, and a `SharedArrayBuffer` goes out as its bytes, as the
-  native tier sends them; both were refused before. A stream queued behind
-  an answer node is still writing is cut by closing the connection under
-  that answer, where it stands.
+  and the chunked answer is cut before its terminal chunk, node ending the
+  last chunk with its CRLF where the native tier does not. A turn ends when
+  the next request is handed out on any connection, or at the check phase
+  after the hand-out. A first chunk that is refused leaves nothing in either
+  turn. A chunk of `undefined` writes nothing, and a `SharedArrayBuffer`
+  goes out as its bytes, as the native tier sends them; both were refused
+  before. A stream queued behind an answer node is still writing is cut by
+  closing the connection under that answer, where it stands. An answer
+  already given on the connection in the same turn is kept and sent before
+  the cut.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request

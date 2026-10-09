@@ -7,7 +7,7 @@ import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLengt
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
-import { inOwnTurn } from './http-helpers.js';
+import { inOwnTurn, releaseTurnIfFull } from './http-helpers.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
@@ -295,6 +295,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 				writeHeaders(res, response, state, null, '', true);
 				if (firstBytes !== null) res.write(firstBytes);
 				else res.flushHeaders();
+				releaseTurnIfFull(res);
 				state.closedByServer = true;
 				cut(res);
 				throw err;
@@ -312,22 +313,23 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
 		// The first two chunks go out together, as the native tier writes them
 		// in its one cork, and like it the writer reads on without asking
-		// either whether the socket drained.
+		// either whether the socket drained. In the request's own turn the
+		// line holds every write; once they fill the native tier's cork, the
+		// hold ends and a full buffer is the socket's, which is waited on.
 		writeHeaders(res, response, state, null, '', true);
 		streaming = true;
 		if (firstBytes !== null) res.write(firstBytes);
 		if (secondBytes !== null) res.write(secondBytes);
+		releaseTurnIfFull(res);
 		for (;;) {
 			const read = await reader.read();
 			if (read.done) { streamDone = true; break; }
 			if (state.aborted) break;
 			const value = writableBytes(read.value);
 			if (value === null) continue;
-			// In the request's own turn the line holds every write corked, so
-			// a full buffer there is the cork, not the reader: the native tier
-			// hands its cork to the socket as it fills, and waits only on the
-			// socket.
-			if (!res.write(value) && !inOwnTurn(res)) {
+			const accepted = res.write(value);
+			releaseTurnIfFull(res);
+			if (!accepted) {
 				const drained = await waitForDrain(res, 30000);
 				if (!drained) break;
 				if (state.aborted) break;
@@ -364,9 +366,11 @@ function writableBytes(value) {
  * failed, a chunk that is not bytes, a reader that did not drain in time.
  * The native tier's close sends what it had handed to the socket and drops
  * what its cork still holds. In the request's own turn the line holds every
- * write corked, so the client gets nothing of the answer; in a later turn the
- * bytes written before the failure go out first, and a chunked answer is cut
- * before its terminal chunk. A response queued behind an answer node is still
+ * write corked, so the client gets nothing of the answer while those writes
+ * fit the native tier's cork; past it, and in a later turn, the bytes written
+ * before the failure go out first, and a chunked answer is cut before its
+ * terminal chunk, node's chunk ending with its CRLF where the native tier's
+ * last one does not. A response queued behind an answer node is still
  * writing has no socket of its own yet, and the connection is closed under
  * that answer, cut where it stands, as the native tier's close cuts it.
  *

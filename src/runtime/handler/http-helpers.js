@@ -270,6 +270,16 @@ const FINISHED_CLOSING = Object.freeze({ writableEnded: true, _last: true });
 // handler and the ticks and microtasks it queued, see servePipelined.
 const TURN = Symbol('svelte-adapter-ws.turn');
 
+// What the native tier's cork holds before it hands the turn's writes to the
+// socket and corks nothing more of that turn. node's socket buffer reports
+// backpressure at the same size, so a write refused under the hold is the
+// hold itself.
+const TURN_CORK_BYTES = 16384;
+
+// Every response whose turn is open, with the socket its writes are held on.
+/** @type {Map<any, import('node:net').Socket | null>} */
+const openTurns = new Map();
+
 /**
  * @typedef {{ req: import('node:http').IncomingMessage | null, res: import('node:http').ServerResponse | null, serve: (req: any, res: any) => void }} Waiting
  * @typedef {{ ahead: any, waiting: Waiting[], serve: (req: any, res: any) => void, scheduled: boolean }} Line
@@ -292,10 +302,16 @@ const TURN = Symbol('svelte-adapter-ws.turn');
  * it: node never ends a response it queued when the connection goes.
  *
  * The turn a request is handed out in is the native tier's cork: what a
- * handler writes in it leaves when the turn ends, and a connection closed in
- * it drops those bytes. The socket is corked for the turn and uncorked by the
- * `setImmediate` that ends it; inOwnTurn tells a writer which case it is in.
- * node flushes a response that ends in its turn at once, as a complete answer.
+ * handler writes in it is held until the turn ends, and a connection closed
+ * in it drops those bytes. The socket is corked for the turn and uncorked
+ * when the turn ends; inOwnTurn tells a writer which case it is in. The turn
+ * ends when the next request is handed out on any connection, which on the
+ * native tier is the next handler's own turn, or at the `setImmediate` that
+ * follows the hand-out, which for a request handed out from the line is the
+ * next loop iteration's: node offers no boundary between the check phase and
+ * the next iteration. The hold also ends once the bytes it keeps pass the
+ * native tier's cork buffer, see releaseTurnIfFull. node flushes a response
+ * that ends in its turn at once, as a complete answer.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
@@ -327,22 +343,27 @@ export function servePipelined(req, res, serve) {
 function handOut(line, res) {
 	line.ahead = res;
 	/** @type {any} */ (res)[LINE] = line;
-	/** @type {any} */ (res)[TURN] = true;
 	res.on('finish', aheadFinished);
+	// Another handler's turn begins: every open one is over.
+	for (const open of openTurns.keys()) endTurn(open);
+	/** @type {any} */ (res)[TURN] = true;
 	// A response queued behind one node is still writing has no socket yet;
 	// node holds its output itself until the one ahead has finished.
 	const socket = res.socket;
 	if (socket !== null) socket.cork();
-	setImmediateTimer(turnEnded, res, socket);
+	openTurns.set(res, socket);
+	setImmediateTimer(endTurn, res);
 }
 
-/**
- * @param {any} res
- * @param {import('node:net').Socket | null} socket
- */
-function turnEnded(res, socket) {
+/** @param {any} res */
+function endTurn(res) {
+	if (res[TURN] !== true) return;
 	res[TURN] = false;
-	if (socket !== null && !socket.destroyed) socket.uncork();
+	const socket = openTurns.get(res);
+	openTurns.delete(res);
+	if (socket != null && !socket.destroyed) {
+		while (socket.writableCorked > 0) socket.uncork();
+	}
 }
 
 /**
@@ -354,6 +375,20 @@ function turnEnded(res, socket) {
  */
 export function inOwnTurn(res) {
 	return /** @type {any} */ (res)[TURN] === true;
+}
+
+/**
+ * For a writer, after each write in the request's own turn: once the bytes
+ * held for the turn reach the native tier's cork buffer, the hold ends - the
+ * native tier hands its cork to the socket then and corks nothing more of
+ * that turn, so a close after that leaves the client everything written.
+ *
+ * @param {import('node:http').ServerResponse} res
+ */
+export function releaseTurnIfFull(res) {
+	if (/** @type {any} */ (res)[TURN] !== true) return;
+	const socket = openTurns.get(res);
+	if (socket != null && socket.writableLength >= TURN_CORK_BYTES) endTurn(res);
 }
 
 /** @this {any} */

@@ -301,6 +301,34 @@ export class Server {
 				cancel() { globalThis.__fafRefuseCancelled = true; }
 			}), { headers: text });
 		}
+		if (p.startsWith('/refuse-third-after/')) {
+			// A first chunk of the named size, then part2, then a value that is
+			// no chunk, all in the request's own turn.
+			const enc = new TextEncoder();
+			const size = Number(p.slice('/refuse-third-after/'.length));
+			let pulls = 0;
+			return new Response(new ReadableStream({
+				pull(c) {
+					pulls++;
+					if (pulls === 1) c.enqueue(enc.encode('a'.repeat(size)));
+					else if (pulls === 2) c.enqueue(enc.encode('part2|'));
+					else c.enqueue(42);
+				},
+				cancel() { globalThis.__fafRefuseCancelled = true; }
+			}), { headers: text });
+		}
+		if (p === '/endless-sync') {
+			// A source that always has the next 64 KB ready, 200 MB of it.
+			const block = new Uint8Array(64 * 1024).fill(104);
+			globalThis.__fafEndlessPulls = 0;
+			return new Response(new ReadableStream({
+				pull(c) {
+					globalThis.__fafEndlessPulls++;
+					if (globalThis.__fafEndlessPulls > 3200) c.close();
+					else c.enqueue(block);
+				}
+			}), { headers: text });
+		}
 		if (p === '/refuse-second-now') {
 			// A second chunk the writer cannot send, in the request's own turn.
 			const enc = new TextEncoder();
@@ -978,7 +1006,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// later turn and let the first ones out. A stream that hands over each
 		// chunk through process.nextTick is still in the turn, where node on
 		// its own would have flushed the first chunks at the first tick.
-		for (const target of ['/fail-third', '/refuse-third', '/refuse-second-now', '/big-first-refuse-third', '/big-third-refuse-fourth', '/tick-fail-third']) {
+		for (const target of ['/fail-third', '/refuse-third', '/refuse-second-now', '/tick-fail-third', '/refuse-third-after/16000']) {
 			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
 			const { result, failures } = await withSsrFailures(() => exchange(
 				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
@@ -989,6 +1017,49 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 			expect(failures, target).toHaveLength(1);
 			if (!target.includes('fail')) expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the source was cancelled').toBe(true);
 		}
+	});
+
+	it('keeps everything the turn wrote once it has passed the native tier\'s cork buffer', async () => {
+		// The native tier holds 16 KB of a turn's writes; past that it hands
+		// them to the socket and corks nothing more of the turn, so a close
+		// later in the turn leaves the client every byte written. The hold
+		// here ends at the same size, whichever write crosses it; the exact
+		// byte differs by this runtime's longer header block.
+		for (const [target, sent] of [
+			['/refuse-third-after/16500', ['a'.repeat(16500), 'part2|']],
+			['/big-first-refuse-third', ['a'.repeat(20 * 1024), 'part2|']],
+			['/big-third-refuse-fourth', ['part1|', 'part2|', 'a'.repeat(20 * 1024)]]
+		]) {
+			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+			const { result, failures } = await withSsrFailures(() => exchange(
+				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+				[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
+			));
+			expect(header(splitFirst(result.buffer).lines, 'transfer-encoding'), target).toEqual(['chunked']);
+			for (const part of sent) expect(result.buffer, target).toContain(part);
+			expect(result.buffer.endsWith('0\r\n\r\n'), target + ': no terminal chunk').toBe(false);
+			expect(result.how, target).toBe('end');
+			expect(failures, target).toHaveLength(1);
+			expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the source was cancelled').toBe(true);
+		}
+	});
+
+	it('stops pulling a source whose client is not reading, in the request\'s own turn too', async () => {
+		// Once the turn's hold is full the writes reach the socket, and a
+		// socket that is not drained holds the writer like any other: a source
+		// that always has the next chunk ready is not read to its end.
+		const socket = await new Promise((resolve) => {
+			const s = net.connect(open.rt.port, '127.0.0.1', () => {
+				s.write('GET /endless-sync HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: s=1\r\n\r\n');
+				s.pause();
+				setTimeout(() => resolve(s), 1000);
+			});
+			s.on('error', () => {});
+		});
+		const pulls = /** @type {any} */ (globalThis).__fafEndlessPulls;
+		socket.destroy();
+		expect(pulls, 'the writer pulled').toBeGreaterThan(0);
+		expect(pulls, 'the writer waited on the socket').toBeLessThan(400);
 	});
 
 	it('cuts a chunked body that fails in a later turn after the bytes written before it, before its terminal chunk', async () => {
@@ -1068,11 +1139,13 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 			socket.on('data', (chunk) => { bytes += chunk.length; tail = (tail + chunk.toString('latin1')).slice(-200); });
 			socket.on('end', () => { how = 'end'; });
 			socket.on('error', (err) => { how = 'error ' + /** @type {any} */ (err).code; });
-			socket.on('close', () => resolve({ bytes, how, tail }));
+			const started = Date.now();
+			socket.on('close', () => resolve({ bytes, how, tail, ms: Date.now() - started }));
 			setTimeout(() => socket.destroy(), 8000);
 		}));
-		const queued = /** @type {{ bytes: number, how: string, tail: string }} */ (result);
+		const queued = /** @type {{ bytes: number, how: string, tail: string, ms: number }} */ (result);
 		expect(queued.how, 'the server closed it').not.toBe('timeout');
+		expect(queued.ms, 'closed as the stream failed, not at the keep-alive timeout').toBeLessThan(3000);
 		expect(queued.bytes, 'the answer ahead was under way').toBeGreaterThan(0);
 		expect(queued.tail, 'nothing of the stream behind it').not.toContain('HTTP/1.1 200');
 		expect(queued.tail).not.toContain('part1|');
