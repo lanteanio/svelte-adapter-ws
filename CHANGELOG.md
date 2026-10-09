@@ -55,6 +55,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   location that proxies to it, not only the WebSocket one, and a health check
   that defaults to HTTP/1.0, such as HAProxy's `option httpchk`, must be set
   to HTTP/1.1. `vite dev` still serves HTTP/1.0.
+- **A request pipelined behind one still waiting for its answer closes the
+  connection unanswered.** node queued it and answered both in order. Now,
+  as on the family's native tier, the request behind is read once the turn
+  the one ahead was handed to the application in has run its ticks and
+  microtasks: if that answer has been written by then, the request is
+  served, and if it is still waiting, the connection closes and neither
+  request gets a byte it did not already have. The waiting request sees its
+  client go, as for any disconnect, and the one behind it never reaches a
+  route. A WebSocket handshake behind a waiting request is decided the same
+  way, a request after `Connection: close` behind one closes the connection
+  too, and an HTTP/1.0 request behind one gets its `505` at once. Nothing
+  behind an answer that ends the connection - a `505`, the `400` for an
+  ambiguous body framing - is read: such a request ran the application
+  before and its answer was dropped. A request queued behind another was
+  counted in flight and never settled when its connection went, so a later
+  shutdown waited out its whole budget; it is no longer counted.
 - **An SSR body is written once its second chunk is read, as on the
   family's native tier.** The writer started streaming a body whose second
   chunk had not arrived within a few microtasks, so a page streaming a slow

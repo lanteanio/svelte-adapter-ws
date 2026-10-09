@@ -236,10 +236,10 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime 
 
 	it('behind a complete handshake on a path the WebSocket route does not take', async () => {
 		const answers = await pipelined(tcp(open.rt.port), open.rt.port, [
-			{ lines: ['GET /api/tiny HTTP/1.1', ...HANDSHAKE] },
-			{ lines: ['GET /healthz HTTP/1.1'] }
+			{ lines: ['GET /healthz HTTP/1.1', ...HANDSHAKE] },
+			{ lines: ['GET /api/tiny HTTP/1.1'] }
 		]);
-		expect(bodies(answers)).toEqual(['ok', 'OK', 'OK']);
+		expect(bodies(answers)).toEqual(['OK', 'ok', 'OK']);
 	});
 
 	it('behind a declined POST, reading past its body', async () => {
@@ -295,12 +295,12 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime 
 		expect(raw).toContain(PONG);
 	});
 
-	it('in order, behind a declined request answered late', async () => {
+	it('closes unanswered, as for any request, behind a declined request still waiting', async () => {
 		const answers = await pipelined(tcp(open.rt.port), open.rt.port, [
 			{ lines: ['GET /api/slow HTTP/1.1', ...H2C] },
 			{ lines: ['GET /api/tiny HTTP/1.1'] }
 		]);
-		expect(bodies(answers)).toEqual(['slow-done', 'ok', 'OK']);
+		expect(bodies(answers)).toEqual([]);
 	});
 
 	it('and opens a WebSocket handshake pipelined behind one', async () => {

@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, speaksHttp11 } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, servePipelined, speaksHttp11 } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -76,10 +76,22 @@ export function installRealtimeRoutes(routes) {
 }
 
 /**
+ * The request listener. Pipelined requests are served in their connection's
+ * order, or the connection closes, as on the family's native tier; see
+ * servePipelined. A request it holds back is not counted.
+ *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  */
 export function handleRequest(req, res) {
+	servePipelined(req, res, serveRequest);
+}
+
+/**
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ */
+function serveRequest(req, res) {
 	counters.inFlightCount++;
 	// `responseStarted` flips once any byte of the real response has reached
 	// the wire, after which no error response can be sent; `closedByServer`

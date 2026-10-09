@@ -378,16 +378,59 @@ function pipeline(port, requests, body = '') {
 		const out = [lines[0], `Host: 127.0.0.1:${port}`, ...lines.slice(1)];
 		if (i === requests.length - 1) out.push('Connection: close');
 		return out.join('\r\n') + '\r\n\r\n' + (i === 0 ? body : '');
-	}).join('');
+	});
+	const methods = requests.map((lines) => lines[0].slice(0, lines[0].indexOf(' ')));
+	// Each request goes out once the answer ahead of it is complete, as its
+	// framing tells: a request pipelined behind an answer still waiting closes
+	// the connection, as on the family's native tier. An answer whose framing
+	// never completes holds the next request back until the wait runs out.
 	return new Promise((resolve, reject) => {
-		const socket = net.connect(port, '127.0.0.1', () => { socket.write(wire); });
+		let sent = 0;
 		let buffer = '';
-		socket.on('data', (chunk) => { buffer += chunk.toString('latin1'); });
+		const socket = net.connect(port, '127.0.0.1', () => { socket.write(wire[sent++]); });
+		socket.on('data', (chunk) => {
+			buffer += chunk.toString('latin1');
+			if (sent < wire.length && answersComplete(buffer, methods.slice(0, sent)) === sent) socket.write(wire[sent++]);
+		});
 		socket.on('end', () => { clearTimeout(timer); resolve(buffer); });
 		socket.on('error', reject);
 		const timer = setTimeout(() => { socket.destroy(); resolve(buffer); }, 5000);
 		timer.unref?.();
 	});
+}
+
+/**
+ * How many whole answers lead `raw`, framed by their Content-Length, their
+ * chunks, or no body for a HEAD, a 204 or a 304.
+ *
+ * @param {string} raw latin1
+ * @param {string[]} methods one per request sent
+ */
+function answersComplete(raw, methods) {
+	let at = 0;
+	let count = 0;
+	while (count < methods.length) {
+		const end = raw.indexOf('\r\n\r\n', at);
+		if (end < 0) break;
+		const head = raw.slice(at, end).split('\r\n');
+		const status = head[0].slice(9, 12);
+		const lines = head.slice(1).map((l) => l.toLowerCase());
+		let next = end + 4;
+		if (methods[count] !== 'HEAD' && status !== '204' && status !== '304') {
+			const length = lines.find((l) => l.startsWith('content-length:'));
+			if (lines.some((l) => l.startsWith('transfer-encoding:') && l.includes('chunked'))) {
+				const last = raw.indexOf('\r\n0\r\n\r\n', next - 2);
+				if (last < 0) break;
+				next = last + 7;
+			} else if (length !== undefined) {
+				next += Number(length.slice(15).trim());
+				if (raw.length < next) break;
+			}
+		}
+		count++;
+		at = next;
+	}
+	return count;
 }
 
 /** @param {string} raw */
@@ -829,24 +872,20 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 	});
 
 	it('streams once the second chunk exists, sending both together', async () => {
+		expect(readChunked(await pipeline(open.rt.port, [['GET /late-second HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('one|two');
+		// The source enqueues its second chunk 200 ms after its first.
 		const started = Date.now();
-		/** @type {number} */
-		let firstByteAt = 0;
-		const raw = await new Promise((resolve, reject) => {
+		const firstByteAt = await new Promise((resolve, reject) => {
 			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
-				socket.write(`GET /late-second HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: s=1\r\n\r\n${OK[0]}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+				socket.write('GET /late-second HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: s=1\r\nConnection: close\r\n\r\n');
 			});
-			let buffer = '';
-			socket.on('data', (chunk) => {
-				if (buffer === '') firstByteAt = Date.now();
-				buffer += chunk.toString('latin1');
+			socket.once('data', () => {
+				resolve(Date.now());
+				socket.destroy();
 			});
-			socket.on('end', () => resolve(buffer));
 			socket.on('error', reject);
 		});
-		expect(readChunked(/** @type {string} */ (raw), '200')).toBe('one|two');
-		// The source enqueues its second chunk 200 ms after its first.
-		expect(firstByteAt - started, 'nothing leaves before the second chunk').toBeGreaterThanOrEqual(150);
+		expect(/** @type {number} */ (firstByteAt) - started, 'nothing leaves before the second chunk').toBeGreaterThanOrEqual(150);
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {

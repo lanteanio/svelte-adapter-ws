@@ -735,6 +735,19 @@ providing the cross-instance relay, presence and clustering primitives over
 Redis. Container fleets that scale by replicas need neither `reusePort` nor
 `CLUSTER_WORKERS` - the balancer already spreads connections across replicas.
 
+**Speak HTTP/1.1 to it.** The server answers HTTP/1.1 only: a request in any
+other version gets `505` and a closed connection, as on the native tier, so
+nginx needs `proxy_http_version 1.1;` on every location that proxies to it,
+and a load balancer's health check has to probe in HTTP/1.1. Pipelined
+requests are answered while each response is written before the next request
+on the connection is parsed. If a request is still waiting on its answer -
+any route that awaits, such as an endpoint doing I/O - when the next one is
+parsed, the connection closes and neither request gets a byte, the native
+tier's rule; RFC 9112 9.3.2 has a client retry requests a closed connection
+left unanswered, and browsers do not pipeline. `vite dev` runs on Vite's own
+server, which serves HTTP/1.0 and queues pipelined requests instead.
+`test/http-pipelining-real.test.js` pins both halves on the built runtime.
+
 **systemd integration** is automatic under a `Type=notify` unit and a no-op
 everywhere else: the runtime detects `NOTIFY_SOCKET` and sends `READY` once
 the service accepts traffic (after the app's `init` hook resolves in
