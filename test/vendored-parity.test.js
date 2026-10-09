@@ -14,6 +14,7 @@
 // path that has no counterpart); everything else stays verbatim so the lead
 // remains the single place the logic evolves.
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -93,4 +94,25 @@ describe('vendored files stay byte-identical to the lead', () => {
 			expect(normalize(readFileSync(oursPath, 'utf8'))).toBe(expected);
 		});
 	}
+
+	it('holds every tracked file that is the lead\'s file unchanged', () => {
+		// A file that equals the lead's at the pin but is not in the manifest is
+		// checked by nothing, so a lead change to it passes a pin move unseen.
+		// protocol.schema.json is held byte-equal by test/platform-parity.test.js.
+		const heldElsewhere = new Set(['protocol.schema.json']);
+		const listed = (/** @type {string} */ cwd, /** @type {string[]} */ args) => execFileSync('git', ['-C', cwd, ...args], { maxBuffer: 64 * 1024 * 1024 })
+			.toString('utf8').split('\0').filter(Boolean);
+		const leadTree = new Set(listed(uwsRoot, ['ls-tree', '-r', '-z', '--name-only', LEAD.rev]));
+		const held = new Set(VENDORED.map((entry) => entry.file));
+		const candidates = listed(repoRoot, ['ls-files', '-z'])
+			.filter((file) => leadTree.has(file) && !held.has(file) && !heldElsewhere.has(file));
+		const sources = readLeadAtPin(candidates);
+		const unheld = candidates.filter((file) => {
+			const lead = sources.get(file);
+			return lead != null && existsSync(path.join(repoRoot, file)) &&
+				normalize(readFileSync(path.join(repoRoot, file), 'utf8')) === normalize(lead).replace(/svelte-adapter-uws/g, 'svelte-adapter-ws');
+		});
+		expect(candidates.length, 'shared files outside the manifest were found to compare').toBeGreaterThan(0);
+		expect(unheld, 'add these to test/vendored-manifest.json').toEqual([]);
+	});
 });

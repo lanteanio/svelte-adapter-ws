@@ -40,7 +40,7 @@
  * counts stay exact. A malformed / truncated buffer throws a RangeError from
  * the reader, which the caller turns into a dropped frame.
  *
- * @module svelte-adapter-uws/src/runtime/wire-value
+ * @module svelte-adapter-ws/src/runtime/wire-value
  */
 
 import { ByteWriter, ByteReader } from './wire.js';

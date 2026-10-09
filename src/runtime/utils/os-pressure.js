@@ -29,7 +29,7 @@
  * drives `sample(intervalMs)` and supplies the window length for the
  * throttle-ratio math.
  *
- * @module svelte-adapter-uws/runtime/utils/os-pressure
+ * @module svelte-adapter-ws/runtime/utils/os-pressure
  */
 
 import { readFileSync } from 'node:fs';

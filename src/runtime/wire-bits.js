@@ -15,7 +15,7 @@
  * Pure: no clocks, no timers, no imports - it bundles for the browser and runs
  * under a deterministic harness unchanged.
  *
- * @module svelte-adapter-uws/src/runtime/wire-bits
+ * @module svelte-adapter-ws/src/runtime/wire-bits
  */
 
 const F64 = new Float64Array(1);

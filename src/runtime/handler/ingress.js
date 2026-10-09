@@ -25,7 +25,7 @@
  * from lookup and the binding would never resolve; the global keeps one
  * registry regardless of how the graph was bundled.
  *
- * @module svelte-adapter-uws/src/runtime/handler/ingress
+ * @module svelte-adapter-ws/src/runtime/handler/ingress
  */
 
 import { parseBinaryFrame } from '../wire.js';

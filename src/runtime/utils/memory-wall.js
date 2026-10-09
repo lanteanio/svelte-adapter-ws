@@ -43,7 +43,7 @@
  * Determinism: no clock, no RNG, no timers. The 1 Hz pressure sampler is
  * the only caller; nothing here sits on a frame path.
  *
- * @module svelte-adapter-uws/runtime/utils/memory-wall
+ * @module svelte-adapter-ws/runtime/utils/memory-wall
  */
 
 import { readFileSync } from 'node:fs';

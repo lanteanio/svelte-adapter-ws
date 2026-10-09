@@ -22,7 +22,7 @@
  *
  * Pure: no clocks, no timers, no runtime imports.
  *
- * @module svelte-adapter-uws/src/runtime/wire-stream
+ * @module svelte-adapter-ws/src/runtime/wire-stream
  */
 
 import { f64ToWords, wordsToF64, clz64, ctz64 } from './wire-bits.js';

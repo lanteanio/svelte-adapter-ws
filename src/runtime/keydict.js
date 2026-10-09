@@ -41,7 +41,7 @@
  * injected `timeSource` a consuming codec binds, so the module bundles for
  * the browser and runs under a deterministic harness unchanged.
  *
- * @module svelte-adapter-uws/src/runtime/keydict
+ * @module svelte-adapter-ws/src/runtime/keydict
  */
 
 /** Default id-space size: 16-bit ids, evicted least-recently-used at the cap. */

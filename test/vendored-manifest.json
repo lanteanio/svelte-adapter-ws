@@ -2262,5 +2262,156 @@
 	},
 	{
 		"file": "test/http-pipelining-real.test.js"
+	},
+	{
+		"file": "LICENSE"
+	},
+	{
+		"file": "src/build-config.js"
+	},
+	{
+		"file": "src/connection.d.ts"
+	},
+	{
+		"file": "src/connection.js"
+	},
+	{
+		"file": "src/runtime/cookies.js"
+	},
+	{
+		"file": "src/runtime/handler/cluster-sequence-policy.js"
+	},
+	{
+		"file": "src/runtime/handler/codec-registry.js"
+	},
+	{
+		"file": "src/runtime/handler/envelope-cache.js"
+	},
+	{
+		"file": "src/runtime/handler/game-ingress.js"
+	},
+	{
+		"file": "src/runtime/handler/ingress.js",
+		"adaptations": [
+			{
+				"lead": "Symbol.for('svelte-adapter-ws.ingress-registry')",
+				"ours": "Symbol.for('svelte-adapter-uws.ingress-registry')"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/handler/wire-fanout.js"
+	},
+	{
+		"file": "src/runtime/keydict.js"
+	},
+	{
+		"file": "src/runtime/relay-spill-policy.js"
+	},
+	{
+		"file": "src/runtime/restart-supervisor.js"
+	},
+	{
+		"file": "src/runtime/shims.js"
+	},
+	{
+		"file": "src/runtime/tracing-bridge.js"
+	},
+	{
+		"file": "src/runtime/tracing.js"
+	},
+	{
+		"file": "src/runtime/utils/attribution.js"
+	},
+	{
+		"file": "src/runtime/utils/backpressure.js"
+	},
+	{
+		"file": "src/runtime/utils/byte-budget.js"
+	},
+	{
+		"file": "src/runtime/utils/dot-path.js"
+	},
+	{
+		"file": "src/runtime/utils/fd-limit.js"
+	},
+	{
+		"file": "src/runtime/utils/hook-boundary.js"
+	},
+	{
+		"file": "src/runtime/utils/memory-wall.js"
+	},
+	{
+		"file": "src/runtime/utils/message-admission.js"
+	},
+	{
+		"file": "src/runtime/utils/mime.js"
+	},
+	{
+		"file": "src/runtime/utils/os-pressure.js"
+	},
+	{
+		"file": "src/runtime/utils/parse.js"
+	},
+	{
+		"file": "src/runtime/utils/rate-limiter.js"
+	},
+	{
+		"file": "src/runtime/utils/sd-notify.js"
+	},
+	{
+		"file": "src/runtime/utils/seq-bound.js"
+	},
+	{
+		"file": "src/runtime/utils/topic.js"
+	},
+	{
+		"file": "src/runtime/version-info.js",
+		"adaptations": [
+			{
+				"lead": "svelte-adapter-ws-extensions",
+				"ours": "svelte-adapter-uws-extensions",
+				"all": true
+			}
+		]
+	},
+	{
+		"file": "src/runtime/wire-bits.js"
+	},
+	{
+		"file": "src/runtime/wire-stream.js"
+	},
+	{
+		"file": "src/runtime/wire-value.js"
+	},
+	{
+		"file": "src/static-scan.js"
+	},
+	{
+		"file": "src/trace-context.js"
+	},
+	{
+		"file": "src/upgrade-response.js"
+	},
+	{
+		"file": "test/fixture/src/routes/big-shared/+server.js"
+	},
+	{
+		"file": "test/fixture/src/routes/stream-big/+server.js"
+	},
+	{
+		"file": "test/message-admission.test.js"
+	},
+	{
+		"file": "test/relay-spill-policy.test.js"
+	},
+	{
+		"file": "test/relay-spill-quarantine-policy.test.js"
+	},
+	{
+		"file": "test/waiting-room-template.test.js"
+	},
+	{
+		"file": "test/worker-boot-deadline.test.js"
 	}
 ]
