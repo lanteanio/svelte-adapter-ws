@@ -207,11 +207,15 @@ describe('the built runtime', () => {
 		const other = await converse(open.rt.port, [[0, 'GET /api/tiny HTTP/1.1\r\nExpect: foo\r\n\r\n']]);
 		expect(statusLines(other.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(other.closed).toBe(true);
-		// With a Host, node's own answers stand.
+		// With a Host, the 100 Continue goes out as on the native tier, and any
+		// other Expect is ignored: the route answers, in the line's order.
 		const okCont = await converse(open.rt.port, [[0, 'POST /api/tiny HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nhello']], 400);
 		expect(statusLines(okCont.raw)).toEqual(['HTTP/1.1 100 Continue', 'HTTP/1.1 200 OK']);
 		const okOther = await converse(open.rt.port, [[0, 'GET /api/tiny HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n']], 400);
-		expect(statusLines(okOther.raw)).toEqual(['HTTP/1.1 417 Expectation Failed']);
+		expect(statusLines(okOther.raw)).toEqual(['HTTP/1.1 200 OK']);
+		const behindWaiting = await converse(open.rt.port, [[0, get('/api/slow') + 'GET /api/tiny HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n']]);
+		expect(behindWaiting.raw).toBe('');
+		expect(behindWaiting.closed).toBe(true);
 	});
 
 	it('writes the refusal a request line or a missing Host earns at once behind a waiting answer', async () => {

@@ -869,10 +869,10 @@ export function refuseUnparsedForbiddenMethods(server) {
 /**
  * node answers a request's Expect before the listener runs: 100 Continue for
  * `100-continue`, 417 for anything else. The native tier reads the Host
- * first and refuses a request without one before any of that, so both
- * answers go through `listener` for a Host-less request, which refuses it in
- * its turn; every other request gets node's own answer, as without these
- * listeners.
+ * first and refuses a request without one before any of that, so a Host-less
+ * request goes through `listener`, which refuses it in its turn; one with a
+ * Host gets the 100 Continue the native tier sends too, and any other Expect
+ * is ignored as the native tier ignores it: the request goes to its route.
  *
  * @param {import('node:http').Server} server
  * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void} listener
@@ -882,14 +882,7 @@ export function answerExpectations(server, listener) {
 		if (!missesHost(req)) res.writeContinue();
 		listener(req, res);
 	});
-	server.on('checkExpectation', (req, res) => {
-		if (missesHost(req)) {
-			listener(req, res);
-			return;
-		}
-		res.writeHead(417);
-		res.end();
-	});
+	server.on('checkExpectation', listener);
 }
 
 /**
