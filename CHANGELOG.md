@@ -152,11 +152,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   navigation still gets the upgrade hint or the capacity answer.
 - **Only a GET to the WebSocket path is taken as a handshake.** A complete
   handshake on any other path or with any other method went to the upgrade
-  listener, which answered `404` off the path and `405` to a `POST` on it -
-  after running the application's `upgrade` hook - and closed the connection.
-  It is now an ordinary request, answered as it would be without the upgrade
-  headers - by the liveness probe, a built asset or the application, body
-  and all - as on the family's native tier, on the runtime and in
+  listener, which answered `404` off the path and closed the connection; a
+  `POST` on it ran the application's `upgrade` hook first and, unless the
+  hook refused it, was answered `405`. It is now an ordinary request,
+  answered as it would be without the upgrade headers - by the liveness
+  probe, a built asset or the application, body and all - as on the
+  family's native tier, on the runtime and in
   `createTestServer`, on every node release the package supports: those
   before 22.21 and 24.9, whose `http.createServer` ignores the
   `shouldUpgradeCallback` option, route the same way. A key that is not 24

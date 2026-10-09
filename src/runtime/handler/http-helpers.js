@@ -419,13 +419,16 @@ export function takesWebSocketRoute(req, wsPath) {
 /**
  * Route upgrades by `shouldUpgradeCallback` on a node that ignores the option
  * (before 22.21 and 24.9). Such a node takes every request that names
- * `Connection: upgrade` as an upgrade while an 'upgrade' listener is attached,
- * so the listener got a declined request on any path and with any method, its
- * body unread; with no listener it never asks the callback, so nothing resumes
- * past a declined request. node decides in the parser's `onIncoming`, which it
- * binds per connection, so each connection's is wrapped to ask the callback
- * first, as a newer node does at that point: a declined request is parsed as
- * an ordinary one. A server that took the option is left alone.
+ * `Connection: upgrade` and carries an Upgrade header as an upgrade while an
+ * 'upgrade' listener is attached, so the listener got a declined request on
+ * any path and with any method, its body unread; with no listener it never
+ * asks the callback, so nothing resumes past a declined request. node decides
+ * in the parser's `onIncoming`, which it binds per connection, so each
+ * connection's is wrapped to ask the callback first: a declined request is
+ * parsed as an ordinary one, as a newer node parses it. A request the callback
+ * takes is left to node's own check, which both callers pass by attaching an
+ * 'upgrade' listener whenever theirs can take one. A server that took the
+ * option is left alone.
  *
  * @param {import('node:http').Server | import('node:https').Server} server
  * @param {(req: import('node:http').IncomingMessage) => boolean} shouldUpgradeCallback
@@ -438,7 +441,8 @@ export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
 		const parser = socket.parser;
 		const onIncoming = parser?.onIncoming;
 		if (typeof onIncoming !== 'function') return;
-		parser.onIncoming = (/** @type {import('node:http').IncomingMessage} */ req, /** @type {boolean} */ keepAlive) => {
+		// `upgrade` is node's own field on the request, which its types leave out.
+		parser.onIncoming = (/** @type {any} */ req, /** @type {boolean} */ keepAlive) => {
 			if (req.upgrade && req.method !== 'CONNECT' && !shouldUpgradeCallback(req)) req.upgrade = false;
 			return onIncoming(req, keepAlive);
 		};

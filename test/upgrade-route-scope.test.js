@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
-import { restoreUpgradeOption, UPGRADE_OPTION_MODES } from './helpers/upgrade-option.js';
+import { listenerDecides, restoreUpgradeOption, UPGRADE_OPTION_MODES } from './helpers/upgrade-option.js';
 import { applyShouldUpgradeCallback } from '../src/runtime/handler/http-helpers.js';
 
 const WS_OPTS = {
@@ -215,6 +215,44 @@ async function expectVersionRefused(port) {
 	expect(answers[0].lines).toContain('connection: close');
 }
 
+/**
+ * Run `build` and collect the http servers it starts listening.
+ *
+ * @template T
+ * @param {() => Promise<T>} build
+ * @returns {Promise<{ result: T, servers: import('node:http').Server[] }>}
+ */
+async function withListening(build) {
+	const proto = /** @type {any} */ (http.Server.prototype);
+	const own = Object.getOwnPropertyDescriptor(proto, 'listen');
+	const listen = proto.listen;
+	/** @type {import('node:http').Server[]} */
+	const servers = [];
+	proto.listen = function (/** @type {any[]} */ ...args) {
+		servers.push(this);
+		return listen.apply(this, args);
+	};
+	try {
+		return { result: await build(), servers };
+	} finally {
+		if (own) Object.defineProperty(proto, 'listen', own);
+		else delete proto.listen;
+	}
+}
+
+/**
+ * The fallback is installed only on a server that did not take the option,
+ * which tells that the caller handed both the same callback: node's own
+ * connection listener, and the fallback's beside it where it is needed.
+ *
+ * @param {import('node:http').Server} server
+ */
+function expectFallbackWhereNeeded(server) {
+	const option = /** @type {any} */ (server).shouldUpgradeCallback;
+	const tookOption = typeof option === 'function' && option !== listenerDecides;
+	expect(server.listenerCount('connection')).toBe(tookOption ? 1 : 2);
+}
+
 afterAll(restoreUpgradeOption);
 
 for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () => {
@@ -283,6 +321,10 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 			await expectVersionRefused(open.rt.port);
 		});
 
+		it('installs the fallback only where the server ignores the option', () => {
+			expectFallbackWhereNeeded(open.rt.handler.server);
+		});
+
 		it('hands a HEAD on the WebSocket path to the application', async () => {
 			expect((await expectOrdinary(open.rt.port, ['HEAD /ws HTTP/1.1'])).status).toBe('200');
 		});
@@ -337,10 +379,13 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 
 	describe('createTestServer takes a handshake on a GET to the WebSocket path only', () => {
 		/** @type {any} */ let mirror;
+		/** @type {import('node:http').Server[]} */ let mirrorServers = [];
 
 		beforeAll(async () => {
 			const { createTestServer } = await import('../src/testing.js');
-			mirror = await build(() => createTestServer({ handler: { upgrade: () => ({}) } }));
+			const started = await withListening(() => build(() => createTestServer({ handler: { upgrade: () => ({}) } })));
+			mirror = started.result;
+			mirrorServers = started.servers;
 		});
 
 		afterAll(async () => {
@@ -368,6 +413,11 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 
 		it('answers a handshake in HTTP/1.0 with the 505, ending the connection', async () => {
 			await expectVersionRefused(mirror.port);
+		});
+
+		it('installs the fallback only where the server ignores the option', () => {
+			expect(mirrorServers).toHaveLength(1);
+			expectFallbackWhereNeeded(mirrorServers[0]);
 		});
 
 		it('refuses a key of another length on the GET answer, keeping the connection', async () => {
