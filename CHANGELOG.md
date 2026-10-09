@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   location that proxies to it, not only the WebSocket one, and a health check
   that defaults to HTTP/1.0, such as HAProxy's `option httpchk`, must be set
   to HTTP/1.1. `vite dev` still serves HTTP/1.0.
+- **An SSR body is written once its second chunk is read, as on the
+  family's native tier.** The writer started streaming a body whose second
+  chunk had not arrived within a few microtasks, so a page streaming a slow
+  promise sent its shell at once, and a body whose end came late after its
+  only chunk went out chunked where the request-dedup path and the native
+  tier length-frame it. It now waits for the second read: a body that ends
+  after one chunk is length-framed, and compressed when it qualifies,
+  however late its end comes, and a streamed page sends its first byte
+  together with its second chunk. A stream cut by a chunk the writer cannot
+  send, right after the ones before it, now delivers those first; the close
+  in the same tick dropped them.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request

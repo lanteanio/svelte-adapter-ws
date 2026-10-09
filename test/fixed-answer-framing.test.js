@@ -230,6 +230,27 @@ export class Server {
 				cancel() { globalThis.__fafRefuseCancelled = true; }
 			}), { headers: text });
 		}
+		if (p === '/late-end') {
+			// One chunk, then the end well after it: a single-chunk body.
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(new TextEncoder().encode('hello'));
+					await new Promise((r) => setTimeout(r, 50));
+					c.close();
+				}
+			}), { headers: text });
+		}
+		if (p === '/late-second') {
+			const enc = new TextEncoder();
+			return new Response(new ReadableStream({
+				async start(c) {
+					c.enqueue(enc.encode('one|'));
+					await new Promise((r) => setTimeout(r, 200));
+					c.enqueue(enc.encode('two'));
+					c.close();
+				}
+			}), { headers: text });
+		}
 		if (p === '/fail-mid') {
 			const enc = new TextEncoder();
 			return new Response(new ReadableStream({
@@ -783,16 +804,49 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 	});
 
 	it('cuts a chunked body that failed mid-stream before its terminal chunk', async () => {
-		const chunked = await exchange(
-			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
-			['GET /fail-mid HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1']
-		);
-		// The cut leaves out the terminal chunk, and the close is a plain one,
-		// so the client keeps every byte sent before it.
-		expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding')).toEqual(['chunked']);
-		expect(chunked.buffer).toContain('part1|');
-		expect(chunked.buffer.endsWith('0\r\n\r\n'), 'no terminal chunk').toBe(false);
-		expect(chunked.how).toBe('end');
+		// A source that errors, and one that hands over a value that is no
+		// chunk right after the writer sent the first.
+		for (const target of ['/fail-mid', '/refuse-mid']) {
+			const chunked = await exchange(
+				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+				[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
+			);
+			// The cut leaves out the terminal chunk, and the close is a plain one,
+			// so the client keeps every byte sent before it.
+			expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding'), target).toEqual(['chunked']);
+			expect(chunked.buffer, target).toContain('part1|');
+			expect(chunked.buffer.endsWith('0\r\n\r\n'), target + ': no terminal chunk').toBe(false);
+			expect(chunked.how, target).toBe('end');
+		}
+	});
+
+	it('length-frames a body whose end comes late after its one chunk, on either path', async () => {
+		// Credentialed, the writer reads it; anonymous, the dedup leader does.
+		// Both wait for the second read, as the native tier does, and agree.
+		for (const cookie of [['Cookie: s=1'], []]) {
+			expectLengthFramed(await pipeline(open.rt.port, [['GET /late-end HTTP/1.1', ...cookie], OK]), { status: '200', body: 'hello' });
+		}
+	});
+
+	it('streams once the second chunk exists, sending both together', async () => {
+		const started = Date.now();
+		/** @type {number} */
+		let firstByteAt = 0;
+		const raw = await new Promise((resolve, reject) => {
+			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
+				socket.write(`GET /late-second HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: s=1\r\n\r\n${OK[0]}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+			});
+			let buffer = '';
+			socket.on('data', (chunk) => {
+				if (buffer === '') firstByteAt = Date.now();
+				buffer += chunk.toString('latin1');
+			});
+			socket.on('end', () => resolve(buffer));
+			socket.on('error', reject);
+		});
+		expect(readChunked(/** @type {string} */ (raw), '200')).toBe('one|two');
+		// The source enqueues its second chunk 200 ms after its first.
+		expect(firstByteAt - started, 'nothing leaves before the second chunk').toBeGreaterThanOrEqual(150);
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {

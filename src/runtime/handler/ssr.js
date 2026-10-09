@@ -259,21 +259,13 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			return;
 		}
 		const firstBytes = chunkBytes(first.value);
-		// The second read decides single-chunk vs streaming, but it must never
-		// WITHHOLD a streaming shell: a page whose next chunk arrives seconds
-		// later (a load() streaming a promise) would otherwise ship its first
-		// byte only when its second exists. A buffered body settles its second
-		// read within a few microtasks; anything parked on real I/O loses the
-		// race and streams chunked from the first chunk on.
-		const STREAMING = Symbol('streaming');
-		let microtasks = Promise.resolve();
-		for (let i = 0; i < 8; i++) microtasks = microtasks.then(() => {});
-		/** @type {Promise<ReadableStreamReadResult<Uint8Array>> | null} */
-		let pendingRead = reader.read();
-		const raced = await Promise.race([pendingRead, microtasks.then(() => STREAMING)]);
+		// The second read decides single-chunk vs streaming, as on the family's
+		// native tier: a body whose end follows its first chunk is one
+		// length-framed answer, compressed when it qualifies, however late that
+		// end arrives.
+		const second = await reader.read();
 		if (state.aborted) return;
-		const second = raced === STREAMING ? null : /** @type {ReadableStreamReadResult<Uint8Array>} */ (raced);
-		if (second !== null && second.done) {
+		if (second.done) {
 			// A string chunk goes out as is: the family's native tier decides
 			// on the chunk's own byteLength, and a string has none.
 			const whole = compressWhole(response, firstBytes, typeof first.value === 'string' ? '' : acceptEncoding || '');
@@ -282,22 +274,20 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			return;
 		}
 
-		/** @type {Uint8Array[]} */
-		const ready = [firstBytes];
-		if (second !== null) {
-			ready.push(chunkBytes(second.value));
-			pendingRead = null;
-		}
+		// The second chunk is read as one only once the first is out, as the
+		// native tier writes them, so a value it refuses cuts a stream already
+		// under way.
+		/** @type {unknown[]} */
+		const ready = [firstBytes, second.value];
 		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
 		writeHeaders(res, response, state, null, '', true);
 		streaming = true;
 		for (;;) {
 			let value;
 			if (ready.length > 0) {
-				value = /** @type {Uint8Array} */ (ready.shift());
+				value = chunkBytes(ready.shift());
 			} else {
-				const read = await (pendingRead ?? reader.read());
-				pendingRead = null;
+				const read = await reader.read();
 				if (read.done) { streamDone = true; break; }
 				value = chunkBytes(read.value);
 			}
@@ -314,6 +304,11 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 				res.end();
 			} else {
 				state.closedByServer = true;
+				// node holds this tick's writes in its cork until the tick ends,
+				// so a close in the same tick would drop bytes already written;
+				// the client keeps every byte sent before the cut.
+				const socket = res.socket;
+				while (socket !== null && socket.writableCorked > 0) socket.uncork();
 				res.destroy();
 			}
 		}

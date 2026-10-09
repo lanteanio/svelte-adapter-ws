@@ -186,9 +186,13 @@ export class Server {
 			throw new Error('boom');
 		}
 		if (p === '/api/sse') {
+			// Two events, then the stream stays open: the writer streams once it
+			// has a second chunk.
 			const stream = new ReadableStream({
-				start(controller) {
+				async start(controller) {
 					controller.enqueue(new TextEncoder().encode('data: 1\\n\\n'));
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					controller.enqueue(new TextEncoder().encode('data: 2\\n\\n'));
 				}
 			});
 			return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
