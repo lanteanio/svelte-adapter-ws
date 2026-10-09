@@ -449,6 +449,15 @@ describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
 		/** @type {import('node:http').RequestListener} */
 		const answer = (req, res) => {
 			opts.onRequest?.(req, req.socket);
+			if (req.url === '/unread') {
+				// Leaves its body unread for a while, so node pauses the socket
+				// behind it once the body passes the request's high-water mark.
+				setTimeout(() => {
+					req.resume();
+					req.on('end', () => res.end('answered /unread'));
+				}, 300);
+				return;
+			}
 			req.resume();
 			req.on('end', () => {
 				if (req.url === '/slow') setTimeout(() => res.end('answered /slow'), 200);
@@ -553,6 +562,41 @@ describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
 			);
 			expect(paused, 'the rest of the read was handed back while node had paused the connection').toEqual([true]);
 			expect(shown(answers)).toEqual(['answered /slow', `wide ${64 * 1024}`, 'answered /a', 'answered /b', 'answered /c']);
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
+
+	it('reads on after a declined body node paused the connection for', async () => {
+		// The unread body stops the connection's reads; its end lets the socket
+		// flow again before node would restart them, which it does from a
+		// 'resume' listener the move to the JS read path drops.
+		/** @type {(boolean | undefined)[]} */
+		const readingAtHandBack = [];
+		const server = await serve({
+			secure: true,
+			onConnection: (socket) => {
+				const unshift = socket.unshift;
+				socket.unshift = function (chunk) {
+					readingAtHandBack.push(/** @type {any} */ (socket)._handle?.reading);
+					return unshift.call(this, chunk);
+				};
+			}
+		});
+		try {
+			const port = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
+			const body = 'b'.repeat(20000);
+			const answers = await exchangeTimed(
+				() => tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false }),
+				[
+					[0, wire('POST /unread', [...H2C, `Content-Length: ${body.length}`]) + body + wire('GET /b')],
+					[150, wire('GET /c')]
+				],
+				3
+			);
+			expect(readingAtHandBack, 'the connection\'s reads were stopped at the hand-back').toEqual([false]);
+			expect(bodies(answers)).toEqual(['answered /unread', 'answered /b', 'answered /c']);
 		} finally {
 			server.closeAllConnections();
 			server.close();
