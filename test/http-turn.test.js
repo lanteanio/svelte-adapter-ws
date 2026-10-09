@@ -5,7 +5,7 @@
 // buffer. On the line alone, with stand-in sockets.
 
 import { describe, expect, it } from 'vitest';
-import { inOwnTurn, lineAhead, releaseTurnIfFull, servePipelined, upgradeTurn } from '../src/runtime/handler/http-helpers.js';
+import { endOpenTurns, inOwnTurn, lineAhead, releaseTurnIfFull, servePipelined, upgradeTurn } from '../src/runtime/handler/http-helpers.js';
 
 function connection() {
 	/** @type {Record<string, Function[]>} */
@@ -52,6 +52,35 @@ describe('a request\'s turn', () => {
 		await new Promise((resolve) => setImmediate(resolve));
 		expect(inOwnTurn(b.res), 'the setImmediate after the hand-out ends it').toBe(false);
 		expect(b.socket.corked).toBe(0);
+	});
+
+	it('ends every open turn when a message or handshake is handed to the application', () => {
+		const h = connection();
+		servePipelined(h.req, h.res, () => {});
+		expect(inOwnTurn(h.res)).toBe(true);
+		endOpenTurns();
+		expect(inOwnTurn(h.res)).toBe(false);
+		expect(h.socket.corked).toBe(0);
+	});
+
+	it('ends the turn of a request handed out from the line at a timer, ahead of any the handler queues', async () => {
+		const k = connection();
+		/** @type {string[]} */
+		const served = [];
+		const second = { req: { socket: k.socket }, res: /** @type {any} */ ({ socket: k.socket, writableEnded: false, _last: false, on() {} }) };
+		// The line keeps one serve per connection.
+		const serve = (/** @type {any} */ _req, /** @type {any} */ res) => { served.push(res === k.res ? 'first' : 'second'); };
+		servePipelined(k.req, k.res, serve);
+		servePipelined(/** @type {any} */ (second.req), second.res, serve);
+		expect(served, 'the second waits for the first to end').toEqual(['first']);
+		k.res.writableEnded = true;
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(served).toEqual(['first', 'second']);
+		expect(inOwnTurn(second.res), 'handed out in the check phase, its turn is open').toBe(true);
+		// A timer the handler queues after the hand-out runs after the turn's own.
+		const seen = await new Promise((resolve) => setTimeout(() => resolve(inOwnTurn(second.res)), 1));
+		expect(seen, 'over before a timer queued after the hand-out').toBe(false);
+		expect(k.socket.corked).toBe(0);
 	});
 
 	it('ends the hold once the held bytes reach the native tier\'s cork buffer', async () => {

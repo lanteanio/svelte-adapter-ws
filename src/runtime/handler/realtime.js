@@ -94,7 +94,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, upgradeTurn, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -1237,6 +1237,7 @@ export async function handleUpgrade(req, socket, head) {
 	// connection's line, as on the native tier, and goes ahead once every HTTP
 	// answer before it is on the wire; the line closes the connection instead
 	// if an answer ahead is still waiting at its turn.
+	endOpenTurns();
 	const turn = upgradeTurn(req, socket);
 	if (turn !== null && !(await turn)) {
 		socket.destroy();
@@ -1787,6 +1788,9 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	sendControl(facade, '{"type":"welcome","sessionId":"' + sessionId + '"}');
 
 	rawWs.on('message', (raw, isBinary) => {
+		// The message handler's own turn, on the native tier: every open HTTP
+		// turn is over.
+		endOpenTurns();
 		lastActivity = monotonicNow();
 		// One RED observation per inbound message. `ws` dispatches per socket, so
 		// the timing wraps this dispatch rather than a shared behavior object.

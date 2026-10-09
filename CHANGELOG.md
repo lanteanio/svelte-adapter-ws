@@ -110,8 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure, so a refused second chunk leaves the headers and the first chunk,
   and the chunked answer is cut before its terminal chunk, node ending the
   last chunk with its CRLF where the native tier does not. A turn ends when
-  the next request is handed out on any connection, or at the check phase
-  after the hand-out. A first chunk that is refused leaves nothing in either
+  the next request, handshake or WebSocket message is handed to the
+  application on any connection, at the check phase after the hand-out, or
+  for a request served behind an answered one at the next timers phase; a
+  stream fed by another socket's data in the same poll phase is still in its
+  turn, since node has no boundary there. A first chunk that is refused leaves nothing in either
   turn. A chunk of `undefined` writes nothing, and a `SharedArrayBuffer`
   goes out as its bytes, as the native tier sends them; both were refused
   before. A stream queued behind an answer node is still writing is cut by

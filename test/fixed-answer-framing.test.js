@@ -317,6 +317,31 @@ export class Server {
 				cancel() { globalThis.__fafRefuseCancelled = true; }
 			}), { headers: text });
 		}
+		if (p.startsWith('/refuse-second-after/')) {
+			// A first chunk of the named size, then a value that is no chunk, in
+			// the request's own turn.
+			const enc = new TextEncoder();
+			const size = Number(p.slice('/refuse-second-after/'.length));
+			return new Response(new ReadableStream({
+				start(c) { c.enqueue(enc.encode('a'.repeat(size))); c.enqueue(42); },
+				cancel() { globalThis.__fafRefuseCancelled = true; }
+			}), { headers: text });
+		}
+		if (p === '/timer-fail-third') {
+			// Two chunks at once, the second after more than a millisecond of
+			// work, then a read that fails from a timer already due by then.
+			const enc = new TextEncoder();
+			let pulls = 0;
+			/** @type {Promise<void>} */ let due;
+			return new Response(new ReadableStream({
+				pull(c) {
+					pulls++;
+					if (pulls === 1) { due = new Promise((r) => setTimeout(r, 0)); c.enqueue(enc.encode('part1|')); }
+					else if (pulls === 2) { const until = Date.now() + 3; while (Date.now() < until) { /* the turn outlasts the timer */ } c.enqueue(enc.encode('part2|')); }
+					else return due.then(() => c.error(new Error('source failed')));
+				}
+			}), { headers: text });
+		}
 		if (p === '/endless-sync') {
 			// A source that always has the next 64 KB ready, 200 MB of it.
 			const block = new Uint8Array(64 * 1024).fill(104);
@@ -1006,7 +1031,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// later turn and let the first ones out. A stream that hands over each
 		// chunk through process.nextTick is still in the turn, where node on
 		// its own would have flushed the first chunks at the first tick.
-		for (const target of ['/fail-third', '/refuse-third', '/refuse-second-now', '/tick-fail-third', '/refuse-third-after/16000']) {
+		for (const target of ['/fail-third', '/refuse-third', '/refuse-second-now', '/tick-fail-third', '/refuse-third-after/16000', '/refuse-second-after/16000']) {
 			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
 			const { result, failures } = await withSsrFailures(() => exchange(
 				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
@@ -1027,6 +1052,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// byte differs by this runtime's longer header block.
 		for (const [target, sent] of [
 			['/refuse-third-after/16500', ['a'.repeat(16500), 'part2|']],
+			['/refuse-second-after/16500', ['a'.repeat(16500)]],
 			['/big-first-refuse-third', ['a'.repeat(20 * 1024), 'part2|']],
 			['/big-third-refuse-fourth', ['part1|', 'part2|', 'a'.repeat(20 * 1024)]]
 		]) {
@@ -1042,6 +1068,22 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 			expect(failures, target).toHaveLength(1);
 			expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the source was cancelled').toBe(true);
 		}
+	});
+
+	it('ends the turn of a request served behind an answered one before the next timers phase', async () => {
+		// Handed out from the line in the check phase, the stream's first
+		// writes are held; the failure comes from a timer already due, which
+		// the native tier runs in a later turn, so the bytes go out first.
+		const { result, failures } = await withSsrFailures(() => exchange(
+			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+			['GET /ok HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1', '', 'GET /timer-fail-third HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1']
+		));
+		expect(result.buffer).toContain('HTTP/1.1 200 OK\r\n');
+		expect(result.buffer, 'the stream\'s bytes before the failure').toContain('part1|');
+		expect(result.buffer).toContain('part2|');
+		expect(result.buffer.endsWith('0\r\n\r\n'), 'no terminal chunk').toBe(false);
+		expect(result.how).toBe('end');
+		expect(failures).toHaveLength(1);
 	});
 
 	it('stops pulling a source whose client is not reading, in the request\'s own turn too', async () => {

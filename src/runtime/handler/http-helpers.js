@@ -280,8 +280,9 @@ const TURN = Symbol('svelte-adapter-ws.turn');
 // hold itself.
 const TURN_CORK_BYTES = 16384;
 
-// Every response whose turn is open, with the socket its writes are held on.
-/** @type {Map<any, import('node:net').Socket | null>} */
+// Every response whose turn is open: the socket its writes are held on, and
+// for a request handed out from the line, the timer that ends the turn.
+/** @type {Map<any, { socket: import('node:net').Socket | null, timer: any }>} */
 const openTurns = new Map();
 
 /**
@@ -309,13 +310,17 @@ const openTurns = new Map();
  * handler writes in it is held until the turn ends, and a connection closed
  * in it drops those bytes. The socket is corked for the turn and uncorked
  * when the turn ends; inOwnTurn tells a writer which case it is in. The turn
- * ends when the next request is handed out on any connection, which on the
- * native tier is the next handler's own turn, or at the `setImmediate` that
- * follows the hand-out, which for a request handed out from the line is the
- * next loop iteration's: node offers no boundary between the check phase and
- * the next iteration. The hold also ends once the bytes it keeps pass the
- * native tier's cork buffer, see releaseTurnIfFull. node flushes a response
- * that ends in its turn at once, as a complete answer.
+ * ends when the next request or WebSocket message is handed to the
+ * application on any connection, which on the native tier is that handler's
+ * own turn, or at the `setImmediate` that follows the hand-out. A request
+ * handed out from the line in the check phase would keep its turn into the
+ * next iteration, so its turn also ends at a timer queued at the hand-out,
+ * which the next timers phase runs before any timer the handler queued
+ * after it; a callback of that iteration's poll phase that is not a hand-out
+ * (an upstream socket feeding a stream) is still inside the turn, since node
+ * offers no boundary there. The hold also ends once the bytes it keeps pass
+ * the native tier's cork buffer, see releaseTurnIfFull. node flushes a
+ * response that ends in its turn at once, as a complete answer.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
@@ -344,27 +349,44 @@ export function servePipelined(req, res, serve) {
  * @param {Line} line
  * @param {import('node:http').ServerResponse} res
  */
-function handOut(line, res) {
+/**
+ * @param {Line} line
+ * @param {import('node:http').ServerResponse} res
+ * @param {boolean} [fromLine] handed out by nextInLine, in the check phase
+ */
+function handOut(line, res, fromLine = false) {
 	line.ahead = res;
 	/** @type {any} */ (res)[LINE] = line;
 	res.on('finish', aheadFinished);
-	// Another handler's turn begins: every open one is over.
-	for (const open of openTurns.keys()) endTurn(open);
+	endOpenTurns();
 	/** @type {any} */ (res)[TURN] = true;
 	// A response queued behind one node is still writing has no socket yet;
 	// node holds its output itself until the one ahead has finished.
 	const socket = res.socket;
 	if (socket !== null) socket.cork();
-	openTurns.set(res, socket);
+	openTurns.set(res, { socket, timer: fromLine ? setTimer(endTurn, 1, res) : null });
 	setImmediateTimer(endTurn, res);
+}
+
+/**
+ * Another handler's turn begins: every open one is over. For the sites that
+ * hand work to the application outside the line, a WebSocket message or a
+ * handshake.
+ */
+export function endOpenTurns() {
+	if (openTurns.size === 0) return;
+	for (const open of openTurns.keys()) endTurn(open);
 }
 
 /** @param {any} res */
 function endTurn(res) {
 	if (res[TURN] !== true) return;
 	res[TURN] = false;
-	const socket = openTurns.get(res);
+	const open = openTurns.get(res);
 	openTurns.delete(res);
+	if (open === undefined) return;
+	if (open.timer !== null) clearTimer(open.timer);
+	const socket = open.socket;
 	if (socket != null && !socket.destroyed) {
 		while (socket.writableCorked > 0) socket.uncork();
 	}
@@ -391,7 +413,7 @@ export function inOwnTurn(res) {
  */
 export function releaseTurnIfFull(res) {
 	if (/** @type {any} */ (res)[TURN] !== true) return;
-	const socket = openTurns.get(res);
+	const socket = openTurns.get(res)?.socket;
 	if (socket != null && socket.writableLength >= TURN_CORK_BYTES) endTurn(res);
 }
 
@@ -426,7 +448,7 @@ function nextInLine(socket, line) {
 			return;
 		}
 		line.waiting.shift();
-		if (next.res !== null) handOut(line, next.res);
+		if (next.res !== null) handOut(line, next.res, true);
 		next.serve(next.req, next.res);
 		if (line.waiting.length > 0) nextInLine(socket, line);
 	});
