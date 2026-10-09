@@ -7,6 +7,7 @@ import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLengt
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
+import { inOwnTurn } from './http-helpers.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
@@ -194,12 +195,15 @@ function compressWhole(response, body, acceptEncoding) {
  * allows. The Response's own Content-Length never passes through. The whole
  * write is awaited, so a body that fails surfaces here as a throw.
  *
- * A source that fails mid-body (a rejecting `reader.read()`) leaves the loop
- * without `streamDone`, and the exchange is then closed abruptly rather than
- * ended: a clean EOF on a partial body would read as a successful but
- * truncated response, and a chunked answer is cut before its terminal chunk.
- * The failure is rethrown so the caller reports it; the close it caused is
- * marked as the server's, so that report is not mistaken for a client abort.
+ * A source that fails mid-body (a rejecting `reader.read()`), or a chunk that
+ * is not bytes, leaves the loop without `streamDone`, and the exchange is
+ * then closed abruptly rather than ended: a clean EOF on a partial body would
+ * read as a successful but truncated response. What the client keeps is what
+ * the native tier's close leaves it, see cut: nothing of an answer that fails
+ * in its request's own turn, and the bytes written before a later failure,
+ * the chunked answer cut before its terminal chunk. The failure is rethrown
+ * so the caller reports it; the close it caused is marked as the server's,
+ * so that report is not mistaken for a client abort.
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
@@ -265,47 +269,69 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		// end arrives.
 		const second = await reader.read();
 		if (state.aborted) return;
-		// The native tier writes the headers and these chunks as one batch, so
-		// a chunk it cannot send ends the connection with nothing written,
-		// where a failed read is still answered 500.
-		/** @type {Uint8Array} */
-		let firstBytes;
+		// The native tier writes the headers and these two chunks in one cork,
+		// so a chunk it cannot send fails after the headers and the chunk ahead
+		// of it were written: the client keeps nothing of them in the request's
+		// own turn, and in a later turn the headers and the first chunk. A read
+		// that fails is still answered 500.
 		/** @type {Uint8Array | null} */
-		let secondBytes = null;
+		let firstBytes;
 		try {
-			firstBytes = chunkBytes(first.value);
-			if (!second.done) secondBytes = chunkBytes(second.value);
+			firstBytes = writableBytes(first.value);
 		} catch (err) {
 			state.responseStarted = true;
 			state.closedByServer = true;
-			res.destroy();
+			cut(res);
 			throw err;
 		}
-		if (secondBytes === null) {
+		/** @type {Uint8Array | null} */
+		let secondBytes = null;
+		if (!second.done) {
+			try {
+				secondBytes = writableBytes(second.value);
+			} catch (err) {
+				// Written as the native tier had written them by then; cut decides
+				// what the client keeps of them.
+				writeHeaders(res, response, state, null, '', true);
+				if (firstBytes !== null) res.write(firstBytes);
+				else res.flushHeaders();
+				state.closedByServer = true;
+				cut(res);
+				throw err;
+			}
+		}
+		if (second.done) {
 			// A string chunk goes out as is: the family's native tier decides
 			// on the chunk's own byteLength, and a string has none.
-			const whole = compressWhole(response, firstBytes, typeof first.value === 'string' ? '' : acceptEncoding || '');
+			const whole = compressWhole(response, firstBytes ?? EMPTY, typeof first.value === 'string' ? '' : acceptEncoding || '');
 			writeHeaders(res, response, state, whole.body.byteLength, whole.encoding);
 			res.end(whole.body);
 			return;
 		}
 
 		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
-		// The first two chunks go out together, as the native tier writes them.
+		// The first two chunks go out together, as the native tier writes them
+		// in its one cork, and like it the writer reads on without asking
+		// either whether the socket drained.
 		writeHeaders(res, response, state, null, '', true);
 		streaming = true;
-		res.write(firstBytes);
-		let value = secondBytes;
+		if (firstBytes !== null) res.write(firstBytes);
+		if (secondBytes !== null) res.write(secondBytes);
 		for (;;) {
+			const read = await reader.read();
+			if (read.done) { streamDone = true; break; }
 			if (state.aborted) break;
-			if (!res.write(value)) {
+			const value = writableBytes(read.value);
+			if (value === null) continue;
+			// In the request's own turn the line holds every write corked, so
+			// a full buffer there is the cork, not the reader: the native tier
+			// hands its cork to the socket as it fills, and waits only on the
+			// socket.
+			if (!res.write(value) && !inOwnTurn(res)) {
 				const drained = await waitForDrain(res, 30000);
 				if (!drained) break;
 				if (state.aborted) break;
 			}
-			const read = await reader.read();
-			if (read.done) { streamDone = true; break; }
-			value = chunkBytes(read.value);
 		}
 	} finally {
 		if (streaming && !state.aborted) {
@@ -313,16 +339,49 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 				res.end();
 			} else {
 				state.closedByServer = true;
-				// node holds this tick's writes in its cork until the tick ends,
-				// so a close in the same tick would drop bytes already written;
-				// the client keeps every byte sent before the cut.
-				const socket = res.socket;
-				while (socket !== null && socket.writableCorked > 0) socket.uncork();
-				res.destroy();
+				cut(res);
 			}
 		}
 		reader.cancel().catch(() => {});
 	}
+}
+
+const EMPTY = new Uint8Array(0);
+
+/**
+ * A body chunk as the bytes to write, or null for one that writes nothing:
+ * the native tier writes nothing for `undefined`, and refuses every other
+ * value that is not a string, an ArrayBuffer or a view, see chunkBytes.
+ *
+ * @param {unknown} value
+ */
+function writableBytes(value) {
+	return value === undefined ? null : chunkBytes(value);
+}
+
+/**
+ * Close the connection under an answer that cannot go on: a source that
+ * failed, a chunk that is not bytes, a reader that did not drain in time.
+ * The native tier's close sends what it had handed to the socket and drops
+ * what its cork still holds. In the request's own turn the line holds every
+ * write corked, so the client gets nothing of the answer; in a later turn the
+ * bytes written before the failure go out first, and a chunked answer is cut
+ * before its terminal chunk. A response queued behind an answer node is still
+ * writing has no socket of its own yet, and the connection is closed under
+ * that answer, cut where it stands, as the native tier's close cuts it.
+ *
+ * @param {import('node:http').ServerResponse} res
+ */
+function cut(res) {
+	const socket = res.socket;
+	if (socket === null) {
+		res.req.socket.destroy();
+		return;
+	}
+	if (!inOwnTurn(res)) {
+		while (socket.writableCorked > 0) socket.uncork();
+	}
+	res.destroy();
 }
 
 /**

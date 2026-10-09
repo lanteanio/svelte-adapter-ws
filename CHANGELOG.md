@@ -87,10 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   however late its end comes, and a streamed page sends its first byte
   together with its second chunk - and an SSE stream its first event with
   its second. A source that fails on that second read is now answered `500`
-  with its request id, where it was a `200` cut after the first chunk; a
-  first or second chunk that is not a string or bytes ends the connection
-  with nothing written, as the native tier does, where it was answered
-  `500` or cut after the first chunk.
+  with its request id, where it was a `200` cut after the first chunk. A
+  chunk that is not a string or bytes, or a source that fails after the
+  writer has started, ends the connection with what the native tier's close
+  leaves the client: in the request's own turn - the handler and the ticks
+  and microtasks it queues, which the native tier holds in one cork - nothing,
+  not even the status line; in a later turn the bytes written before the
+  failure, so a refused second chunk leaves the headers and the first chunk,
+  and the chunked answer is cut before its terminal chunk. A first chunk
+  that is refused leaves nothing in either turn. A chunk of `undefined`
+  writes nothing, and a `SharedArrayBuffer` goes out as its bytes, as the
+  native tier sends them; both were refused before. A stream queued behind
+  an answer node is still writing is cut by closing the connection under
+  that answer, where it stands.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request
@@ -241,13 +250,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **An SSR stream that fails in the same tick as its last writes delivers
-  them before the cut.** A source that errors, or hands over a chunk that is
-  not bytes, right after chunks the writer had just written had its
-  connection closed while node still held those writes, so the client got
-  nothing at all, not even the status line. The bytes written before the
-  failure now go out first, and the chunked answer is cut before its
-  terminal chunk, as on the family's native tier.
+- **An SSR stream that fails in a later turn than its request's own, right
+  after its last writes, delivers them before the cut.** A source that
+  errors, or hands over a chunk that is not bytes, in the same tick as
+  chunks the writer had just written had its connection closed while node
+  still held those writes, so the client got nothing at all, not even the
+  status line, where the native tier had already sent them. The bytes
+  written before such a failure now go out first, and the chunked answer is
+  cut before its terminal chunk.
 - **Under `vite dev` over HTTPS the WebSocket, the auth endpoint and the
   dashboard accept a browser's requests.** Under `server.https` the plugin
   refused the browser's WebSocket, and over HTTP/2, which Vite 7.2 and later

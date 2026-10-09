@@ -43,10 +43,10 @@ export function declaresBodyPastCap(response, cap) {
 
 /**
  * A body chunk as bytes. A Response built on a stream the app wrote hands back
- * whatever was enqueued, and the family's native tier writes a string or an
- * ArrayBuffer as readily as a view, so both are taken here; anything else is
- * a body that cannot go on the wire, and the throw reaches the failure path
- * like a source that errored. Both readers of a response body take their
+ * whatever was enqueued, and the family's native tier writes a string, an
+ * ArrayBuffer or a SharedArrayBuffer as readily as a view, so all are taken
+ * here; anything else is a body that cannot go on the wire, and the throw
+ * reaches the failure path like a source that errored. Both readers of a response body take their
  * chunks through this: the writer, and the dedup leader below, which would
  * otherwise copy an ArrayBuffer or a string into its buffer as zeros.
  *
@@ -56,7 +56,7 @@ export function declaresBodyPastCap(response, cap) {
 export function chunkBytes(chunk) {
 	if (chunk instanceof Uint8Array) return chunk;
 	if (typeof chunk === 'string') return Buffer.from(chunk);
-	if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+	if (chunk instanceof ArrayBuffer || chunk instanceof SharedArrayBuffer) return new Uint8Array(chunk);
 	if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
 	throw new TypeError('A response body chunk must be a string, an ArrayBuffer or a typed array');
 }

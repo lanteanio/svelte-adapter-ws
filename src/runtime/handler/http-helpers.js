@@ -266,6 +266,10 @@ const LINE = Symbol('svelte-adapter-ws.pipeline');
 const FINISHED = Object.freeze({ writableEnded: true, _last: false });
 const FINISHED_CLOSING = Object.freeze({ writableEnded: true, _last: true });
 
+// On a response, true while the request it answers is in its own turn: the
+// handler and the ticks and microtasks it queued, see servePipelined.
+const TURN = Symbol('svelte-adapter-ws.turn');
+
 /**
  * @typedef {{ req: import('node:http').IncomingMessage | null, res: import('node:http').ServerResponse | null, serve: (req: any, res: any) => void }} Waiting
  * @typedef {{ ahead: any, waiting: Waiting[], serve: (req: any, res: any) => void, scheduled: boolean }} Line
@@ -286,6 +290,12 @@ const FINISHED_CLOSING = Object.freeze({ writableEnded: true, _last: true });
  *
  * A request held here or dropped is not handed to `serve`, so nothing counts
  * it: node never ends a response it queued when the connection goes.
+ *
+ * The turn a request is handed out in is the native tier's cork: what a
+ * handler writes in it leaves when the turn ends, and a connection closed in
+ * it drops those bytes. The socket is corked for the turn and uncorked by the
+ * `setImmediate` that ends it; inOwnTurn tells a writer which case it is in.
+ * node flushes a response that ends in its turn at once, as a complete answer.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
@@ -317,7 +327,33 @@ export function servePipelined(req, res, serve) {
 function handOut(line, res) {
 	line.ahead = res;
 	/** @type {any} */ (res)[LINE] = line;
+	/** @type {any} */ (res)[TURN] = true;
 	res.on('finish', aheadFinished);
+	// A response queued behind one node is still writing has no socket yet;
+	// node holds its output itself until the one ahead has finished.
+	const socket = res.socket;
+	if (socket !== null) socket.cork();
+	setImmediateTimer(turnEnded, res, socket);
+}
+
+/**
+ * @param {any} res
+ * @param {import('node:net').Socket | null} socket
+ */
+function turnEnded(res, socket) {
+	res[TURN] = false;
+	if (socket !== null && !socket.destroyed) socket.uncork();
+}
+
+/**
+ * Whether the request this response answers is still in its own turn, so
+ * the bytes written for it so far are held in the socket's cork and a close
+ * now drops them, as the native tier's does.
+ *
+ * @param {import('node:http').ServerResponse} res
+ */
+export function inOwnTurn(res) {
+	return /** @type {any} */ (res)[TURN] === true;
 }
 
 /** @this {any} */

@@ -595,9 +595,10 @@ HTTP/2 and the entire observability ecosystem
    duplicate-header policy (repeated singleton headers are refused, proxy
    identity headers keep their last line). Answers are framed by what the
    runtime writes, not by what the Response declares: a body that ends after
-   its first chunk carries its real length and one with a second chunk goes
-   out chunked, a HEAD takes the length the app declared, and a 204 or 304
-   carries only the length RFC 9110 8.6 allows. Health and readiness probes
+   its first chunk carries its real length, as does one the dedup leader read
+   whole under its cap, one that keeps coming goes out chunked, a HEAD takes
+   the length the app declared, and a 204 or 304 carries only the length
+   RFC 9110 8.6 allows. Health and readiness probes
    answering GET and HEAD, readiness-gated SSR warmup, `ADDRESS_HEADER`/`TRUSTED_PROXIES` client-IP
    resolution and a managed drain of in-flight requests are in. Each SSR
    and admin request's `request.signal` aborts when its client disconnects
