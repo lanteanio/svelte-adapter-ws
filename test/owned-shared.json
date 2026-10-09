@@ -1,198 +1,217 @@
 [
 	{
 		"file": ".gitattributes",
-		"reason": "this repository's own configuration"
+		"reason": "this repository's own configuration",
+		"lead": "72181fae9749453c7ae48c469551e52300c1d6f2"
 	},
 	{
 		"file": ".gitignore",
-		"reason": "this repository's own configuration"
+		"reason": "this repository's own configuration",
+		"lead": "d061d7c78c692f81e956f6418942ee2111f9b1b3"
 	},
 	{
 		"file": "CHANGELOG.md",
-		"reason": "this adapter's own documentation"
+		"reason": "this adapter's own documentation",
+		"lead": "3cef47ec7f9a6337b8e6dc9bd2fd0bcf08d5bc39"
 	},
 	{
 		"file": "README.md",
-		"reason": "this adapter's own documentation"
+		"reason": "this adapter's own documentation",
+		"lead": "67eb0ba373e1b37b6a9d865042b387b8d0cf6202"
 	},
 	{
 		"file": "docs/errors.md",
-		"reason": "this adapter's own documentation"
+		"reason": "this adapter's own documentation",
+		"lead": "e166f3b8da613298755860683621d9402f12e533"
 	},
 	{
 		"file": "package.json",
-		"reason": "this repository's own configuration"
+		"reason": "this repository's own configuration",
+		"lead": "29c9a3c53e0ae281010129abacdeae02f421fc2f"
 	},
 	{
 		"file": "scripts/check-determinism.js",
-		"reason": "this repository's own configuration"
-	},
-	{
-		"file": "scripts/check-types.js",
-		"reason": "this repository's own configuration"
+		"reason": "this repository's own configuration",
+		"lead": "65af5b32c54c67f3ac087d82c59c580490140503"
 	},
 	{
 		"file": "src/index.d.ts",
-		"reason": "declares the surface this runtime ships, spelled as the lead spells it"
+		"reason": "declares the surface this runtime ships, spelled as the lead spells it",
+		"lead": "ad367e40b4e79015cab5201585c3314d37fdd950"
 	},
 	{
 		"file": "src/index.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "f4decfe8b885d124534ac2f2e747a930effa9025"
 	},
 	{
 		"file": "src/runtime/_init.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "312337bc6a5a9d063a2aa0d107c8065949d32761"
 	},
 	{
 		"file": "src/runtime/error-registry.js",
-		"reason": "the lead's registry with the ids this runtime raises"
+		"reason": "the lead's registry with the ids this runtime raises",
+		"lead": "92c32d388d1e2814bfad6e2ad88bda65ac67cda1"
 	},
 	{
 		"file": "src/runtime/handler.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "a47358638aff8fa96ed7b61956aac8ddad69121d"
 	},
 	{
 		"file": "src/runtime/handler/admin.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "23f5be749bb1864c4592772b88ea0b575ae570ac"
 	},
 	{
 		"file": "src/runtime/handler/config.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "226c2b504fc1e639499e454092d6534bbfd3e93e"
 	},
 	{
 		"file": "src/runtime/handler/http-helpers.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "f25e03ef7198d18e14368656457f81762583a69a"
 	},
 	{
 		"file": "src/runtime/handler/lifecycle.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "7bc23cf94366ab9875105c27541a5740142bdc05"
 	},
 	{
 		"file": "src/runtime/handler/platform.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "4fc17cf8ab90e2f49694ff22dfab407af566f669"
 	},
 	{
 		"file": "src/runtime/handler/relay.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "57b8079eac2270bd3ae704e6505af40a21149667"
 	},
 	{
 		"file": "src/runtime/handler/request.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "ebc116a54bcc44e2c6fecb08a371a237b1f06a8e"
 	},
 	{
 		"file": "src/runtime/handler/seq-bound.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "463b6004cb937ade57f88a288ec994aab1391b78"
 	},
 	{
 		"file": "src/runtime/handler/ssr-dedup.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "beb77744049f1536eeba8a22ba3fc8090f983044"
 	},
 	{
 		"file": "src/runtime/handler/ssr.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "737eb8c74cfe98bf0fd996df4796212d081071c3"
 	},
 	{
 		"file": "src/runtime/handler/state.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "30c30476adaa4448c3de869a3fe6e7c8d581b661"
 	},
 	{
 		"file": "src/runtime/handler/static-assets.js",
-		"reason": "implements the lead's module on node:http"
-	},
-	{
-		"file": "src/runtime/handler/warmup.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "1b45e52fc015cef8fa82fc00600227045e60d37b"
 	},
 	{
 		"file": "src/runtime/index.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "0a7f56daa7e600d19308aba0d36a4db54e67099c"
 	},
 	{
 		"file": "src/runtime/relay-ring.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "f3a011a00f1da2461a7106a55ff851919a2d6d40"
 	},
 	{
 		"file": "src/runtime/sim-inmemory.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "53515a922e5e9d14d96bfc73f836ac5cd75eee93"
 	},
 	{
 		"file": "src/runtime/utils.js",
-		"reason": "the lead's barrel plus the subscribe-policy, dot-path and seq-bound modules this runtime keeps under utils/"
+		"reason": "the lead's barrel plus the subscribe-policy, dot-path and seq-bound modules this runtime keeps under utils/",
+		"lead": "c6ab617069ddd127ce8dd31713c07a4466f0d2fe"
 	},
 	{
 		"file": "src/runtime/utils/request-headers.js",
-		"reason": "implements the lead's module on node:http"
-	},
-	{
-		"file": "src/runtime/utils/request-id.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "a7cbee1b5db7b90419aefa6249843acd535a2267"
 	},
 	{
 		"file": "src/runtime/utils/tls-reload.js",
-		"reason": "implements the lead's module on node:http"
-	},
-	{
-		"file": "src/runtime/utils/trusted-proxies.js",
-		"reason": "implements the lead's module on node:http"
-	},
-	{
-		"file": "src/runtime/utils/ws-symbols.js",
-		"reason": "implements the lead's module on node:http"
-	},
-	{
-		"file": "src/runtime/worker-watchdog.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "the lead's module plus a guard around the caller's onError, proposed to the lead as RT-1633; takes the lead's spelling once it ships",
+		"lead": "8e36be9c58081c334d2d6a5bfb7b80ddfa061bf1"
 	},
 	{
 		"file": "src/testing.js",
-		"reason": "implements the lead's module on node:http"
+		"reason": "implements the lead's module on node:http",
+		"lead": "b1ea861e404e9905f1204a714d1dd6381801454e"
 	},
 	{
 		"file": "test/close-path-ordering.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "9da742d00b38beeccebc951a54e2574050adbc9f"
 	},
 	{
 		"file": "test/cluster-sequence-policy.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "5391cc157628a660b1efc9b214c04963cb22499e"
 	},
 	{
 		"file": "test/platform-parity.test.js",
-		"reason": "the parity gate itself; holds protocol.schema.json byte-equal"
+		"reason": "the parity gate itself; holds protocol.schema.json byte-equal",
+		"lead": "012f68c401b5b0e019e4ca6f4df4516899782f06"
 	},
 	{
 		"file": "test/recover-ref-contract.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "8a74c58aa343d3eb37b8fdbafada8711295b83d2"
 	},
 	{
 		"file": "test/relay-ring.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "10863b9542f1d1d5c107d3baab35499b700d8561"
 	},
 	{
 		"file": "test/tls-reload.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "dd0b428e3c2bd0b3ef49112b797ebf2d35f3daec"
 	},
 	{
 		"file": "test/trusted-proxies.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "9a18f50c2654a06367fe659a524316d14be77f00"
 	},
 	{
 		"file": "test/upgrade-admission-deferred.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "12bedc2d79abbae5a4b1fe2d20b0355c90424ff1"
 	},
 	{
 		"file": "test/upgrade-admission-wiring.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "ae91129f273c7725759fad337353b9e9d9932c9e"
 	},
 	{
 		"file": "test/upgrade-waiting-room.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "1fa111d70cf4b080de32c5d3b23e8c88722e13d6"
 	},
 	{
 		"file": "test/wire-value.test.js",
-		"reason": "this runtime's own test of the module it implements"
+		"reason": "this runtime's own test of the module it implements",
+		"lead": "243b0df52b4150280097da9059b9436c9476903f"
 	},
 	{
 		"file": "vitest.config.js",
-		"reason": "this repository's own configuration"
+		"reason": "this repository's own configuration",
+		"lead": "f128512d03bb7a02976b3da96e8397371ef6a6b6"
 	}
 ]

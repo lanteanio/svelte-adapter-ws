@@ -100,22 +100,34 @@ describe('vendored files stay byte-identical to the lead', () => {
 		// listed somewhere, so a lead change to it passes a pin move unseen:
 		// every such file is in the manifest, held byte-equal by another gate
 		// (protocol.schema.json, in test/platform-parity.test.js), or named in
-		// test/owned-shared.json with the reason this runtime keeps its own.
-		// An owned file that equals the lead's is vendored instead, and a
-		// manifest entry dropped by mistake leaves its file unlisted.
+		// test/owned-shared.json with the reason this runtime keeps its own and
+		// the lead blob it was reconciled against, so a pin move lists exactly
+		// the owned files the lead has changed since. An owned file that equals
+		// the lead's is vendored instead, and a manifest entry dropped by
+		// mistake leaves its file unlisted.
 		const heldElsewhere = new Set(['protocol.schema.json']);
 		const listed = (/** @type {string} */ cwd, /** @type {string[]} */ args) => execFileSync('git', ['-C', cwd, ...args], { maxBuffer: 64 * 1024 * 1024 })
 			.toString('utf8').split('\0').filter(Boolean);
-		const leadTree = new Set(listed(uwsRoot, ['ls-tree', '-r', '-z', '--name-only', LEAD.rev]));
+		/** @type {Map<string, string>} path -> blob at the pin */
+		const leadTree = new Map(listed(uwsRoot, ['ls-tree', '-r', '-z', LEAD.rev]).map((line) => {
+			const [meta, file] = line.split('\t');
+			return [file, meta.split(' ')[2]];
+		}));
 		const tracked = listed(repoRoot, ['ls-files', '-z']);
 		const shared = tracked.filter((file) => leadTree.has(file));
 		const held = new Set(VENDORED.map((entry) => entry.file));
-		/** @type {Array<{ file: string, reason: string }>} */
+		expect(VENDORED.length, 'no manifest entry twice').toBe(held.size);
+		/** @type {Array<{ file: string, reason: string, lead: string }>} */
 		const owned = JSON.parse(readFileSync(path.join(repoRoot, 'test', 'owned-shared.json'), 'utf8'));
 		const ownedFiles = new Set(owned.map((entry) => entry.file));
-		expect(owned.filter((entry) => typeof entry.reason !== 'string' || entry.reason === ''), 'every owned file names its reason').toEqual([]);
+		expect(owned.length, 'no owned entry twice').toBe(ownedFiles.size);
+		expect(owned.filter((entry) => typeof entry.reason !== 'string' || entry.reason.trim() === ''), 'every owned file names its reason').toEqual([]);
 		expect(owned.map((entry) => entry.file).filter((file) => held.has(file) || heldElsewhere.has(file)), 'owned and vendored at once').toEqual([]);
 		expect(owned.map((entry) => entry.file).filter((file) => !leadTree.has(file) || !tracked.includes(file)), 'owned entries the lead or this repo no longer has').toEqual([]);
+		expect(
+			owned.filter((entry) => leadTree.get(entry.file) !== entry.lead).map((entry) => entry.file),
+			'owned files the lead has changed since they were reconciled: read the lead\'s change, carry what applies, then record the blob at the pin'
+		).toEqual([]);
 		const unlisted = shared.filter((file) => !held.has(file) && !heldElsewhere.has(file) && !ownedFiles.has(file));
 		expect(shared.length, 'shared files were found to account for').toBeGreaterThan(0);
 		expect(unlisted, 'add these to test/vendored-manifest.json, or to test/owned-shared.json with a reason').toEqual([]);

@@ -24,6 +24,22 @@
 //     timeout so a slow-but-healthy warmup whose sync stretches exceed the tight
 //     steady timeout is not false-killed; `bootTimeoutMs <= 0` disables it (a wedged
 //     boot then stays stranded, the pre-fix behavior).
+//   - ATTACH: a worker that reported ready and never reported its relay reader live.
+//     Ready is posted as soon as `start()` resolves; the worker then drains its boot
+//     backlog, starts the relay lanes and posts `relay-attached`, all synchronously,
+//     so a healthy worker attaches in the same tick it goes ready. The primary hands
+//     an unattached worker no relay frames at all, which is what keeps a slow boot out
+//     of the spill ceiling's reach - and that is also why nothing else notices when
+//     the attach never arrives: no frames are written, so no spill accumulates, and
+//     the worker keeps acking heartbeats while silently missing every cross-worker
+//     publish its own subscribers are owed. The post is a `postMessage` inside a
+//     swallowing try/catch, so a failed post leaves exactly that state. Judged against
+//     the steady timeout rather than a knob of its own: the healthy gap is one tick,
+//     so any bound is generous, and this is an internal invariant rather than a
+//     statement about how long a boot may take. Deliberately NOT tied to
+//     `bootTimeoutMs` - an operator who disables the boot deadline is saying an init
+//     may take arbitrarily long, not that a serving worker may miss relay traffic
+//     forever.
 
 /**
  * @typedef {{ ready: boolean, lastHeartbeat: number, spawnedAt: number, readyAt?: number, relayAttached?: boolean }} HealthMeta
@@ -41,18 +57,10 @@ export function classifyWorkerHealth(meta, now, { steadyTimeoutMs, bootTimeoutMs
 		if (now - meta.lastHeartbeat > steadyTimeoutMs) {
 			return { escalate: true, regime: 'steady', reason: `unresponsive (no heartbeat ack in ${steadyTimeoutMs}ms)` };
 		}
-		// ATTACH: a worker that reported ready and never reported its relay
-		// reader live. The primary hands an unattached worker no relay frames at
-		// all, so no spill accumulates and it keeps acking heartbeats while
-		// silently missing every cross-worker publish its subscribers are owed.
-		// A healthy worker posts ready and relay-attached in the same tick, so
-		// the steady timeout is a generous bound and needs no knob of its own -
-		// and it is deliberately NOT tied to the boot deadline: an operator who
-		// disables that is saying an init may take arbitrarily long, not that a
-		// serving worker may miss relay traffic forever.
 		// `=== false` rather than `!meta.relayAttached`, and an explicit `readyAt`
-		// reading: a caller whose meta does not carry these fields is not making
-		// a claim about attachment and must not be judged on one.
+		// reading rather than a truthiness test: a caller whose meta does not carry
+		// these fields is not making a claim about attachment and must not be judged
+		// on one. That absent-field shape is a real caller, not a hypothetical.
 		const readyAt = meta.readyAt ?? 0;
 		if (meta.relayAttached === false && readyAt > 0 && now - readyAt > steadyTimeoutMs) {
 			return {

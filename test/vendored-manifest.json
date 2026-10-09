@@ -58,6 +58,15 @@
 		"file": "scripts/check-tracked-imports.js"
 	},
 	{
+		"file": "scripts/check-types.js",
+		"adaptations": [
+			{
+				"lead": " * is required, so it runs anywhere `node` does. Run via `npm run check`; wired\n * into `pretest` so the unit run enforces it.\n",
+				"ours": " * is required, so it runs anywhere `node` does. Run via `npm run check:types`; the\n * export-parity suite runs it too, so the unit run enforces it.\n"
+			}
+		]
+	},
+	{
 		"file": "scripts/sim-git-commit.js"
 	},
 	{
@@ -591,7 +600,26 @@
 		"file": "src/runtime/handler/shared-wire-id.js"
 	},
 	{
-		"file": "src/runtime/handler/warmup-registry.js"
+		"file": "src/runtime/handler/warmup-registry.js",
+		"adaptations": [
+			{
+				"lead": "// isWarmupRequest to expose it to app hooks; warmup.js writes it. Keeping the\n// WeakSet here - a dependency-free leaf both import - is deliberate: platform.js\n// sits inside the sealed byte-copy authority graph, so importing the whole\n// warmup module (with its render engine and timers) into that graph would churn\n// the graph's syntax seal on every unrelated warmup edit. This module never\n// touches a byte and effectively never changes.\n",
+				"ours": "// isWarmupRequest to expose it to app hooks; warmup.js writes it. This module\n// never touches a byte and effectively never changes.\n"
+			}
+		]
+	},
+	{
+		"file": "src/runtime/handler/warmup.js",
+		"adaptations": [
+			{
+				"lead": "// A cold SvelteKit SSR render costs about twenty times a warm one (measured:\n// ~20 ms versus ~1 ms on the default fixture, the whole penalty attributable\n// to the render path warming up, not to HTTP or connection setup). A load\n// balancer will not route until the readiness probe reports ready, so a warmup\n// pass run DURING the `starting` window - after the init hook, before the flip\n// to `ready` - guarantees the render path is warm before the first real client\n// is ever routed in. A bare boot-time request burst cannot make that guarantee:\n// it races the balancer.\n",
+				"ours": "// A cold SvelteKit SSR render costs about twenty times a warm one, the whole\n// penalty attributable to the render path warming up, not to HTTP or\n// connection setup. A load balancer will not route until the readiness probe\n// reports ready, so a warmup pass run DURING the `starting` window - before\n// the flip to `ready` - guarantees the render path is warm before the first\n// real client is ever routed in. A bare boot-time request burst cannot make\n// that guarantee: it races the balancer.\n"
+			},
+			{
+				"lead": "// Only the SSR lane is warmed, because only it was measured to pay - a cold\n// static or health route already answers at warm latency, and the first\n// envelope build after boot costs about 70 microseconds once (0.3 warm),\n// against the tens of milliseconds of a cold render.\n",
+				"ours": "// Only the SSR lane is warmed, because only it pays a cold-start penalty - a\n// cold static or health route already answers at warm latency.\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/handler/wire-fanout.js"
@@ -812,6 +840,31 @@
 		"file": "src/runtime/utils/rate-limiter.js"
 	},
 	{
+		"file": "src/runtime/utils/request-id.js",
+		"adaptations": [
+			{
+				"lead": " * The string key the request id used to cross `res.upgrade()` on. Nothing is\n",
+				"ours": " * The string key the request id used to cross the upgrade on. Nothing is\n"
+			},
+			{
+				"lead": "export const WS_REQUEST_ID_KEY = '__adapter_uws_request_id__';\n",
+				"ours": "export const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';\n"
+			},
+			{
+				"lead": " * Keys the runtime carries per-connection values under from `res.upgrade()` to\n * `open`.\n",
+				"ours": " * Keys a per-connection value is carried under from the upgrade to `open`.\n"
+			},
+			{
+				"lead": " * `res.upgrade()` does not hand its argument through: uWS builds its own\n * userData object and copies the enumerable own properties across with plain\n * assignments, string and Symbol keys alike, so an accessor for a carried key\n * on Object.prototype would take the value and the far side would never see\n * it. A Symbol created here has no name any other code can reach, so no such\n * accessor can exist; `open` promotes each value and deletes the slot before\n * any hook runs.\n",
+				"ours": " * A carrier that copies the upgrade userData onto the object `open` receives\n * with plain assignments - as the native tier's `res.upgrade()` does, string\n * and Symbol keys alike - hands a carried string key to any accessor for it on\n * Object.prototype, and the far side never sees the value. A Symbol created\n * here has no name any other code can reach, so no such accessor can exist;\n * `open` promotes each value and deletes the slot before any hook runs.\n"
+			},
+			{
+				"lead": " * printable ASCII range (0x21-0x7e). Callers fall back to `randomUUID()`\n",
+				"ours": " * printable ASCII range (0x21-0x7e). Callers fall back to a random UUID\n"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/utils/request-target.js",
 		"adaptations": [
 			{
@@ -837,6 +890,39 @@
 	},
 	{
 		"file": "src/runtime/utils/topic.js"
+	},
+	{
+		"file": "src/runtime/utils/trusted-proxies.js",
+		"adaptations": [
+			{
+				"lead": " * `ADDRESS_HEADER` (and the PROXY-protocol address) name the *claimed* client\n * address; whether that claim is believable depends on who the direct socket\n * peer is. `TRUSTED_PROXIES` is the opt-in allowlist of peers (IPs or CIDRs)\n * whose claims are honored. When it is unset, header trust is unconditional\n * (the historical behavior); when set, a claim arriving from a peer outside\n * the list is ignored and the socket address is used instead, so a client\n * that can reach the listener directly cannot spoof its rate-limit identity\n * or `getClientAddress()`.\n",
+				"ours": " * `ADDRESS_HEADER` names the *claimed* client address; whether that claim is\n * believable depends on who the direct socket peer is. `TRUSTED_PROXIES` is\n * the opt-in allowlist of peers (IPs or CIDRs) whose claims are honored. When\n * it is unset, header trust is unconditional (the historical behavior); when\n * set, a claim arriving from a peer outside the list is ignored and the\n * socket address is used instead, so a client that can reach the listener\n * directly cannot spoof its rate-limit identity or `getClientAddress()`.\n"
+			},
+			{
+				"lead": " * This module is pure (no env, no uWS import) so it is unit-testable;\n",
+				"ours": " * This module is pure (no env, no server import) so it is unit-testable;\n"
+			},
+			{
+				"lead": " * the entry's lifetime - measured, 10,000 entries retained ~40 MB per worker\n * instead of the ~2 MB the entry cap implies, with the documented 128-character\n * key bound doing nothing about it because the bound counts characters and the\n * cost is in the parent.\n *\n * Concatenating and re-slicing forces a fresh, compact backing string, so what\n * survives is the address and nothing else. Only reached on the configured\n * address-header path; the default `getRemoteAddressAsText()` value is already\n * a standalone string and pays none of this.\n",
+				"ours": " * the entry's lifetime. Concatenating and re-slicing forces a fresh, compact\n * backing string, so what survives is the address and nothing else.\n"
+			},
+			{
+				"lead": " * The returned function keeps the historical contract: it returns a usable\n * address string on ANY input so rate limiting and userData injection never\n * receive undefined. `rawIp` is the effective transport address (the\n * PROXY-protocol address when that is configured and trusted, else the\n * socket peer); `directIp` is always the socket peer - header trust is\n * decided on who actually connected, never on a forwarded claim.\n",
+				"ours": " * The returned function keeps the family contract: it returns a usable\n * address string on ANY input so rate limiting and connection tagging never\n * receive undefined. `rawIp` is the effective transport address; `directIp`\n * is always the socket peer - header trust is decided on who actually\n * connected, never on a forwarded claim.\n"
+			},
+			{
+				"lead": "\t\t\t//\n\t\t\t// This branch used to answer `rawIp` for anything over the bound, which\n\t\t\t// is the behaviour the comment below this block argues is unacceptable\n\t\t\t// for the other headers: it merges every client behind one proxy into a\n\t\t\t// single rate-limit identity, and a client that can pad the header can\n\t\t\t// therefore force that merge on demand.\n\t\t\t//\n\t\t\t// The tail is the part to keep. Every hop APPENDS to X-Forwarded-For, so\n\t\t\t// the rightmost addresses are the ones infrastructure added and the\n\t\t\t// leftmost is the only region a client controls - which is also why\n\t\t\t// `xffDepth` counts from the right. Cutting the head keeps exactly the\n\t\t\t// addresses the depth selects while bounding the work, where cutting the\n\t\t\t// tail would throw away the only trustworthy end.\n",
+				"ours": "\t\t\t// Every hop APPENDS to X-Forwarded-For, so the rightmost addresses\n\t\t\t// are the ones infrastructure added and the leftmost is the only\n\t\t\t// region a client controls - which is also why `xffDepth` counts\n\t\t\t// from the right. Cutting the head keeps exactly the addresses the\n\t\t\t// depth selects while bounding the work; cutting the tail would\n\t\t\t// throw away the only trustworthy end. Falling back to the socket\n\t\t\t// address instead would merge every client behind one proxy into a\n\t\t\t// single rate-limit identity, on demand for any client that can\n\t\t\t// pad the header.\n"
+			},
+			{
+				"lead": "\t\t\t// A DEPTH OVERFLOW still answers the socket peer, and that is not the\n\t\t\t// merge the paragraph above removes.\n\t\t\t//\n\t\t\t// The route into this branch that ordinary infrastructure could take is\n\t\t\t// gone. A proxy emitting one X-Forwarded-For LINE per hop used to arrive\n\t\t\t// with a single address, because header collection kept the last line\n\t\t\t// and dropped the rest, so a correctly configured two-hop deployment\n\t\t\t// landed here and merged. Collection joins repeated lines now, and the\n\t\t\t// depth finds the hops it was configured for.\n\t\t\t//\n\t\t\t// What is left is a chain SHORTER than the configured hop count, which a\n\t\t\t// client cannot manufacture - every hop only appends. Either the request\n\t\t\t// did not traverse the configured chain (it reached the origin directly,\n\t\t\t// or through a hop that does not append), in which case the socket peer\n\t\t\t// IS the client and nothing is merged; or the configured depth names\n\t\t\t// more hops than exist. The only alternative for that second case is the\n\t\t\t// leftmost surviving address, and that one is client-authored by\n\t\t\t// construction - the first hop appends to whatever the client sent - so\n\t\t\t// it would let any client choose its own rate-limit identity, a victim's\n\t\t\t// included. An accidental merge under a misconfiguration is the smaller\n\t\t\t// harm than a targeted one available on demand.\n",
+				"ours": "\t\t\t// A chain SHORTER than the configured hop count answers the socket\n\t\t\t// peer: either the request did not traverse the configured chain\n\t\t\t// (the socket peer IS the client), or the depth names more hops\n\t\t\t// than exist - and the only alternative, the leftmost surviving\n\t\t\t// address, is client-authored by construction, which would let any\n\t\t\t// client choose its own rate-limit identity.\n"
+			},
+			{
+				"lead": "\t\t// THIS BRANCH REQUIRES A SINGLE HEADER LINE, and gets one. Every\n\t\t// configured address header EXCEPT the literal `x-forwarded-for` reaches\n\t\t// here - including names that chain by grammar, such as `forwarded`,\n\t\t// `via` and `x-original-forwarded-for` - and header collection puts\n\t\t// exactly those in the last-line-wins class rather than joining their\n\t\t// repeats (utils/request-headers.js keys that class off the configured\n\t\t// name, not off the grammar). Widening the comparison above therefore\n\t\t// requires widening RESOLVER_CHAIN_HEADER in the same change, or this\n\t\t// branch starts receiving joined values again. The requirement is not\n\t\t// cosmetic. A proxy that APPENDS\n\t\t// rather than overwrites arrives as two lines, and a joined\n\t\t// \"<client's 130 bytes of padding>, 203.0.113.5\" is both over the bound\n\t\t// below and leading-truncated - so the resolved address, the rate-limit\n\t\t// key and `getClientAddress()` would all be entirely client-authored,\n\t\t// which is the opposite of what naming a trusted proxy header is for.\n\t\t// A collector that ever comma-joins a configured ADDRESS_HEADER hands\n\t\t// this branch that value.\n\t\t//\n\t\t// TRUNCATE an over-long value; do NOT fall back to the socket address.\n\t\t//\n\t\t// Nothing bounded the non-XFF headers (`x-real-ip`, `cf-connecting-ip`,\n\t\t// `true-client-ip`, ...), so a client could name itself with kilobytes\n\t\t// and have that string become a rate-limit identity. But answering\n\t\t// `rawIp` for anything over the bound MERGES every client behind one\n\t\t// proxy into a single identity, and some of these headers legitimately\n\t\t// CHAIN: `x-original-forwarded-for` (ingress-nginx, the GCP external LB)\n\t\t// and RFC 7239 `Forwarded` carry every hop, so three IPv6 hops already\n\t\t// reach ~121 characters. Measured, thirty distinct clients behind such a\n\t\t// header collapsed to one bucket and two thirds of their upgrades were\n\t\t// refused. The limiter states the rule this broke: merging distinct\n\t\t// clients is a far worse error than failing to merge one client's\n\t\t// addresses.\n\t\t//\n\t\t// Truncation keeps the LEADING address, which is the client's, so\n\t\t// distinct clients stay distinct while the stored value stays bounded.\n\t\t// Only this branch detaches, and only when it slices: below the bound\n\t\t// the header value is already a standalone string from the uWS binding\n\t\t// (`request.js` builds it per key), so detaching it there would copy for\n\t\t// no reason on every single request.\n",
+				"ours": "\t\t// THIS BRANCH REQUIRES A SINGLE HEADER LINE, and header collection\n\t\t// guarantees one: every configured address header except the literal\n\t\t// `x-forwarded-for` is placed in the last-line-wins class (see\n\t\t// utils/request-headers.js, RESOLVER_CHAIN_HEADER). TRUNCATE an\n\t\t// over-long value keeping the LEADING address - the proxy's for a\n\t\t// single line - rather than falling back to the socket address, which\n\t\t// would merge every client behind one proxy into a single identity.\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/unsubscribe-hook.js"
@@ -869,6 +955,43 @@
 		"file": "src/runtime/utils/ws-handshake.js"
 	},
 	{
+		"file": "src/runtime/utils/ws-symbols.js",
+		"adaptations": [
+			{
+				"lead": "// (and downstream consumers like svelte-adapter-ws-extensions/redis/registry)\n",
+				"ours": "// (and downstream consumers like svelte-adapter-uws-extensions/redis/registry)\n"
+			},
+			{
+				"lead": " * The slot is one `Symbol.for` on globalThis, so every copy of this module in\n * the worker addresses the same sink - which is the point, and also the hazard:\n * an install REPLACES whatever was there, and nothing about that is visible.\n * Two copies of the handler in one worker each register their own counter at\n * module scope, the second silently takes every delta, and from then on one\n * counter is frozen while the other receives releases for memberships it never\n * charged. That reads downstream as a subscription total drifting under its\n * summed bookkeeping on one side and going negative on the other, with nothing\n * naming the cause. So the install says whether it displaced a DIFFERENT sink,\n * and the caller decides what that is worth reporting.\n *\n",
+				"ours": ""
+			},
+			{
+				"lead": " * @returns {boolean} true when this replaced a different, already-installed sink\n",
+				"ours": ""
+			},
+			{
+				"lead": "export function setSubscriptionAccountingHook(onChange) {\n\tconst next = typeof onChange === 'function' ? onChange : null;\n",
+				"ours": "export function setSubscriptionAccountingHook(onChange) {\n\t// The slot is one `Symbol.for` on globalThis, so every copy of this module\n\t// in the worker addresses the same sink - which is the point, and also the\n\t// hazard: an install REPLACES whatever was there, and nothing about that is\n\t// visible. So the install says whether it displaced a DIFFERENT sink, and\n\t// the caller decides what that is worth reporting. Only a function\n\t// displacing a different function is a takeover: clearing to null is how a\n\t// test releases the slot, and re-installing the same function is idempotent.\n\tconst next = typeof onChange === 'function' ? onChange : null;\n"
+			},
+			{
+				"lead": "\t// Only a function displacing a DIFFERENT function is a takeover. Clearing to\n\t// null is how a test releases the slot, and re-installing the same function\n\t// is idempotent.\n",
+				"ours": ""
+			},
+			{
+				"lead": "\t// Defined, not assigned, so an accessor on the key cannot take the hook and\n\t// leave every subscribe unaccounted while the installer reports success.\n",
+				"ours": ""
+			},
+			{
+				"lead": " * own property. The userData object uWS hands to `open` inherits from\n * `uWS.WebSocket.prototype`, whose chain reaches `Object.prototype`, so an\n * application that puts an accessor on one of these keys silences the write.\n",
+				"ours": " * own property. The userData object is whatever the app's upgrade hook\n * returned - a plain object whose chain reaches `Object.prototype`, or any\n * class instance the app chose - so an application that puts an accessor on\n * one of these keys silences the write.\n"
+			},
+			{
+				"lead": " * assignment and pays nothing. The declaration cannot ride the upgrade object\n * instead - uWS copies that object into its own with `[[Set]]`, so a slot\n * declared there is intercepted on the way across and arrives absent.\n",
+				"ours": " * assignment and pays nothing.\n"
+			}
+		]
+	},
+	{
 		"file": "src/runtime/version-info.js",
 		"adaptations": [
 			{
@@ -898,6 +1021,9 @@
 				"ours": " * Both pairs are pinned in test/lease-grant.test.js, which drives the SHIPPED\n * sizer against these thresholds rather than restating either. A change to a\n * producer's basis or to a threshold below must move with them.\n"
 			}
 		]
+	},
+	{
+		"file": "src/runtime/worker-watchdog.js"
 	},
 	{
 		"file": "src/runtime/ws-handler-bridge.js"
