@@ -288,9 +288,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			ready.push(chunkBytes(second.value));
 			pendingRead = null;
 		}
-		// node frames this answer chunked unless the request is HTTP/1.0
-		// without `TE: chunked`, which it answers close-delimited instead.
-		writeHeaders(res, response, state, null, '', res.useChunkedEncodingByDefault);
+		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
+		writeHeaders(res, response, state, null, '', true);
 		streaming = true;
 		for (;;) {
 			let value;

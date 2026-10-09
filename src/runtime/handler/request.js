@@ -1,14 +1,14 @@
 // The main request handler: the routing spine every HTTP exchange walks.
 // Order is load-bearing and mirrors the family contract:
-//   health/readiness -> static fast path -> platform hardening -> method gate
-//   -> prerendered lookup -> header policy -> SSR catch-all.
+//   HTTP version -> health/readiness -> static fast path -> platform hardening
+//   -> method gate -> prerendered lookup -> header policy -> SSR catch-all.
 
 // Substituted by the adapter's build step; free identifiers until then.
 /* global HEALTH_CHECK_PATH */
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500 } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, send400, send405, send500, send505, speaksHttp11 } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -105,6 +105,14 @@ export function handleRequest(req, res) {
 			metricsHook(req.method || '', res.statusCode, state.aborted, (monotonicNow() - startedAt) / 1000);
 		}
 	});
+
+	// Any version but HTTP/1.1 is refused 505 ahead of everything else, the
+	// framing check included, and the connection ends with it, as on the
+	// family's native tier. Every lane below therefore answers HTTP/1.1 only.
+	if (!speaksHttp11(req)) {
+		send505(res);
+		return;
+	}
 
 	// A Transfer-Encoding naming anything but chunked is refused ahead of every
 	// lane, the probes and the realtime routes included. The lanes that answer

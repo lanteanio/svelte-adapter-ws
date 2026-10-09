@@ -782,38 +782,17 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(readChunked(raw, '200')).toBe('one|two');
 	});
 
-	it('drops that Trailer for an HTTP/1.0 request, which node answers close-delimited', async () => {
-		const first = splitFirst(await pipeline(open.rt.port, [['GET /trailer-stream HTTP/1.0', 'Cookie: s=1']]));
-		expect(first.status).toContain('200');
-		expect(header(first.lines, 'trailer')).toEqual([]);
-		expect(header(first.lines, 'transfer-encoding')).toEqual([]);
-		expect(header(first.lines, 'content-length')).toEqual([]);
-		expect(first.rest).toBe('one|two');
-	});
-
-	it('keeps it for an HTTP/1.0 request that accepts chunked', async () => {
-		const first = splitFirst(await pipeline(open.rt.port, [['GET /trailer-stream HTTP/1.0', 'Cookie: s=1', 'TE: chunked']]));
-		expect(first.status).toContain('200');
-		expect(header(first.lines, 'trailer')).toEqual(['x-foo']);
-		expect(header(first.lines, 'transfer-encoding')).toEqual(['chunked']);
-		expect(first.rest).toBe('4\r\none|\r\n3\r\ntwo\r\n0\r\n\r\n');
-	});
-
 	it('cuts a chunked body that failed mid-stream before its terminal chunk', async () => {
-		const ask = (/** @type {string} */ version, /** @type {string[]} */ extra = []) => exchange(
+		const chunked = await exchange(
 			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
-			[`GET /fail-mid HTTP/${version}`, 'Host: 127.0.0.1', 'Cookie: s=1', ...extra]
+			['GET /fail-mid HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1']
 		);
-		// To HTTP/1.1, or to HTTP/1.0 that asked for chunked, the cut leaves out
-		// the terminal chunk, and the close is a plain one, so the client keeps
-		// every byte sent before it.
-		for (const [version, extra] of /** @type {Array<[string, string[]]>} */ ([['1.1', []], ['1.0', ['TE: chunked']]])) {
-			const chunked = await ask(version, extra);
-			expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding'), version).toEqual(['chunked']);
-			expect(chunked.buffer, version).toContain('part1|');
-			expect(chunked.buffer.endsWith('0\r\n\r\n'), version + ': no terminal chunk').toBe(false);
-			expect(chunked.how, version).toBe('end');
-		}
+		// The cut leaves out the terminal chunk, and the close is a plain one,
+		// so the client keeps every byte sent before it.
+		expect(header(splitFirst(chunked.buffer).lines, 'transfer-encoding')).toEqual(['chunked']);
+		expect(chunked.buffer).toContain('part1|');
+		expect(chunked.buffer.endsWith('0\r\n\r\n'), 'no terminal chunk').toBe(false);
+		expect(chunked.how).toBe('end');
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
@@ -1428,8 +1407,8 @@ describe('createTestServer', () => {
 
 describe('a body that fails mid-stream over TLS', () => {
 	// The same cut as over TCP: a chunked answer ends before its terminal chunk,
-	// so the client can tell the body is short, and a close-delimited HTTP/1.0
-	// answer is closed rather than left open with nothing more to send.
+	// so the client can tell the body is short, and the connection is closed
+	// rather than left open with nothing more to send.
 	const prefix = 'SAW_FAF_TLS_';
 	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
 	/** @type {any} */ let secure;
@@ -1449,28 +1428,21 @@ describe('a body that fails mid-stream over TLS', () => {
 	});
 
 	it('cuts the chunked body before its terminal chunk, closes, cancels the source, and lets shutdown drain', async () => {
-		for (const version of ['1.1', '1.0']) {
-			for (const target of ['/fail-mid', '/refuse-mid']) {
-				const label = `HTTP/${version} ${target}`;
-				delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
-				const answer = await exchange(
-					(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
-					[`GET ${target} HTTP/${version}`, 'Host: 127.0.0.1', 'Cookie: s=1']
-				);
-				const first = splitFirst(answer.buffer);
-				expect(first.status, label).toBe('HTTP/1.1 200 OK');
-				expect(header(first.lines, 'content-length'), label).toEqual([]);
-				expect(first.rest, label).toContain('part1|');
-				if (version === '1.1') {
-					expect(header(first.lines, 'transfer-encoding'), label).toEqual(['chunked']);
-					expect(answer.buffer.endsWith('0\r\n\r\n'), label + ': no terminal chunk').toBe(false);
-				} else {
-					expect(header(first.lines, 'transfer-encoding'), label).toEqual([]);
-				}
-				expect(answer.how, label + ' is closed, not left open').not.toBe('timeout');
-				if (target === '/refuse-mid') {
-					expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, label + ': the refused source was cancelled').toBe(true);
-				}
+		for (const target of ['/fail-mid', '/refuse-mid']) {
+			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
+			const answer = await exchange(
+				(onConnect) => tls.connect({ host: '127.0.0.1', port: secure.rt.port, rejectUnauthorized: false }, onConnect),
+				[`GET ${target} HTTP/1.1`, 'Host: 127.0.0.1', 'Cookie: s=1']
+			);
+			const first = splitFirst(answer.buffer);
+			expect(first.status, target).toBe('HTTP/1.1 200 OK');
+			expect(header(first.lines, 'content-length'), target).toEqual([]);
+			expect(first.rest, target).toContain('part1|');
+			expect(header(first.lines, 'transfer-encoding'), target).toEqual(['chunked']);
+			expect(answer.buffer.endsWith('0\r\n\r\n'), target + ': no terminal chunk').toBe(false);
+			expect(answer.how, target + ' is closed, not left open').not.toBe('timeout');
+			if (target === '/refuse-mid') {
+				expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, target + ': the refused source was cancelled').toBe(true);
 			}
 		}
 		expect(await secure.rt.handler.shutdown({ timeoutMs: 2000 }), 'nothing is left in flight').toBe(true);

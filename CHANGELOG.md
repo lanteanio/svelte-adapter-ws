@@ -42,6 +42,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A request in any HTTP version but 1.1 is refused with `505`, and its
+  connection ends.** HTTP/1.0 was served, close-delimited unless it asked for
+  chunked. Every request line that does not name HTTP/1.1 - HTTP/1.0, a line
+  with no version, `HTTP/2.0` sent as text, a version in lower case - is now
+  answered `505 HTTP Version Not Supported`, length-framed with
+  `Connection: close`, before its method, target, headers or route are looked
+  at, as on the family's native tier, on the runtime and in
+  `createTestServer`. An HTTP/1.0 WebSocket handshake is refused the same way
+  and never reaches the `upgrade` hook. Anything that talks HTTP/1.0 to the
+  server directly stops working: nginx needs `proxy_http_version 1.1` on every
+  location that proxies to it, not only the WebSocket one, and a health check
+  that defaults to HTTP/1.0, such as HAProxy's `option httpchk`, must be set
+  to HTTP/1.1. `vite dev` still serves HTTP/1.0.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request
@@ -423,9 +436,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `500`; `createTestServer`'s admin mirror and waiting room answer the same
   way. A relayed `Trailer`, which node refuses on an answer it does not
   stream chunked, is dropped there with the other framing headers the writer
-  owns, and kept on an SSR answer node streams chunked. An HTTP/1.0 request
-  without `TE: chunked` is answered close-delimited, so the Trailer is
-  dropped for it too.
+  owns, and kept on an SSR answer node streams chunked.
 - A `413` the adapter writes reads `Content Too Large`, as RFC 9110 and the
   family's native tier name it, where node's default wrote `Payload Too
   Large`, and the `500` that follows a relayed header node refuses reads

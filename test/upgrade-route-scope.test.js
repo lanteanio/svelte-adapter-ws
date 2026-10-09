@@ -203,6 +203,18 @@ async function expectConnectRefused(port) {
 	expect(answer?.lines).toContain('connection: close');
 }
 
+/**
+ * A complete handshake on the WebSocket path in HTTP/1.0 is the 505 every
+ * version but HTTP/1.1 gets, and the request behind it goes unanswered.
+ *
+ * @param {number} port
+ */
+async function expectVersionRefused(port) {
+	const answers = await exchange(port, [{ lines: ['GET /ws HTTP/1.0', ...HANDSHAKE] }, FOLLOW_UP]);
+	expect(answers.map((a) => a.status)).toEqual(['505']);
+	expect(answers[0].lines).toContain('connection: close');
+}
+
 afterAll(restoreUpgradeOption);
 
 for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () => {
@@ -265,6 +277,10 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 
 		it('leaves a CONNECT to its own answer', async () => {
 			await expectConnectRefused(open.rt.port);
+		});
+
+		it('answers a handshake in HTTP/1.0 with the 505, ending the connection', async () => {
+			await expectVersionRefused(open.rt.port);
 		});
 
 		it('hands a HEAD on the WebSocket path to the application', async () => {
@@ -348,6 +364,10 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 
 		it('leaves a CONNECT to its own answer', async () => {
 			await expectConnectRefused(mirror.port);
+		});
+
+		it('answers a handshake in HTTP/1.0 with the 505, ending the connection', async () => {
+			await expectVersionRefused(mirror.port);
 		});
 
 		it('refuses a key of another length on the GET answer, keeping the connection', async () => {

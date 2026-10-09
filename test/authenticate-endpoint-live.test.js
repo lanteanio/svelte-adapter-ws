@@ -323,13 +323,13 @@ describe('the authenticate endpoint', () => {
 	});
 
 	it('counts a request before asking for its origin', async () => {
-		// An HTTP/1.0 request with no Host is one get_origin cannot make an
+		// A Host that is not an authority is one get_origin cannot make an
 		// origin of. The budget is one: the first is counted and then refused
 		// 400, and every later one - a usable request included - is the 429.
 		const port = hostless.rt.port;
-		const bare = 'POST /__ws/auth HTTP/1.0\r\nx-requested-with: XMLHttpRequest\r\nContent-Length: 0\r\n\r\n';
-		expect((await exchange(port, bare)).status).toContain('400');
-		expect((await exchange(port, bare)).status).toContain('429');
+		const unusable = post(port, ['Content-Length: 0'], { host: 'a b' });
+		expect((await exchange(port, unusable)).status).toContain('400');
+		expect((await exchange(port, unusable)).status).toContain('429');
 		expect((await exchange(port, post(port, ['Content-Length: 0']))).status).toContain('429');
 	});
 

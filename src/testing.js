@@ -6,7 +6,7 @@ import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-bo
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { invalidRequestTarget, invalidHost } from './runtime/utils/request-target.js';
-import { ALLOW_HEADER, FORBIDDEN_METHODS, applyShouldUpgradeCallback, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, stageHeaders, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
+import { ALLOW_HEADER, FORBIDDEN_METHODS, applyShouldUpgradeCallback, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send505, speaksHttp11, stageHeaders, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
@@ -489,6 +489,12 @@ function createNodeApp() {
 	}
 
 	httpServer.on('request', (nodeReq, nodeRes) => {
+		// As production: any version but HTTP/1.1 is refused 505 before any
+		// route runs, and the connection ends with it.
+		if (!speaksHttp11(nodeReq)) {
+			send505(nodeRes);
+			return;
+		}
 		const url = nodeReq.url || '/';
 		const qi = url.indexOf('?');
 		const pathname = qi === -1 ? url : url.slice(0, qi);

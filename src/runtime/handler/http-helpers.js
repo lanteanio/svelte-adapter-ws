@@ -218,6 +218,30 @@ export function send400(res, closeConnection = false) {
 		: { 'content-type': 'text/plain' }, 'Bad Request');
 }
 
+/**
+ * Whether a request speaks HTTP/1.1, the one version the family serves. Its
+ * native tier answers every other request line with 505 and a close, ahead of
+ * the method, the target, the headers and the route: HTTP/1.0, which nginx
+ * sends by default, a line with no version, and `HTTP/2.0` sent as text. node
+ * parses those three into a request; send505 answers it.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+export function speaksHttp11(req) {
+	return req.httpVersion === '1.1';
+}
+
+/**
+ * The 505 for a request whose version is not HTTP/1.1. The connection ends
+ * with it, as on the native tier.
+ *
+ * @param {import('node:http').ServerResponse} res
+ */
+export function send505(res) {
+	if (res.headersSent) return;
+	endText(res, 505, { 'content-type': 'text/plain', connection: 'close' }, 'HTTP Version Not Supported');
+}
+
 /** @param {import('node:http').ServerResponse} res */
 export function send413(res) {
 	if (res.headersSent) return;
@@ -256,6 +280,36 @@ const BAD_TARGET_400_HEAD_RAW =
 	'\r\n';
 const BAD_TARGET_400_RAW = BAD_TARGET_400_HEAD_RAW + 'Bad Request';
 
+// send505 as raw bytes, for the requests node never hands the request
+// listener. A HEAD gets the head alone, the length included.
+const VERSION_505_HEAD_RAW =
+	'HTTP/1.1 505 HTTP Version Not Supported\r\n' +
+	'content-type: text/plain\r\n' +
+	'content-length: 26\r\n' +
+	'connection: close\r\n' +
+	'\r\n';
+const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
+
+/**
+ * Whether node's parser refused a request whose line names a version other
+ * than HTTP/1.1, which the native tier answers 505 whatever else is wrong with
+ * it. The line must end in exactly ` HTTP/1.1` and CRLF. It is read only in the
+ * connection's first read, which starts with the connection's first request
+ * line; a later read can begin inside a request, and node's answer stands. A
+ * request refused behind another in that read leaves the first one's line to
+ * answer for: an HTTP/1.1 line keeps node's answer, and a request in another
+ * version was refused 505 and ended the connection before this one was read.
+ *
+ * @param {any} err
+ * @param {any} socket
+ */
+function refusedVersion(err, socket) {
+	const packet = err?.rawPacket;
+	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return false;
+	const end = packet.indexOf(10);
+	return end !== -1 && packet.toString('latin1', Math.max(0, end - 10), end + 1) !== ' HTTP/1.1\r\n';
+}
+
 /**
  * Answer the forbidden methods node never hands to the request listener.
  * llhttp knows TRACE, so it reaches the method gate above; CONNECT is routed
@@ -267,7 +321,10 @@ const BAD_TARGET_400_RAW = BAD_TARGET_400_HEAD_RAW + 'Bad Request';
  * that way. A request target with a byte outside visible ASCII, which
  * RFC 9112 does not allow and node's parser refuses before any listener runs,
  * gets the 400 every lane writes for a target it refuses, body included, or
- * for a HEAD its length alone.
+ * for a HEAD its length alone. Ahead of both, a request whose line names a
+ * version other than HTTP/1.1 gets the 505 the request listener writes for
+ * one, as the native tier answers the version before anything else; a CONNECT
+ * in another version gets it too.
  * Every other parser failure keeps node's own answer: 431 for a
  * header block past the limit, 408 for a request that timed out, 413 for
  * chunk extensions past the limit, 400 otherwise, written only when no
@@ -293,8 +350,8 @@ export function refuseUnparsedForbiddenMethods(server) {
 	};
 	// CONNECT parses, but node hands it to the 'connect' event rather than the
 	// request listener, and a server with no listener for it drops the socket.
-	server.on('connect', (/** @type {any} */ _req, /** @type {import('node:net').Socket} */ socket) => {
-		if (socket.writable) answerAndClose(socket, FORBIDDEN_405_RAW);
+	server.on('connect', (/** @type {import('node:http').IncomingMessage} */ req, /** @type {import('node:net').Socket} */ socket) => {
+		if (socket.writable) answerAndClose(socket, speaksHttp11(req) ? FORBIDDEN_405_RAW : VERSION_505_RAW);
 		else socket.destroy();
 	});
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
@@ -304,6 +361,12 @@ export function refuseUnparsedForbiddenMethods(server) {
 		const inFlight = /** @type {any} */ (socket)._httpMessage;
 		if (!socket.writable || (err && err.code === 'ECONNRESET') || (inFlight && inFlight._headerSent)) {
 			socket.destroy(err);
+			return;
+		}
+		// The version first, as on the native tier: an HTTP/1.0 TRACK or bad
+		// target is a 505.
+		if (refusedVersion(err, socket)) {
+			answerAndClose(socket, err.rawPacket.subarray(0, 5).toString('latin1') === 'HEAD ' ? VERSION_505_HEAD_RAW : VERSION_505_RAW);
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
@@ -330,13 +393,14 @@ export function refuseUnparsedForbiddenMethods(server) {
 
 /**
  * Whether a request is the WebSocket route's, and so the 'upgrade' listener's:
- * a GET on the WebSocket path as spelled, whose first Sec-WebSocket-Key line
- * is 24 bytes long. That is what the family's native tier routes to its
- * handshake. Everything else asking to upgrade is an ordinary request for the
- * HTTP routes, which answer it as they would without the upgrade headers: an
- * upgrade to another protocol, a handshake on another path or with another
- * method, and an attempt with a key of any other length, which the GET answer
- * on the WebSocket path refuses 400.
+ * an HTTP/1.1 GET on the WebSocket path as spelled, whose first
+ * Sec-WebSocket-Key line is 24 bytes long. That is what the family's native
+ * tier routes to its handshake. Everything else asking to upgrade is an
+ * ordinary request for the HTTP routes, which answer it as they would without
+ * the upgrade headers: an upgrade to another protocol, a handshake on another
+ * path, with another method or in another version, which gets the 505, and an
+ * attempt with a key of any other length, which the GET answer on the
+ * WebSocket path refuses 400.
  *
  * node asks this only of a request that names `Connection: upgrade` and
  * carries an Upgrade header.
@@ -345,7 +409,7 @@ export function refuseUnparsedForbiddenMethods(server) {
  * @param {string} wsPath
  */
 export function takesWebSocketRoute(req, wsPath) {
-	if (req.method !== 'GET') return false;
+	if (req.method !== 'GET' || !speaksHttp11(req)) return false;
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
