@@ -153,6 +153,11 @@ export class Server {
 			await new Promise((r) => setTimeout(r, 300));
 			return new Response('slow-done', { headers: { 'content-type': 'text/plain' } });
 		}
+		if (p === '/api/bulk') {
+			// One answer larger than the loopback holds while its client is not
+			// reading: it ends at once and is still being written for a while.
+			return new Response('b'.repeat(32 * 1024 * 1024), { headers: { 'content-type': 'text/plain' } });
+		}
 		if (p === '/api/counted') {
 			globalThis.__renders = (globalThis.__renders || 0) + 1;
 			await new Promise((r) => setTimeout(r, 100));

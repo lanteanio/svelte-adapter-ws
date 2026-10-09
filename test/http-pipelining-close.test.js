@@ -225,6 +225,22 @@ describe('the built runtime', () => {
 		expect(/** @type {any} */ (globalThis).__pipelineUpgrades ?? 0).toBe(before);
 	});
 
+	it('leaves nothing counted when a client goes while its request sits behind an answer still being written', async () => {
+		// The answer ahead has ended but is not flushed to a client that is
+		// not reading, so the request behind it is served and its response
+		// is queued in node without a socket of its own. The client going
+		// settles that exchange like any other.
+		await new Promise((resolve) => {
+			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
+				socket.write(get('/api/bulk', 'Cookie: s=1\r\n') + get('/api/slow', 'Cookie: s=1\r\n'));
+				socket.pause();
+				setTimeout(() => { socket.destroy(); resolve(undefined); }, 50);
+			});
+			socket.on('error', () => {});
+		});
+		await expectNothingInFlight();
+	});
+
 	it('leaves nothing counted in flight after such a close', async () => {
 		// A queued exchange that was counted and never ended would hold a
 		// shutdown's drain to its budget.
@@ -234,6 +250,7 @@ describe('the built runtime', () => {
 		expect(await open.rt.handler.shutdown({ timeoutMs: 2000 }), 'nothing was left in flight').toBe(true);
 		expect(Date.now() - started, 'the drain did not wait out its budget').toBeLessThan(1500);
 	});
+
 });
 
 describe('createTestServer', () => {
