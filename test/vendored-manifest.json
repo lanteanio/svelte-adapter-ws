@@ -63,6 +63,18 @@
 			{
 				"lead": " * is required, so it runs anywhere `node` does. Run via `npm run check`; wired\n * into `pretest` so the unit run enforces it.\n",
 				"ours": " * is required, so it runs anywhere `node` does. Run via `npm run check:types`; the\n * export-parity suite runs it too, so the unit run enforces it.\n"
+			},
+			{
+				"lead": "// Three root exports shipped undeclared, were declared one by one, and the\n// class immediately re-broke when the next round added another - because\n// nothing checked the CLASS, only the instances. A consumer importing an\n// undeclared export gets `any` in a package whose whole point is that the\n// types ship, and nothing fails until someone notices by hand.\n",
+				"ours": "// A consumer importing an undeclared export gets `any` in a package whose\n// whole point is that the types ship, and nothing fails until someone notices\n// by hand. Checking the CLASS rather than named instances is what keeps that\n// closed: declare one missing name and the next undeclared export still fails.\n"
+			},
+			{
+				"lead": "// The PAIRS COME FROM THE EXPORTS MAP, not a hand-kept list. A hand-kept list\n// covered six of the thirty-two published pairs and left `./client` - the most\n// imported subpath in the package - ungated, where two exports were in fact\n// already undeclared. A gate that has to be remembered is the same failure it\n// was written to stop.\n",
+				"ours": "// The PAIRS COME FROM THE EXPORTS MAP, not a hand-kept list, so a subpath\n// added to the map is gated the moment it exists. A gate that has to be\n// remembered is the same failure it was written to stop.\n"
+			},
+			{
+				"lead": " * `src/index.js` that ate 42,000 of 47,420 characters and the file reported ZERO\n * exports - a gate that silently checked nothing, which is worse than the false\n * positive it was written to remove. acorn is already a dependency here (see\n * check-scope.js) and answers the question exactly.\n",
+				"ours": " * a large module that can swallow most of the file and report ZERO exports - a\n * gate that silently checks nothing, which is worse than the false positive it\n * was written to remove. acorn is already a devDependency here and answers the\n * question exactly.\n"
 			}
 		]
 	},

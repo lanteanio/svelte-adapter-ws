@@ -101,21 +101,18 @@ for (const field of ['main', 'module']) {
 
 // Every named runtime export must carry a declaration.
 //
-// Three root exports shipped undeclared, were declared one by one, and the
-// class immediately re-broke when the next round added another - because
-// nothing checked the CLASS, only the instances. A consumer importing an
-// undeclared export gets `any` in a package whose whole point is that the
-// types ship, and nothing fails until someone notices by hand.
+// A consumer importing an undeclared export gets `any` in a package whose
+// whole point is that the types ship, and nothing fails until someone notices
+// by hand. Checking the CLASS rather than named instances is what keeps that
+// closed: declare one missing name and the next undeclared export still fails.
 //
 // Deliberately a source-text scan rather than a typecheck: this gate runs
 // before any build and must stay dependency-free, and the question here is
 // only "is there a declaration with this name", which the text answers.
 //
-// The PAIRS COME FROM THE EXPORTS MAP, not a hand-kept list. A hand-kept list
-// covered six of the thirty-two published pairs and left `./client` - the most
-// imported subpath in the package - ungated, where two exports were in fact
-// already undeclared. A gate that has to be remembered is the same failure it
-// was written to stop.
+// The PAIRS COME FROM THE EXPORTS MAP, not a hand-kept list, so a subpath
+// added to the map is gated the moment it exists. A gate that has to be
+// remembered is the same failure it was written to stop.
 
 /**
  * Names a JS module exports, read from the AST.
@@ -124,10 +121,10 @@ for (const field of ['main', 'module']) {
  * quoted literals looked right and was badly wrong: it has no way to tell a
  * regex literal from division, so a regex containing a quote (`/['"]/`) read as
  * the start of a string and swallowed everything to the next matching quote. On
- * `src/index.js` that ate 42,000 of 47,420 characters and the file reported ZERO
- * exports - a gate that silently checked nothing, which is worse than the false
- * positive it was written to remove. acorn is already a dependency here (see
- * check-scope.js) and answers the question exactly.
+ * a large module that can swallow most of the file and report ZERO exports - a
+ * gate that silently checks nothing, which is worse than the false positive it
+ * was written to remove. acorn is already a devDependency here and answers the
+ * question exactly.
  *
  * @param {string} src
  * @param {string} label for the error message
