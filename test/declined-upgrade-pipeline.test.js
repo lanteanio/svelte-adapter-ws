@@ -4,6 +4,8 @@
 // then the pipelined one, and the connection stays open for the next. The
 // family's native tier answers both; node's parser stops the read at the end
 // of the declined request and hands the rest on only for an upgrade it took.
+// Each server runs as this node builds it and again as a node before 22.21
+// and 24.9 builds it, which ignores shouldUpgradeCallback.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -15,7 +17,8 @@ import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
-import { resumeAfterDeclinedUpgrade } from '../src/runtime/handler/http-helpers.js';
+import { applyShouldUpgradeCallback, resumeAfterDeclinedUpgrade } from '../src/runtime/handler/http-helpers.js';
+import { restoreUpgradeOption, UPGRADE_OPTION_MODES } from './helpers/upgrade-option.js';
 
 const WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -208,11 +211,13 @@ async function boot(replace = {}) {
 	return { payload, rt: await bootRuntime(payload) };
 }
 
-describe('the built runtime answers a request pipelined behind a declined upgrade', () => {
+afterAll(restoreUpgradeOption);
+
+for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime answers a request pipelined behind a declined upgrade, on ${name}`, () => {
 	/** @type {any} */ let open;
 
 	beforeAll(async () => {
-		open = await boot({ WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) });
+		open = await build(() => boot({ WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) }));
 	}, 60000);
 
 	afterAll(async () => {
@@ -307,11 +312,11 @@ describe('the built runtime answers a request pipelined behind a declined upgrad
 	});
 });
 
-describe('the built runtime without a WebSocket route', () => {
+for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime without a WebSocket route, on ${name}`, () => {
 	/** @type {any} */ let plain;
 
 	beforeAll(async () => {
-		plain = await boot();
+		plain = await build(() => boot());
 	}, 60000);
 
 	afterAll(async () => {
@@ -328,7 +333,7 @@ describe('the built runtime without a WebSocket route', () => {
 	});
 });
 
-describe('the built runtime over TLS', () => {
+for (const { name, build } of UPGRADE_OPTION_MODES) describe(`the built runtime over TLS, on ${name}`, () => {
 	const prefix = 'SAW_DUP_TLS_';
 	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
 	/** @type {any} */ let secure;
@@ -337,7 +342,7 @@ describe('the built runtime over TLS', () => {
 		process.env[prefix + 'SSL_CERT'] = path.join(certs, 'localhost.crt');
 		process.env[prefix + 'SSL_KEY'] = path.join(certs, 'localhost.key');
 		process.env[prefix + 'SSL_WATCH'] = '0';
-		secure = await boot({ ENV_PREFIX: JSON.stringify(prefix) });
+		secure = await build(() => boot({ ENV_PREFIX: JSON.stringify(prefix) }));
 	}, 60000);
 
 	afterAll(async () => {
@@ -371,12 +376,12 @@ describe('the built runtime over TLS', () => {
 	});
 });
 
-describe('createTestServer answers a request pipelined behind a declined upgrade', () => {
+for (const { name, build } of UPGRADE_OPTION_MODES) describe(`createTestServer answers a request pipelined behind a declined upgrade, on ${name}`, () => {
 	/** @type {any} */ let mirror;
 
 	beforeAll(async () => {
 		const { createTestServer } = await import('../src/testing.js');
-		mirror = await createTestServer({ handler: { upgrade: () => ({}) } });
+		mirror = await build(() => createTestServer({ handler: { upgrade: () => ({}) } }));
 	});
 
 	afterAll(async () => {
@@ -428,7 +433,7 @@ describe('createTestServer answers a request pipelined behind a declined upgrade
 	});
 });
 
-describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
+for (const { name, build } of UPGRADE_OPTION_MODES) describe(`resumeAfterDeclinedUpgrade on a plain node server, on ${name}`, () => {
 	const certs = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
 
 	/**
@@ -465,13 +470,15 @@ describe('resumeAfterDeclinedUpgrade on a plain node server', () => {
 				else res.end(`answered ${req.url}`);
 			});
 		};
-		const server = opts.secure
+		const server = await build(() => opts.secure
 			? https.createServer({
 				key: fs.readFileSync(path.join(certs, 'localhost.key')),
 				cert: fs.readFileSync(path.join(certs, 'localhost.crt')),
 				shouldUpgradeCallback
 			}, answer)
-			: http.createServer({ shouldUpgradeCallback }, answer);
+			: http.createServer({ shouldUpgradeCallback }, answer));
+		// As both servers are built, so a node without the option runs it too.
+		applyShouldUpgradeCallback(server, shouldUpgradeCallback);
 		if (opts.onConnection) server.on(opts.secure ? 'secureConnection' : 'connection', opts.onConnection);
 		if (opts.onUpgrade) server.on('upgrade', opts.onUpgrade);
 		await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(undefined)));

@@ -1238,8 +1238,8 @@ export async function handleUpgrade(req, socket, head) {
 	const pathname = q === -1 ? url : url.slice(0, q);
 	const query = q === -1 ? '' : url.slice(q + 1);
 	if (pathname !== WS_PATH) {
-		// Only a node that ignores the server's shouldUpgradeCallback (before
-		// 22.21 and 24.9) hands this listener a request on another path. A
+		// The server routes only the WebSocket path here, on every node, so
+		// another path arrives only from code that emits 'upgrade' itself. A
 		// target RFC 9112 does not allow - `/ws#x` misses the path as spelled -
 		// gets the 400 every lane writes for it, as on the request edge.
 		if (invalidRequestTarget(pathname, query)) refuseUpgrade(socket, 400, 'Bad Request');

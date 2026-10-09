@@ -2,7 +2,7 @@
 // late failure can never write a second response into an exchange whose first
 // byte already left; the caller owns deciding whether that situation is fatal.
 
-import { STATUS_CODES, validateHeaderName, validateHeaderValue } from 'node:http';
+import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { createRequire } from 'node:module';
 import { firstHeaderValue } from '../utils/request-headers.js';
 
@@ -350,6 +350,35 @@ export function takesWebSocketRoute(req, wsPath) {
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
 		firstHeaderValue(req.rawHeaders, 'sec-websocket-key').length === 24;
+}
+
+/**
+ * Route upgrades by `shouldUpgradeCallback` on a node that ignores the option
+ * (before 22.21 and 24.9). Such a node takes every request that names
+ * `Connection: upgrade` as an upgrade while an 'upgrade' listener is attached,
+ * so the listener got a declined request on any path and with any method, its
+ * body unread; with no listener it never asks the callback, so nothing resumes
+ * past a declined request. node decides in the parser's `onIncoming`, which it
+ * binds per connection, so each connection's is wrapped to ask the callback
+ * first, as a newer node does at that point: a declined request is parsed as
+ * an ordinary one. A server that took the option is left alone.
+ *
+ * @param {import('node:http').Server | import('node:https').Server} server
+ * @param {(req: import('node:http').IncomingMessage) => boolean} shouldUpgradeCallback
+ */
+export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
+	if (/** @type {any} */ (server).shouldUpgradeCallback === shouldUpgradeCallback) return;
+	// After node's own listener, which the server attached when it was built:
+	// an https server is no http.Server, and listens on 'secureConnection'.
+	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', (/** @type {any} */ socket) => {
+		const parser = socket.parser;
+		const onIncoming = parser?.onIncoming;
+		if (typeof onIncoming !== 'function') return;
+		parser.onIncoming = (/** @type {import('node:http').IncomingMessage} */ req, /** @type {boolean} */ keepAlive) => {
+			if (req.upgrade && req.method !== 'CONNECT' && !shouldUpgradeCallback(req)) req.upgrade = false;
+			return onIncoming(req, keepAlive);
+		};
+	});
 }
 
 // node's HTTP parser binding, for resumeAfterDeclinedUpgrade. Where a node

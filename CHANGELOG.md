@@ -139,14 +139,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   navigation still gets the upgrade hint or the capacity answer.
 - **Only a GET to the WebSocket path is taken as a handshake.** A complete
   handshake on any other path or with any other method went to the upgrade
-  listener, which answered `404` off the path and `405` to a `POST` on it and
-  closed the connection. It is now an ordinary request, answered as it would
-  be without the upgrade headers - by the liveness probe, a built asset or the
-  application - as on the family's native tier, on the runtime and in
-  `createTestServer`. A key that is not 24 bytes long is refused `400` by the
-  GET answer on the WebSocket path. The WebSocket path and the waiting room's
-  two pages answer GET only: a HEAD to any of them reaches the application,
-  and the `426` upgrade hint no longer carries an `Upgrade` header.
+  listener, which answered `404` off the path and `405` to a `POST` on it -
+  after running the application's `upgrade` hook - and closed the connection.
+  It is now an ordinary request, answered as it would be without the upgrade
+  headers - by the liveness probe, a built asset or the application, body
+  and all - as on the family's native tier, on the runtime and in
+  `createTestServer`, on every node release the package supports: those
+  before 22.21 and 24.9, whose `http.createServer` ignores the
+  `shouldUpgradeCallback` option, route the same way. A key that is not 24
+  bytes long is refused `400` by the GET answer on the WebSocket path. The
+  WebSocket path and the waiting room's two pages answer GET only: a HEAD to
+  any of them reaches the application, and the `426` upgrade hint no longer
+  carries an `Upgrade` header.
 - **A second `SIGTERM` or `SIGINT` during shutdown no longer ends the process
   at once.** It exited with status `1` and skipped whatever the shutdown had
   left to do; the shutdown already running now keeps its `SHUTDOWN_TIMEOUT`
