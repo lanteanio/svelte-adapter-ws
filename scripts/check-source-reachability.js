@@ -9,7 +9,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const SOURCE_ENTRY_POINTS = Object.freeze({
 	'src/runtime/index.js': 'Copied by the adapter to the generated server process entry.',
 	'src/plugins/cursor/cursor-worker.js': 'Loaded by the cursor client with Worker(new URL(..., import.meta.url)).',
-	'src/runtime/utils/cookies-string.js': 'Retained as a pinned family utility; the Node request implementation uses its own cookie handling.'
+	'src/runtime/utils/cookies-string.js': 'Kept byte-identical to the lead file by the vendored manifest.'
 });
 
 /** Modules reachable from package exports and explicitly declared source roots. */

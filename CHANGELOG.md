@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readiness, restart policy and termination grace.
 
 - **Source reachability check rejects disconnected modules.** Package exports and
-  justified file-loaded entries root the import graph, including dynamic imports
+  file-loaded entries and explicitly retained family utilities root the import graph, including dynamic imports
   and re-exports. Detached cycles fail too. The unused Node bridge was removed.
 
 - **Error reference details include explicit anchors and runtime guidance.** Each
