@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The runtime environment reference documents `WS_DEBUG`.
+
 - WebSocket debug logging includes connection lifecycle, capability negotiation, resume, ingress fallback and publish activity; topic and event identifiers remain private.
 
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.

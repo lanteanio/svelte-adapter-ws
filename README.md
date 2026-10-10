@@ -511,6 +511,7 @@ keeps using `ORIGIN`.
 | `CLUSTER_RELAY_MAX_PENDING_KB` / `_MAX_PENDING_MS` | `4096` / `5000` | Per-peer relay spill ceilings; a worker past them is quarantined and replaced. |
 | `CLUSTER_RELAY_MAX_FRAME_KB` | pending KB | Sender-side ceiling on one relayed envelope; `0` disables. |
 | `WORKER_BOOT_TIMEOUT_MS` | `60000` | Boot deadline for a worker that stops acking liveness mid-init; `0` disables. |
+| `WS_DEBUG` | - | Set to `1` to enable structured WebSocket debug logging (open, close, subscribe, publish) |
 
 A `SIGTERM`/`SIGINT` during a shutdown already running changes nothing: that
 shutdown keeps its `SHUTDOWN_TIMEOUT` budget. Invalid cluster configurations
