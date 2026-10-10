@@ -45,7 +45,7 @@ export const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl
 	? _ssl_debounce_raw
 	: 500;
 
-/** Optional comma-separated SNI host override; empty = auto-discover from each cert SAN. */
+/** Optional comma-separated SNI host override; empty = discover certificate SAN DNS names, then subject CN. */
 export const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
 export const origin = parse_origin(env('ORIGIN', undefined));

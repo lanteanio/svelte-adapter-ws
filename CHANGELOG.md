@@ -280,6 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TLS reads one `SSL_CERT`/`SSL_KEY` pair, including literal commas in file paths.
+  `SSL_SNI_HOSTS` is a flat comma-separated list of renewal hostnames.
+
 - **An SSR stream that fails in a later turn than its request's own, right
   after its last writes, delivers them before the cut.** A source that
   errors, or hands over a chunk that is not bytes, in the same tick as

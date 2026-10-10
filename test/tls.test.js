@@ -16,9 +16,7 @@ import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'tls');
 const tlsSource = readFileSync(new URL('../src/runtime/handler/tls.js', import.meta.url), 'utf8');
 
-// The shared-host cases need certificates whose SAN sets overlap and then
-// diverge, which the checked-in fixtures do not carry; they are generated
-// with openssl and skip where none is found. Git for Windows bundles one.
+// CN-only renewal coverage generates a legacy certificate with openssl.
 function findOpenssl() {
 	const candidates = ['openssl'];
 	if (process.platform === 'win32') {
@@ -187,35 +185,35 @@ describe('native TLS', () => {
 		expect(welcome.type).toBe('welcome');
 	});
 
-	it('selects the SNI certificate for its host and the default otherwise', async () => {
-		const rt = await bootTls('SAW_T4_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'sni.crt')}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${path.join(fixtures, 'sni.key')}`,
-			SSL_WATCH: '0'
-		});
-		const sni = await tlsGet(rt.port, '/healthz', 'sni.example');
-		expect(sni.peerCert.subject.CN).toBe('sni.example');
-		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
-		expect(fallback.peerCert.subject.CN).toBe('localhost');
+	it('treats commas in certificate and key paths as literal filename characters', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlscomma-'));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const certPath = path.join(dir, 'cert,live.crt');
+		const keyPath = path.join(dir, 'key,live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		const rt = await bootTls('SAW_T4_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
+		copyFileSync(path.join(fixtures, 'sni.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'sni.key'), keyPath);
+		rt.handler.reloadTls();
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
 
-	it('selects an extra certificate that carries only a subject CN, under that name', async () => {
-		// The one host discovery the family has: SAN DNS names, then the subject
-		// CN for a legacy single-name certificate. Boot and reload discover the
-		// same names, so a CN-only extra pair is served under its CN rather
-		// than refused as one with no name.
+	itOpenssl('serves a CN-only renewal under its subject name', async () => {
 		const dir = mkdtempSync(path.join(tmpdir(), 'saw-cnonly-'));
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 		const cnOnly = genCertCnOnly(dir, 'cnonly', 'legacy.example');
-		const rt = await bootTls('SAW_TCN_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${cnOnly.crt}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${cnOnly.key}`,
-			SSL_WATCH: '0'
-		});
-		const legacy = await tlsGet(rt.port, '/healthz', 'legacy.example');
-		expect(legacy.peerCert.subject.CN).toBe('legacy.example');
-		const fallback = await tlsGet(rt.port, '/healthz', 'localhost');
-		expect(fallback.peerCert.subject.CN).toBe('localhost');
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		const rt = await bootTls('SAW_TCN_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		copyFileSync(cnOnly.crt, certPath);
+		copyFileSync(cnOnly.key, keyPath);
+		rt.handler.reloadTls();
+		expect((await tlsGet(rt.port, '/healthz', 'legacy.example')).peerCert.subject.CN).toBe('legacy.example');
+		expect((await tlsGet(rt.port, '/healthz', 'localhost')).peerCert.subject.CN).toBe('localhost');
 	});
 
 	it('hot-reloads a renewed certificate without a restart', async () => {
@@ -297,7 +295,7 @@ describe('native TLS', () => {
 		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 
-		const rt = await bootTls('SAW_T17_', { SSL_CERT: certPath, SSL_KEY: keyPath, SSL_SNI_HOSTS: 'other.example' });
+		const rt = await bootTls('SAW_T17_', { SSL_CERT: certPath, SSL_KEY: keyPath, SSL_SNI_HOSTS: ' OTHER.example , alias.example ' });
 		// Boot registers nothing: the override names reload hosts only.
 		expect((await tlsGet(rt.port, '/healthz', 'other.example')).peerCert.subject.CN).toBe('localhost');
 		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
@@ -305,9 +303,10 @@ describe('native TLS', () => {
 		const lines = captureLog(() => rt.handler.reloadTls());
 		expect(rt.handler.tlsReloadState().generation).toBe(1);
 		// The default certificate changed, so the line carries its expiry.
-		expect(lines).toContain(`[tls] renewed certificate now served (SNI: other.example; expires ${rt.handler.tlsReloadState().notAfterText}; generation 1)`);
+		expect(lines).toContain(`[tls] renewed certificate now served (SNI: other.example, alias.example; expires ${rt.handler.tlsReloadState().notAfterText}; generation 1)`);
 
 		expect((await tlsGet(rt.port, '/healthz', 'other.example')).peerCert.subject.CN).toBe('sni.example');
+		expect((await tlsGet(rt.port, '/healthz', 'alias.example')).peerCert.subject.CN).toBe('sni.example');
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('localhost');
 		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
 	});
@@ -374,32 +373,6 @@ describe('native TLS', () => {
 		expect(logs).toContain('[tls] certificate reload recovered (was: a certificate swap failed mid-apply)');
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
-
-	itOpenssl('keeps an extra pair ahead of a renewed default that now carries the same host', async () => {
-		// The map is written in pair order, the default pair's overlay first:
-		// a host the default's renewal picks up that an extra pair already
-		// serves stays with the extra pair, exactly as it did at boot.
-		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsorder-'));
-		const renewed = genCert(dir, 'renewed', 'renewed.example', 'DNS:localhost,DNS:sni.example');
-		const certPath = path.join(dir, 'live.crt');
-		const keyPath = path.join(dir, 'live.key');
-		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
-		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
-		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		const rt = await bootTls('SAW_T18_', {
-			SSL_CERT: `${certPath},${path.join(fixtures, 'sni.crt')}`,
-			SSL_KEY: `${keyPath},${path.join(fixtures, 'sni.key')}`
-		});
-		copyFileSync(renewed.crt, certPath);
-		copyFileSync(renewed.key, keyPath);
-		rt.handler.reloadTls();
-		expect(rt.handler.tlsReloadState().generation).toBe(1);
-
-		expect((await tlsGet(rt.port, '/healthz', 'localhost')).peerCert.subject.CN).toBe('renewed.example');
-		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN, 'the later pair keeps the shared host').toBe('sni.example');
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
-	}, 30000);
 
 	itOpenssl('serves a same-name renewal to SNI handshakes and the boot certificate to the rest', async () => {
 		// The ordinary renewal: the same names, a fresh key pair. A handshake
@@ -498,12 +471,17 @@ describe('native TLS', () => {
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
 
-	it('selects a wildcard SAN certificate for names under it, one label deep', async () => {
-		const rt = await bootTls('SAW_T8_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${path.join(fixtures, 'wild.crt')}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${path.join(fixtures, 'wild.key')}`,
-			SSL_WATCH: '0'
-		});
+	it('selects a renewed wildcard SAN for names under it, one label deep', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlswild-'));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
+		const rt = await bootTls('SAW_T8_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		copyFileSync(path.join(fixtures, 'wild.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'wild.key'), keyPath);
+		rt.handler.reloadTls();
 		// The dominant multi-host shape: the cert says *.wild.example and the
 		// client says app.wild.example - an exact-match-only lookup would hand
 		// back the default cert and every browser would hard-fail the handshake.
@@ -518,40 +496,23 @@ describe('native TLS', () => {
 		expect(bare.peerCert.subject.CN).toBe('localhost');
 	});
 
-	it('remaps SNI names from the reloaded certificate, dropping stale ones', async () => {
+	it('remaps SNI names across renewals, dropping stale ones', async () => {
 		const dir = mkdtempSync(path.join(tmpdir(), 'saw-sniremap-'));
-		const certPath = path.join(dir, 'extra.crt');
-		const keyPath = path.join(dir, 'extra.key');
-		copyFileSync(path.join(fixtures, 'sni.crt'), certPath);
-		copyFileSync(path.join(fixtures, 'sni.key'), keyPath);
+		const certPath = path.join(dir, 'live.crt');
+		const keyPath = path.join(dir, 'live.key');
+		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
+		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		const rt = await bootTls('SAW_T9_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${certPath}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${keyPath}`,
-			SSL_RELOAD_DEBOUNCE_MS: '50'
-		});
-		const before = await tlsGet(rt.port, '/healthz', 'sni.example');
-		expect(before.peerCert.subject.CN).toBe('sni.example');
-
-		// The renewal changes the certificate's SAN set entirely: the reloaded
-		// names must serve, and the dropped name must stop matching instead of
-		// pointing at a certificate that no longer claims it.
-		writeFileSync(certPath, readFileSync(path.join(fixtures, 'wild.crt')));
-		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'wild.key')));
-
-		let remapped = null;
-		const t0 = Date.now();
-		while (Date.now() - t0 < 5000) {
-			await new Promise((r) => setTimeout(r, 150));
-			const probe = await tlsGet(rt.port, '/healthz', 'app.wild.example');
-			if (probe.peerCert.subject.CN === 'wild.example') { remapped = probe; break; }
+		const rt = await bootTls('SAW_T9_', { SSL_CERT: certPath, SSL_KEY: keyPath });
+		for (const [name, hostname] of [['sni', 'sni.example'], ['wild', 'app.wild.example']]) {
+			copyFileSync(path.join(fixtures, name + '.crt'), certPath);
+			copyFileSync(path.join(fixtures, name + '.key'), keyPath);
+			rt.handler.reloadTls();
+			expect((await tlsGet(rt.port, '/healthz', hostname)).peerCert.subject.CN).toBe(name === 'sni' ? 'sni.example' : 'wild.example');
 		}
-		expect(remapped?.peerCert.subject.CN).toBe('wild.example');
-
-		const dropped = await tlsGet(rt.port, '/healthz', 'sni.example');
-		expect(dropped.peerCert.subject.CN).toBe('localhost');
-	}, 15000);
+		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('localhost');
+		expect(rt.handler.tlsReloadState().generation).toBe(2);
+	});
 
 	it('serves a renewal that landed between the boot read and the watch being armed', async () => {
 		// The watch is armed once the listen socket is bound, not while the
@@ -587,137 +548,6 @@ describe('native TLS', () => {
 		expect(probe.peerCert.subject.CN).toBe('sni.example');
 		expect(handler.tlsReloadState().generation).toBe(1);
 	});
-
-	it('swaps nothing at all when one pair of a renewal is torn, the default included', async () => {
-		// Every pair is validated before any is taken. A renewal that rewrote
-		// the default pair fully and left an extra pair's key half-written
-		// must not put the new default in front of clients while reporting
-		// that the previous certificate is still being served.
-		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlstorn-'));
-		const certPath = path.join(dir, 'live.crt');
-		const keyPath = path.join(dir, 'live.key');
-		const extraCert = path.join(dir, 'extra.crt');
-		const extraKey = path.join(dir, 'extra.key');
-		copyFileSync(path.join(fixtures, 'localhost.crt'), certPath);
-		copyFileSync(path.join(fixtures, 'localhost.key'), keyPath);
-		copyFileSync(path.join(fixtures, 'sni.crt'), extraCert);
-		copyFileSync(path.join(fixtures, 'sni.key'), extraKey);
-		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		// The extra pair's name is pinned so it stays addressable across a
-		// renewal whose own SAN differs.
-		const rt = await bootTls('SAW_T13_', {
-			SSL_CERT: `${certPath},${extraCert}`,
-			SSL_KEY: `${keyPath},${extraKey}`,
-			SSL_SNI_HOSTS: 'extra.example'
-		});
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
-		expect((await tlsGet(rt.port, '/healthz', 'extra.example')).peerCert.subject.CN).toBe('sni.example');
-
-		// The default pair renews cleanly; the extra pair's certificate has
-		// been rewritten but its key is still being written.
-		writeFileSync(certPath, readFileSync(path.join(fixtures, 'sni.crt')));
-		writeFileSync(keyPath, readFileSync(path.join(fixtures, 'sni.key')));
-		writeFileSync(extraCert, readFileSync(path.join(fixtures, 'wild.crt')));
-		writeFileSync(extraKey, '-----BEGIN PRIVATE KEY-----\ntorn');
-		// A skipped reload is a warn-severity operational event, and the default
-		// sink writes those through console.warn.
-		const warnings = [];
-		const originalWarn = console.warn;
-		console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
-		try {
-			rt.handler.reloadTls();
-		} finally {
-			console.warn = originalWarn;
-		}
-		expect(warnings.some((line) => line.includes('event=tls.reload-skipped'))).toBe(true);
-		// The default still serves the boot certificate: the claim in the
-		// degraded reason is true of every pair, not only the torn one.
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
-		expect((await tlsGet(rt.port, '/healthz', 'extra.example')).peerCert.subject.CN).toBe('sni.example');
-		const failed = rt.handler.tlsReloadState();
-		expect(failed.generation).toBe(0);
-		expect(failed.failures).toBe(1);
-		expect(failed.degraded).toContain('previous one is still being served');
-
-		// The key finishes writing; the next reload takes the whole set: the
-		// renewed default serves under its own name, the extra pair under its
-		// pinned one, and a client that sends no servername keeps the boot
-		// certificate.
-		copyFileSync(path.join(fixtures, 'wild.key'), extraKey);
-		rt.handler.reloadTls();
-		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
-		expect((await tlsGet(rt.port, '/healthz', 'extra.example')).peerCert.subject.CN).toBe('wild.example');
-		const recovered = rt.handler.tlsReloadState();
-		expect(recovered.generation).toBe(1);
-		expect(recovered.degraded).toBeNull();
-	});
-
-	it('counts a renewal of an extra certificate alone as the swap it is', async () => {
-		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlssniswap-'));
-		const extraCert = path.join(dir, 'extra.crt');
-		const extraKey = path.join(dir, 'extra.key');
-		copyFileSync(path.join(fixtures, 'sni.crt'), extraCert);
-		copyFileSync(path.join(fixtures, 'sni.key'), extraKey);
-		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		// The name is pinned by SSL_SNI_HOSTS so the renewal, whose own SAN
-		// differs, keeps serving under it.
-		const rt = await bootTls('SAW_T14_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${extraCert}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${extraKey}`,
-			SSL_SNI_HOSTS: 'sni.example'
-		});
-		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
-		expect(rt.handler.tlsReloadState().generation).toBe(0);
-
-		writeFileSync(extraCert, readFileSync(path.join(fixtures, 'wild.crt')));
-		writeFileSync(extraKey, readFileSync(path.join(fixtures, 'wild.key')));
-		const lines = captureLog(() => rt.handler.reloadTls());
-		// The line names only what changed this pass, and no expiry: the
-		// recorded expiry is the default certificate's, which did not change.
-		expect(lines).toContain('[tls] renewed certificate now served (SNI: sni.example; generation 1)');
-
-		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('wild.example');
-		// The default did not change and is not counted; the extra pair did.
-		expect((await tlsGet(rt.port, '/healthz')).peerCert.subject.CN).toBe('localhost');
-		expect(rt.handler.tlsReloadState().generation).toBe(1);
-	});
-
-	itOpenssl('keeps serving a host an earlier certificate still carries when a later one drops it', async () => {
-		// Two extra pairs both carry shared.example; at boot the later pair
-		// serves it, in pair order. When the later pair renews WITHOUT that
-		// name, the host must fall back to the earlier pair that still claims
-		// it - not to the default certificate, which never did.
-		const dir = mkdtempSync(path.join(tmpdir(), 'saw-tlsshared-'));
-		const first = genCert(dir, 'first', 'first.example', 'DNS:a.example,DNS:shared.example');
-		const second = genCert(dir, 'second-boot', 'second.example', 'DNS:b.example,DNS:shared.example');
-		const secondRenewed = genCert(dir, 'second-renewed', 'second-renewed.example', 'DNS:b.example');
-		const secondCert = path.join(dir, 'second.crt');
-		const secondKey = path.join(dir, 'second.key');
-		copyFileSync(second.crt, secondCert);
-		copyFileSync(second.key, secondKey);
-		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-
-		const rt = await bootTls('SAW_T15_', {
-			SSL_CERT: `${path.join(fixtures, 'localhost.crt')},${first.crt},${secondCert}`,
-			SSL_KEY: `${path.join(fixtures, 'localhost.key')},${first.key},${secondKey}`
-		});
-		expect((await tlsGet(rt.port, '/healthz', 'shared.example')).peerCert.subject.CN).toBe('second.example');
-		expect((await tlsGet(rt.port, '/healthz', 'a.example')).peerCert.subject.CN).toBe('first.example');
-
-		copyFileSync(secondRenewed.crt, secondCert);
-		copyFileSync(secondRenewed.key, secondKey);
-		const lines = captureLog(() => rt.handler.reloadTls());
-		// Only the pair that changed is named; the first extra pair and the
-		// default did not.
-		expect(lines).toContain('[tls] renewed certificate now served (SNI: b.example; generation 1)');
-
-		expect((await tlsGet(rt.port, '/healthz', 'b.example')).peerCert.subject.CN).toBe('second-renewed.example');
-		expect((await tlsGet(rt.port, '/healthz', 'shared.example')).peerCert.subject.CN, 'the host fell through to the default').toBe('first.example');
-		expect((await tlsGet(rt.port, '/healthz', 'a.example')).peerCert.subject.CN).toBe('first.example');
-	}, 30000);
 
 	it('disarms the expiry sentinel with the watchers when the server closes', () => {
 		// A degraded process that kept its hourly expiry line going after its

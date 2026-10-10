@@ -326,21 +326,11 @@ if (is_primary) {
 	const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
-	// SSL_SNI_HOSTS is deliberately NOT read here: it names reload hosts
-	// (with one certificate, that certificate's; with extra certificates, the
-	// extras' groups - handler/tls.js), and this identity record is read for
-	// its expiry only. The workers parse it themselves when they build their
-	// SNI contexts.
-	// Watch every certificate-bearing DIRECTORY, deduped, exactly as the
-	// single-process watch does (handler/tls.js): certbot renews each domain
-	// on its own schedule and a key can live apart from its cert, so keying
-	// the broadcast on the first pair's directory alone would let every other
-	// pair's renewal land unseen - no broadcast, a fleet serving stale SNI
-	// certs until they expire. Identity/expiry observability reads the FIRST
-	// cert (the default context).
-	const watched_files = [...ssl_cert.split(','), ...ssl_key.split(',')].map((s) => s.trim()).filter(Boolean);
+	// Host overrides belong to worker renewal; the primary reads expiry only.
+	// Watch both directories when the key is stored apart from its certificate.
+	const watched_files = [ssl_cert, ssl_key].filter(Boolean);
 	const watched_dirs = [...new Set(watched_files.map((f) => dirname(f)))];
-	const identity_cert_path = ssl_cert.split(',').map((s) => s.trim()).filter(Boolean)[0] || '';
+	const identity_cert_path = ssl_cert;
 
 	console.log(
 		`[svelte-adapter-ws] Primary thread starting ${num} workers ` +

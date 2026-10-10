@@ -496,8 +496,8 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). A request still open when it runs out has its `request.signal` aborted before it is dropped. |
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
-| `SSL_CERT` / `SSL_KEY` | - | PEM pair; comma-separated lists serve extra certs per SNI name (wildcard SANs included). |
-| `SSL_SNI_HOSTS` | - | Comma-separated SNI host override for the certificate's hot-reload; with extra certificates, semicolon-grouped per extra pair. |
+| `SSL_CERT` / `SSL_KEY` | - | Paths to one PEM certificate and private key. |
+| `SSL_SNI_HOSTS` | - | Flat comma-separated SNI host override for the certificate's hot-reload; defaults to SAN DNS names, then subject CN. |
 | `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
 | `CLUSTER_WORKERS` | - | In-process cluster: worker-thread count or `auto` (Linux; see Deployment). |
 | `CLUSTER_MODE` | `reuseport` | The one mode this runtime has; `acceptor` refuses with the reason. |
@@ -559,11 +559,10 @@ HTTP/2 and the entire observability ecosystem
 
 2. **HTTP half**: a built SvelteKit app serves over `node:http` - or
    `node:https` with first-class in-process TLS: a PEM pair (`SSL_CERT`/
-   `SSL_KEY`, comma-separated lists for multiple certificates - the first
-   pair is the default context, every further pair serves the SNI names its
-   cert carries or the `SSL_SNI_HOSTS` override) and certificate
+   `SSL_KEY`) and certificate
    hot-reload (`SSL_WATCH`, default on; `SSL_RELOAD_DEBOUNCE_MS`) that
-   registers a renewed certificate under its SNI names in place, so a certbot
+   registers a renewed certificate under its SAN DNS names (or the flat
+   `SSL_SNI_HOSTS` override) in place, so a certbot
    renewal is served on new SNI-matched handshakes without re-binding the
    listen socket or dropping a live connection. A non-SNI / unmatched-SNI
    client keeps the boot-time certificate until a restart: the default
