@@ -817,7 +817,9 @@ server, which serves HTTP/1.0 and queues pipelined requests instead.
 `test/http-pipelining-real.test.js` pins both halves on the built runtime.
 An incomplete following request head does not interrupt an active answer,
 including an SSE stream. Its 10-second idle deadline starts after that answer
-finishes.
+finishes. Completed static, SSR and realtime HTTP answers that fill the
+16 KiB response buffer for a read are released before a later pipelined refusal; smaller
+answers still held in that read are discarded.
 
 **systemd integration** is automatic under a `Type=notify` unit and a no-op
 everywhere else: the runtime detects `NOTIFY_SOCKET` and sends `READY` once

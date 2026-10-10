@@ -15,6 +15,7 @@ import { revalidationHeaders } from '../utils/revalidation-headers.js';
 import { monotonicNow } from '../runtime.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
 import { send400, wireValue } from './http-helpers.js';
+import { releaseHttpReadIfFull } from './read-turn.js';
 
 // File extensions that browsers cannot render inline. Serving these with
 // Content-Disposition: attachment prompts a download dialog instead of
@@ -328,6 +329,7 @@ export const _t_static = monotonicNow();
 function sendNotModified(res, revalidation) {
 	res.writeHead(304, revalidation);
 	res.end();
+	releaseHttpReadIfFull(res);
 }
 
 /**
@@ -493,6 +495,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 			// every fixed answer here does.
 			res.writeHead(412, { 'content-length': '0' });
 			res.end();
+			releaseHttpReadIfFull(res);
 			return;
 		}
 		if (verdict === 304) {
@@ -521,6 +524,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 		// (`bytes=-0`) - so that representation's length is the one to quote.
 		res.writeHead(416, { 'content-range': `bytes */${body.byteLength}`, 'content-length': '0' });
 		res.end();
+		releaseHttpReadIfFull(res);
 		return;
 	}
 
@@ -546,6 +550,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 		// slice keeps the HEAD answer from depending on that.
 		if (headOnly) res.end();
 		else res.end(slice);
+		releaseHttpReadIfFull(res);
 		return;
 	}
 
@@ -559,6 +564,7 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	} else {
 		res.end(body);
 	}
+	releaseHttpReadIfFull(res);
 }
 
 // Bounded cache for decoded URI pathnames. Avoids repeated decodeURIComponent
@@ -613,6 +619,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 		if (prerenderedDirStyle.has(decoded)) {
 			res.writeHead(308, { location: locationTarget(decoded + '/', search), 'content-length': '0' });
 			res.end();
+			releaseHttpReadIfFull(res);
 			return true;
 		}
 		const entry = staticCache.get(decoded);
@@ -639,6 +646,7 @@ export function tryPrerendered(res, pathname, search, acceptEncoding, ifNoneMatc
 		// writes a header value as Latin-1 and refuses a character past it.
 		res.writeHead(308, { location: locationTarget(alt, search), 'content-length': '0' });
 		res.end();
+		releaseHttpReadIfFull(res);
 		return true;
 	}
 

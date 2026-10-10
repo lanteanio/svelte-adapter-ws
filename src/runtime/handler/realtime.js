@@ -2830,6 +2830,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 			if (outCookies.length > 0) stageHeaders(res, [['set-cookie', outCookies]]);
 			res.writeHead(204);
 			res.end();
+			releaseHttpReadIfFull(res);
 		})
 		.catch((err) => {
 			try { span?.recordException?.(err); } catch { /* provider gone */ }
@@ -2956,6 +2957,7 @@ function httpRefusalResponse(res) {
 			// in the body's encoding, which would encode a header value that
 			// stageHeaders already spelled as its UTF-8 bytes a second time.
 			res.end(Buffer.from(text));
+			releaseHttpReadIfFull(res);
 			return facade;
 		}
 	};
