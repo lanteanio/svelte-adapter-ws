@@ -175,6 +175,7 @@
 		"check:declarations": "node scripts/check-declarations.js",
 		"check:source-bytes": "node scripts/check-source-bytes.js",
 		"check:tracked-imports": "node scripts/check-tracked-imports.js",
+		"check:source-reachability": "node scripts/check-source-reachability.js",
 		"check:publish": "publint && attw --pack . --profile esm-only",
 		"test": "vitest run",
 		"test:watch": "vitest",

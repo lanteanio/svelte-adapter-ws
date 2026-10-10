@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
 
+- **Source reachability check rejects disconnected modules.** Package exports and
+  justified file-loaded entries root the import graph, including dynamic imports
+  and re-exports. Detached cycles fail too. The unused Node bridge was removed.
+
 - **Error reference details include explicit anchors and runtime guidance.** Each
   section now shows the code or event, searchable message prefix, operator
   shortlink, runtime help route and emitting source links in the family format.
