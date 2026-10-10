@@ -914,6 +914,9 @@ export function refuseUnparsedForbiddenMethods(server) {
 	});
 }
 
+/** @type {WeakMap<import('node:net').Socket, { pending: Set<() => void>, close: () => void }>} */
+const queuedExchangeClosures = new WeakMap();
+
 /**
  * Run `fn` once when an exchange is over: on the response's 'close', or on
  * the connection's close while the response never had a socket. node hands
@@ -930,16 +933,34 @@ export function onExchangeClosed(req, res, fn) {
 	// queued responses can lose the connection without receiving close.
 	if (res.socket != null) { res.once('close', fn); return; }
 	const socket = req.socket;
+	let group = queuedExchangeClosures.get(socket);
+	if (!group) {
+		const pending = new Set();
+		const close = () => {
+			queuedExchangeClosures.delete(socket);
+			try { for (const unassigned of pending) unassigned(); }
+			finally { pending.clear(); }
+		};
+		group = { pending, close };
+		queuedExchangeClosures.set(socket, group);
+		socket.once('close', close);
+	}
+	const owner = group;
 	let done = false;
 	const settle = () => {
 		if (done) return;
 		done = true;
-		socket.off('close', unassigned);
+		res.off('close', settle);
+		owner.pending.delete(unassigned);
+		if (owner.pending.size === 0) {
+			socket.off('close', owner.close);
+			if (queuedExchangeClosures.get(socket) === owner) queuedExchangeClosures.delete(socket);
+		}
 		fn();
 	};
 	const unassigned = () => { if (res.socket === null) settle(); };
+	owner.pending.add(unassigned);
 	res.once('close', settle);
-	socket.once('close', unassigned);
 }
 
 /**

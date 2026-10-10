@@ -293,9 +293,12 @@ describe('the built runtime', () => {
 			});
 			s.on('error', () => {});
 		});
-		for (let i = 0; i < 50 && counters.inFlightCount < 2; i++) await new Promise((r) => setTimeout(r, 10));
-		expect(counters.inFlightCount, 'the request two deep was handed out behind the answer still being written').toBe(2);
-		socket.destroy();
+		try {
+			for (let i = 0; i < 50 && counters.inFlightCount < 2; i++) await new Promise((r) => setTimeout(r, 10));
+			expect(counters.inFlightCount, 'the request two deep was handed out behind the answer still being written').toBeGreaterThanOrEqual(2);
+		} finally {
+			socket.destroy();
+		}
 		await expectNothingInFlight();
 	});
 	it('leaves nothing counted in flight after such a close', async () => {

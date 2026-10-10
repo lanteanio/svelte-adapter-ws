@@ -382,6 +382,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Draining changes readiness without adding a WebSocket admission refusal. Pending upgrade hooks can complete, and refused handshakes retain their HTTP connection after the listener closes.
 
+- Long HTTP pipelines no longer accumulate connection close listeners or emit
+  listener-limit warnings; aborted queued requests still settle once.
+
 - Test server unmatched routes return `404 File Not Found` with the complete
   HTML body, including HEAD and WebSocket navigation without an admission limit.
 
