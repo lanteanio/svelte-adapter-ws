@@ -102,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reduced ASCII header processing for requests with bodies and WebSocket handshakes.
+
 - Probe GET responses use implicit length framing without allocating a header object; HEAD keeps its explicit body length.
 
 - Plain HTTP batches skip redundant parser callback forwarding while later framed requests and UTF-8 headers retain normalization.

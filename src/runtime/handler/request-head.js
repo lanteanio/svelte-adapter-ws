@@ -1,4 +1,5 @@
 import { METHODS } from 'node:http';
+import { isAscii } from 'node:buffer';
 import { endParserRefusal } from './read-turn.js';
 import { normalizeHeaderEdges } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
@@ -47,6 +48,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let timer = null;
 	let answer = null;
 	let current = null;
+	let currentAscii = true;
 	let stopped = false;
 	let chunkSize = 0;
 	let chunkDigitsEnded = false;
@@ -54,7 +56,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	const originalIncoming = parser.onIncoming;
 	const onIncoming = function(req, keepAlive) {
 		if (current) {
-			decodeRequestHeaders(req);
+			if (!currentAscii) decodeRequestHeaders(req);
 			req.method = current.method;
 			req.url = current.target;
 			if (req.headers['transfer-encoding']) mode = 'chunk-line';
@@ -170,7 +172,9 @@ export function createRequestHeadExecutor(parser, socket) {
 						if (length > LIMIT) { refuse(431); return data.length; }
 						current = line;
 						consumed = length - prefix;
-						part = normalizeHeaderEdges(available.subarray(0, length));
+						part = available.subarray(0, length);
+						currentAscii = isAscii(part);
+						part = normalizeHeaderEdges(part, currentAscii);
 						const safeMethod = METHODS_SET.has(line.method) ? line.method : 'GET';
 						const safeTarget = line.target.replace(/[^\x21-\x7e]/g, '_');
 						if (safeMethod !== available.toString('latin1', 0, available.indexOf(32)) || safeTarget !== line.target) {

@@ -8,10 +8,11 @@ import { isAscii } from 'node:buffer';
  * Ordinary ASCII heads keep their original buffer without a header scan.
  *
  * @param {Buffer} head - One complete request head, including its request line.
+ * @param {boolean} [ascii] - Whether the complete head contains only ASCII bytes.
  * @returns {Buffer}
  */
-export function normalizeHeaderEdges(head) {
-	if (isAscii(head)) return head;
+export function normalizeHeaderEdges(head, ascii = isAscii(head)) {
+	if (ascii) return head;
 	let result = head;
 	let start = head.indexOf('\r\n') + 2;
 	if (start < 2) return head;
