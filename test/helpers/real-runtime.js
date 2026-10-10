@@ -29,6 +29,9 @@ import { variantOut } from '../fixture/variants.js';
 import { parse_as_bytes, parse_origin } from '../../src/runtime/utils/parse.js';
 
 const fixtureDir = fileURLToPath(new URL('../fixture', import.meta.url));
+const subscriptionAccountingSlot = Symbol.for('adapter-uws.subscription-accounting-hook');
+/** @type {WeakMap<object, (delta: number, topic: string) => void>} */
+const runtimeAccountingHooks = new WeakMap();
 
 let transport;
 try {
@@ -314,6 +317,20 @@ export async function startRealRuntime({ variant = 'default', env = {} } = {}) {
 
 	const builtHandler = path.join(fixtureDir, variantOut(variant), 'handler.js');
 	const handler = await import(pathToFileURL(builtHandler).href);
+
+	// Each fixture installs its own production callback when evaluated. A
+	// cached fixture must reclaim that same callback after another build ran.
+	if (!runtimeAccountingHooks.has(handler)) {
+		const hook = /** @type {any} */ (globalThis)[subscriptionAccountingSlot];
+		if (typeof hook === 'function') runtimeAccountingHooks.set(handler, hook);
+	}
+	const accountingHook = runtimeAccountingHooks.get(handler);
+	if (accountingHook) {
+		const { setSubscriptionAccountingHook } = await import(pathToFileURL(
+			path.join(fixtureDir, variantOut(variant), 'utils', 'ws-symbols.js')
+		).href);
+		setSubscriptionAccountingHook(accountingHook);
+	}
 
 	// The import above is a CACHE READ when another suite in this worker already
 	// loaded this variant. That only happens when file parallelism is off (at

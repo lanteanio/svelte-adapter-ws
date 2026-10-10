@@ -2017,6 +2017,14 @@
 			{
 				"lead": "\t\t'uWebSockets.js is not installed, so every real-runtime suite would skip and report ' +",
 				"ours": "\t\t'ws is not installed, so every real-runtime suite would skip and report ' +"
+			},
+			{
+				"lead": "const fixtureDir = fileURLToPath(new URL('../fixture', import.meta.url));\n",
+				"ours": "const fixtureDir = fileURLToPath(new URL('../fixture', import.meta.url));\nconst subscriptionAccountingSlot = Symbol.for('adapter-uws.subscription-accounting-hook');\n/** @type {WeakMap<object, (delta: number, topic: string) => void>} */\nconst runtimeAccountingHooks = new WeakMap();\n"
+			},
+			{
+				"lead": "\tconst handler = await import(pathToFileURL(builtHandler).href);\n\n\t// The import above is a CACHE READ",
+				"ours": "\tconst handler = await import(pathToFileURL(builtHandler).href);\n\n\t// Each fixture installs its own production callback when evaluated. A\n\t// cached fixture must reclaim that same callback after another build ran.\n\tif (!runtimeAccountingHooks.has(handler)) {\n\t\tconst hook = /** @type {any} */ (globalThis)[subscriptionAccountingSlot];\n\t\tif (typeof hook === 'function') runtimeAccountingHooks.set(handler, hook);\n\t}\n\tconst accountingHook = runtimeAccountingHooks.get(handler);\n\tif (accountingHook) {\n\t\tconst { setSubscriptionAccountingHook } = await import(pathToFileURL(\n\t\t\tpath.join(fixtureDir, variantOut(variant), 'utils', 'ws-symbols.js')\n\t\t).href);\n\t\tsetSubscriptionAccountingHook(accountingHook);\n\t}\n\n\t// The import above is a CACHE READ"
 			}
 		]
 	},

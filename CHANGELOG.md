@@ -382,6 +382,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the UTF-8 examples in older changelog entries and check tracked text
   for accidental double encoding with `check:source-encoding` and in CI.
 
+- Test runtime fixtures restore their subscription accounting callback when a cached build restarts after another fixture.
+
 - Vite subscriber iteration passes the adapter socket and its user data to callbacks, so matching subscribers can be inspected and sent messages without throwing.
 
 - Incomplete request heads no longer time out an active SSE stream or delayed HTTP response.
