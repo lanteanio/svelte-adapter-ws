@@ -980,7 +980,7 @@ export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
 	if (/** @type {any} */ (server).shouldUpgradeCallback === shouldUpgradeCallback) return;
 	// After node's own listener, which the server attached when it was built:
 	// an https server is no http.Server, and listens on 'secureConnection'.
-	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', (/** @type {any} */ socket) => {
+	const install = (/** @type {any} */ socket) => {
 		const parser = socket.parser;
 		const onIncoming = parser?.onIncoming;
 		if (typeof onIncoming !== 'function') return;
@@ -989,7 +989,9 @@ export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
 			if (req.upgrade && req.method !== 'CONNECT' && !shouldUpgradeCallback(req)) req.upgrade = false;
 			return onIncoming(req, keepAlive);
 		};
-	});
+	};
+	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', install);
+	server.on(Symbol.for('svelte-adapter-ws.httpParserReady'), install);
 }
 
 // node's HTTP parser binding, for resumeAfterDeclinedUpgrade. Where a node
