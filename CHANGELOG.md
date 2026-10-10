@@ -128,9 +128,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Request bodies left unread after an answer are drained, including bodies
   rejected by the authentication size cap, so keep-alive requests continue.
 
-- The test server answers invalid admin response statuses with a clean 500,
-  matching production without carrying headers from the refused response.
-
 - Full request-path and envelope-prefix caches discard their oldest half
   every 60 seconds, allowing stale entries to age out after traffic changes.
 
@@ -368,6 +365,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page.
 
 ### Fixed
+
+- Error reference entries follow the shared catalog order and retain the cluster
+  operator link.
+
+- The test server answers invalid admin response statuses with a clean 500,
+  matching production without carrying headers from the refused response.
 
 - Large probe pipelines release completed responses when the read cork fills before a later request is refused.
 

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readLeadAtPin } from './lead-pin.js';
 import { ADAPTER_ERROR_IDS, ADAPTER_ERROR_REGISTRY, adapterConsoleLine } from '../src/runtime/error-registry.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,6 +48,15 @@ function emitSites(entry) {
 }
 
 describe('error catalog', () => {
+	it('retains the shared registry order and cluster operator link', () => {
+		const lead = readLeadAtPin(['src/runtime/error-registry.js']).get('src/runtime/error-registry.js');
+		expect(lead, 'the pinned family registry is available').toBeTruthy();
+		const keys = [...lead.slice(lead.indexOf('export const ADAPTER_ERROR_REGISTRY')).matchAll(/id: ADAPTER_ERROR_IDS\.(\w+)/g)]
+			.map(match => match[1]).filter(key => key !== 'NATIVE_LOAD');
+		expect(ADAPTER_ERROR_REGISTRY.map(entry => entry.id)).toEqual(keys.map(key => ADAPTER_ERROR_IDS[key]));
+		expect(ADAPTER_ERROR_REGISTRY.find(entry => entry.id === ADAPTER_ERROR_IDS.CLUSTER_CONFIG_REUSEPORT).link).toBe('https://svti.me/cluster-mode');
+	});
+
 	it('has a live emit site for every entry', () => {
 		const dead = ADAPTER_ERROR_REGISTRY
 			.filter((entry) => emitSites(entry).size === 0)

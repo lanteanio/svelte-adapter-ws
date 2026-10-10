@@ -72,6 +72,14 @@ describe('message prefixes in the error reference', () => {
 			expect(anchor, entry.id + ' has an explicit anchor').toBeGreaterThan(-1);
 			const next = lines.findIndex((line, index) => index > anchor && line.startsWith('<a id="'));
 			const section = lines.slice(anchor, next === -1 ? lines.length : next);
+			expect(section.slice(0, 3), entry.id + ' retains the heading separator').toEqual([
+				'<a id="' + entry.anchor + '"></a>', '## \x60' + entry.id + '\x60', ''
+			]);
+			const labels = section.filter(line => line.startsWith('- **')).map(line => line.match(/^- \*\*([^:]+):\*\*/)?.[1]);
+			expect(labels, entry.id + ' follows the family detail template').toEqual([
+				'Code/event', 'Message prefix', 'Cause', 'Consequence', 'Automatic recovery', 'Next action',
+				...(entry.link ? ['Operator shortlink'] : []), 'Runtime help', 'Runtime sources'
+			]);
 			const prefix = section.find((line) => line.startsWith('- **Message prefix:** '));
 			expect(prefix, entry.id + ' has a message prefix').toBeTruthy();
 			expect(codeSpans(prefix), entry.id).toEqual([entry.messagePrefix]);
