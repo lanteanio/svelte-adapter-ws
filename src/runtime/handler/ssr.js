@@ -8,6 +8,7 @@ import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
 import { inOwnTurn, releaseTurnIfFull } from './http-helpers.js';
+import { httpReadHeld } from './read-turn.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
@@ -399,7 +400,7 @@ function cut(res) {
 		res.req.socket.destroy();
 		return;
 	}
-	if (!inOwnTurn(res)) {
+	if (!inOwnTurn(res) && !httpReadHeld(socket)) {
 		while (socket.writableCorked > 0) socket.uncork();
 	}
 	res.destroy();

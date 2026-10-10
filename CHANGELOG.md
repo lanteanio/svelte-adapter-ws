@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipelined HTTP dispatch follows application callback boundaries.** Promise
   jobs finish before the next request is considered; delayed responses close
   an unanswered pipeline. Application `Connection: close` headers retain their
-  wire value while preserving the native transport behavior.
+  wire value while preserving the native transport behavior. Stream teardown
+  also respects pending HTTP read buffers.
 
 - **Refused WebSocket handshakes keep their HTTP connection.** Safe refusals
   accept later requests and synchronous pipelines; ambiguous framing still
