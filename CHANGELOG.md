@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
 
+- **Live Linux cluster tests cover request aborts before worker exits.** Fatal
+  and unhandled exceptions abort pending requests, handled exceptions preserve
+  them, and repeated primary stop signals let the original drain finish.
+
 - **Linux recovery drill verifies external process restarts.** The respawner
   command wedges a clustered worker, checks the whole-process hard exit, and
   verifies replacement readiness after both that failure and a primary kill.
@@ -334,7 +338,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a hook's Response as production does, and the auth and dashboard mounts
   answer only their own paths.
 - **A header value past ASCII goes out as its UTF-8 bytes.** node writes a
-  header value one byte per character, so `x-note: cafÃ©` went out as the
+  header value one byte per character, so `x-note: cafÃƒÂ©` went out as the
   single byte `e9`, and a character past U+00FF was answered with a `500`.
   Every lane that writes an app or configured header - pages, the auth
   endpoint, the admin route, the waiting-room renderer, built assets and
@@ -500,10 +504,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A prerendered trailing-slash redirect is percent-encoded, and a route
   named past Latin-1 no longer takes the process down.** The lookup matches
   the DECODED path and wrote it verbatim into `Location`. node writes a header
-  value as Latin-1, so a route named `cafÃ©` redirected with the raw byte
+  value as Latin-1, so a route named `cafÃƒÂ©` redirected with the raw byte
   `0xE9` in the header rather than a request target, and it refuses a
   character past Latin-1 outright, so a trailing-slash request to a route
-  named `Å‚Ã³dÅº`, or a bare request to a directory-style route named `Å¼Ã³Å‚w`,
+  named `Ã…â€šÃƒÂ³dÃ…Âº`, or a bare request to a directory-style route named `Ã…Â¼ÃƒÂ³Ã…â€šw`,
   threw `ERR_INVALID_CHAR` out of the request listener, where nothing caught
   it. The target is now spelled as a request target
   (`utils/location-target.js`, the family's own), path segments and query

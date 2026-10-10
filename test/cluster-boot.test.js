@@ -7,6 +7,9 @@
 
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import http from 'node:http';
+import { symlinkSync, rmdirSync, unlinkSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,12 +27,16 @@ afterEach(async () => {
  * Run the payload's process entry as a child with the given env.
  *
  * @param {Record<string, string>} env
- * @param {{ replace?: Record<string, string>, wsHandlerSource?: string, primaryInitSource?: string }} [build]
+ * @param {{ replace?: Record<string, string>, wsHandlerSource?: string, primaryInitSource?: string, serverSource?: string }} [build]
  */
 function spawnPayload(env, build = {}) {
 	const payload = buildRuntime(build);
+	const dependencies = path.join(payload.dir, 'node_modules');
+	symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), dependencies, process.platform === 'win32' ? 'junction' : 'dir');
+	const childEnv = { ...process.env, ...env };
+	delete childEnv.VITEST;
 	const proc = spawn(process.execPath, [path.join(payload.dir, 'index.js')], {
-		env: { ...process.env, ...env },
+		env: childEnv,
 		stdio: ['ignore', 'pipe', 'pipe']
 	});
 	let stdout = '';
@@ -59,6 +66,8 @@ function spawnPayload(env, build = {}) {
 			proc.kill('SIGKILL');
 			await exited;
 		}
+		if (process.platform === 'win32') rmdirSync(dependencies);
+		else unlinkSync(dependencies);
 		payload.cleanup();
 	});
 	return handle;
@@ -296,3 +305,87 @@ async function subscribe(client, topic) {
 	client.send({ type: 'subscribe', topic, ref: 1 });
 	await client.next((f) => f.json?.type === 'subscribed' && f.json?.topic === topic);
 }
+
+// The fault originates in the worker serving the held request, so reuseport
+// distribution cannot send a separate trigger to a different worker. Direct
+// writes survive a worker's immediate exit; console output can be buffered.
+const EXIT_SERVER = `
+import { writeSync } from 'node:fs';
+import { fatal } from '../utils/assertions.js';
+export class Server {
+	async init() {}
+	async respond(request) {
+		const url = new URL(request.url);
+		if (url.pathname !== '/api/hold') return new Response('ok');
+		const mode = url.searchParams.get('mode');
+		request.signal.addEventListener('abort', () => writeSync(1, '[hold] aborted: ' + request.signal.reason.name + ': ' + request.signal.reason.message + '\\n'), { once: true });
+		writeSync(1, '[hold] holding\\n');
+		if (mode === 'handled') process.once('uncaughtException', () => writeSync(1, '[hold] exception handled\\n'));
+		setTimeout(() => {
+			if (mode === 'fatal') fatal(false, 'fixture.worker-exit', null);
+			else throw new Error('fixture uncaught worker error');
+		}, 100);
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		return new Response('held');
+	}
+}
+`;
+
+function heldRequest(port, pathname) {
+	return new Promise((resolve) => {
+		const request = http.get({ host: '127.0.0.1', port, path: pathname, agent: false }, (response) => {
+			let body = '';
+			response.on('data', (chunk) => { body += chunk; });
+			response.on('end', () => resolve({ status: response.statusCode, body }));
+			response.on('error', (error) => resolve({ error }));
+		});
+		request.on('error', (error) => resolve({ error }));
+		cleanups.push(() => request.destroy());
+	});
+}
+
+describe.skipIf(!onLinux)('cluster request signals', () => {
+	it.each([['fatal', 78], ['uncaught', 1]])('aborts a held request before %s worker exit', async (mode, exitCode) => {
+		const port = await freePort();
+		const run = spawnPayload({ CLUSTER_WORKERS: '2', HOST: '127.0.0.1', PORT: String(port), NODE_ENV: 'production', SHUTDOWN_TIMEOUT: '10' }, { serverSource: EXIT_SERVER });
+		await run.waitFor(/listening on :\d+[\s\S]*listening on :\d+/, 30000);
+		const held = heldRequest(port, '/api/hold?mode=' + mode);
+		await run.waitFor(/\[hold\] holding/);
+		await run.waitFor(/\[hold\] aborted: AbortError: The server shut down before the request finished/, 5000);
+		await run.waitFor(new RegExp('exited with code ' + exitCode + ', restarting'), 5000);
+		expect((await held).error?.code).toBe('ECONNRESET');
+		expect(run.out().match(/\[hold\] aborted:/g)).toHaveLength(1);
+		run.proc.kill('SIGTERM');
+		expect(await run.exited).toBe(0);
+	}, 45000);
+
+	it('keeps the held request live when the application handles the exception', async () => {
+		const port = await freePort();
+		const run = spawnPayload({ CLUSTER_WORKERS: '2', HOST: '127.0.0.1', PORT: String(port), NODE_ENV: 'production', SHUTDOWN_TIMEOUT: '10' }, { serverSource: EXIT_SERVER });
+		await run.waitFor(/listening on :\d+[\s\S]*listening on :\d+/, 30000);
+		const held = heldRequest(port, '/api/hold?mode=handled');
+		await run.waitFor(/\[hold\] exception handled/);
+		expect(await held).toEqual({ status: 200, body: 'held' });
+		expect(run.out()).not.toContain('[hold] aborted:');
+		run.proc.kill('SIGTERM');
+		expect(await run.exited).toBe(0);
+	}, 45000);
+
+	it('finishes the held response after a second primary stop signal', async () => {
+		const port = await freePort();
+		const run = spawnPayload({ CLUSTER_WORKERS: '2', HOST: '127.0.0.1', PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, {
+			primaryInitSource: `export default function () { process.on('SIGTERM', () => console.log('[primary] stop received')); return {}; }`
+		});
+		await run.waitFor(/listening on :\d+[\s\S]*listening on :\d+/, 30000);
+		const held = heldRequest(port, '/api/hold?ms=1200');
+		await run.waitFor(/\[hold\] holding/);
+		run.proc.kill('SIGTERM');
+		await run.waitFor(/Primary received SIGTERM, shutting down 2 workers/);
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		run.proc.kill('SIGTERM');
+		await run.waitFor(/\[primary\] stop received[\s\S]*\[primary\] stop received/);
+		expect(await held).toEqual({ status: 200, body: 'held' });
+		expect(await run.exited).toBe(0);
+		expect(run.out()).not.toContain('[hold] aborted:');
+	}, 45000);
+});
