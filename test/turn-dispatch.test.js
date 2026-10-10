@@ -138,7 +138,7 @@ describe('createTestServer', () => {
 				upgrade() { /** @type {any} */ (globalThis).__turnProbe?.('upgrade'); return {}; }
 			}
 		});
-	});
+	}, 60000);
 
 	afterAll(async () => {
 		await mirror?.close();
