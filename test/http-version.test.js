@@ -504,10 +504,10 @@ describe('the built runtime over TLS', () => {
 		const hostless = await converse(connect, [[0, 'GET /api/tiny HTTP/1.1\r\n\r\n']], ['GET']);
 		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 		expect(hostless.closed).toBe(true);
-		// In its turn: behind an answered request, after that answer, where
-		// node's own check would have written the 400 before it.
+		// The parser refusal replaces the small preceding answer still held
+		// in this read's response buffer.
 		const behind = await converse(connect, [[0, 'GET /api/tiny HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\n\r\n']], ['GET', 'GET']);
-		expect(behind.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request']);
+		expect(behind.answers.map((a) => a.statusLine)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(behind.closed).toBe(true);
 		// Behind a waiting answer the line writes the 400 at once and ends
 		// the connection, taking the waiting answer along; node's own check

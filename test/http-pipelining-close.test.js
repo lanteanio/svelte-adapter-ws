@@ -341,7 +341,7 @@ describe('createTestServer', () => {
 		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(alone.closed).toBe(true);
 		const behind = await converse(quick.port, [[0, get('/__realtime/status') + 'GET /healthz HTTP/1.1\r\n\r\n']]);
-		expect(statusLines(behind.raw)).toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 400 Bad Request']);
+		expect(statusLines(behind.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(behind.closed).toBe(true);
 		const handshake = await converse(quick.port, [[0, 'GET /ws HTTP/1.1\r\n' + HANDSHAKE + '\r\n']]);
 		expect(statusLines(handshake.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
