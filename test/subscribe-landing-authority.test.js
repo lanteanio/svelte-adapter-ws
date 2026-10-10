@@ -1,0 +1,58 @@
+import { expect, it } from 'vitest';
+import WebSocket from 'ws';
+import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
+import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+
+const handler = `
+export const pending = [];
+export function subscribe(ws, topic) {
+  return new Promise(resolve => pending.push({ ws, topic, resolve }));
+}
+export function message(ws, { platform }) { platform.send(ws, 'probe', 'alive', {}); }
+`;
+
+it('a refused fresh attempt never grants authority to its revoked sibling', async () => {
+	const payload = buildRuntime({ replace: {
+		WS_ENABLED: 'true', WS_OPTIONS: JSON.stringify({ allowedOrigins: '*', idleTimeout: 120, compression: false })
+	}, wsHandlerSource: handler });
+	let rt;
+	let ws;
+	try {
+		rt = await bootRuntime(payload);
+		const load = p => import(pathToFileURL(`${payload.dir}/${p}`).href);
+		const { wsModule } = await load('ws-handler-bridge.js');
+		const { platform } = await load('handler/platform.js');
+		const { trackedSubscribe, WS_SUBSCRIPTIONS, WS_PENDING_SUBSCRIBES } = await load('utils/ws-symbols.js');
+		ws = new WebSocket(`ws://127.0.0.1:${rt.port}/ws`);
+		const frames = [];
+		ws.on('message', raw => frames.push(JSON.parse(raw.toString())));
+		await once(ws, 'open');
+		const topic = 'landing-authority';
+		ws.send(JSON.stringify({ type: 'subscribe', topic, ref: 1 }));
+		await expect.poll(() => wsModule.pending.length).toBe(1);
+		const first = wsModule.pending[0];
+		platform.unsubscribe(first.ws, topic);
+		ws.send(JSON.stringify({ type: 'subscribe', topic, ref: 2 }));
+		await expect.poll(() => wsModule.pending.length).toBe(2);
+		platform.authorizeWireSubscribe('strict');
+		wsModule.pending[1].resolve(true);
+		await expect.poll(() => frames.find(f => f.ref === 2)).toMatchObject({ type: 'subscribe-denied', reason: 'FORBIDDEN' });
+		const ud = first.ws.getUserData();
+		// A plugin finishing the revoked hook installs tracked membership in
+		// its own await window. The refused sibling supplies no authority for it.
+		trackedSubscribe(first.ws, topic);
+		expect(ud[WS_SUBSCRIPTIONS].has(topic)).toBe(true);
+		first.resolve(true);
+		await expect.poll(() => frames.find(f => f.ref === 1)).toMatchObject({ type: 'subscribe-denied', reason: 'FORBIDDEN' });
+		expect(ud[WS_SUBSCRIPTIONS].has(topic)).toBe(false);
+		expect(ud[WS_PENDING_SUBSCRIBES].size).toBe(0);
+		const barrier = once(ws, 'message');
+		ws.send(JSON.stringify({ type: 'probe' }));
+		expect(JSON.parse((await barrier)[0].toString()).event).toBe('alive');
+	} finally {
+		ws?.terminate();
+		await rt?.close();
+		payload.cleanup();
+	}
+}, 30000);
