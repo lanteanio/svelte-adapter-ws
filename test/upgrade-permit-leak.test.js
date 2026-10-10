@@ -196,9 +196,9 @@ describe('a refused upgrade returns the in-flight slot', () => {
 	}, 60000);
 });
 
-// Over a real socket every refusal ends in socket.destroy(), node emits
-// 'close' on the next tick, and the abandoned-handshake listener an armed gate
-// installs hands the slot back regardless of what the branch itself did. So an
+// When a peer closes after refusal, the abandoned-handshake listener an
+// armed gate installs hands the slot back regardless of what the branch
+// itself did. So an
 // end-to-end refusal cannot tell a working branch from a deleted one. These
 // drive the upgrade listener directly over a socket stub that destroys without
 // emitting anything: with no 'close' there is no backstop, and the branch's own
@@ -217,6 +217,9 @@ function stubSocket({ destroyed = false } = {}) {
 	socket.written = '';
 	socket.write = (chunk) => { socket.written += String(chunk); return true; };
 	socket.destroy = () => { socket.destroyed = true; };
+	socket.end = (chunk) => { socket.write(chunk); socket.destroy(); };
+	socket.pause = () => socket;
+	socket.resume = () => socket;
 	return socket;
 }
 

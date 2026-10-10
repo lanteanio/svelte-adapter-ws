@@ -246,7 +246,7 @@ export function send505(res) {
 }
 
 /**
- * Whether an HTTP/1.1 request names no Host, which the native tier refuses
+ * Whether an HTTP/1.1 request lacks exactly one Host field, which the native tier refuses
  * 400 as it reads the headers. The servers are built with
  * `requireHostHeader: false`, so such a request reaches the listener and the
  * connection's line rather than node's own 400, which never waits its turn.
@@ -254,7 +254,16 @@ export function send505(res) {
  * @param {import('node:http').IncomingMessage} req
  */
 export function missesHost(req) {
-	return req.headers.host === undefined && req.httpVersion === '1.1';
+	if (req.httpVersion !== '1.1') return false;
+	if (req.headers.host === undefined) return true;
+	let seen = false;
+	const raw = req.rawHeaders;
+	if (raw) for (let i = 0; i < raw.length; i += 2) {
+		if (raw[i].length !== 4 || raw[i].toLowerCase() !== 'host') continue;
+		if (seen) return true;
+		seen = true;
+	}
+	return false;
 }
 
 // The requests of one connection in the order it carried them, on the socket,
@@ -658,7 +667,10 @@ function forbiddenHeadAnswer(head, limit) {
 	for (const line of head.subarray(0, end).toString('latin1').split('\r\n').slice(1)) {
 		const colon = line.indexOf(':');
 		if (colon <= 0 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(line.slice(0, colon))) return BAD_TARGET_400_RAW;
-		if (line.slice(0, colon).toLowerCase() === 'host') host = true;
+		if (line.slice(0, colon).toLowerCase() === 'host') {
+			if (host) return BAD_TARGET_400_RAW;
+			host = true;
+		}
 	}
 	return host ? FORBIDDEN_405_RAW : BAD_TARGET_400_RAW;
 }
@@ -796,7 +808,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		};
 		// What the line asks of a request: its line was read, a Host is what
 		// the head has shown so far.
-		const standIn = { socket, httpVersion: '1.1', url: '/', method: 'TRACK', headers: { get host() { return /^host:/im.test(head.toString('latin1')) ? 'x' : undefined; } } };
+		const standIn = { socket, httpVersion: '1.1', url: '/', method: 'TRACK', headers: { get host() { return (head.toString('latin1').match(/^host:/igm)?.length ?? 0) === 1 ? 'x' : undefined; } } };
 		const timer = setTimer(() => { cleanup(); socket.destroy(); }, timeoutMs);
 		socket.once('close', cleanup);
 		socket[PENDING_HEAD] = (/** @type {Buffer} */ chunk) => {
@@ -968,7 +980,7 @@ export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
 	if (/** @type {any} */ (server).shouldUpgradeCallback === shouldUpgradeCallback) return;
 	// After node's own listener, which the server attached when it was built:
 	// an https server is no http.Server, and listens on 'secureConnection'.
-	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', (/** @type {any} */ socket) => {
+	const install = (/** @type {any} */ socket) => {
 		const parser = socket.parser;
 		const onIncoming = parser?.onIncoming;
 		if (typeof onIncoming !== 'function') return;
@@ -977,7 +989,9 @@ export function applyShouldUpgradeCallback(server, shouldUpgradeCallback) {
 			if (req.upgrade && req.method !== 'CONNECT' && !shouldUpgradeCallback(req)) req.upgrade = false;
 			return onIncoming(req, keepAlive);
 		};
-	});
+	};
+	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', install);
+	server.on(Symbol.for('svelte-adapter-ws.httpParserReady'), install);
 }
 
 // node's HTTP parser binding, for resumeAfterDeclinedUpgrade. Where a node
