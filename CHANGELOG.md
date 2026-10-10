@@ -113,6 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Plain HTTP batches skip redundant parser callback forwarding while later framed requests and UTF-8 headers retain normalization.
+
 - Built-in health and readiness probes avoid per-response turn scheduling while retaining pipelined response ordering.
 
 - Request lines retain their original boundaries across fragmented reads. Invalid

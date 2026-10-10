@@ -49,7 +49,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let chunkDigitsEnded = false;
 	let trailerBytes = 0;
 	const originalIncoming = parser.onIncoming;
-	parser.onIncoming = function(req, keepAlive) {
+	const onIncoming = function(req, keepAlive) {
 		if (current) {
 			decodeRequestHeaders(req);
 			req.method = current.method;
@@ -64,6 +64,7 @@ export function createRequestHeadExecutor(parser, socket) {
 		}
 		return originalIncoming.call(this, req, keepAlive);
 	};
+	parser.onIncoming = onIncoming;
 	const clearPending = () => { pending = null; if (timer !== null) clearTimer(timer); timer = null; };
 	const hold = data => {
 		pending = Buffer.from(data);
@@ -80,6 +81,7 @@ export function createRequestHeadExecutor(parser, socket) {
 		const text = data.toString('latin1');
 		if (FRAMED.test(text) || !FAST_HEADS.test(text)) return null;
 		current = null;
+		parser.onIncoming = originalIncoming;
 		return executePlainHttp.call(parser, data);
 	};
 	return {
@@ -90,6 +92,7 @@ export function createRequestHeadExecutor(parser, socket) {
 			if (stopped) return data.length;
 			const fast = tryFast(data);
 			if (fast !== null) return fast;
+			parser.onIncoming = onIncoming;
 			let at = 0;
 			while (at < data.length) {
 				let part, consumed;
