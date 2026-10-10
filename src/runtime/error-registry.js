@@ -796,7 +796,7 @@ export const ADAPTER_ERROR_REGISTRY = Object.freeze([
 		cause: 'Applying a new certificate set failed partway through the swap.',
 		consequence: 'Nothing changed on the wire: every context is built and validated before any is taken, and the staged set is discarded on a throw, so the served certificates - default and every SNI name - are exactly what they were. The renewal on disk is not being served, and the TLS degraded state is set for the duration.',
 		automaticRecovery: 'A one-shot retry is armed from the failure itself, rather than from the next filesystem event, because the throw may have consumed the last event of a renewal burst and the next one could be months away. A persistent fault therefore retries at that cadence instead of spinning.',
-		nextAction: 'Read the attached error. An extra pair rewritten between its validation read and the apply read - a certbot burst landing mid-reload - resolves through the armed retry once the write completes; a default context the server refused names the material to fix. Confirm the served certificate afterwards rather than assuming the renewal took.',
+		nextAction: 'Read the attached error. A certificate/key pair rewritten between validation and apply can succeed through the armed retry once both writes complete; otherwise repair the reported material. Confirm the served certificate afterwards rather than assuming the renewal took.',
 		sources: Object.freeze(['src/runtime/handler/tls.js']),
 		anchor: 'adapter-err-tls-swap',
 		help: 'docs/errors.md#adapter-err-tls-swap'
