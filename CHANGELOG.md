@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
 
+- **Error reference details include explicit anchors and runtime guidance.** Each
+  section now shows the code or event, searchable message prefix, operator
+  shortlink, runtime help route and emitting source links in the family format.
+
 - **`event.request.signal` aborts when the client disconnects and when
   shutdown stops waiting.** The Request handed to SvelteKit, and to an
   `admin()` handler, carried no signal, so it never fired. It now aborts

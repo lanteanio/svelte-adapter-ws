@@ -181,7 +181,7 @@ describe('error catalog', () => {
 	it('matches docs/errors.md entry for entry', () => {
 		const docs = readFileSync(path.join(repoRoot, 'docs', 'errors.md'), 'utf8');
 		const documented = new Set(
-			[...docs.matchAll(/^## (ADAPTER-ERR-[A-Z-]+)$/gm)].map((match) => match[1])
+			[...docs.matchAll(/^## `(ADAPTER-ERR-[A-Z-]+)`$/gm)].map((match) => match[1])
 		);
 		const inRegistry = new Set(ADAPTER_ERROR_REGISTRY.map((entry) => entry.id));
 		const undocumented = [...inRegistry].filter((id) => !documented.has(id));

@@ -1,8 +1,8 @@
 // Each message prefix in docs/errors.md renders as exactly that prefix.
 //
 // The reference quotes every prefix three times: as an inline code span in its
-// index-table row and in the indexed-console-lines bullet, and in a fenced
-// block in its own section. A prefix that carries backticks closed a
+// index-table row and in the indexed-console-lines bullet, and as an inline code span
+// in its own section. A prefix that carries backticks closed a
 // single-backtick span early, so the rest spilled out as prose. This parses the
 // committed reference with a CommonMark renderer rather than trusting the
 // string it was built from.
@@ -67,12 +67,23 @@ describe('message prefixes in the error reference', () => {
 	});
 
 	it('renders each prefix exactly in its own section', () => {
-		const tokens = md.parse(reference, {});
 		for (const entry of withPrefix) {
-			const heading = tokens.findIndex((t, i) => t.type === 'inline' && t.content === entry.id && tokens[i - 1]?.type === 'heading_open');
-			expect(heading, entry.id + ' has a section').toBeGreaterThan(-1);
-			const fence = tokens.slice(heading).find((t) => t.type === 'fence');
-			expect(fence?.content, entry.id).toBe(entry.messagePrefix + '\n');
+			const anchor = lines.indexOf('<a id="' + entry.anchor + '"></a>');
+			expect(anchor, entry.id + ' has an explicit anchor').toBeGreaterThan(-1);
+			const next = lines.findIndex((line, index) => index > anchor && line.startsWith('<a id="'));
+			const section = lines.slice(anchor, next === -1 ? lines.length : next);
+			const prefix = section.find((line) => line.startsWith('- **Message prefix:** '));
+			expect(prefix, entry.id + ' has a message prefix').toBeTruthy();
+			expect(codeSpans(prefix), entry.id).toEqual([entry.messagePrefix]);
+			const key = section.find((line) => line.startsWith('- **Code/event:** '));
+			expect(codeSpans(key), entry.id).toEqual([entry.code || entry.event]);
+			expect(section).toContain('- **Runtime help:** ' + '\x60' + entry.help + '\x60');
+			for (const [label, field] of [['Cause', 'cause'], ['Consequence', 'consequence'], ['Automatic recovery', 'automaticRecovery'], ['Next action', 'nextAction']]) {
+				expect(section).toContain('- **' + label + ':** ' + entry[field]);
+			}
+			const sources = section.find((line) => line.startsWith('- **Runtime sources:** '));
+			for (const source of entry.sources) expect(sources).toContain('[' + source + '](../' + source + ')');
+			if (entry.link) expect(section).toContain('- **Operator shortlink:** ' + '\x60' + entry.link + '\x60');
 		}
 	});
 });

@@ -4,10 +4,6 @@
 //
 //   node scripts/render-error-docs.js
 //
-// The GitHub anchor for a `## ADAPTER-ERR-*` heading is the lowercased id,
-// which is exactly each entry's `anchor` field - the check below keeps that
-// true so a registry edit cannot silently break its own help link.
-//
 // The page opens with the two indexes an operator reads it for: a row per id
 // carrying the code or event and the searchable start of the line, and a list
 // keyed the other way round - by the event name a sink reports, or by the
@@ -125,20 +121,23 @@ for (const entry of consoleEntries) {
 lines.push('');
 
 for (const entry of ADAPTER_ERROR_REGISTRY) {
-	const expectedAnchor = entry.id.toLowerCase();
-	if (entry.anchor !== expectedAnchor) {
-		throw new Error(`anchor mismatch for ${entry.id}: registry says '${entry.anchor}', heading yields '${expectedAnchor}'`);
-	}
-	lines.push(`## ${entry.id}`, '');
-	if (entry.severity) lines.push(`Severity: ${entry.severity}`, '');
-	if (entry.messagePrefix) {
-		lines.push('Log line begins:', '', '```', entry.messagePrefix, '```', '');
-	}
-	if (entry.cause) lines.push(`**Cause.** ${entry.cause}`, '');
-	if (entry.consequence) lines.push(`**Consequence.** ${entry.consequence}`, '');
-	if (entry.automaticRecovery) lines.push(`**Automatic recovery.** ${entry.automaticRecovery}`, '');
-	if (entry.nextAction) lines.push(`**What to do.** ${entry.nextAction}`, '');
-	if (entry.link) lines.push(`Further reading: ${entry.link}`, '');
+	lines.push(
+		'',
+		'<a id="' + entry.anchor + '"></a>',
+		'## `' + entry.id + '`',
+		'',
+		'- **Code/event:** `' + (entry.code || entry.event) + '`',
+		'- **Message prefix:** ' + codeSpan(entry.messagePrefix),
+		'- **Cause:** ' + entry.cause,
+		'- **Consequence:** ' + entry.consequence,
+		'- **Automatic recovery:** ' + entry.automaticRecovery,
+		'- **Next action:** ' + entry.nextAction,
+		...(entry.link ? ['- **Operator shortlink:** `' + entry.link + '`'] : []),
+		'- **Runtime help:** `' + entry.help + '`',
+		'- **Runtime sources:** ' + entry.sources.map((source) =>
+			'[' + source + '](../' + source.replace(/\\/g, '/') + ')'
+		).join(', ')
+	);
 }
 
 const outPath = path.join(repoRoot, 'docs', 'errors.md');
