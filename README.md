@@ -854,13 +854,19 @@ on the connection is parsed, which the native tier does once the request
 ahead has been handed to the application and the ticks and microtasks it
 queued have run. If its answer is still waiting then - on I/O or a timer,
 as an endpoint doing I/O does - the connection closes and neither request
-gets a byte it did not already have, the native tier's rule. Nothing behind
-an answer that ends the connection is read here: node ends the connection
-once that answer is written. RFC 9112 9.3.2 has a client
+gets a byte it did not already have, the native tier's rule. A client's
+`Connection: close` takes effect after the read's final complete request has
+finished its answer. A later complete request in the same read replaces that
+policy while the answer is buffered, while an incomplete following head leaves
+it in place. A completed closing answer that fills the response buffer ends
+the connection before later dispatch. This also
+applies when a fixed-length or chunked body finishes in that read. Parser
+refusals that end the connection still stop later dispatch. RFC 9112 9.3.2 has a client
 retry requests a closed connection left unanswered, and browsers do not
 pipeline. `vite dev` runs on Vite's own
 server, which serves HTTP/1.0 and queues pipelined requests instead.
-`test/http-pipelining-real.test.js` pins both halves on the built runtime.
+`test/http-pipelining-real.test.js` and `test/http-request-close.test.js` pin
+these boundaries on the built runtime.
 An incomplete following request head does not interrupt an active answer,
 including an SSE stream. Its 10-second idle deadline starts after that answer
 finishes. Completed static, SSR and realtime HTTP answers that fill the

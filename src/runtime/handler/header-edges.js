@@ -84,3 +84,39 @@ export function normalizeHeaderDel(head) {
 	}
 	return values.length ? { head: result, values } : null;
 }
+
+/** Keep llhttp's close flag from ending a read before its later requests. */
+export function normalizeConnectionClose(head) {
+	const text = head.toString('latin1');
+	if (!/\r\nconnection:[^\r\n]*(?:\r\n[\t ][^\r\n]*)*close/i.test(text)) return null;
+	const pattern = /\r\nconnection:([^\r\n]*(?:\r\n[\t ][^\r\n]*)*)/gi;
+	let result = head;
+	const values = [];
+	let ordinal = 0;
+	for (const match of text.matchAll(pattern)) {
+		const index = ordinal++;
+		const value = match[1];
+		if (!/close/i.test(value)) continue;
+		const start = match.index + match[0].length - value.length;
+		const tokens = [...value.matchAll(/cl[o0]se/gi)];
+		values.push([index, tokens.map(token => token[0])]);
+		if (result === head) result = Buffer.from(head);
+		for (const token of tokens) if (/close/i.test(token[0])) result[start + token.index + 2] = 48;
+	}
+	return result === head ? null : { head: result, values };
+}
+
+/** Restore token spelling independently of llhttp's header whitespace folding. */
+export function restoreConnectionClose(req, values) {
+	let ordinal = 0;
+	let next = 0;
+	for (let i = 0; i < req.rawHeaders.length && next < values.length; i += 2) {
+		if (req.rawHeaders[i].toLowerCase() !== 'connection') continue;
+		if (ordinal++ !== values[next][0]) continue;
+		const tokens = values[next++][1];
+		let token = 0;
+		req.rawHeaders[i + 1] = req.rawHeaders[i + 1].replace(/cl[o0]se/gi, value => tokens[token++] ?? value);
+	}
+	req.headers = null;
+	req.headersDistinct = null;
+}

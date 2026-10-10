@@ -6,6 +6,7 @@ import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderV
 import { createRequire } from 'node:module';
 import { isNativeError } from 'node:util/types';
 import { webSocketKeyByteLength } from './header-values.js';
+import { registerClosingResponse } from './request-close.js';
 import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
 import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal, httpCallbackCheckpoint } from './read-turn.js';
 
@@ -254,11 +255,8 @@ export function send505(res) {
  * @param {import('node:http').ServerResponse} res
  */
 export function sendHost400(req, res) {
-	if (!httpReadHeld(req.socket)) { send400(res, true); return; }
-	// Host validation belongs to the parser. Its refusal replaces answers
-	// still in this read's cork and prevents later callbacks on the same read.
-	const line = req.socket[LINE];
-	if (line) line.ahead = FINISHED_CLOSING;
+	// The parser owns both the closing bytes and the terminal read state.
+	// Its refusal replaces only answers still held in this read's cork.
 	endParserRefusal(req.socket, req.method === 'HEAD' ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
 }
 
@@ -346,6 +344,7 @@ const openTurns = new Map();
  * @param {boolean} [synchronous] a built-in answer that finishes before returning
  */
 export function servePipelined(req, res, serve, synchronous = false) {
+	registerClosingResponse(req, res);
 	const socket = /** @type {any} */ (req.socket);
 	/** @type {Line} */
 	let line = socket[LINE];
@@ -749,7 +748,9 @@ function refusedRequestLine(packet, at) {
 }
 
 /**
- * Answer the forbidden methods node never hands to the request listener.
+ * Answer forbidden methods when optional request-head normalization is absent.
+ * The normal reader gives node safe methods and restores them before routing;
+ * this fallback handles the unmodified native parser's errors instead.
  * llhttp knows TRACE, so it reaches the method gate above; CONNECT is routed
  * to the 'connect' event instead, and TRACK is not a method llhttp
  * recognises, so the parser fails the request and node's default
@@ -1013,11 +1014,11 @@ export function lineAhead(socket) {
  * @param {string} wsPath
  */
 export function takesWebSocketRoute(req, wsPath) {
-	if (req.method !== 'GET' || !acceptsRequestLine(req) || missesHost(req) || behindClosingAnswer(req)) return false;
+	if (req.method !== 'GET' || !acceptsRequestLine(req)) return false;
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
-		webSocketKeyByteLength(req.rawHeaders) === 24;
+		!missesHost(req) && !behindClosingAnswer(req) && webSocketKeyByteLength(req.rawHeaders) === 24;
 }
 
 /**

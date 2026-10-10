@@ -73,6 +73,7 @@ export function installProxyProtocolSocket(socket) {
 		else delete parser.execute;
 	};
 	parser.execute = function (data) {
+		heads.beginRead();
 		const firstHead = data.indexOf(PREFIX);
 		const held = !heads.boundary || firstHead >= 0 && firstHead + 4 < data.length;
 		if (held) beginHttpRead(socket);
@@ -162,7 +163,10 @@ export function installProxyProtocolSocket(socket) {
 				if (result < length) return offset;
 			}
 			return offset;
-		} finally { if (held && !parserFailed) endHttpRead(socket); }
+		} finally {
+			if (held && !parserFailed) endHttpRead(socket);
+			heads.endRead(parserFailed);
+		}
 	};
 	// Adding a reader switches node from its native consumed path to the
 	// JS execute path, so no read can bypass the preamble filter.

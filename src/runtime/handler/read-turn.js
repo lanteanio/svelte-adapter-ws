@@ -1,6 +1,8 @@
 // Hold the small writes made while a pipelined read is being dispatched.
 // Node may uncork from ServerResponse.end(); that cannot commit an earlier
 // answer before a later request in the same read has passed its turn checks.
+import { commitClosingResponse } from './request-close.js';
+
 const reads = new WeakMap();
 const LIMIT = 16 * 1024;
 let checkpointActive = false;
@@ -82,7 +84,7 @@ function headerAdjustment(res, shortStatus) {
 export function releaseHttpReadIfFull(res) {
 	const socket = res.socket || res.req?.socket;
 	const state = reads.get(socket);
-	if (!state?.holding) return false;
+	if (!state?.holding) { commitClosingResponse(res); return false; }
 	if (res.socket === null) {
 		const previous = state.queued.get(res) || 0;
 		const bytes = res.outputData.reduce((sum, entry) => sum + (typeof entry.data === 'string' ? Buffer.byteLength(entry.data, entry.encoding) : entry.data.length), 0);
@@ -101,6 +103,7 @@ export function releaseHttpReadIfFull(res) {
 	}
 	if (bytes <= LIMIT) return false;
 	endHttpRead(socket);
+	commitClosingResponse(res);
 	return true;
 }
 

@@ -147,16 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line like any request: behind an answer that ends the connection it goes
   unanswered, behind one still waiting the connection closes, and otherwise
   its `405` follows the answers ahead of it, and so does a `TRACK`, a
-  `TRACE` or a `CONNECT` spelled in lower case, which node's parser refuses.
+  `TRACE` or a `CONNECT` spelled in lower case. The request-head reader
+  normalizes methods for parsing and restores them before the method gate.
   Those get the `400` for a missing Host ahead of the `405`, once their
   head has ended, as the native tier reads the line, then the Host, then the
   method; the head is read as the native tier reads it, so a bare LF or a
   header name that is not a token in it is a `400` at once, and a head past
-  node's header limit a `431`. A line that starts with a
-  space and the target has an empty method, which the native tier hands on;
-  node's parser refuses it with `400`, and that answer stands, as it does
-  for a line with a CR before its version, which the native tier reads no
-  answer from unless the head ends right after that line. Anything that talks
+  the header limit a `431`. A line with a CR before its version is held
+  without an answer, unless its short suffix already rules out a supported
+  version. Anything that talks
   HTTP/1.0 to the server directly stops working: nginx before 1.29.7 proxies
   with HTTP/1.0 unless `proxy_http_version 1.1` is set on every location that
   proxies to it, and a health check that defaults to HTTP/1.0, such as
@@ -171,8 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request gets a byte it did not already have. The waiting request sees its
   client go, as for any disconnect, and the one behind it never reaches a
   route. A WebSocket handshake behind a waiting request is decided the same
-  way, a request after `Connection: close` behind one closes the connection
-  too, and an HTTP/1.0 request behind one gets its `505` at once, an
+  way. An HTTP/1.0 request behind one gets its `505` at once, an
   HTTP/1.1 request without a `Host` its `400`. A handshake later in a
   pipeline is upgraded once every answer before it is on the wire. Nothing
   behind an answer that ends the connection - a `505`, the `400` for an
@@ -376,6 +374,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Static assets omit Last-Modified for future or pre-1900 file timestamps while retaining their ETag.
 - Static date preconditions accept the three HTTP date formats and ignore invalid dates, including years before 1900. Two-digit years follow the rolling 50-year boundary.
 - Immutable assets evaluate entity preconditions: `If-None-Match: *` returns 304, `If-Match: *` succeeds, and specific or empty list entries cannot match an absent validator.
+
+- Client-requested HTTP connection closure follows the final complete request
+  in each socket read, including fixed-length and chunked bodies. A complete
+  pipelined request can replace an earlier close policy while its answer is
+  buffered; a partial head cannot. Once a completed closing answer fills the
+  response buffer, it closes before later dispatch.
+  Missing and duplicate Host refusals now use the same response bytes whether
+  an earlier response is buffered or already complete.
 
 - Readers of an incomplete request body reject if the response finishes first.
   The connection drains unread bytes for later requests.

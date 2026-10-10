@@ -1,8 +1,10 @@
 import { METHODS } from 'node:http';
 import { isAscii } from 'node:buffer';
-import { endParserRefusal } from './read-turn.js';
-import { normalizeHeaderEdges, normalizeHeaderDel } from './header-edges.js';
+import { endParserRefusal, httpCallbackCheckpoint } from './read-turn.js';
+import { normalizeHeaderEdges, normalizeHeaderDel, normalizeConnectionClose, restoreConnectionClose } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
+import { createRequestCloseController } from './request-close.js';
+import { firstHeaderValue } from '../utils/request-headers.js';
 import { executeAfterDeclines, executePlainHttp } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
 
@@ -12,6 +14,7 @@ const LIMIT = 4096;
 export const HEADER_TOO_LARGE = 'HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n<h1>Request Header Fields Too Large</h1><hr><i>uWebSockets/20 Server</i>';
 const FAST_HEADS = /^(?:(?:GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE) \/[!-~]* HTTP\/1\.1\r\n(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+:[\t -~]*\r\n)*\r\n)+$/;
 const FRAMED = /\r\n(?:content-length|transfer-encoding|upgrade):/i;
+const CONNECTION_CLOSE = /\r\nconnection:[\t ]*(?:[^\r\n]*close|[^\r\n]{5}[\t ]*\r\n)/i;
 const WAIT = 0;
 const REFUSE = 1;
 
@@ -49,7 +52,9 @@ export function createRequestHeadExecutor(parser, socket) {
 	let answer = null;
 	let current = null;
 	let currentAscii = true;
+	let currentConnectionValues = null;
 	let currentDelValues = null;
+	const closes = createRequestCloseController(socket);
 	let stopped = false;
 	let chunkSize = 0;
 	let chunkDigitsEnded = false;
@@ -64,6 +69,9 @@ export function createRequestHeadExecutor(parser, socket) {
 				req.headers = null;
 				req.headersDistinct = null;
 			}
+			if (currentConnectionValues !== null) restoreConnectionClose(req, currentConnectionValues);
+			const connection = req.headers.connection;
+			closes.select(req, connection?.includes(',') ? firstHeaderValue(req.rawHeaders, 'connection').length === 5 : connection?.length === 5);
 			if (!currentAscii) decodeRequestHeaders(req);
 			req.method = current.method;
 			req.url = current.target;
@@ -75,7 +83,7 @@ export function createRequestHeadExecutor(parser, socket) {
 				mode = remaining ? 'body' : 'head';
 			}
 		}
-		return originalIncoming.call(this, req, keepAlive);
+		return originalIncoming.call(this, req, current ? true : keepAlive);
 	};
 	parser.onIncoming = onIncoming;
 	const armHoldTimeout = () => {
@@ -103,24 +111,29 @@ export function createRequestHeadExecutor(parser, socket) {
 		if (timer === null && answer === null) armHoldTimeout();
 	};
 	const refuse = (status, headOnly = false) => {
-		clearPending(); stopped = true;
+		clearPending(); closes.clear(); stopped = true;
 		if (status === 431) { endParserRefusal(socket, HEADER_TOO_LARGE); return; }
 		const phrase = status === 505 ? 'HTTP Version Not Supported' : 'Bad Request';
 		endParserRefusal(socket, 'HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase));
 	};
 	const tryFast = (data) => {
+		if (closes.pending) httpCallbackCheckpoint();
+		if (closes.closed) stopped = true;
 		if (stopped) return data.length;
 		if (mode !== 'head' || pending !== null || data.length > LIMIT) return null;
 		const text = data.toString('latin1');
-		if (FRAMED.test(text) || !FAST_HEADS.test(text)) return null;
+		if (FRAMED.test(text) || CONNECTION_CLOSE.test(text) || !FAST_HEADS.test(text)) return null;
 		current = null;
+		closes.clear();
 		parser.onIncoming = originalIncoming;
 		return executePlainHttp.call(parser, data);
 	};
 	return {
 		tryFast,
+		beginRead: closes.beginRead,
+		endRead: closes.endRead,
 		get boundary() { return mode === 'head' && pending === null; },
-		restore() { clearPending(); if (parser.socket === socket) parser.onIncoming = originalIncoming; },
+		restore() { clearPending(); closes.clear(); if (parser.socket === socket) parser.onIncoming = originalIncoming; },
 		execute(data, trailingBytes = 0) {
 			if (stopped) return data.length;
 			const fast = tryFast(data);
@@ -168,6 +181,8 @@ export function createRequestHeadExecutor(parser, socket) {
 					const prefix = pending?.length || 0;
 					const available = pending === null ? data.subarray(at) : Buffer.concat([pending, data.subarray(at)]);
 					if (mode === 'head') {
+						if (closes.pending) httpCallbackCheckpoint();
+						if (closes.closed) { stopped = true; return data.length; }
 						const line = requestLine(available, trailingBytes);
 						if (line === REFUSE) { refuse(505, available.toString('latin1', 0, 5) === 'HEAD '); return data.length; }
 						const end = line === WAIT ? -1 : available.indexOf('\r\n\r\n', line.end - 2);
@@ -183,6 +198,9 @@ export function createRequestHeadExecutor(parser, socket) {
 						part = available.subarray(0, length);
 						currentAscii = isAscii(part);
 						part = normalizeHeaderEdges(part, currentAscii);
+						const connection = normalizeConnectionClose(part);
+						currentConnectionValues = connection?.values || null;
+						if (connection !== null) part = connection.head;
 						const del = normalizeHeaderDel(part);
 						currentDelValues = del?.values || null;
 						if (del) part = del.head;

@@ -9,7 +9,7 @@ import { createTestServer } from '../src/testing.js';
 
 const prefix = 'HEADER_DEL_TEST_';
 const certs = fileURLToPath(new URL('./fixtures/tls/', import.meta.url));
-const inspect = request => Response.json({ value: request.headers.get('x-probe'), cookie: request.headers.get('cookie') });
+const inspect = request => Response.json({ value: request.headers.get('x-probe') === 'connection' ? request.headers.get('connection') : request.headers.get('x-probe'), cookie: request.headers.get('cookie') });
 function request(target, headers) {
 	return Buffer.from('GET ' + target + ' HTTP/1.1\r\nHost: localhost\r\n' + headers.join('\r\n') + '\r\n\r\n', 'latin1');
 }
@@ -57,8 +57,8 @@ describe.each(['runtime', 'tls', 'mirror'])('DEL header values on %s', surface =
 		});
 		payload = buildRuntime({
 			replace: { ENV_PREFIX: JSON.stringify(prefix), WS_ENABLED: 'true', WS_OPTIONS: JSON.stringify({ allowedOrigins: '*', adminAuthAcknowledged: true, upgradeRateLimit: 0 }) },
-			serverSource: 'export class Server { async init() {} async respond(request) { return Response.json({value:request.headers.get("x-probe"),cookie:request.headers.get("cookie")}); } }',
-			wsHandlerSource: 'export function admin(request) { return Response.json({value:request.headers.get("x-probe"),cookie:request.headers.get("cookie")}); }'
+			serverSource: 'export class Server { async init() {} async respond(request) { return Response.json({value:request.headers.get("x-probe") === "connection" ? request.headers.get("connection") : request.headers.get("x-probe"),cookie:request.headers.get("cookie")}); } }',
+			wsHandlerSource: 'export function admin(request) { return Response.json({value:request.headers.get("x-probe") === "connection" ? request.headers.get("connection") : request.headers.get("x-probe"),cookie:request.headers.get("cookie")}); }'
 		});
 		runtime = await bootRuntime(payload);
 	}, 60000);
@@ -87,6 +87,16 @@ describe.each(['runtime', 'tls', 'mirror'])('DEL header values on %s', surface =
 		expect(answers[0].status).toBe(200);
 		expect(JSON.parse(answers[0].body)).toEqual({ value: '~\x7f~, second\x7f', cookie: 'a=\x7f; b=~' });
 	});
+
+	it('restores DEL and close-token spelling independently on a reused connection', async () => {
+		const values = ['\x7fclose, cl0se', 'keep-alive, CLOSE\x7f', '\x7fcl0se, CLOSE, close'];
+		const requests = values.map(value => [request('/__realtime/inspect', ['X-Probe: connection', 'Connection: ' + value, 'Connection: close'])]);
+		requests.push([request('/__realtime/inspect', ['X-Probe: reused'])]);
+		const answers = await exchange(runtime.port, secure, requests);
+		expect(answers.map(answer => answer.status)).toEqual([200, 200, 200, 200]);
+		expect(answers.map(answer => JSON.parse(answer.body).value)).toEqual([...values.map(value => value + ', close'), 'reused']);
+	});
+
 	it('keeps the original head byte limit for many DEL bytes', async () => {
 		const value = '\x7f'.repeat(3000);
 		const answers = await exchange(runtime.port, secure, [[request('/__realtime/inspect', ['X-Probe: ' + value])]]);
