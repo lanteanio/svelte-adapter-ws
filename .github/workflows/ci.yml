@@ -23,7 +23,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install dependencies
+      - name: Install npm
+        run: npm install --global npm@11.8.0 --no-audit --no-fund
+      - name: Install project dependencies
         run: npm install --no-audit --no-fund
       - name: Check source bytes
         run: npm run check:source-bytes
@@ -44,7 +46,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install dependencies
+      - name: Install npm
+        run: npm install --global npm@11.8.0 --no-audit --no-fund
+      - name: Install project dependencies
         run: npm install --no-audit --no-fund
       # The adapter is built against measured behavior, not documented
       # behavior. Re-running the probe here catches a Node or ws upgrade that
@@ -80,6 +84,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install npm
+        run: npm install --global npm@11.8.0 --no-audit --no-fund
       - run: npm install --no-audit --no-fund
       - name: Install fixture dependencies
         working-directory: test/fixture

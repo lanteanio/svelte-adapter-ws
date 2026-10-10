@@ -359,6 +359,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CI installs npm 11.8.0 before resolving dependencies on Node 22, avoiding the
+  bundled npm 10 resolver crash during clean installs.
+
 - Readers of an incomplete request body reject if the response finishes first.
   The connection drains unread bytes for later requests.
 
