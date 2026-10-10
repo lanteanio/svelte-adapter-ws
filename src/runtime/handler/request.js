@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, onExchangeClosed, send400, send405, send500, send505, servePipelined, takesWebSocketRoute } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, sendHost400, onExchangeClosed, send400, send405, send500, send505, servePipelined, takesWebSocketRoute } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -105,10 +105,10 @@ function serveRequest(req, res) {
 		return;
 	}
 	// An HTTP/1.1 request without a Host is refused 400 and closes, as the
-	// native tier refuses it while reading the headers. The server leaves this
-	// to the listener, so the refusal waits its turn like any answer.
+	// native tier refuses it while reading the headers. Discard earlier answers
+	// still buffered in this read before writing the closing refusal.
 	if (missesHost(req)) {
-		send400(res, true);
+		sendHost400(req, res);
 		return;
 	}
 

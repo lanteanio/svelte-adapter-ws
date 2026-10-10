@@ -248,11 +248,21 @@ export function send505(res) {
 }
 
 /**
- * Whether an HTTP/1.1 request lacks exactly one Host field, which the native tier refuses
- * 400 as it reads the headers. The servers are built with
- * `requireHostHeader: false`, so such a request reaches the listener and the
- * connection's line rather than node's own 400, which never waits its turn.
- *
+ * Refuse invalid Host framing, replacing responses held in the current read.
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ */
+export function sendHost400(req, res) {
+	if (!httpReadHeld(req.socket)) { send400(res, true); return; }
+	// Host validation belongs to the parser. Its refusal replaces answers
+	// still in this read's cork and prevents later callbacks on the same read.
+	const line = req.socket[LINE];
+	if (line) line.ahead = FINISHED_CLOSING;
+	endParserRefusal(req.socket, req.method === 'HEAD' ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
+}
+
+/**
+ * Whether an HTTP/1.1 request lacks exactly one Host field.
  * @param {import('node:http').IncomingMessage} req
  */
 export function missesHost(req) {
@@ -981,7 +991,7 @@ export function lineAhead(socket) {
  * @param {string} wsPath
  */
 export function takesWebSocketRoute(req, wsPath) {
-	if (req.method !== 'GET' || !acceptsRequestLine(req) || behindClosingAnswer(req)) return false;
+	if (req.method !== 'GET' || !acceptsRequestLine(req) || missesHost(req) || behindClosingAnswer(req)) return false;
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
