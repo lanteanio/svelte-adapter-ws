@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 import { rawConversation } from './helpers/raw-http.js';
@@ -16,6 +17,33 @@ beforeAll(async () => {
 	runtime = await bootRuntime(payload);
 });
 afterAll(async () => { await runtime?.close(); payload?.cleanup(); });
+function frameAfterUnreadableHead() {
+	return new Promise((resolve, reject) => {
+		const socket = net.connect(runtime.port, '127.0.0.1');
+		let raw = '', sentAt = null, settled = false;
+		const finish = (closed, error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(deadline);
+			socket.destroy();
+			if (error) reject(error);
+			else resolve({ raw, closed, after: sentAt === null ? '' : raw.slice(sentAt) });
+		};
+		const deadline = setTimeout(() => finish(false, new Error('No SSE frame arrived after the unreadable head')), 3000);
+		socket.on('error', error => finish(true, error));
+		socket.on('end', () => finish(true));
+		socket.on('connect', () => socket.write('GET /events HTTP/1.1\r\nHost: x\r\n\r\n'));
+		socket.on('data', chunk => {
+			raw += chunk.toString('latin1');
+			if (sentAt === null) {
+				if (!raw.includes('data: first\n\n')) return;
+				sentAt = raw.length;
+				socket.write('xyz\r\n\r\n');
+			} else if (raw.slice(sentAt).includes('data: next\n\n')) finish(false);
+		});
+	});
+}
+
 describe('unreadable bytes after a request', () => {
 	it('preserves an answered request in the same read', async () => {
 		const result = await rawConversation(runtime.port, [[0, 'GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nxyz\r\n\r\n']]);
@@ -30,9 +58,9 @@ describe('unreadable bytes after a request', () => {
 		expect(result.closed).toBe(false);
 	});
 	it('leaves an existing event stream alive', async () => {
-		const result = await rawConversation(runtime.port, [[0, 'GET /events HTTP/1.1\r\nHost: x\r\n\r\n'], [90, 'xyz\r\n\r\n']], { wait: 220 });
+		const result = await frameAfterUnreadableHead();
 		expect(result.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200']);
-		expect(result.raw.match(/data: next/g).length).toBeGreaterThanOrEqual(5);
+		expect(result.after).toContain('data: next\n\n');
 		expect(result.closed).toBe(false);
 	});
 });

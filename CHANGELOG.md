@@ -386,6 +386,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Vite subscriber iteration passes the adapter socket and its user data to callbacks, so matching subscribers can be inspected and sent messages without throwing.
 
+- SSE regression checks wait for a frame after unreadable input instead of assuming a timer tick rate.
+
 - Incomplete request heads no longer time out an active SSE stream or delayed HTTP response.
 
 - Authentication rate-limit refusals round fractional windows up before jitter so `Retry-After` contains whole seconds.
