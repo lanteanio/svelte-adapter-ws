@@ -468,7 +468,8 @@ function serveRequest(req, res) {
 	// against (own property shadows the IncomingMessage prototype getter).
 	Object.defineProperty(req, 'headers', { value: headers, configurable: true });
 
-	const { direct, effective } = resolveTransportAddress(req.socket);
+	const direct = req.socket?.remoteAddress || '';
+	const effective = resolveTransportAddress(req.socket, direct);
 	// The application's `request.signal`, aborted when the client goes away
 	// before its request body has arrived in full, as SvelteKit's Node adapter
 	// does - a form action that has its data finishes what it started. Only

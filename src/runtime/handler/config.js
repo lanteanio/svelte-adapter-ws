@@ -74,16 +74,18 @@ export const trusted_proxies = createTrustedProxyMatcher(env('TRUSTED_PROXIES', 
 /** Opt in to the PROXY v2 source address, gated by TRUSTED_PROXIES when set. */
 export const proxy_protocol = env('PROXY_PROTOCOL', '') === '1';
 
-/** @param {import('node:net').Socket} socket */
-export function resolveTransportAddress(socket) {
-	const direct = socket?.remoteAddress || '';
-	if (!proxy_protocol) return { direct, effective: direct };
+/**
+ * @param {import('node:net').Socket} socket
+ * @param {string} direct
+ */
+export function resolveTransportAddress(socket, direct) {
+	if (!proxy_protocol) return direct;
 	const claimed = proxiedAddress(socket);
 	if (trusted_proxies && !trusted_proxies.match(direct)) {
 		if (claimed) warnUntrustedClaim(direct, 'PROXY-protocol');
-		return { direct, effective: direct };
+		return direct;
 	}
-	return { direct, effective: claimed || direct };
+	return claimed || direct;
 }
 
 /**

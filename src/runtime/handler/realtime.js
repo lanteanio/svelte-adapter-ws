@@ -1473,7 +1473,8 @@ export async function handleUpgrade(req, socket, head) {
 	}
 	const wsTraceParent = extractTraceContext(headers);
 
-	const { direct, effective } = resolveTransportAddress(req.socket);
+	const direct = req.socket?.remoteAddress || '';
+	const effective = resolveTransportAddress(req.socket, direct);
 	const clientIp = resolveClientIp(effective, headers, direct);
 
 	if (upgradeRateLimiter.exceeded(clientIp, now())) {
@@ -2671,7 +2672,8 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		return true;
 	}
 
-	const { direct, effective } = resolveTransportAddress(req.socket);
+	const direct = req.socket?.remoteAddress || '';
+	const effective = resolveTransportAddress(req.socket, direct);
 	const clientIp = resolveClientIp(effective, headers, direct);
 	if (authPathRateLimiter.exceeded(clientIp, now())) {
 		// The preflight door has its own reason: a 429 here never reached the
