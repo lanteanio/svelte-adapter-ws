@@ -27,6 +27,7 @@ export const POSTURE_EXPORT_PATH = process.platform === 'win32'
 
 export const FIXTURE_VARIANTS = {
 	ssrbody: { out: 'build-ssr-body', handler: null, websocket: false },
+	ssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },
 	subscriptionrelease: {
 		out: 'build-subscription-release',
 		handler: './src/hooks.ws.subscription-release.js',

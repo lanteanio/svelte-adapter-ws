@@ -367,6 +367,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serial client test runs isolate connection singletons and runtime overrides
   between files, so a prior mock connection cannot replace a real socket.
 
+- Deferred SSR and SSE bodies flush ready first bytes before later producer work. Disconnects cancel and release response readers, including after completed POST bodies and when source cancellation never settles. Ready finite bodies retain length framing and compression.
+
 - Response streams preserve exact buffer/view bytes and UTF-8 strings in shared and direct delivery. Invalid chunks cancel their producer. Single-string bodies now qualify for dynamic compression with the existing credentialed-response protection.
 
 - Static assets omit Last-Modified for future or pre-1900 file timestamps while retaining their ETag.

@@ -118,8 +118,8 @@ function serveRequest(req, res) {
 	// the wire, after which no error response can be sent; `closedByServer`
 	// marks an abort this runtime caused (a source that failed mid-body), so
 	// the failure is still reported where a client-initiated abort stays silent.
-	/** @type {{ aborted: boolean, responseStarted: boolean, closedByServer: boolean, bodyReceived: boolean, signal: AbortSignal | null }} */
-	const state = { aborted: false, responseStarted: false, closedByServer: false, bodyReceived: false, signal: null };
+	/** @type {{ aborted: boolean, responseStarted: boolean, closedByServer: boolean, bodyReceived: boolean, signal: AbortSignal | null, cancelResponse: (() => void) | null }} */
+	const state = { aborted: false, responseStarted: false, closedByServer: false, bodyReceived: false, signal: null, cancelResponse: null };
 	// The RED observation rides the SAME terminal hook as the in-flight
 	// accounting, so probes, realtime routes, static assets and SSR are all
 	// counted through one funnel with the aborted/finished distinction already
@@ -133,7 +133,7 @@ function serveRequest(req, res) {
 	// single accounting point, settled once. An end before the response
 	// finished is a client abort.
 	onExchangeClosed(req, res, () => {
-		if (!res.writableFinished) state.aborted = true;
+		if (!res.writableFinished) { state.aborted = true; state.cancelResponse?.(); }
 		counters.inFlightCount--;
 		requestDone();
 		if (metricsHook !== null) {

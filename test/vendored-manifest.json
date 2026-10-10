@@ -2190,7 +2190,7 @@
 		"file": "test/fixture/static/deep/.hidden.txt"
 	},
 	{
-		"file": "test/fixture/static/ma\u00c3\u0178.txt"
+		"file": "test/fixture/static/maß.txt"
 	},
 	{
 		"file": "test/fixture/static/test.txt"
@@ -2208,6 +2208,10 @@
 			{
 				"lead": "export const FIXTURE_VARIANTS = {\n",
 				"ours": "export const FIXTURE_VARIANTS = {\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n"
+			},
+			{
+				"lead": "\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n",
+				"ours": "\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n"
 			}
 		]
 	},

@@ -138,9 +138,11 @@ describe('dynamic compression', () => {
 		expect(text.length).toBe(4 * ('chunk-0-'.length + 2048));
 	});
 
-	it('compresses the single chunk a dedup-buffered chunked GET collapses to', async () => {
+	it('streams deferred anonymous chunks without compression', async () => {
 		const res = await req('/api/chunked', { headers: { 'accept-encoding': 'gzip' } });
-		expect(res.headers.get('content-encoding')).toBe('gzip');
+		expect(res.headers.get('content-encoding')).toBeNull();
+		expect(res.headers.get('transfer-encoding')).toBe('chunked');
+		expect(res.headers.get('content-length')).toBeNull();
 		const text = await res.text();
 		expect(text.length).toBe(4 * ('chunk-0-'.length + 2048));
 	});

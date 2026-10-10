@@ -1,3 +1,4 @@
+import { readReady } from './response-read.js';
 import { responseChunkBytes } from './response-body.js';
 import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib';
 import { server } from '../_init.js';
@@ -203,13 +204,10 @@ function compressWhole(response, body, acceptEncoding) {
 
 /**
  * Write a Response onto the node response, framed the way uWS frames what it
- * is handed. The second read decides, as on the family's native tier: a body
- * that ends after one chunk (the common SSR shape) goes out whole with its
- * length, compressed first when the client negotiated a coding; a body with a
- * second chunk goes out chunked once that chunk exists, the first two
- * together, and is never buffered or compressed, so an SSE stream's first
- * event waits for its second; a bodyless answer says what bodylessLength
- * allows. The Response's own Content-Length never passes through. The whole
+ * is handed. A ready finite body can retain length framing and compression;
+ * a pending continuation flushes the prefix and hands its exact read to the
+ * chunked writer. A bodyless answer follows bodylessLength. The Response's
+ * own Content-Length never passes through. The whole
  * write is awaited, so a body that fails surfaces here as a throw.
  *
  * A source that fails mid-body (a rejecting `reader.read()`), or a chunk that
@@ -224,7 +222,7 @@ function compressWhole(response, body, acceptEncoding) {
  *
  * @param {import('node:http').ServerResponse} res
  * @param {Response} response
- * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean }} state
+ * @param {{ aborted: boolean, responseStarted?: boolean, closedByServer?: boolean, cancelResponse?: (() => void) | null }} state
  * @param {string} [acceptEncoding] '' suppresses compression (BREACH defense)
  * @param {boolean} [headOnly] the request was a HEAD: headers go out, the
  *   body never does
@@ -272,6 +270,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 	}
 
 	const reader = response.body.getReader();
+	const cancel = () => { reader.cancel().catch(() => {}); };
+	state.cancelResponse = cancel;
 	let streaming = false;
 	let streamDone = false;
 	try {
@@ -284,9 +284,9 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			return;
 		}
 		const firstBytes = responseChunkBytes(first.value);
-		const second = await reader.read();
+		const second = await readReady(reader);
 		if (state.aborted) return;
-		const secondBytes = second.done ? null : responseChunkBytes(second.value);
+		const secondBytes = second.done || second.pending ? null : responseChunkBytes(second.value);
 		if (second.done) {
 			const whole = compressWhole(response, firstBytes, acceptEncoding || '');
 			writeHeaders(res, response, state, whole.body.byteLength, whole.encoding);
@@ -296,8 +296,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		}
 
 		// Streamed, so node frames it chunked: every request here is HTTP/1.1.
-		// The first two chunks go out together, as the native tier writes them
-		// in its one cork, and like it the writer reads on without asking
+		// A ready second chunk accompanies the first; a pending one is read
+		// after the prefix is written. The writer reads on without asking
 		// either whether the socket drained. In the request's own turn the
 		// line holds every write; once they fill the native tier's cork, the
 		// hold ends and a full buffer is the socket's, which is waited on.
@@ -306,8 +306,11 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		if (firstBytes !== null) res.write(firstBytes);
 		if (secondBytes !== null) res.write(secondBytes);
 		releaseTurnIfFull(res);
+		let pending = second.pending;
 		for (;;) {
-			const read = await reader.read();
+			const next = pending || reader.read();
+			pending = null;
+			const read = await next;
 			if (read.done) { streamDone = true; break; }
 			if (state.aborted) break;
 			const value = responseChunkBytes(read.value);
@@ -320,6 +323,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			}
 		}
 	} finally {
+		if (state.cancelResponse === cancel) state.cancelResponse = null;
 		if (streaming && !state.aborted) {
 			if (streamDone) {
 				res.end();
@@ -672,7 +676,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 						await writeResponse(res, response, state, respAcceptEncoding, headOnly);
 						return;
 					}
-					const read = await readBodyUpTo(/** @type {ReadableStream<Uint8Array>} */ (response.body), MAX_SSR_DEDUP_BODY);
+					const read = await readBodyUpTo(/** @type {ReadableStream<Uint8Array>} */ (response.body), MAX_SSR_DEDUP_BODY, state);
 					if (state.aborted) {
 						resolveShared(null);
 						if (!read.complete) read.stream.cancel().catch(() => {});

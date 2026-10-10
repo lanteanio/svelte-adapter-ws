@@ -905,3 +905,9 @@ ArrayBuffers and typed-array/DataView slices. Invalid chunks fail the response
 and cancel the producer. A finite single-string body has the same dynamic
 compression eligibility as its byte equivalent; credentialed response compression
 remains disabled unless explicitly enabled.
+
+Deferred response streams flush their first ready bytes without waiting for
+later producer work. A buffered prefix receives one check-phase turn in total
+to settle ready transformations; a pending continuation then streams with chunked
+framing and without shared rendering or compression. Socket disconnects cancel
+and release response readers even after a POST body has finished.
