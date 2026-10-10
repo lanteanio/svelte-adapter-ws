@@ -2701,7 +2701,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		mUpgradeRejected?.inc({ reason: 'auth_rate_limit' });
 		// About one limiter window, jittered so the clients behind one
 		// address do not all come back in the same second.
-		const retryAfter = jitterRetryAfter(wsOptions.authPathRateLimitWindow ?? 10, 0.5);
+		const retryAfter = jitterRetryAfter(Math.ceil(wsOptions.authPathRateLimitWindow ?? 10), 0.5);
 		endText(res, 429, { 'retry-after': String(retryAfter), 'content-type': 'text/plain' }, 'Too many authentication requests');
 		return true;
 	}
