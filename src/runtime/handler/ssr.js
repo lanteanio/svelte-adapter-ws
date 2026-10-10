@@ -67,9 +67,10 @@ const COMPRESSIBLE_TYPES = new Set([
  * @param {number} limit - bytes, or Infinity
  * @param {{ aborted: boolean, bodyReceived?: boolean }} state - `bodyReceived`
  *   is set once the last chunk of the body has arrived
+ * @param {import('node:http').ServerResponse} [res] - answer completion discards unread bytes
  * @returns {ReadableStream<Uint8Array>}
  */
-export function readBody(req, limit, state) {
+export function readBody(req, limit, state, res) {
 	let initialized = false;
 	// Set once the stream is finished, from either side: the request ended,
 	// failed or passed the limit, or the consumer cancelled. The listeners
@@ -79,9 +80,19 @@ export function readBody(req, limit, state) {
 	let done = false;
 	return new ReadableStream({
 		start(controller) {
-			if (state.aborted) controller.error(new Error('Request aborted'));
+			if (state.aborted) { done = true; controller.error(new Error('Request aborted')); }
+			// The application may answer without consuming its request. Drop
+			// queued bytes and keep reading after that answer so the next
+			// request is not stranded behind a paused IncomingMessage.
+			const discard = () => {
+				if (!done) { done = true; controller.close(); }
+				req.resume();
+			};
+			res?.once('finish', discard);
+			req.once('close', () => res?.off('finish', discard));
 		},
 		pull(controller) {
+			if (done) return;
 			if (state.aborted) {
 				try { controller.error(new Error('Request aborted')); } catch { /* already closed */ }
 				return;
@@ -135,15 +146,16 @@ export function readBody(req, limit, state) {
  * @param {Record<string, string>} headers - the collected lowercase headers
  * @param {{ aborted: boolean, bodyReceived?: boolean, signal?: AbortSignal | null }} state -
  *   `signal` becomes the Request's own
+ * @param {import('node:http').ServerResponse} [res]
  * @returns {Request | null} null when the declared length already exceeds the limit
  */
-export function buildRequest(req, baseOrigin, headers, state) {
+export function buildRequest(req, baseOrigin, headers, state, res) {
 	const method = req.method || 'GET';
 	let body;
 	if (method !== 'GET' && method !== 'HEAD') {
 		const cl = parseInt(headers['content-length'], 10);
 		if (!isNaN(cl) && body_size_limit !== Infinity && cl > body_size_limit) return null;
-		body = readBody(req, body_size_limit, state);
+		body = readBody(req, body_size_limit, state, res);
 	}
 	return new Request(baseOrigin + req.url, {
 		method,
@@ -516,7 +528,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 		/** @type {Request | null} */
 		let request;
 		try {
-			request = buildRequest(req, base_origin, headers, state);
+			request = buildRequest(req, base_origin, headers, state, res);
 		} catch {
 			send400(res);
 			return;

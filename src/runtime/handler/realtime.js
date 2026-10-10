@@ -2709,7 +2709,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 	// the socket - a body within the cap usually arrives whole in that read -
 	// and the rest follows as the hook reads it. A hook that reads past the
 	// cap rejects with PayloadTooLargeError, answered 413 below.
-	const body = readBody(req, AUTH_BODY_LIMIT, state);
+	const body = readBody(req, AUTH_BODY_LIMIT, state, res);
 	// The path and, when there is one, the query: a bare trailing `?` names no
 	// query, so it is not carried into the URL the hook sees.
 	const target = req.url || WS_AUTH_PATH;

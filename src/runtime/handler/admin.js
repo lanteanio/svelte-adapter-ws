@@ -167,7 +167,7 @@ async function bridgeAdminRequest(req, res, baseOrigin, headers, state, span) {
 	try {
 		// GET/HEAD carry no body; other methods stream through the same
 		// reader the SSR lane uses, under the global body-size cap.
-		request = buildRequest(req, baseOrigin, headers, state);
+		request = buildRequest(req, baseOrigin, headers, state, res);
 	} catch {
 		if (state.aborted) return;
 		sendAdminError(res, 400, 'bad request');
