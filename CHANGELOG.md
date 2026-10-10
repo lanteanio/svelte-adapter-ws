@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Smooth authorities accept an optional positive integer `maxCommandsPerTick`
+  to bound client command work per entity, retaining ordered tails and
+  acknowledging only applied work. Omitted preserves full draining; trusted
+  server injections remain unpaced.
+
 - `releaseSubscription` in the subscriptions subpath removes failed framework admissions, including derived and publish access, while independently pending authorizations can still complete. Explicit unsubscribe continues to cancel pending attempts.
 
 - The runtime environment reference documents `WS_DEBUG`.

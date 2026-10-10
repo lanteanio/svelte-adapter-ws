@@ -164,6 +164,36 @@ object. Existing global subscriptions need no manual rebind.
 
 For framework rollback after an admitted loader or setup fails, import `releaseSubscription(ws, topic)` from `svelte-adapter-ws/subscriptions`. It removes native and logical membership, registered derived subscriptions, shared-codec cohorts and the topic's publish grant immediately, while independently pending subscribe attempts can still finish their own authorization. It returns `true` when membership or a publish grant was removed, and `false` when already released, missing or closed. It does not revive previously revoked attempts. The caller performs its own application cleanup; no application unsubscribe hook runs. This operation removes physical membership, so coordinate already-completed concurrent admissions before calling it. Use `platform.unsubscribe` or `trackedUnsubscribe` for explicit unsubscribe, kicks and revocations that must also cancel pending attempts.
 
+### Smooth command pacing
+
+`createSmoothAuthority` from `svelte-adapter-ws/plugins/smooth` accepts an
+optional positive integer `maxCommandsPerTick`:
+
+```js
+import { createSmoothAuthority } from 'svelte-adapter-ws/plugins/smooth';
+
+const authority = createSmoothAuthority({
+	apply: (state, command) => ({ x: state.x + command.dx }),
+	maxCommandsPerTick: 1
+});
+```
+
+Each caller-driven `drain()` applies at most that many client commands per
+entity, retains the remaining tail in order, and acknowledges only the applied
+prefix. A limit of one bounds command steps to the tick rate; larger limits
+allow bounded catch-up. Keep the authoritative tick cadence bounded. Trusted
+server `inject()` commands remain unpaced, and `queueCap` still drops the oldest
+commands on overflow.
+
+Existing applications need no migration when the option is omitted: draining
+all queued client commands, including synchronous enqueue from `apply`, stays
+the default. Bounded drains own their prefix while callbacks enqueue more work.
+If `apply` throws before state commit, the whole prefix is restored ahead of
+the waiting tail and the normal queue cap is reapplied; callback side effects
+remain the caller's responsibility. Higher-level consumers must forward the
+same setting to each authoritative owner, including cluster relay owners. The
+option requires no wire-format or dependency change.
+
 ## Configuration
 
 Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,
