@@ -636,6 +636,9 @@ const FORBIDDEN_405_RAW =
 	'\r\n' +
 	'Method Not Allowed';
 
+// The native parser's generic refusal is delimited by the connection close.
+const PARSER_400_RAW = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
+
 // The runtime's own 400, as send400 writes it, for a target node's parser
 // refuses: the bytes after it can no longer be read, so it also closes. A HEAD
 // gets the head alone, the length included.
@@ -924,7 +927,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 			: code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout'
 				: code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW' ? '413 Content Too Large'
 					: '400 Bad Request';
-		answerAndClose(socket, 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
+		answerAndClose(socket, status === '400 Bad Request' ? PARSER_400_RAW : 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
 	});
 }
 

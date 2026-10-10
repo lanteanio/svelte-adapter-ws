@@ -148,7 +148,7 @@ describe.each([false, true])('request close ownership over TLS=%s', secure => {
 	it.each(['X-\x01: value', 'X-Probe: a\x01b'])('leaves a following parser error to its terminal handler: %s', async header => {
 		const tail = 'GET /healthz HTTP/1.1\r\nHost: x\r\n' + header + '\r\n\r\n';
 		const result = await rawConversation(runtime.port, [[0, closing + tail]], { secure, wait: 500 });
-		expect(result).toEqual({ raw: 'HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n', closed: true });
+		expect(result).toEqual({ raw: 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>', closed: true });
 	});
 
 });
