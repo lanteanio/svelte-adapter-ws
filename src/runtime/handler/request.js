@@ -8,7 +8,7 @@
 /* global READINESS_CHECK_PATH */
 import { staticCache, counters } from './state.js';
 import { serveStatic, tryPrerendered, encodedStaticEntry } from './static-assets.js';
-import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, onExchangeClosed, send400, send405, send500, send505, servePipelined } from './http-helpers.js';
+import { ALLOWED_METHODS, FORBIDDEN_METHODS, acceptsRequestLine, missesHost, onExchangeClosed, send400, send405, send500, send505, servePipelined, takesWebSocketRoute } from './http-helpers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
@@ -56,7 +56,7 @@ const ADMIN_PREFIX = ADMIN_PATH === false ? null : ADMIN_PATH + '/';
  * @type {{
  *   wsPath: string,
  *   tryAuthenticateRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean,
- *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string, state: { websocketUpgrade: boolean }) => boolean,
+ *   serveWsPathGet: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
  *   tryWaitingRoomRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, search: string) => boolean,
  *   tryAdminRoute: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string, state: { aborted: boolean }) => boolean,
  *   exactPaths: string[]
@@ -114,14 +114,14 @@ function serveRequest(req, res) {
 	// the wire, after which no error response can be sent; `closedByServer`
 	// marks an abort this runtime caused (a source that failed mid-body), so
 	// the failure is still reported where a client-initiated abort stays silent.
-	/** @type {{ aborted: boolean, responseStarted: boolean, closedByServer: boolean, bodyReceived: boolean, signal: AbortSignal | null, websocketUpgrade: boolean }} */
-	const state = { aborted: false, responseStarted: false, closedByServer: false, bodyReceived: false, signal: null, websocketUpgrade: false };
+	/** @type {{ aborted: boolean, responseStarted: boolean, closedByServer: boolean, bodyReceived: boolean, signal: AbortSignal | null }} */
+	const state = { aborted: false, responseStarted: false, closedByServer: false, bodyReceived: false, signal: null };
 	// The RED observation rides the SAME terminal hook as the in-flight
 	// accounting, so probes, realtime routes, static assets and SSR are all
 	// counted through one funnel with the aborted/finished distinction already
 	// made. A request routed as a WebSocket upgrade records its decision instead. Null unless a metrics registry is configured, which keeps the
 	// zero-config path at one property read and no clock call.
-	const metricsHook = counters.httpRequestHook;
+	let metricsHook = counters.httpRequestHook;
 	const startedAt = metricsHook === null ? 0 : monotonicNow();
 	// The exchange's end - a finished response, a torn-down one, or a
 	// connection gone under a response node never gave a socket - is the
@@ -131,7 +131,7 @@ function serveRequest(req, res) {
 		if (!res.writableFinished) state.aborted = true;
 		counters.inFlightCount--;
 		requestDone();
-		if (metricsHook !== null && !state.websocketUpgrade) {
+		if (metricsHook !== null) {
 			metricsHook(req.method || '', res.statusCode, state.aborted, (monotonicNow() - startedAt) / 1000);
 		}
 	});
@@ -218,7 +218,10 @@ function serveRequest(req, res) {
 		// GET only, here and for the waiting room's pages below: the family
 		// mounts these three paths for GET, and every other method on them,
 		// HEAD included, is the application's.
-		if (pathname === realtimeRoutes.wsPath && method === 'GET' && realtimeRoutes.serveWsPathGet(req, res, pathname, search, state)) return;
+		if (pathname === realtimeRoutes.wsPath && method === 'GET') {
+			if (takesWebSocketRoute(req, realtimeRoutes.wsPath)) metricsHook = null;
+			if (realtimeRoutes.serveWsPathGet(req, res, pathname, search)) return;
+		}
 		// The waiting room's poll and holding page. Both are read-only and
 		// answer before the static index so a same-named asset can never
 		// shadow the queue a browser is sitting in.

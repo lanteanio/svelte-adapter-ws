@@ -2959,21 +2959,20 @@ function httpRefusalResponse(res) {
  * @param {import('node:http').ServerResponse} res
  * @param {string} pathname
  * @param {string} search - the query string including its leading '?', or ''
- * @param {{ websocketUpgrade: boolean }} state
  * @returns {boolean} true when the request was answered here
  */
-export function serveWsPathGet(req, res, pathname, search, state) {
+export function serveWsPathGet(req, res, pathname, search) {
 	if (isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))) {
 		// The native route selects a 24-byte key even without the Upgrade
 		// headers node requires before dispatching its upgrade event.
 		// Its refusal belongs to upgrade metrics, while shorter keys stay
 		// on the ordinary HTTP route and retain HTTP completion metrics.
-		if (takesWebSocketRoute(req, WS_PATH)) {
-			state.websocketUpgrade = true;
+		const onWebSocketRoute = takesWebSocketRoute(req, WS_PATH);
+		if (onWebSocketRoute) {
 			if (hUpgradeDuration !== undefined) upgradeTimings.set(req.socket, { started: monotonicNow() });
 		}
 		noteUpgradeRejection(undefined, 'malformed_handshake', req);
-		if (state.websocketUpgrade) observeUpgradeOutcome(req.socket, 'rejected');
+		if (onWebSocketRoute) observeUpgradeOutcome(req.socket, 'rejected');
 		send400(res);
 		return true;
 	}
