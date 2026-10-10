@@ -397,8 +397,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client address resolution avoids allocating temporary transport metadata on each request.
 
-- TLS reads one `SSL_CERT`/`SSL_KEY` pair, including literal commas in file paths.
-  `SSL_SNI_HOSTS` is a flat comma-separated list of renewal hostnames.
+- TLS renewal watches only the certificate directory, including in the cluster primary.
+  A key stored in another directory is read during renewal without adding another watcher.
 
 - **An SSR stream that fails in a later turn than its request's own, right
   after its last writes, delivers them before the cut.** A source that
@@ -737,6 +737,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idle until it timed out. Those bytes now go back to node's parser, so each
   request is answered in order and the connection stays open, as on the
   family's native tier, in the runtime, over TLS, and in `createTestServer`.
+
+### Removed
+
+- Removed comma-separated multi-certificate `SSL_CERT`/`SSL_KEY` lists and
+  semicolon-grouped `SSL_SNI_HOSTS` overrides. Each path now names one literal
+  file, and `SSL_SNI_HOSTS` is one flat comma-separated renewal hostname list.
+  A deployment using `SSL_CERT=a.pem,b.pem` now attempts to open a file literally
+  named `a.pem,b.pem` and fails at boot unless that file exists. Configure one
+  certificate/key pair before upgrading from 0.0.1.
 
 ## [0.0.1] - 2026-09-22
 

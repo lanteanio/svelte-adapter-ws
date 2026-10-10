@@ -269,7 +269,7 @@ function buildReloader(sniContexts) {
 }
 
 /**
- * Watch every certificate-bearing directory and drive `reload` on a debounced
+ * Watch the certificate directory and drive `reload` on a debounced
  * change. Main-thread only: in a cluster the primary owns the one watch and
  * fans the change out by message.
  *
@@ -277,12 +277,10 @@ function buildReloader(sniContexts) {
  * @param {() => void} reload
  */
 function armHotReload(server, reload) {
-	const watchedFiles = [ssl_cert, ssl_key];
-	// Watch the containing DIRECTORIES, deduped: certbot renews by writing
-	// into archive/ and re-pointing the live/ symlink, and cert-manager swaps
-	// an atomic ..data symlink - neither touches the watched file's inode, so
-	// a per-file watch misses the canonical renewal shapes.
-	const watchedDirs = [...new Set(watchedFiles.map((file) => path.dirname(file)))];
+	// Watch the certificate's directory: certbot and cert-manager renew by
+	// replacing directory entries or symlinks rather than the watched inode.
+	// The key may live elsewhere; its directory does not trigger reloads.
+	const watchedDirs = [path.dirname(ssl_cert)];
 
 	/** @type {any} */
 	let debounce = null;
@@ -293,10 +291,8 @@ function armHotReload(server, reload) {
 
 	/** @type {import('node:fs').FSWatcher[]} */
 	const watchers = [];
-	// One unarmed directory means renewals landing THERE are never seen, so any
-	// failure degrades even when the other directories armed - and it degrades
-	// STICKILY, because nothing retries a watch: no later reload, however
-	// successful, can resurrect it.
+	// A failed watch stays degraded: no later successful reload can
+	// resurrect it, so future certificate renewals would still be missed.
 	let watchFailed = false;
 	for (const dir of watchedDirs) {
 		try {

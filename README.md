@@ -514,7 +514,7 @@ refuse the boot (see Deployment).
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
 not give up is capability. In-process TLS is first class through `node:https`,
-with the family's surface - SNI, multiple certs, hot reload. Node also brings
+with the family's surface - SNI and certificate hot reload. Node also brings
 HTTP/2 and the entire observability ecosystem
 (APM agents, OpenTelemetry auto-instrumentation, `AsyncLocalStorage`,
 `--inspect`), none of which hooks a native addon.

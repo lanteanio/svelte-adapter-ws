@@ -326,11 +326,7 @@ if (is_primary) {
 	const ssl_watch = is_tls && env('SSL_WATCH', '1') !== '0';
 	const _ssl_debounce_raw = parseInt(env('SSL_RELOAD_DEBOUNCE_MS', '500'), 10);
 	const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl_debounce_raw >= 0 ? _ssl_debounce_raw : 500;
-	// Host overrides belong to worker renewal; the primary reads expiry only.
-	// Watch both directories when the key is stored apart from its certificate.
-	const watched_files = [ssl_cert, ssl_key].filter(Boolean);
-	const watched_dirs = [...new Set(watched_files.map((f) => dirname(f)))];
-	const identity_cert_path = ssl_cert;
+	const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
 	console.log(
 		`[svelte-adapter-ws] Primary thread starting ${num} workers ` +
@@ -1096,8 +1092,8 @@ if (is_primary) {
 	// only tracks the disk cert's identity for observability. Live
 	// connections survive a swap; node applies the new context to new
 	// handshakes without re-binding.
-	/** @type {Array<{ stop: () => void }>} */
-	let primaryCertWatchers = [];
+	/** @type {{ stop: () => void } | null} */
+	let primaryCertWatcher = null;
 	let primaryTlsState = { hosts: [], fingerprint: null, notAfter: null, notAfterText: null };
 
 	// Reload-path health, mirroring the per-worker record. The primary is the
@@ -1139,10 +1135,7 @@ if (is_primary) {
 	// it from the same ledger rather than keeping a second copy inline: a dead
 	// watch is sticky and survives any later success, because the success
 	// proves a certificate was readable and proves nothing about the watcher,
-	// while a read failure is superseded by the next read that works. Here it
-	// is reachable in practice: the cert and key directories are watched
-	// separately, so a renewal seen in the live one can succeed while the
-	// other watch is dead.
+	// while a read failure is superseded by the next read that works.
 	const primaryTlsLedger = createTlsDegradedLedger({
 		health: primaryTlsHealth,
 		onRecovered: (was, still) => {
@@ -1164,7 +1157,7 @@ if (is_primary) {
 		let failure = null;
 		primaryTlsState = reloadClusterTls({
 			workers: workers.keys(),
-			source: identity_cert_path ? { certPath: identity_cert_path } : undefined,
+			source: { certPath: ssl_cert, hosts: ssl_sni_hosts },
 			state: primaryTlsState,
 			onError: (err) => { failure = err && err.message ? err.message : String(err); }
 		});
@@ -1177,64 +1170,52 @@ if (is_primary) {
 			primaryTlsRecovered();
 		}
 	}
-	if (is_tls && ssl_watch && watched_dirs.length > 0) {
-		// Record the boot cert's identity so the reload broadcast has a
-		// baseline to report against, and its expiry so a later failure can be
-		// reported with the number that says how urgent it is. A parse failure
-		// only degrades primary-side observability - the workers gate on their
-		// own reads.
-		if (identity_cert_path) {
-			try {
-				primaryTlsState = readCertIdentity(identity_cert_path);
-				primaryTlsHealth.notAfter = primaryTlsState.notAfter;
-				primaryTlsHealth.notAfterText = primaryTlsState.notAfterText;
-			} catch (err) {
-				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_BOOT_READ), err && err.message ? err.message : err);
-			}
+	if (is_tls && ssl_watch) {
+		// Record the boot cert's identity so the reload broadcast has a baseline to
+		// report against, and its expiry so a later failure can be reported with the
+		// number that says how urgent it is. A parse failure only degrades
+		// primary-side observability - the workers gate on their own reads.
+		try {
+			primaryTlsState = readCertIdentity(ssl_cert, ssl_sni_hosts);
+			primaryTlsHealth.notAfter = primaryTlsState.notAfter;
+			primaryTlsHealth.notAfterText = primaryTlsState.notAfterText;
+		} catch (err) {
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_BOOT_READ), err && err.message ? err.message : err);
 		}
-		// Guard each watcher start: fs.watch throws ENOENT synchronously when
-		// a parent directory does not exist (a not-yet-mounted secret volume,
-		// a mistyped path). Single-process degrades gracefully here (its
-		// cert-read gates the watcher), so the cluster primary must too - log
-		// and degrade rather than crash-loop the whole process at boot. One
-		// unarmed directory means renewals landing THERE are never seen, so
-		// any failure enters the degraded state even when other directories
-		// armed.
-		let watchFailed = false;
-		for (const dir of watched_dirs) {
-			try {
-				const watcher = createCertWatcher({
-					certPath: identity_cert_path || watched_files[0],
-					dir,
-					debounceMs: ssl_reload_debounce_ms,
-					onChange: onCertChange,
-					// A watch that dies AFTER starting arrives as an event, not a
-					// throw, so the catch below never sees it. Reported under its
-					// own id because the causes and the operator's next move differ
-					// from a watch that never started; sticky, because nothing
-					// re-arms it. The reference is KEPT: a replaced directory gets
-					// one final debounced read after this report, and only `stop()`
-					// clears that timer, so a shutdown inside the debounce window
-					// must still be able to reach it.
-					onError: (err) => {
-						console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH_LOST), /** @type {any} */ (err)?.message || err);
-						primaryTlsWatchDegraded('the primary certificate directory watch stopped, so no worker will be told to reload');
-					}
-				});
-				watcher.start();
-				primaryCertWatchers.push(watcher);
-				console.log(`[tls] primary watching ${dir} for certificate renewals (cluster broadcast reload)`);
-			} catch (err) {
-				watchFailed = true;
-				console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), err && err.message ? err.message : err);
-			}
-		}
-		if (watchFailed) {
-			// Nothing retries this: a renewal in an unwatched directory never
-			// broadcasts, so those workers serve their current certificate
-			// until it expires. Sticky, because no later success can resurrect
-			// a watcher - a read that works proves a certificate was readable
-			// and proves nothing about the watch.
+		// Guard the watcher start: fs.watch throws ENOENT synchronously when the
+		// cert's parent directory does not exist (a not-yet-mounted secret volume,
+		// a mistyped path). Single-process degrades gracefully here (its cert-read
+		// gates the watcher), so the cluster primary must too - log and disable
+		// hot-reload rather than crash-loop the whole process at boot.
+		try {
+			primaryCertWatcher = createCertWatcher({
+				certPath: ssl_cert,
+				debounceMs: ssl_reload_debounce_ms,
+				onChange: onCertChange,
+				// A watch that dies AFTER starting arrives as an event, not a
+				// throw, so the catch below never sees it - and an `error` event
+				// with no listener is rethrown, which on the primary is an
+				// uncaught exception that takes the whole fleet down. Reported
+				// under its own id because the causes and the operator's next
+				// move differ from a watch that never started. The reference is
+				// KEPT: a replaced directory gets one final debounced read after
+				// this report, and only `stop()` clears that timer, so a shutdown
+				// inside the debounce window must still be able to reach it.
+				onError: (err) => {
+					console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH_LOST), err && err.message ? err.message : err);
+					primaryTlsWatchDegraded('the primary certificate directory watch stopped, so no worker will be told to reload');
+				}
+			});
+			primaryCertWatcher.start();
+			console.log(`[tls] primary watching ${dirname(ssl_cert)} for certificate renewals (cluster broadcast reload)`);
+		} catch (err) {
+			primaryCertWatcher = null;
+			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), err && err.message ? err.message : err);
+			// Nothing retries this: with no watcher on the primary, no worker is ever
+			// told to reload, so the whole cluster serves its current certificate
+			// until it expires. Sticky, because no later success can resurrect a
+			// watcher - a read that works proves a certificate was readable and
+			// proves nothing about the watch.
 			primaryTlsWatchDegraded('the primary certificate directory watch failed to start, so no worker will be told to reload');
 		}
 	}
@@ -1257,10 +1238,9 @@ if (is_primary) {
 		// this.)
 		restartSupervisor.stopAll();
 
-		// Stop the cert-directory watchers so they never hold the loop or fire
+		// Stop the cert-directory watcher so it never holds the loop or fires
 		// a broadcast at exiting workers.
-		for (const watcher of primaryCertWatchers) watcher.stop();
-		primaryCertWatchers = [];
+		if (primaryCertWatcher) { primaryCertWatcher.stop(); primaryCertWatcher = null; }
 
 		// Step 1: readiness OFF on every worker, BEFORE the delay below. The
 		// workers own the readiness route, so this is what makes the delay do

@@ -173,9 +173,7 @@ describe('ADAPTER-ERR-TLS-WATCH: the degraded-state ledger', () => {
 			// And the watcher still owns that timer until stop(), which is why
 			// the primary keeps its reference after the report.
 			expect(source).not.toMatch(/onError: \(err\) => \{\s*primaryCertWatcher = null;/);
-			// One watcher per certificate here, so the shutdown stops each of them.
-			expect(source).toMatch(/for \(const watcher of primaryCertWatchers\) watcher\.stop\(\);/);
-			expect(source).not.toMatch(/primaryCertWatchers = primaryCertWatchers\.filter/);
+			expect(source).toMatch(/if \(primaryCertWatcher\) \{ primaryCertWatcher\.stop\(\);/);
 		});
 
 		it('builds a ledger instead of clearing the degraded state by hand', () => {

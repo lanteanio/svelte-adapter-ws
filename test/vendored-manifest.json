@@ -1550,13 +1550,7 @@
 		"file": "test/error-registry-subscribe-hook.test.js"
 	},
 	{
-		"file": "test/error-registry-tls.test.js",
-		"adaptations": [
-			{
-				"lead": "\t\t\texpect(source).toMatch(/if \\(primaryCertWatcher\\) \\{ primaryCertWatcher\\.stop\\(\\);/);\n",
-				"ours": "\t\t\t// One watcher per certificate here, so the shutdown stops each of them.\n\t\t\texpect(source).toMatch(/for \\(const watcher of primaryCertWatchers\\) watcher\\.stop\\(\\);/);\n\t\t\texpect(source).not.toMatch(/primaryCertWatchers = primaryCertWatchers\\.filter/);\n"
-			}
-		]
+		"file": "test/error-registry-tls.test.js"
 	},
 	{
 		"file": "test/error-registry-unsubscribe-hook.test.js"
