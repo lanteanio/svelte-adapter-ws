@@ -374,6 +374,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Module client stores, accumulated helpers and binary ingress handles follow
+  explicit connections created after close. Implicit store and plugin access
+  after close stays inert, while connection-bound stores remain bound.
+
 - Invalid-target refusals preserve GET bodies and bodyless HEAD framing when the HTTP connection is reused.
 
 - Completed static and realtime HTTP responses that fill the response buffer for a read reach the client before a later pipelined refusal.

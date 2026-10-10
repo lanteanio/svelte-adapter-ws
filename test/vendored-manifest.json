@@ -176,6 +176,14 @@
 			{
 				"lead": "\t */\n\treadonly bufferedAmount: number;\n\n\t/** Close the connection permanently. Will not auto-reconnect. */\n\tclose(): void;\n}\n",
 				"ours": "\t */\n\treadonly bufferedAmount: number;\n\n\t/**\n\t * Pause this connection until resumeOnline(). Cancels the current socket or\n\t * auth attempt and emits disconnected immediately, preserving subscriptions,\n\t * listeners and queued messages. Browser events and retry timers cannot\n\t * reconnect while paused; canceled retries do not spend the retry\n\t * budget. Repeated calls are harmless. Inert during SSR without a URL.\n\t */\n\tsimulateOffline(): void;\n\n\t/**\n\t * Resume a paused connection immediately with its configured URL and a fresh\n\t * auth preflight, when enabled. Normal resubscription and queued sends follow.\n\t * Repeated calls are harmless. Cannot revive a permanently closed connection.\n\t */\n\tresumeOnline(): void;\n\n\t/** Close the connection permanently. Will not auto-reconnect. */\n\tclose(): void;\n}\n"
+			},
+			{
+				"lead": "export function on<T = unknown>(topic: string, event: string): TopicStore<{ data: T }>;\n\n/**\n * Readable store - connection status. Auto-connects on first access.\n *\n * Five states drive distinct UI affordances:\n * - `'connecting'` - establishing a connection (initial attempt or retry)\n",
+				"ours": "export function on<T = unknown>(topic: string, event: string): TopicStore<{ data: T }>;\n\n/**\n * Readable store - connection status. Auto-connects on first access and follows\n * explicit connection replacement. After close(), access alone never reconnects.\n *\n * Five states drive distinct UI affordances:\n * - `'connecting'` - establishing a connection (initial attempt or retry)\n"
+			},
+			{
+				"lead": "\t */\n\tresumeOnline(): void;\n\n\t/** Close the connection permanently. Will not auto-reconnect. */\n\tclose(): void;\n}\n\n",
+				"ours": "\t */\n\tresumeOnline(): void;\n\n\t/**\n\t * Close this connection permanently. Module stores and plugin accessors stay\n\t * inert until a later explicit connect() creates a replacement, which global\n\t * topic/diagnostic stores and ingress handles follow. Connection-bound stores\n\t * remain attached to this closed connection.\n\t */\n\tclose(): void;\n}\n\n"
 			}
 		]
 	},
@@ -345,6 +353,82 @@
 			{
 				"lead": "\t\t// the set bounded across churn of dynamic topics.\n\t\tmanagedTopics.delete(topic);\n\t\tsubscribedTopics.delete(topic);\n\t\ttopicStores.delete(topic);\n\t\t// Clean up topic+event filtered stores for this topic\n\t\tfor (const key of eventStores.keys()) {\n",
 				"ours": "\t\t// the set bounded across churn of dynamic topics.\n\t\tmanagedTopics.delete(topic);\n\t\tsubscribedTopics.delete(topic);\n\t\tpendingRecoveries.delete(topic);\n\t\tpendingRetryRefs.delete(topic);\n\t\trateLimitedTopics.delete(topic);\n\t\ttopicStores.delete(topic);\n\t\t// Clean up topic+event filtered stores for this topic\n\t\tfor (const key of eventStores.keys()) {\n"
+			},
+			{
+				"lead": "\n/** @type {'explicit' | 'implicit' | ''} */\nlet singletonCreatedBy = '';\n\n/**\n * Client-side binary wire codecs, keyed by topic-name prefix. A plugin (e.g.\n",
+				"ours": "\n/** @type {'explicit' | 'implicit' | ''} */\nlet singletonCreatedBy = '';\nlet singletonClosed = false;\n/** @type {Set<(connection: ReturnType<typeof createConnection>) => void>} */\nconst connectionFollowers = new Set();\n\n/**\n * Client-side binary wire codecs, keyed by topic-name prefix. A plugin (e.g.\n"
+			},
+			{
+				"lead": " *   - `dispose()` releases the binding.\n *\n * The transport is generic (any consumer can encode any payload); the server\n * decodes and routes by the registered `kind`. Auto-connects, like `on()`.\n *\n * @param {string} kind - the binding kind (e.g. `'smooth.command:1'`)\n * @param {any} target - opaque destination the server-side handler interprets\n * @returns {{ send: (schemaVersion: number, payload: Uint8Array) => boolean, live: () => boolean, dispose: () => void }}\n */\nexport function bindIngress(kind, target) {\n\treturn ensureConnection()._bindIngress(kind, target);\n}\n\n/**\n",
+				"ours": " *   - `dispose()` releases the binding.\n *\n * The transport is generic (any consumer can encode any payload); the server\n * decodes and routes by the registered `kind`. Follows the singleton, with the\n * same auto-connect and permanent-close barrier as `on()`.\n *\n * @param {string} kind - the binding kind (e.g. `'smooth.command:1'`)\n * @param {any} target - opaque destination the server-side handler interprets\n * @returns {{ send: (schemaVersion: number, payload: Uint8Array) => boolean, live: () => boolean, dispose: () => void }}\n */\nexport function bindIngress(kind, target) {\n\tlet binding = null;\n\tconst stop = followStore(connection => ({\n\t\tsubscribe(fn) {\n\t\t\tconst next = connection._bindIngress(kind, target);\n\t\t\tfn(next);\n\t\t\treturn () => next.dispose();\n\t\t}\n\t})).subscribe(value => { binding = value; });\n\treturn {\n\t\tsend(schemaVersion, payload) { return binding?.send(schemaVersion, payload) ?? false; },\n\t\tlive() { return binding?.live() ?? false; },\n\t\treannounce() { binding?.reannounce(); },\n\t\tdispose() { stop(); binding = null; }\n\t};\n}\n\n/**\n"
+			},
+			{
+				"lead": " * @returns {ReturnType<typeof createConnection>}\n */\nfunction ensureConnection(options, explicit = false) {\n\tif (!singleton) {\n\t\tsingletonCreatedBy = explicit ? 'explicit' : 'implicit';\n\t\tsingleton = createConnection(options || {});\n\t}\n\treturn singleton;\n}\n\n/**\n * Connect to the WebSocket server.\n *\n",
+				"ours": " * @returns {ReturnType<typeof createConnection>}\n */\nfunction ensureConnection(options, explicit = false) {\n\tif (!singleton || (explicit && singletonClosed)) {\n\t\tsingletonCreatedBy = explicit ? 'explicit' : 'implicit';\n\t\tsingletonClosed = false;\n\t\tconst connection = createConnection(options || {});\n\t\tsingleton = connection;\n\t\tfor (const follow of [...connectionFollowers]) {\n\t\t\tif (singleton !== connection) break;\n\t\t\tfollow(connection);\n\t\t}\n\t}\n\treturn singleton;\n}\n\n/**\n * Follow explicit replacement without adding another writable store to dispatch.\n * @template T\n * @param {(connection: ReturnType<typeof createConnection>) => import('svelte/store').Readable<T>} select\n * @returns {import('svelte/store').Readable<T>}\n */\nfunction followStore(select) {\n\tlet selectedConnection = ensureConnection();\n\tlet selectedStore = select(selectedConnection);\n\treturn {\n\t\tsubscribe(fn) {\n\t\t\tlet active = true;\n\t\t\tlet generation = 0;\n\t\t\t/** @type {(() => void) | null} */\n\t\t\tlet stop = null;\n\t\t\tfunction follow(connection) {\n\t\t\t\tif (!active) return;\n\t\t\t\tconst ownGeneration = ++generation;\n\t\t\t\tconst previous = stop;\n\t\t\t\tstop = null;\n\t\t\t\tprevious?.();\n\t\t\t\tif (!active || ownGeneration !== generation || singleton !== connection) return;\n\t\t\t\tif (selectedConnection !== connection) {\n\t\t\t\t\tselectedConnection = connection;\n\t\t\t\t\tselectedStore = select(connection);\n\t\t\t\t}\n\t\t\t\tconst cleanup = selectedStore.subscribe(value => {\n\t\t\t\t\tif (active && ownGeneration === generation && singleton === connection) fn(value);\n\t\t\t\t});\n\t\t\t\tif (active && ownGeneration === generation && singleton === connection) stop = cleanup;\n\t\t\t\telse cleanup();\n\t\t\t}\n\t\t\tconnectionFollowers.add(follow);\n\t\t\tfollow(ensureConnection());\n\t\t\treturn () => {\n\t\t\t\tif (!active) return;\n\t\t\t\tactive = false;\n\t\t\t\tgeneration++;\n\t\t\t\tconnectionFollowers.delete(follow);\n\t\t\t\tconst cleanup = stop;\n\t\t\t\tstop = null;\n\t\t\t\tcleanup?.();\n\t\t\t};\n\t\t}\n\t};\n}\n\n/**\n * Create a .scan() method bound to a source store.\n * @param {{ subscribe: (fn: (value: any) => void) => () => void }} source\n */\nfunction makeScan(source) {\n\t/**\n\t * @template A\n\t * @param {A} initial\n\t * @param {(acc: A, value: any) => A} reducer\n\t * @returns {import('svelte/store').Readable<A>}\n\t */\n\treturn function scan(initial, reducer) {\n\t\tlet acc = initial;\n\t\tconst accumulated = writable(initial);\n\t\t/** @type {(() => void) | null} */\n\t\tlet sourceUnsub = null;\n\t\tlet subCount = 0;\n\n\t\treturn {\n\t\t\tsubscribe(fn) {\n\t\t\t\t// Start listening to source when first subscriber arrives\n\t\t\t\tif (subCount === 0) {\n\t\t\t\t\tsourceUnsub = source.subscribe((value) => {\n\t\t\t\t\t\tif (value !== null) {\n\t\t\t\t\t\t\tacc = reducer(acc, value);\n\t\t\t\t\t\t\taccumulated.set(acc);\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t\tsubCount++;\n\t\t\t\tconst unsub = accumulated.subscribe(fn);\n\t\t\t\treturn () => {\n\t\t\t\t\tunsub();\n\t\t\t\t\tsubCount--;\n\t\t\t\t\t// Stop listening when last subscriber leaves\n\t\t\t\t\tif (subCount === 0 && sourceUnsub) {\n\t\t\t\t\t\tsourceUnsub();\n\t\t\t\t\t\tsourceUnsub = null;\n\t\t\t\t\t}\n\t\t\t\t};\n\t\t\t}\n\t\t};\n\t};\n}\n\n\n/**\n * Connect to the WebSocket server.\n *\n"
+			},
+			{
+				"lead": " * @returns {import('./client.js').WSConnection}\n */\nexport function connect(options = {}) {\n\tif (singleton && singletonCreatedBy === 'implicit' && Object.keys(options).length > 0) {\n\t\tconsole.warn(\n\t\t\t'[ws] connect() was called with options, but the connection already exists ' +\n\t\t\t'(created automatically by on(), status, or ready()). ' +\n",
+				"ours": " * @returns {import('./client.js').WSConnection}\n */\nexport function connect(options = {}) {\n\tif (singleton && !singletonClosed && singletonCreatedBy === 'implicit' && Object.keys(options).length > 0) {\n\t\tconsole.warn(\n\t\t\t'[ws] connect() was called with options, but the connection already exists ' +\n\t\t\t'(created automatically by on(), status, or ready()). ' +\n"
+			},
+			{
+				"lead": "\n/**\n * Get a reactive Svelte store for a topic (and optionally a specific event).\n * Auto-connects and auto-subscribes - this is the only function most users need.\n *\n * @overload\n * @param {string} topic - Topic to subscribe to\n",
+				"ours": "\n/**\n * Get a reactive Svelte store for a topic (and optionally a specific event).\n * Auto-connects and auto-subscribes on first use. After close(), stays inert\n * until explicit connect(); existing stores then follow the new connection.\n *\n * @overload\n * @param {string} topic - Topic to subscribe to\n"
+			},
+			{
+				"lead": " * @param {string} [event]\n */\nexport function on(topic, event) {\n\tconst conn = ensureConnection();\n\tif (event !== undefined) {\n\t\treturn conn._onEvent(topic, event);\n\t}\n\tconst store = conn.on(topic);\n\treturn store;\n}\n\n/**\n",
+				"ours": " * @param {string} [event]\n */\nexport function on(topic, event) {\n\tconst store = followStore(conn => event !== undefined ? conn._onEvent(topic, event) : conn.on(topic));\n\treturn { subscribe: store.subscribe, scan: makeScan(store) };\n}\n\n/**\n"
+			},
+			{
+				"lead": "}\n\n/**\n * Readable store - connection status. Auto-connects on first access.\n *\n * Five states drive distinct UI affordances:\n * - `'connecting'` - establishing a connection (initial attempt or retry)\n",
+				"ours": "}\n\n/**\n * Readable store - connection status. Auto-connects on first access and follows\n * explicit connection replacement. After close(), access alone never reconnects.\n *\n * Five states drive distinct UI affordances:\n * - `'connecting'` - establishing a connection (initial attempt or retry)\n"
+			},
+			{
+				"lead": " */\nexport const status = {\n\tsubscribe(fn) {\n\t\treturn ensureConnection().status.subscribe(fn);\n\t}\n};\n\n",
+				"ours": " */\nexport const status = {\n\tsubscribe(fn) {\n\t\treturn followStore(conn => conn.status).subscribe(fn);\n\t}\n};\n\n"
+			},
+			{
+				"lead": " */\nexport const denials = {\n\tsubscribe(fn) {\n\t\treturn ensureConnection().denials.subscribe(fn);\n\t}\n};\n\n",
+				"ours": " */\nexport const denials = {\n\tsubscribe(fn) {\n\t\treturn followStore(conn => conn.denials).subscribe(fn);\n\t}\n};\n\n"
+			},
+			{
+				"lead": " */\nexport const failure = {\n\tsubscribe(fn) {\n\t\treturn ensureConnection().failure.subscribe(fn);\n\t}\n};\n\n",
+				"ours": " */\nexport const failure = {\n\tsubscribe(fn) {\n\t\treturn followStore(conn => conn.failure).subscribe(fn);\n\t}\n};\n\n"
+			},
+			{
+				"lead": " */\nexport const overloads = {\n\tsubscribe(fn) {\n\t\treturn ensureConnection().overloads.subscribe(fn);\n\t}\n};\n\n",
+				"ours": " */\nexport const overloads = {\n\tsubscribe(fn) {\n\t\treturn followStore(conn => conn.overloads).subscribe(fn);\n\t}\n};\n\n"
+			},
+			{
+				"lead": "\t}\n\n\t// maxAge mode: track timestamps per key, sweep on interval\n\tconst conn = ensureConnection();\n\tconst source = conn.on(topic);\n\tconst keyOf = (/** @type {any} */ x) => String(x[key]);\n\tconst reducerOpts = { keyOf, prepend };\n\n",
+				"ours": "\t}\n\n\t// maxAge mode: track timestamps per key, sweep on interval\n\tconst source = on(topic);\n\tconst keyOf = (/** @type {any} */ x) => String(x[key]);\n\tconst reducerOpts = { keyOf, prepend };\n\n"
+			},
+			{
+				"lead": "\t}\n\n\t// maxAge mode: track timestamps per key, sweep on interval\n\tconst conn = ensureConnection();\n\tconst source = conn.on(topic);\n\tconst keyOf = (/** @type {any} */ x) => x[key];\n\tconst reducerOpts = { keyOf };\n\n",
+				"ours": "\t}\n\n\t// maxAge mode: track timestamps per key, sweep on interval\n\tconst source = on(topic);\n\tconst keyOf = (/** @type {any} */ x) => x[key];\n\tconst reducerOpts = { keyOf };\n\n"
+			},
+			{
+				"lead": "\tfunction doUnsubscribe(topic) {\n\t\t// Drop the managed mark (re-added on the next server-driven attach) to keep\n\t\t// the set bounded across churn of dynamic topics.\n\t\tmanagedTopics.delete(topic);\n\t\tsubscribedTopics.delete(topic);\n\t\tpendingRecoveries.delete(topic);\n\t\tpendingRetryRefs.delete(topic);\n",
+				"ours": "\tfunction doUnsubscribe(topic) {\n\t\t// Drop the managed mark (re-added on the next server-driven attach) to keep\n\t\t// the set bounded across churn of dynamic topics.\n\t\tif (singleton === connection) managedTopics.delete(topic);\n\t\tsubscribedTopics.delete(topic);\n\t\tpendingRecoveries.delete(topic);\n\t\tpendingRetryRefs.delete(topic);\n"
+			},
+			{
+				"lead": "\t\t}\n\t}\n\n\t/**\n\t * Create a .scan() method bound to a source store.\n\t * @param {{ subscribe: (fn: (value: any) => void) => () => void }} source\n\t */\n\tfunction makeScan(source) {\n\t\t/**\n\t\t * @template A\n\t\t * @param {A} initial\n\t\t * @param {(acc: A, value: any) => A} reducer\n\t\t * @returns {import('svelte/store').Readable<A>}\n\t\t */\n\t\treturn function scan(initial, reducer) {\n\t\t\tlet acc = initial;\n\t\t\tconst accumulated = writable(initial);\n\t\t\t/** @type {(() => void) | null} */\n\t\t\tlet sourceUnsub = null;\n\t\t\tlet subCount = 0;\n\n\t\t\treturn {\n\t\t\t\tsubscribe(fn) {\n\t\t\t\t\t// Start listening to source when first subscriber arrives\n\t\t\t\t\tif (subCount === 0) {\n\t\t\t\t\t\tsourceUnsub = source.subscribe((value) => {\n\t\t\t\t\t\t\tif (value !== null) {\n\t\t\t\t\t\t\t\tacc = reducer(acc, value);\n\t\t\t\t\t\t\t\taccumulated.set(acc);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t\tsubCount++;\n\t\t\t\t\tconst unsub = accumulated.subscribe(fn);\n\t\t\t\t\treturn () => {\n\t\t\t\t\t\tunsub();\n\t\t\t\t\t\tsubCount--;\n\t\t\t\t\t\t// Stop listening when last subscriber leaves\n\t\t\t\t\t\tif (subCount === 0 && sourceUnsub) {\n\t\t\t\t\t\t\tsourceUnsub();\n\t\t\t\t\t\t\tsourceUnsub = null;\n\t\t\t\t\t\t}\n\t\t\t\t\t};\n\t\t\t\t}\n\t\t\t};\n\t\t};\n\t}\n\n\t/**\n\t * Get a reactive store for a topic (all events).\n",
+				"ours": "\t\t}\n\t}\n\n\n\t/**\n\t * Get a reactive store for a topic (all events).\n"
+			},
+			{
+				"lead": "\t}\n\n\tfunction close() {\n\t\tintentionallyClosed = true;\n\t\tcancelAttempt();\n\t\tclearReconnect();\n",
+				"ours": "\t}\n\n\tfunction close() {\n\t\tif (singleton === connection) singletonClosed = true;\n\t\tintentionallyClosed = true;\n\t\tcancelAttempt();\n\t\tclearReconnect();\n"
+			},
+			{
+				"lead": "\t\tconst sock = ws;\n\t\tws = null;\n\t\tsock?.close();\n\t\tsingleton = null;\n\t\tsingletonCreatedBy = '';\n\t\t// Intentional termination is not a failure cause. Clear any prior\n\t\t// value here too because if the user calls close() while we are\n\t\t// already disconnected (no live ws), onclose never re-enters and\n",
+				"ours": "\t\tconst sock = ws;\n\t\tws = null;\n\t\tsock?.close();\n\t\t// Intentional termination is not a failure cause. Clear any prior\n\t\t// value here too because if the user calls close() while we are\n\t\t// already disconnected (no live ws), onclose never re-enters and\n"
+			},
+			{
+				"lead": "\t\t}\n\t}\n\n\treturn {\n\t\tevents: { subscribe: eventsStore.subscribe },\n\t\tstatus: { subscribe: statusStore.subscribe },\n\t\tdenials: { subscribe: denialsStore.subscribe },\n",
+				"ours": "\t\t}\n\t}\n\n\tconst connection = {\n\t\tevents: { subscribe: eventsStore.subscribe },\n\t\tstatus: { subscribe: statusStore.subscribe },\n\t\tdenials: { subscribe: denialsStore.subscribe },\n"
+			},
+			{
+				"lead": "\t\tresumeOnline,\n\t\tclose\n\t};\n}\n",
+				"ours": "\t\tresumeOnline,\n\t\tclose\n\t};\n\treturn connection;\n}\n"
 			}
 		]
 	},

@@ -154,6 +154,12 @@ socket retries from the last safe offset. Applications need no source change.
 The `onReplay` store reports standalone or inline truncation once per outstanding
 request and keeps separate replay requests correlated.
 
+Module-level topic and diagnostic stores follow an explicit `connect()` after
+`close()`, including accumulated helpers and binary ingress handles. Store
+access and plugin construction after close do not reopen the socket; call
+`connect()` to start a new session. Connection-object stores stay bound to that
+object. Existing global subscriptions need no manual rebind.
+
 ### Subscription cleanup
 
 For framework rollback after an admitted loader or setup fails, import `releaseSubscription(ws, topic)` from `svelte-adapter-ws/subscriptions`. It removes native and logical membership, registered derived subscriptions, shared-codec cohorts and the topic's publish grant immediately, while independently pending subscribe attempts can still finish their own authorization. It returns `true` when membership or a publish grant was removed, and `false` when already released, missing or closed. It does not revive previously revoked attempts. The caller performs its own application cleanup; no application unsubscribe hook runs. This operation removes physical membership, so coordinate already-completed concurrent admissions before calling it. Use `platform.unsubscribe` or `trackedUnsubscribe` for explicit unsubscribe, kicks and revocations that must also cancel pending attempts.
