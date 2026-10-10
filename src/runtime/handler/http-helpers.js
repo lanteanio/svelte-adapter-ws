@@ -387,6 +387,7 @@ function serveSynchronous(line, req, res, serve) {
 	finally {
 		/** @type {any} */ (res)[TURN] = false;
 		if (res.writableEnded) {
+			releaseHttpReadIfFull(res);
 			if (line.ahead === res) line.ahead = /** @type {any} */ (res)._last ? FINISHED_CLOSING : FINISHED;
 		} else handOut(line, res);
 	}

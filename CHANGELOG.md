@@ -357,6 +357,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Large probe pipelines release completed responses when the read cork fills before a later request is refused.
+
 - Complete ASCII HTTP batches avoid repeated transport-prefix scans and upgrade bookkeeping, and Host checks read raw fields directly.
 
 
