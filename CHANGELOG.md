@@ -26,8 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.
 
-- Assigned HTTP responses use their own close notification; queued responses retain socket-close accounting.
-
 - A completed request that closes its connection releases its buffered answer before the socket ends.
 
 - HTTP read buffers use the native response byte count at their exact release boundary, including queued TLS replies and application headers.
@@ -40,18 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Split non-ASCII request targets retain HEAD response framing over HTTP and HTTPS.
 
-- A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
-
-- Host parsing tests cover duplicate fields across HTTP routes, forbidden methods and WebSocket upgrades, with empty and absent Host controls.
-
-- Refusal response tests verify that shared renders, cookie errors, compressible pages, admin responses and waiting pages discard headers staged before a 500.
-
-- Wire publish tests verify relay success, per-entry relay payloads, resume cutover capture and JSON-only relay for declined codec frames, including excluded recipients.
-
-- Production subscription cleanup tests cover throwing and rejecting unsubscribe hooks across wire, recover, platform and observer authorization unwinds.
-
-- Live subscription tests verify that a refused attempt, including a subscription-cap refusal, cannot preserve membership installed by a revoked sibling.
-
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`, and batched subscriptions report the number of newly installed topics.
 - **Pipelined HTTP dispatch follows application callback boundaries.** Promise
   jobs finish before the next request is considered; delayed responses close
@@ -63,14 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept later requests and synchronous pipelines; ambiguous framing still
   closes, and a request arriving behind a pending admission hook closes the
   connection without an HTTP answer.
-
-- **Custom handshake header tests pin the supported byte range.** Values beyond
-  Latin-1, including lone surrogates, are rejected before the 101 response;
-  accepted non-ASCII values retain their UTF-8 wire spelling.
-
-- **Live Linux cluster tests cover request aborts before worker exits.** Fatal
-  and unhandled exceptions abort pending requests, handled exceptions preserve
-  them, and repeated primary stop signals let the original drain finish.
 
 - **Linux recovery drill verifies external process restarts.** The respawner
   command wedges a clustered worker, checks the whole-process hard exit, and
@@ -85,9 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Error reference details include explicit anchors and runtime guidance.** Each
   section now shows the code or event, searchable message prefix, operator
   shortlink, runtime help route and emitting source links in the family format.
-
-- Test-server routing checks cover HEAD on the WebSocket, admission poll and
-  waiting-room paths with and without admission enabled.
 
 - PROXY protocol v2 works on HTTP and HTTPS, including fragmented preambles
   and persistent connections. `PROXY_PROTOCOL=1` uses the claimed source for
@@ -377,6 +352,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page.
 
 ### Fixed
+
+- Readers of an incomplete request body reject if the response finishes first.
+  The connection drains unread bytes for later requests.
+
+- A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
 
 - Oversized request heads return one complete HTML refusal, including split request lines. Missing native parser internals leave ordinary HTTP handling available, and an invalid error probe fails startup.
 

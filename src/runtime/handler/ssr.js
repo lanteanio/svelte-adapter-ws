@@ -86,7 +86,10 @@ export function readBody(req, limit, state, res) {
 			// queuing bytes and keep reading after that answer so the next
 			// request is not stranded behind a paused IncomingMessage.
 			const discard = () => {
-				if (!done) { done = true; controller.close(); }
+				if (!done) {
+					done = true;
+					controller.error(new Error('Request body discarded after response completed'));
+				}
 				req.resume();
 			};
 			res?.once('finish', discard);

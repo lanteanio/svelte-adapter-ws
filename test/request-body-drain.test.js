@@ -62,7 +62,7 @@ describe('unread request bodies on keep-alive connections', () => {
 		expect(raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200', 'HTTP/1.1 200']);
 	});
 	it('drains a streamed SSR body after its size refusal', async () => {
-		const raw = await exchange('/ignore?read', true, 600000);
+		const raw = await exchange('/ignore?read', true, 1024 * 1024);
 		expect(raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 413', 'HTTP/1.1 200']);
 	});
 	it.each(['', '?read'])('drains a streamed auth body after its answer (%s)', async (query) => {

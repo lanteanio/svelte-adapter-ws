@@ -122,7 +122,8 @@ function serveRequest(req, res) {
 	// The RED observation rides the SAME terminal hook as the in-flight
 	// accounting, so probes, realtime routes, static assets and SSR are all
 	// counted through one funnel with the aborted/finished distinction already
-	// made. A request routed as a WebSocket upgrade records its decision instead. Null unless a metrics registry is configured, which keeps the
+	// made. A request routed as a WebSocket upgrade records its decision instead.
+	// Null unless a metrics registry is configured, which keeps the
 	// zero-config path at one property read and no clock call.
 	let metricsHook = counters.httpRequestHook;
 	const startedAt = metricsHook === null ? 0 : monotonicNow();
