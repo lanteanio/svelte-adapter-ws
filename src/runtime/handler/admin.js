@@ -13,6 +13,7 @@
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
 import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { markShortHttpStatus, releaseHttpReadIfFull } from './read-turn.js';
 import { buildRequest } from './ssr.js';
 import { openRequestSignal, closeRequestSignal } from './lifecycle.js';
 import { collectRequestHeaders, isFramingHeader } from '../utils/request-headers.js';
@@ -111,8 +112,10 @@ async function writeAdminResponse(res, response, state, headOnly) {
 	assertWritableStatus(response.status);
 	stageHeaders(res, headers);
 	res.writeHead(response.status);
+	markShortHttpStatus(res);
 	if (whole) res.end(body);
 	else res.end();
+	releaseHttpReadIfFull(res);
 }
 
 /**

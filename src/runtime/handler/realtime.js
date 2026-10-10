@@ -8,6 +8,7 @@
 /* global WS_PATH */
 /* global WS_AUTH_PATH */
 import { WebSocketServer } from 'ws';
+import { markShortHttpStatus, releaseHttpReadIfFull } from './read-turn.js';
 import { prepareUpgradeRefusal, forgetUpgradeRefusal, finishUpgradeRefusal, watchPendingUpgrade } from './upgrade-refusal.js';
 import {
 	WS_ATTRIBUTION, WS_CAPS, WS_CONNECTION_PERMIT, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
@@ -2804,8 +2805,10 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 				assertWritableStatus(result.status);
 				stageHeaders(res, outHeaders);
 				res.writeHead(result.status);
+				markShortHttpStatus(res);
 				if (buf) res.end(buf);
 				else res.end();
+				releaseHttpReadIfFull(res);
 				return;
 			}
 

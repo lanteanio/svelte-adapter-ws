@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HTTP read buffers use the native response byte count at their exact release boundary, including queued TLS replies and application headers.
+
 - Parser-generated header errors discard small responses buffered earlier in the same read.
 
 - Pipelined reads hold small responses until request validation completes and release large responses without losing their write callbacks.

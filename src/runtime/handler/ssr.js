@@ -8,7 +8,7 @@ import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted
 import { platform } from './platform.js';
 import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
 import { inOwnTurn, releaseTurnIfFull } from './http-helpers.js';
-import { httpReadHeld } from './read-turn.js';
+import { httpReadHeld, markShortHttpStatus } from './read-turn.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 
@@ -465,6 +465,7 @@ function writeHeaders(res, response, state, length, encoding = '', chunked = fal
 	}
 	if (length !== null) res.setHeader('content-length', String(length));
 	res.writeHead(response.status);
+	markShortHttpStatus(res);
 	// A user-supplied Connection field is serialized verbatim by the native
 	// writer; only its explicit close operation ends the transport. Node also
 	// interprets that field as a close instruction while writing the head.
