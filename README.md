@@ -137,6 +137,14 @@ open socket, or `false` when disconnected or paused. This reports local
 admission; serialization and transport exceptions propagate. A self-initiated
 socket close reports `disconnected` before its closing handshake finishes.
 
+`connection.sendSerialized(text): boolean` sends a complete JSON message that
+you have already encoded, without parsing or serializing it again. It returns
+`true` after the open WebSocket accepts the text and `false` when the socket is
+absent, connecting, closing or closed, including during SSR. It never queues a
+message for reconnect. A `true` result is local transport acceptance, not
+confirmation from the server. Pass a primitive string containing valid JSON;
+non-string input throws `TypeError`, and errors from `WebSocket.send` propagate.
+
 Use `connection.simulateOffline()` and `connection.resumeOnline()` for temporary
 offline simulation. Pause cancels socket and authentication attempts and
 suppresses retries and browser reconnect triggers while preserving subscriptions,

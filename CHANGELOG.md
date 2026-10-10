@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Client connections expose `sendSerialized(text): boolean` for pre-encoded JSON
+  text. The method reports local transport acceptance, preserves the text exactly,
+  and never retains it for reconnect.
+
 - Smooth authorities accept an optional positive integer `maxCommandsPerTick`
   to bound client command work per entity, retaining ordered tails and
   acknowledging only applied work. Omitted preserves full draining; trusted

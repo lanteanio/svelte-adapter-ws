@@ -184,6 +184,10 @@
 			{
 				"lead": "\t */\n\tresumeOnline(): void;\n\n\t/** Close the connection permanently. Will not auto-reconnect. */\n\tclose(): void;\n}\n\n",
 				"ours": "\t */\n\tresumeOnline(): void;\n\n\t/**\n\t * Close this connection permanently. Module stores and plugin accessors stay\n\t * inert until a later explicit connect() creates a replacement, which global\n\t * topic/diagnostic stores and ingress handles follow. Connection-bound stores\n\t * remain attached to this closed connection.\n\t */\n\tclose(): void;\n}\n\n"
+			},
+			{
+				"lead": "\t/**\n\t * Send a message, queuing it if not currently connected.\n",
+				"ours": "\t/**\n\t * Send a complete JSON message already encoded as text, unchanged.\n\t * The caller validates and serializes it; this method never parses or\n\t * serializes the text. Non-string input throws a TypeError.\n\t *\n\t * Returns false unless the underlying socket is OPEN, including during\n\t * reconnect and SSR. Never retains a message for reconnect. Returns true\n\t * after WebSocket.send accepts the text, not after server acknowledgement;\n\t * transport errors propagate. Available since 0.6.0-next.96.\n\t */\n\tsendSerialized(text: string): boolean;\n\n\t/**\n\t * Send a message, queuing it if not currently connected.\n"
 			}
 		]
 	},
@@ -429,6 +433,14 @@
 			{
 				"lead": "\t\tresumeOnline,\n\t\tclose\n\t};\n}\n",
 				"ours": "\t\tresumeOnline,\n\t\tclose\n\t};\n\treturn connection;\n}\n"
+			},
+			{
+				"lead": "\t/**\n\t * Send a message, queuing it if not currently connected.\n",
+				"ours": "\t/**\n\t * Send a complete JSON message already encoded as text, without queuing.\n\t * The caller validates and serializes the message; no JSON parsing or\n\t * serialization happens here. A successful send is transport acceptance,\n\t * not an acknowledgement from the server. Transport errors propagate.\n\t *\n\t * @param {string} text\n\t * @returns {boolean} Whether an open socket accepted the text.\n\t */\n\tfunction sendSerialized(text) {\n\t\tif (typeof text !== 'string') throw new TypeError('sendSerialized requires a string');\n\t\tif (!ws || ws.readyState !== WebSocket.OPEN) return false;\n\t\tws.send(text);\n\t\treturn true;\n\t}\n\n\t/**\n\t * Send a message, queuing it if not currently connected.\n"
+			},
+			{
+				"lead": "\t\tsend,\n\t\tsendQueued,",
+				"ours": "\t\tsend,\n\t\tsendSerialized,\n\t\tsendQueued,"
 			}
 		]
 	},
