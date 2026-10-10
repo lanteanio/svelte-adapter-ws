@@ -195,18 +195,16 @@ function serveRequest(req, res) {
 		// The length is the only header written: the family's probes carry no
 		// content-type.
 		if (HEALTH_CHECK_PATH !== false && pathname === HEALTH_CHECK_PATH) {
-			const body = 'OK';
-			res.writeHead(200, { 'content-length': String(Buffer.byteLength(body)) });
-			res.end(body);
+			if (method === 'HEAD') res.setHeader('content-length', '2');
+			res.end('OK');
 			return;
 		}
 		if (READINESS_CHECK_PATH !== false && pathname === READINESS_CHECK_PATH) {
 			// The body is the state's own name: `ready`, or `starting`,
 			// `draining` or `closed` behind a 503.
 			const lifecycle = lifecycleState();
-			res.writeHead(lifecycle === 'ready' ? 200 : 503, {
-				'content-length': String(Buffer.byteLength(lifecycle))
-			});
+			res.statusCode = lifecycle === 'ready' ? 200 : 503;
+			if (method === 'HEAD') res.setHeader('content-length', String(lifecycle.length));
 			res.end(lifecycle);
 			return;
 		}
