@@ -24,6 +24,10 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Check source bytes
+        run: npm run check:source-bytes
+      - name: Check source encoding
+        run: npm run check:source-encoding
       - name: Check source reachability
         run: npm run check:source-reachability
       - name: Run the suite

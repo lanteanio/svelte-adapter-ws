@@ -176,6 +176,7 @@
 		"check:types": "node scripts/check-types.js",
 		"check:declarations": "node scripts/check-declarations.js",
 		"check:source-bytes": "node scripts/check-source-bytes.js",
+		"check:source-encoding": "node scripts/check-source-encoding.js",
 		"check:tracked-imports": "node scripts/check-tracked-imports.js",
 		"check:source-reachability": "node scripts/check-source-reachability.js",
 		"check:publish": "publint && attw --pack . --profile esm-only",
