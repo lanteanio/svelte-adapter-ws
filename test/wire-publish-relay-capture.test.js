@@ -77,12 +77,13 @@ it('captures every fast-path entry during resume and delivers it at cutover', ()
 		expect(state.resumeBuffers.has('resume-fast')).toBe(false);
 	} finally { resume.discardResumeCapture(capture); pending.close(); }
 });
-it('relays a declined codec frame as an envelope without codec carry', async () => {
-	const declined = { capability: 'wire.declined:1', schemaVersion: 1, encode: vi.fn(() => null) };
+it.each([false, true])('relays a declined frame without codec carry with exclusion=%s', async exclusion => {
+	const declined = { capability: exclusion ? 'wire.declinedexclusion:1' : 'wire.declined:1', schemaVersion: 1, encode: vi.fn(() => null) };
 	platform.registerWireCodec(declined);
 	const local = socket('declined-frame', [declined.capability]);
+	const excluded = exclusion ? socket('declined-frame', [declined.capability]) : null;
 	try {
-		platform.publishWire('declined-frame', 'tick', { n: 3 }, declined, { seq: false });
+		platform.publishWire('declined-frame', 'tick', { n: 3 }, declined, { seq: false, excludeWs: excluded?.facade });
 		expect(declined.encode).toHaveBeenCalledOnce();
 		const messages = await relayed();
 		expect(messages).toHaveLength(1);
@@ -91,5 +92,6 @@ it('relays a declined codec frame as an envelope without codec carry', async () 
 		expect(messages[0].data).toBeUndefined();
 		expect(JSON.parse(messages[0].envelope)).toMatchObject({ topic: 'declined-frame', event: 'tick', data: { n: 3 } });
 		expect(local.frames.map(f => f.value)).toEqual([messages[0].envelope]);
-	} finally { local.close(); }
+		if (excluded) expect(excluded.frames).toHaveLength(0);
+	} finally { local.close(); excluded?.close(); }
 });

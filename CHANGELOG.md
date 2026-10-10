@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Declined codec frames with excluded recipients relay only their JSON envelope and omit codec metadata.
+
 - Subscription-cap refusals cannot authorize membership installed by an overlapping revoked subscribe attempt.
 
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.
