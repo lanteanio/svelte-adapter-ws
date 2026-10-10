@@ -73,18 +73,22 @@ export function createRequestHeadExecutor(parser, socket) {
 		const phrase = status === 505 ? 'HTTP Version Not Supported' : status === 400 ? 'Bad Request' : 'Request Header Fields Too Large';
 		socket.end('HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase), () => socket.destroy());
 	};
+	const tryFast = (data) => {
+		if (stopped) return data.length;
+		if (mode !== 'head' || pending !== null || data.length > LIMIT) return null;
+		const text = data.toString('latin1');
+		if (FRAMED.test(text) || !FAST_HEADS.test(text)) return null;
+		current = null;
+		return executeAfterDeclines.call(parser, data);
+	};
 	return {
+		tryFast,
 		get boundary() { return mode === 'head' && pending === null; },
 		restore() { clearPending(); if (parser.socket === socket) parser.onIncoming = originalIncoming; },
 		execute(data, trailingBytes = 0) {
 			if (stopped) return data.length;
-			if (mode === 'head' && pending === null && data.length <= LIMIT) {
-				const text = data.toString('latin1');
-				if (!FRAMED.test(text) && FAST_HEADS.test(text)) {
-					current = null;
-					return executeAfterDeclines.call(parser, data);
-				}
-			}
+			const fast = tryFast(data);
+			if (fast !== null) return fast;
 			let at = 0;
 			while (at < data.length) {
 				let part, consumed;

@@ -255,15 +255,15 @@ export function send505(res) {
  */
 export function missesHost(req) {
 	if (req.httpVersion !== '1.1') return false;
-	if (req.headers.host === undefined) return true;
-	let seen = false;
 	const raw = req.rawHeaders;
-	if (raw) for (let i = 0; i < raw.length; i += 2) {
+	if (raw === undefined) return req.headers.host === undefined;
+	let seen = false;
+	for (let i = 0; i < raw.length; i += 2) {
 		if (raw[i].length !== 4 || raw[i].toLowerCase() !== 'host') continue;
 		if (seen) return true;
 		seen = true;
 	}
-	return false;
+	return !seen;
 }
 
 // The requests of one connection in the order it carried them, on the socket,

@@ -71,6 +71,17 @@ export function installProxyProtocolSocket(socket) {
 		else delete parser.execute;
 	};
 	parser.execute = function (data) {
+		// A complete bodyless ASCII batch cannot carry connection metadata.
+		// Let the head reader consume it together instead of splitting every
+		// HTTP terminator while searching for a PROXY prefix.
+		if (pending === null && boundary && refusedBytes === 0) {
+			const fast = heads.tryFast(data);
+			if (fast !== null) {
+				boundary = heads.boundary;
+				if (this.incoming?.upgrade) restore();
+				return fast;
+			}
+		}
 		let offset = 0;
 		const refuse = (bytes) => {
 			refusedBytes += bytes;
