@@ -44,7 +44,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let timer = null;
 	let current = null;
 	let stopped = false;
-	let chunkDigits = '';
+	let chunkSize = 0;
 	let chunkDigitsEnded = false;
 	let trailerBytes = 0;
 	const originalIncoming = parser.onIncoming;
@@ -54,7 +54,12 @@ export function createRequestHeadExecutor(parser, socket) {
 			req.method = current.method;
 			req.url = current.target;
 			if (req.headers['transfer-encoding']) mode = 'chunk-line';
-			else { remaining = Number(req.headers['content-length'] || 0); mode = remaining ? 'body' : 'head'; }
+			else {
+				const declared = req.headers['content-length'] || '0';
+				remaining = Number(declared);
+				if (remaining > Number.MAX_SAFE_INTEGER) remaining = BigInt(declared);
+				mode = remaining ? 'body' : 'head';
+			}
 		}
 		return originalIncoming.call(this, req, keepAlive);
 	};
@@ -84,9 +89,11 @@ export function createRequestHeadExecutor(parser, socket) {
 			while (at < data.length) {
 				let part, consumed;
 				if (mode === 'body' || mode === 'chunk-data') {
-					consumed = Math.min(remaining, data.length - at);
+					consumed = typeof remaining === 'bigint'
+						? Number(remaining < BigInt(data.length - at) ? remaining : BigInt(data.length - at))
+						: Math.min(remaining, data.length - at);
 					part = data.subarray(at, at + consumed);
-					remaining -= consumed;
+					remaining -= typeof remaining === 'bigint' ? BigInt(consumed) : consumed;
 					if (!remaining) mode = mode === 'body' ? 'head' : 'chunk-line';
 				} else if (mode === 'chunk-line' || mode === 'trailers') {
 					const end = data.indexOf(10, at);
@@ -96,14 +103,18 @@ export function createRequestHeadExecutor(parser, socket) {
 						if (!chunkDigitsEnded) {
 							for (const byte of part) {
 								if (byte === 59 || byte === 13 || byte === 10) { chunkDigitsEnded = true; break; }
-								if (chunkDigits.length < 32) chunkDigits += String.fromCharCode(byte);
+								const digit = byte >= 48 && byte <= 57 ? byte - 48 : (byte | 32) >= 97 && (byte | 32) <= 102 ? (byte | 32) - 87 : -1;
+								if (digit < 0) continue; // node rejects this byte below
+								if (typeof chunkSize === 'bigint') chunkSize = chunkSize * 16n + BigInt(digit);
+								else if (chunkSize > Math.floor((Number.MAX_SAFE_INTEGER - digit) / 16)) chunkSize = BigInt(chunkSize) * 16n + BigInt(digit);
+								else chunkSize = chunkSize * 16 + digit;
 							}
 						}
 						if (end >= 0) {
-							const size = parseInt(chunkDigits, 16);
-							chunkDigits = '';
+							const size = chunkSize;
+							chunkSize = 0;
 							chunkDigitsEnded = false;
-							remaining = size + 2;
+							remaining = typeof size === 'bigint' ? size + 2n : size + 2;
 							mode = size === 0 ? 'trailers' : 'chunk-data';
 						}
 					} else {

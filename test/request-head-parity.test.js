@@ -61,3 +61,8 @@ describe('request framing bounds', () => {
 		expect(result.raw).toContain('413 Content Too Large');
 	});
 });
+
+it('reads chunk sizes with arbitrarily many leading zeroes', async () => {
+	const result = await exchange([[0, 'POST /api/echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n' + '0'.repeat(80) + '5\r\na\r\n\r\n\r\n0\r\n\r\n' + healthy]], 300);
+	expect(result.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200', 'HTTP/1.1 200']);
+});
