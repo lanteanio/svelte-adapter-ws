@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Invalid-target pipeline tests verify response ordering and refusal bodies after GET and HEAD.
+
 - Split non-ASCII request targets retain HEAD response framing over HTTP and HTTPS.
 
 - A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
