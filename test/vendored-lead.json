@@ -1,5 +1,8 @@
 {
 	"repo": "svelte-adapter-uws",
 	"rev": "ed86c50",
-	"why": "The commit of the lead adapter this repo vendored from. The parity gate reads the lead at THIS revision, never at its working tree: a lead checkout with uncommitted edits would otherwise turn this gate red for work that is not ours. Moving to a newer lead is a deliberate act - bump this rev, re-derive every vendored file, review what changed, commit the two together."
+	"why": "The commit of the lead adapter this repo vendored from. The parity gate reads the lead at THIS revision, never at its working tree: a lead checkout with uncommitted edits would otherwise turn this gate red for work that is not ours. Moving to a newer lead is a deliberate act - bump this rev, re-derive every vendored file, review what changed, commit the two together. fileRevisions pins independently verified contracts that were carried after the general source revision; every other file stays at rev.",
+	"fileRevisions": {
+		"protocol.schema.json": "7bafe5ea27e060f0bca67e4376a8b6e676db30f4"
+	}
 }

@@ -88,7 +88,7 @@ describe('wire revision parity', () => {
 		const leadSchema = LEAD_SOURCES.get('protocol.schema.json');
 		expect(
 			leadSchema,
-			`the lead checkout at ${uwsRoot} has no protocol.schema.json at ${LEAD.rev}`
+			`the lead checkout at ${uwsRoot} has no protocol.schema.json at ${LEAD.fileRevisions?.['protocol.schema.json'] || LEAD.rev}`
 		).not.toBe(null);
 		// Byte-identical, and the schema is checked out with -text so no
 		// line-ending normalization stands between the two copies.

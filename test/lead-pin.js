@@ -8,7 +8,8 @@
 //
 // Moving to a newer lead is deliberate: bump `rev` in test/vendored-lead.json,
 // re-derive every vendored file against it, read what changed, and commit the
-// pin with the re-vendored files.
+// pin with the re-vendored files. A fileRevisions entry pins a separately
+// carried contract without changing the revision used by other source gates.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -46,7 +47,7 @@ export function readLeadAtPin(leadRelativePaths) {
 	let stdout;
 	try {
 		stdout = execFileSync('git', ['-C', uwsRoot, 'cat-file', '--batch'], {
-			input: requests.map((p) => `${LEAD.rev}:${p}`).join('\n') + '\n',
+			input: requests.map((p) => `${LEAD.fileRevisions?.[p] || LEAD.rev}:${p}`).join('\n') + '\n',
 			maxBuffer: 512 * 1024 * 1024,
 			stdio: ['pipe', 'pipe', 'ignore']
 		});

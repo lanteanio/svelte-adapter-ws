@@ -390,6 +390,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Incomplete request heads no longer time out an active SSE stream or delayed HTTP response.
 
+- Replay stores report standalone and inline truncation once per outstanding
+  request. Recovery invalidation clears offsets while retaining their server
+  generation, and unanswered recovery holds speculative live progress until
+  its matching acknowledgement. Queued retries retain only wanted topics and
+  cannot outlive their socket or subscription.
+
 - Authentication rate-limit refusals round fractional windows up before jitter so `Retry-After` contains whole seconds.
 
 - Client socket closes report `disconnected` before the closing handshake ends.
