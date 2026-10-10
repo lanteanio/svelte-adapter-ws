@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Full request-path and envelope-prefix caches discard their oldest half
+  every 60 seconds, allowing stale entries to age out after traffic changes.
+
 - The deprecated `WS_REQUEST_ID_KEY` constant and its declaration now use
   `__adapter_uws_request_id__`, matching the native adapter.
 

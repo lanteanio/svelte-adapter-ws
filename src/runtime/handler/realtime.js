@@ -73,6 +73,8 @@ import {
 	subscribeAuth, takeConfirmedGaps, topicPublishStats, wsConnections, wsWrappers
 } from './state.js';
 import { joinSharedCohort, leaveSharedCohort } from './cohort.js';
+import { DECODE_CACHE_MAX } from './static-assets.js';
+import { ENVELOPE_CACHE_MAX } from './envelope-cache.js';
 import { releaseSharedWireId } from './shared-wire-id.js';
 import { signalRelayGaps } from './platform.js';
 import { seqBound } from './seq-bound.js';
@@ -996,6 +998,24 @@ const _rateSweepTimer = setIntervalTimer(() => {
 	const t = now();
 	upgradeRateLimiter.sweep(t);
 	authPathRateLimiter.sweep(t);
+	// Trim module-level FIFO caches if they are full. When a cache is at
+	// capacity it evicts one entry per insertion, but traffic patterns can
+	// shift and leave the cache full of stale entries. Clearing the oldest
+	// half every 60 s lets hot entries reclaim the freed slots.
+	if (decodeCache.size >= DECODE_CACHE_MAX) {
+		let i = 0;
+		for (const k of decodeCache.keys()) {
+			if (i++ >= DECODE_CACHE_MAX / 2) break;
+			decodeCache.delete(k);
+		}
+	}
+	if (envelopePrefixCache.size >= ENVELOPE_CACHE_MAX) {
+		let i = 0;
+		for (const k of envelopePrefixCache.keys()) {
+			if (i++ >= ENVELOPE_CACHE_MAX / 2) break;
+			envelopePrefixCache.delete(k);
+		}
+	}
 }, 60_000);
 if (typeof _rateSweepTimer?.unref === 'function') _rateSweepTimer.unref();
 
