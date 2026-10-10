@@ -38,6 +38,12 @@ describe.each([false, true])('HTTP read response ordering with TLS=%s', secure =
   expect(raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 505']);
   expect(closed).toBe(true);
  });
+ it.each(['/healthz', '/sync'])('drops the buffered %s answer before a header refusal', async first => {
+  const bad = 'GET /bad HTTP/1.1\r\nHost: x\r\nBad Header: x\r\n\r\n';
+  const { raw, closed } = await rawConversation(runtime.port, [[0, request(first) + bad]], { secure });
+  expect(raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 400']);
+  expect(closed).toBe(true);
+ });
  it('drops earlier small answers when a later callback cannot finish', async () => {
   const { raw, closed } = await rawConversation(runtime.port, [[0, request('/sync') + request('/slow') + request('/sync')]], { secure });
   expect(raw).toBe('');

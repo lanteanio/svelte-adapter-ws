@@ -75,6 +75,7 @@ export function installProxyProtocolSocket(socket) {
 		const firstHead = data.indexOf(PREFIX);
 		const held = !heads.boundary || firstHead >= 0 && firstHead + 4 < data.length;
 		if (held) beginHttpRead(socket);
+		let parserFailed = false;
 		try {
 			// A complete bodyless ASCII batch cannot carry connection metadata.
 			// Let the head reader consume it together instead of splitting every
@@ -82,6 +83,7 @@ export function installProxyProtocolSocket(socket) {
 			if (pending === null && boundary && refusedBytes === 0) {
 				const fast = heads.tryFast(data);
 				if (fast !== null) {
+					parserFailed = typeof fast !== 'number';
 					boundary = heads.boundary;
 					if (this.incoming?.upgrade) restore();
 					return fast;
@@ -150,6 +152,7 @@ export function installProxyProtocolSocket(socket) {
 				const result = heads.execute(offset === 0 && end === data.length ? data : data.subarray(offset, end), data.length - end);
 				boundary = heads.boundary;
 				if (typeof result !== 'number') {
+					parserFailed = true;
 					if (typeof result?.bytesParsed === 'number') result.bytesParsed += offset;
 					return result;
 				}
@@ -158,7 +161,7 @@ export function installProxyProtocolSocket(socket) {
 				if (result < length) return offset;
 			}
 			return offset;
-		} finally { if (held) endHttpRead(socket); }
+		} finally { if (held && !parserFailed) endHttpRead(socket); }
 	};
 	// Adding a reader switches node from its native consumed path to the
 	// JS execute path, so no read can bypass the preamble filter.
