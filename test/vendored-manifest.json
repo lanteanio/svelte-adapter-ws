@@ -1087,7 +1087,17 @@
 		"file": "src/runtime/restart-supervisor.js"
 	},
 	{
-		"file": "src/runtime/runtime.js"
+		"file": "src/runtime/runtime.js",
+		"adaptations": [
+			{
+				"lead": "\t\tclearInterval: (h) => clearInterval(h),\n\t\tqueueMicrotask:",
+				"ours": "\t\tclearInterval: (h) => clearInterval(h),\n\t\tclearImmediate: (h) => clearImmediate(h),\n\t\tqueueMicrotask:"
+			},
+			{
+				"lead": "export const clearIntervalTimer = (h) => current.timers.clearInterval(h);\nexport const microtask",
+				"ours": "export const clearIntervalTimer = (h) => current.timers.clearInterval(h);\nexport const clearImmediateTimer = (h) => current.timers.clearImmediate(h);\nexport const microtask"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/shims.js"
@@ -1104,6 +1114,10 @@
 	{
 		"file": "src/runtime/sim-core.js",
 		"adaptations": [
+			{
+				"lead": "\t\t\t\tclearInterval: clear,\n\t\t\t\tqueueMicrotask:",
+				"ours": "\t\t\t\tclearInterval: clear,\n\t\t\t\tclearImmediate: clear,\n\t\t\t\tqueueMicrotask:"
+			},
 			{
 				"lead": "real uWS in createTestServer",
 				"ours": "real ws in createTestServer"

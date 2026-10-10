@@ -53,6 +53,7 @@ const defaultEnv = Object.freeze({
 		setImmediate: (cb, ...a) => setImmediate(cb, ...a),
 		clear: (h) => clearTimeout(h),
 		clearInterval: (h) => clearInterval(h),
+		clearImmediate: (h) => clearImmediate(h),
 		queueMicrotask: (cb) => queueMicrotask(cb)
 	}),
 	tz: undefined // effective timezone for cron evaluation; undefined = real local TZ
@@ -95,6 +96,7 @@ export const setIntervalTimer = (cb, ms, ...a) => current.timers.setInterval(cb,
 export const setImmediateTimer = (cb, ...a) => current.timers.setImmediate(cb, ...a);
 export const clearTimer = (h) => current.timers.clear(h);
 export const clearIntervalTimer = (h) => current.timers.clearInterval(h);
+export const clearImmediateTimer = (h) => current.timers.clearImmediate(h);
 export const microtask = (cb) => current.timers.queueMicrotask(cb);
 export const effectiveTimeZone = () => current.tz;
 
