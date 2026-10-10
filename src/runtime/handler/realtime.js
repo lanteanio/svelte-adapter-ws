@@ -8,6 +8,7 @@
 /* global WS_PATH */
 /* global WS_AUTH_PATH */
 import { WebSocketServer } from 'ws';
+import { prepareUpgradeRefusal, forgetUpgradeRefusal, finishUpgradeRefusal, watchPendingUpgrade } from './upgrade-refusal.js';
 import {
 	WS_ATTRIBUTION, WS_CAPS, WS_CONNECTION_PERMIT, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
 	WS_PUBLISH_GRANT, WS_SESSION_ID, WS_SHARED_COHORTS, WS_STATS, WS_SUBSCRIPTIONS,
@@ -1129,14 +1130,16 @@ function observeUpgradeOutcome(socket, outcome) {
  * @param {number} status
  * @param {string} text
  * @param {string | Array<[string, string]>} [extraHeaders]
+ * @param {boolean} [closeConnection]
  */
-function refuseUpgrade(socket, status, text, extraHeaders) {
+function refuseUpgrade(socket, status, text, extraHeaders, closeConnection = false) {
 	// Every refusal on the WebSocket path writes through here (the waiting-room
 	// and capacity documents reach it via upgradeRefusalResponse), so this is
 	// the one place the rejected leg of the upgrade timing has to be stamped.
 	observeUpgradeOutcome(socket, 'rejected');
 	const line = STATUS_TEXT[status] || 'Error';
-	let head = `HTTP/1.1 ${status} ${line}\r\nConnection: close\r\n`;
+	let head = `HTTP/1.1 ${status} ${line}\r\n`;
+	if (closeConnection) head += 'Connection: close\r\n';
 	let hasType = false;
 	if (typeof extraHeaders === 'string') {
 		head += extraHeaders + '\r\n';
@@ -1147,10 +1150,7 @@ function refuseUpgrade(socket, status, text, extraHeaders) {
 		}
 	}
 	if (!hasType) head += 'Content-Type: text/plain\r\n';
-	try {
-		socket.write(head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text);
-	} catch { /* peer already gone */ }
-	socket.destroy();
+	finishUpgradeRefusal(socket, head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text, closeConnection);
 }
 
 /**
@@ -1252,6 +1252,7 @@ export async function handleUpgrade(req, socket, head) {
 	// is detached the moment ws takes ownership and installs its own.
 	const onSocketError = () => socket.destroy();
 	socket.on('error', onSocketError);
+	const updateRefusalHead = prepareUpgradeRefusal(socket, head, onSocketError);
 
 	// A handshake pipelined behind other requests waits its turn in the
 	// connection's line, as on the native tier, and goes ahead once every HTTP
@@ -1267,7 +1268,7 @@ export async function handleUpgrade(req, socket, head) {
 	// headers, a handshake included; node's own check never reaches an
 	// upgrade.
 	if (missesHost(req)) {
-		refuseUpgrade(socket, 400, 'Bad Request');
+		refuseUpgrade(socket, 400, 'Bad Request', undefined, true);
 		return;
 	}
 
@@ -1296,7 +1297,7 @@ export async function handleUpgrade(req, socket, head) {
 	// asked further down, where the header set is built.
 	if (framingRefusal(firstHeaderValue(req.rawHeaders, 'transfer-encoding') || undefined, undefined) !== null) {
 		noteUpgradeRejection(undefined, 'ambiguous_framing', req);
-		refuseUpgrade(socket, 400, 'Bad Request');
+		refuseUpgrade(socket, 400, 'Bad Request', undefined, true);
 		return;
 	}
 
@@ -1460,14 +1461,13 @@ export async function handleUpgrade(req, socket, head) {
 		// Two ways to arrive: the same header twice, or one header whose value
 		// frames the body two ways. A handshake carries no body at all, so the
 		// second says the sender and this server disagree about where the
-		// request even ends. Every refusal here closes the connection anyway;
-		// the reason is what tells them apart.
+		// request even ends. Only that framing ambiguity ends the connection.
 		// A literal per branch, not one variable read twice: the label
 		// contract is checked by reading these call sites, and a name it
 		// cannot fold to a string leaves this door unchecked.
 		if (isFramingHeader(ambiguous)) noteUpgradeRejection(null, 'ambiguous_framing');
 		else noteUpgradeRejection(null, 'duplicate_header');
-		refuseUpgrade(socket, 400, 'Bad Request');
+		refuseUpgrade(socket, 400, 'Bad Request', undefined, isFramingHeader(ambiguous));
 		releaseInFlight();
 		return;
 	}
@@ -1543,7 +1543,14 @@ export async function handleUpgrade(req, socket, head) {
 				timer = setTimeout(() => { timedOut = true; resolve(TIMEOUT); }, UPGRADE_TIMEOUT_S * 1000); // determinism-allow: admission deadline over a real socket, outside the replayable engine
 				if (typeof timer?.unref === 'function') timer.unref();
 			});
-			const result = await Promise.race([hookRun, deadline]);
+			const stopWatching = watchPendingUpgrade(socket, head);
+			let result;
+			try {
+				result = await Promise.race([hookRun, deadline]);
+			} finally {
+				head = stopWatching();
+				updateRefusalHead(head);
+			}
 			if (timer) clearTimeout(timer); // determinism-allow: pairs with the admission deadline above
 			if (result === TIMEOUT) {
 				noteUpgradeRejection(headers, 'auth_timeout');
@@ -1632,9 +1639,11 @@ export async function handleUpgrade(req, socket, head) {
 			// throws.
 			if (connectionPermitHeld) carrier = connectionPermitCarrier.install(merged);
 			try {
+				forgetUpgradeRefusal(socket);
 				wss.handleUpgrade(req, socket, head, (ws) => {
 					// ws owns the socket's error handling from here on.
 					socket.removeListener('error', onSocketError);
+					socket.resume();
 					// The accept landed, so the permit now belongs to the
 					// connection and close is what returns it.
 					if (connectionPermitHeld) connectionPermitTransferred = true;
