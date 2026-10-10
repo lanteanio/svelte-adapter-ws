@@ -1178,6 +1178,26 @@
 				"lead": "[adapter-uws]",
 				"ours": "[adapter-ws]",
 				"all": true
+			},
+			{
+				"lead": "\t// the Host header, both of which a non-browser client supplies - so the pin\n\t// is what makes that mode mean anything. Dev honouring it too keeps the dev\n\t// server from being quietly more permissive than the deployment.\n\tconst PINNED_ORIGIN_V = parse_origin(process.env.ORIGIN || undefined);\n\n\t/** @type {import('ws').WebSocketServer | undefined} */\n\tlet wss;\n",
+				"ours": "\t// the Host header, both of which a non-browser client supplies - so the pin\n\t// is what makes that mode mean anything. Dev honouring it too keeps the dev\n\t// server from being quietly more permissive than the deployment.\n\t/** @type {string | undefined} Resolved from the adapter before dev starts. */\n\tlet PINNED_ORIGIN_V;\n\n\t/** @type {import('ws').WebSocketServer | undefined} */\n\tlet wss;\n"
+			},
+			{
+				"lead": "\t *\n\t * @param {string} root\n\t * @param {{ plugins?: Array<any> } | null | undefined} resolved\n\t * @returns {Promise<{ handler: string | null, from: string | null }>}\n\t */\n\tasync function adapterHandlerOption(root, resolved) {\n\t\tfor (const plugin of resolved?.plugins ?? []) {\n",
+				"ours": "\t *\n\t * @param {string} root\n\t * @param {{ plugins?: Array<any> } | null | undefined} resolved\n\t * @returns {Promise<{ handler: string | null, metrics: string | null, envPrefix: string, from: string | null, configName: string | null }>}\n\t */\n\tasync function adapterHandlerOption(root, resolved) {\n\t\tfor (const plugin of resolved?.plugins ?? []) {\n"
+			},
+			{
+				"lead": "\t\t\treturn {\n\t\t\t\thandler: typeof handler === 'string' && handler ? handler : null,\n\t\t\t\tmetrics: typeof metrics === 'string' && metrics ? metrics : null,\n\t\t\t\tfrom: 'websocket.handler in SvelteKit config',\n\t\t\t\tconfigName: 'SvelteKit config'\n\t\t\t};\n",
+				"ours": "\t\t\treturn {\n\t\t\t\thandler: typeof handler === 'string' && handler ? handler : null,\n\t\t\t\tmetrics: typeof metrics === 'string' && metrics ? metrics : null,\n\t\t\t\tenvPrefix: typeof adapter.envPrefix === 'string' ? adapter.envPrefix : '',\n\t\t\t\tfrom: 'websocket.handler in SvelteKit config',\n\t\t\t\tconfigName: 'SvelteKit config'\n\t\t\t};\n"
+			},
+			{
+				"lead": "\t\t\t\t// API path above to avoid evaluating app config twice.\n\t\t\t\tconst mod = await import(pathToFileURL(full).href);\n\t\t\t\tconst adapter = mod?.default?.kit?.adapter;\n\t\t\t\tif (adapter?.name !== 'adapter-ws') return { handler: null, metrics: null, from: null, configName: null };\n\t\t\t\tconst handler = adapter.websocketHandler;\n\t\t\t\tconst metrics = adapter.websocketMetrics;\n\t\t\t\treturn {\n\t\t\t\t\thandler: typeof handler === 'string' && handler ? handler : null,\n\t\t\t\t\tmetrics: typeof metrics === 'string' && metrics ? metrics : null,\n\t\t\t\t\tfrom: `websocket.handler in ${name}`,\n\t\t\t\t\tconfigName: name\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\treturn { handler: null, metrics: null, from: null, configName: null };\n\t\t\t}\n\t\t}\n\t\treturn { handler: null, metrics: null, from: null, configName: null };\n\t}\n\n\t/**\n",
+				"ours": "\t\t\t\t// API path above to avoid evaluating app config twice.\n\t\t\t\tconst mod = await import(pathToFileURL(full).href);\n\t\t\t\tconst adapter = mod?.default?.kit?.adapter;\n\t\t\t\tif (adapter?.name !== 'adapter-ws') return { handler: null, metrics: null, envPrefix: '', from: null, configName: null };\n\t\t\t\tconst handler = adapter.websocketHandler;\n\t\t\t\tconst metrics = adapter.websocketMetrics;\n\t\t\t\treturn {\n\t\t\t\t\thandler: typeof handler === 'string' && handler ? handler : null,\n\t\t\t\t\tmetrics: typeof metrics === 'string' && metrics ? metrics : null,\n\t\t\t\t\tenvPrefix: typeof adapter.envPrefix === 'string' ? adapter.envPrefix : '',\n\t\t\t\t\tfrom: `websocket.handler in ${name}`,\n\t\t\t\t\tconfigName: name\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\treturn { handler: null, metrics: null, envPrefix: '', from: null, configName: null };\n\t\t\t}\n\t\t}\n\t\treturn { handler: null, metrics: null, envPrefix: '', from: null, configName: null };\n\t}\n\n\t/**\n"
+			},
+			{
+				"lead": "\t\t\t// and aborts dev startup, which is the point: it is the same error the\n\t\t\t// build raises, surfaced at the earliest moment an app can see it.\n\t\t\tconst adapterOption = await adapterHandlerOption(root, server.config);\n\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// The metrics registry, on the same mechanism as the handler and for\n",
+				"ours": "\t\t\t// and aborts dev startup, which is the point: it is the same error the\n\t\t\t// build raises, surfaced at the earliest moment an app can see it.\n\t\t\tconst adapterOption = await adapterHandlerOption(root, server.config);\n\t\t\tPINNED_ORIGIN_V = parse_origin(process.env[adapterOption.envPrefix + 'ORIGIN'] || undefined);\n\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// The metrics registry, on the same mechanism as the handler and for\n"
 			}
 		]
 	},

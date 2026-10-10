@@ -377,6 +377,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   middleware checking the previous `svelte-adapter-ws` value must accept
   `XMLHttpRequest`.
 
+- The Vite plugin uses the adapter's `envPrefix` for the authentication request URL and both same-origin checks. A configured prefix ignores bare `ORIGIN`; an empty prefix keeps using it.
+
 - Error reference entries follow the shared catalog order and retain the cluster
   operator link.
 

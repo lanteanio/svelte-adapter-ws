@@ -485,6 +485,11 @@ option the tracing paths cost one boolean test.
 
 Runtime environment (prefix configurable via the `envPrefix` option):
 
+The Vite plugin reads the same prefix from the adapter configuration. For
+`envPrefix: 'MY_APP_'`, set `MY_APP_ORIGIN` to pin the dev authentication
+request URL and same-origin checks; bare `ORIGIN` is ignored. An empty prefix
+keeps using `ORIGIN`.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `HOST` / `PORT` | `0.0.0.0` / `3000` | Listen address. |

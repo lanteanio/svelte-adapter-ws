@@ -769,7 +769,10 @@ export interface AdapterOptions {
 	out?: string;
 	/** Emit .br/.gz siblings for static assets (default true). */
 	precompress?: boolean;
-	/** Environment variable prefix (default ''). */
+	/**
+	 * Environment variable prefix (default ''). The Vite plugin also uses this
+	 * prefix for its ORIGIN pin; with a prefix set, bare ORIGIN is ignored.
+	 */
 	envPrefix?: string;
 	/** Liveness probe path or false (default '/healthz'). Answers GET and HEAD. */
 	healthCheckPath?: string | false;
