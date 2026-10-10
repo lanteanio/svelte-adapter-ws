@@ -1072,7 +1072,7 @@ export function resumeAfterDeclinedUpgrade(req) {
  * @this {any}
  * @param {Buffer} data
  */
-function executeAfterDeclines(data) {
+export function executeAfterDeclines(data) {
 	const socket = this.socket;
 	let offset = 0;
 	/** @type {unknown} */
@@ -1091,7 +1091,7 @@ function executeAfterDeclines(data) {
 		if (offset >= data.length) break;
 	}
 	// node frees a parser that took an upgrade into its pool right after this.
-	if (this.incoming?.upgrade) delete this.execute;
+	if (this.incoming?.upgrade && this.execute === executeAfterDeclines) delete this.execute;
 	return result;
 }
 

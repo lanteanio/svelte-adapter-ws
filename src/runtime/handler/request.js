@@ -14,7 +14,7 @@ import { handleSSR } from './ssr.js';
 import { extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { lifecycleState, requestDone, openRequestSignal, closeRequestSignal } from './lifecycle.js';
 import { monotonicNow } from '../runtime.js';
-import { ADMIN_PATH } from './config.js';
+import { ADMIN_PATH, resolveTransportAddress } from './config.js';
 import { adminMounted } from './admin.js';
 import { windowsReservedPath } from '../utils/windows-path.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
@@ -468,7 +468,7 @@ function serveRequest(req, res) {
 	// against (own property shadows the IncomingMessage prototype getter).
 	Object.defineProperty(req, 'headers', { value: headers, configurable: true });
 
-	const direct = req.socket?.remoteAddress || '';
+	const { direct, effective } = resolveTransportAddress(req.socket);
 	// The application's `request.signal`, aborted when the client goes away
 	// before its request body has arrived in full, as SvelteKit's Node adapter
 	// does - a form action that has its data finishes what it started. Only
@@ -477,7 +477,7 @@ function serveRequest(req, res) {
 	// handleSSR contains its own error handling; this catch covers only a
 	// throw from that handling itself, which must never become an unhandled
 	// rejection that kills the process.
-	handleSSR(req, res, headers, direct, state, direct).catch(() => {
+	handleSSR(req, res, headers, effective, state, direct).catch(() => {
 		try { send500(res); } catch { /* exchange already gone */ }
 	}).finally(() => closeRequestSignal(controller));
 }

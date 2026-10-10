@@ -1,3 +1,4 @@
+import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
@@ -218,6 +219,7 @@ function createNodeApp() {
 	};
 	const httpServer = createHttpServer({ shouldUpgradeCallback, requireHostHeader: false });
 	applyShouldUpgradeCallback(httpServer, shouldUpgradeCallback);
+	installProxyProtocol(httpServer);
 	// A method node's parser refuses is answered like the ones it accepts,
 	// as on the production server.
 	refuseUnparsedForbiddenMethods(httpServer);

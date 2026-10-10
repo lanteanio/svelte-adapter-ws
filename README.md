@@ -496,6 +496,7 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). A request still open when it runs out has its `request.signal` aborted before it is dropped. |
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
+| `PROXY_PROTOCOL` | off | `1` uses the PROXY v2 source address, gated by `TRUSTED_PROXIES` when set. |
 | `SSL_CERT` / `SSL_KEY` | - | Paths to one PEM certificate and private key. |
 | `SSL_SNI_HOSTS` | - | Flat comma-separated SNI host override for the certificate's hot-reload; defaults to SAN DNS names, then subject CN. |
 | `SSL_WATCH` / `SSL_RELOAD_DEBOUNCE_MS` | `1` / `500` | Certificate hot-reload watch. |
@@ -507,9 +508,8 @@ Runtime environment (prefix configurable via the `envPrefix` option):
 | `WORKER_BOOT_TIMEOUT_MS` | `60000` | Boot deadline for a worker that stops acking liveness mid-init; `0` disables. |
 
 A `SIGTERM`/`SIGINT` during a shutdown already running changes nothing: that
-shutdown keeps its `SHUTDOWN_TIMEOUT` budget. `PROXY_PROTOCOL` refuses the boot
-loudly rather than half-working, and so does every invalid cluster
-configuration (see Deployment).
+shutdown keeps its `SHUTDOWN_TIMEOUT` budget. Invalid cluster configurations
+refuse the boot (see Deployment).
 
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does
@@ -606,7 +606,10 @@ HTTP/2 and the entire observability ecosystem
    naming the shutdown, when the shutdown budget runs out and the request is
    about to be dropped, so a handler that passes the signal to a `fetch` or a
    query can stop.
-   `PROXY_PROTOCOL` refuses the boot loudly rather than half-working.
+   PROXY v2 metadata is consumed before HTTP on TCP and decrypted TLS streams.
+   `PROXY_PROTOCOL=1` substitutes the first claimed client address;
+   `TRUSTED_PROXIES`, when configured, checks the actual socket peer for both
+   PROXY and `ADDRESS_HEADER` claims. Repeated preambles retain the first claim.
 
 3. **JSON realtime**: the upgrade path with async admission, origin
    policy, per-IP rate limiting, upgrade timeout and validated custom 101

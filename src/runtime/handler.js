@@ -13,6 +13,7 @@
 import './_init.js';
 import { applyShouldUpgradeCallback, answerExpectations, refuseUnparsedForbiddenMethods, resumeAfterDeclinedUpgrade, takesWebSocketRoute } from './handler/http-helpers.js';
 import http from 'node:http';
+import { installProxyProtocol } from './handler/proxy-protocol.js';
 import path from 'node:path';
 import { isMainThread, threadId, workerData } from 'node:worker_threads';
 import { env } from './env.js';
@@ -219,6 +220,7 @@ export const server = tlsModule
 	: http.createServer({ shouldUpgradeCallback, requireHostHeader: false }, handleRequest);
 // The same routing on a node that ignores the option, before 22.21 and 24.9.
 applyShouldUpgradeCallback(server, shouldUpgradeCallback);
+installProxyProtocol(server);
 // A method node's parser refuses is answered like the ones it accepts.
 refuseUnparsedForbiddenMethods(server);
 // A request's Expect is answered after its Host is checked, in its turn.

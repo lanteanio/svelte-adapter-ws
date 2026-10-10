@@ -6,6 +6,7 @@
 /* global WS_OPTIONS */
 /* global ENV_PREFIX */
 
+import { proxiedAddress } from './proxy-protocol.js';
 import { env } from '../env.js';
 import { parse_as_bytes, parse_origin } from '../utils/parse.js';
 import { originFromHeaders, OriginHeaderError, refusedHeaderSetting } from '../utils/origin.js';
@@ -70,26 +71,19 @@ export const body_size_limit = parse_as_bytes(env('BODY_SIZE_LIMIT', '512K'));
  */
 export const trusted_proxies = createTrustedProxyMatcher(env('TRUSTED_PROXIES', ''));
 
-/**
- * Whether the PROXY protocol v2 preamble is parsed off the raw socket. Always
- * false here: the refusal below makes `1` fatal at module eval, so a module
- * that finished evaluating never carries any other value. It is exported all
- * the same, because the resolved value is part of the config surface every
- * other eval-time knob exposes, and a reader that cannot see this one cannot
- * tell an adapter that declines the flag from one that ignores it.
- */
+/** Opt in to the PROXY v2 source address, gated by TRUSTED_PROXIES when set. */
 export const proxy_protocol = env('PROXY_PROTOCOL', '') === '1';
 
-// Parsing the preamble means reading it off the socket before the HTTP parser
-// sees the stream, which this adapter does not do. A deployment that sets the
-// flag must not silently run with spoofable client addresses, so the
-// misconfiguration is fatal at boot rather than quietly ignored.
-if (proxy_protocol) {
-	throw new Error(
-		'[svelte-adapter-ws] PROXY_PROTOCOL=1 is not supported by this adapter. ' +
-		'Terminate the PROXY protocol at the fronting load balancer and forward the ' +
-		'client address via ADDRESS_HEADER (gated by TRUSTED_PROXIES) instead.'
-	);
+/** @param {import('node:net').Socket} socket */
+export function resolveTransportAddress(socket) {
+	const direct = socket?.remoteAddress || '';
+	if (!proxy_protocol) return { direct, effective: direct };
+	const claimed = proxiedAddress(socket);
+	if (trusted_proxies && !trusted_proxies.match(direct)) {
+		if (claimed) warnUntrustedClaim(direct, 'PROXY-protocol');
+		return { direct, effective: direct };
+	}
+	return { direct, effective: claimed || direct };
 }
 
 /**

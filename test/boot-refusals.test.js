@@ -25,10 +25,6 @@ function bootWith(prefix, env) {
 }
 
 describe('boot-time refusals', () => {
-	it('refuses PROXY_PROTOCOL=1 loudly', async () => {
-		await expect(bootWith('SAW_B1_', { PROXY_PROTOCOL: '1' })).rejects.toThrow(/PROXY_PROTOCOL=1 is not supported/);
-	});
-
 	it('refuses a partial TLS config', async () => {
 		await expect(bootWith('SAW_B2_', { SSL_CERT: '/certs/fullchain.pem' })).rejects.toThrow(/Incomplete TLS config/);
 	});

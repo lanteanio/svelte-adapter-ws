@@ -94,7 +94,7 @@ import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
-import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
+import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
@@ -1473,8 +1473,8 @@ export async function handleUpgrade(req, socket, head) {
 	}
 	const wsTraceParent = extractTraceContext(headers);
 
-	const direct = req.socket?.remoteAddress || '';
-	const clientIp = resolveClientIp(direct, headers, direct);
+	const { direct, effective } = resolveTransportAddress(req.socket);
+	const clientIp = resolveClientIp(effective, headers, direct);
 
 	if (upgradeRateLimiter.exceeded(clientIp, now())) {
 		// Per-IP rate-limit reject. Reported on its own counter, never the
@@ -2671,8 +2671,8 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		return true;
 	}
 
-	const direct = req.socket?.remoteAddress || '';
-	const clientIp = resolveClientIp(direct, headers, direct);
+	const { direct, effective } = resolveTransportAddress(req.socket);
+	const clientIp = resolveClientIp(effective, headers, direct);
 	if (authPathRateLimiter.exceeded(clientIp, now())) {
 		// The preflight door has its own reason: a 429 here never reached the
 		// upgrade gate, and folding it into ip_rate_limit would hide which door

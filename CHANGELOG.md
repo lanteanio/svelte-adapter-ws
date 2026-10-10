@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test-server routing checks cover HEAD on the WebSocket, admission poll and
   waiting-room paths with and without admission enabled.
 
+- PROXY protocol v2 works on HTTP and HTTPS, including fragmented preambles
+  and persistent connections. `PROXY_PROTOCOL=1` uses the claimed source for
+  SSR, WebSocket upgrades and authentication; `TRUSTED_PROXIES` checks the
+  direct peer before accepting transport or forwarded-header claims.
+
 - **`event.request.signal` aborts when the client disconnects and when
   shutdown stops waiting.** The Request handed to SvelteKit, and to an
   `admin()` handler, carried no signal, so it never fired. It now aborts
