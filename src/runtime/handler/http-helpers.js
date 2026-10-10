@@ -4,7 +4,7 @@
 
 import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { createRequire } from 'node:module';
-import { firstHeaderValue } from '../utils/request-headers.js';
+import { webSocketKeyByteLength } from './header-values.js';
 import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
@@ -956,7 +956,7 @@ export function takesWebSocketRoute(req, wsPath) {
 	const url = req.url || '/';
 	const q = url.indexOf('?');
 	return (q === -1 ? url : url.slice(0, q)) === wsPath &&
-		firstHeaderValue(req.rawHeaders, 'sec-websocket-key').length === 24;
+		webSocketKeyByteLength(req.rawHeaders) === 24;
 }
 
 /**
