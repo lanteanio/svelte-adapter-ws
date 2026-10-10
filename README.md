@@ -785,6 +785,9 @@ retry requests a closed connection left unanswered, and browsers do not
 pipeline. `vite dev` runs on Vite's own
 server, which serves HTTP/1.0 and queues pipelined requests instead.
 `test/http-pipelining-real.test.js` pins both halves on the built runtime.
+An incomplete following request head does not interrupt an active answer,
+including an SSE stream. Its 10-second idle deadline starts after that answer
+finishes.
 
 **systemd integration** is automatic under a `Type=notify` unit and a no-op
 everywhere else: the runtime detects `NOTIFY_SOCKET` and sends `READY` once

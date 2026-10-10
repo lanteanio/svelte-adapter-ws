@@ -43,6 +43,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let remaining = 0;
 	let pending = null;
 	let timer = null;
+	let answer = null;
 	let current = null;
 	let stopped = false;
 	let chunkSize = 0;
@@ -65,10 +66,29 @@ export function createRequestHeadExecutor(parser, socket) {
 		return originalIncoming.call(this, req, keepAlive);
 	};
 	parser.onIncoming = onIncoming;
-	const clearPending = () => { pending = null; if (timer !== null) clearTimer(timer); timer = null; };
+	const armHoldTimeout = () => {
+		answer = null;
+		if (pending === null || socket.destroyed) return;
+		const response = socket._httpMessage;
+		if (response && !response.writableFinished) {
+			// An incomplete next head must not cut off the answer ahead of it.
+			answer = response;
+			response.once('finish', armHoldTimeout);
+			return;
+		}
+		timer = setTimer(() => socket.destroy(), 10_000);
+		timer?.unref?.();
+	};
+	const clearPending = () => {
+		pending = null;
+		if (timer !== null) clearTimer(timer);
+		timer = null;
+		if (answer !== null) answer.removeListener('finish', armHoldTimeout);
+		answer = null;
+	};
 	const hold = data => {
 		pending = Buffer.from(data);
-		if (timer === null) { timer = setTimer(() => socket.destroy(), 10_000); timer?.unref?.(); }
+		if (timer === null && answer === null) armHoldTimeout();
 	};
 	const refuse = (status, headOnly = false) => {
 		clearPending(); stopped = true;
