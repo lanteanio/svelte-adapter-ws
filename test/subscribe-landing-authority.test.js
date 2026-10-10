@@ -12,7 +12,7 @@ export function subscribe(ws, topic) {
 export function message(ws, { platform }) { platform.send(ws, 'probe', 'alive', {}); }
 `;
 
-it('a refused fresh attempt never grants authority to its revoked sibling', async () => {
+it.each(['landing', 'cap'])('a %s refusal never grants authority to its revoked sibling', async refusal => {
 	const payload = buildRuntime({ replace: {
 		WS_ENABLED: 'true', WS_OPTIONS: JSON.stringify({ allowedOrigins: '*', idleTimeout: 120, compression: false })
 	}, wsHandlerSource: handler });
@@ -35,9 +35,17 @@ it('a refused fresh attempt never grants authority to its revoked sibling', asyn
 		platform.unsubscribe(first.ws, topic);
 		ws.send(JSON.stringify({ type: 'subscribe', topic, ref: 2 }));
 		await expect.poll(() => wsModule.pending.length).toBe(2);
-		platform.authorizeWireSubscribe('strict');
+		if (refusal === 'landing') platform.authorizeWireSubscribe('strict');
+		else {
+			const { MAX_SUBSCRIPTIONS_PER_CONNECTION: max } = await load('utils/caps.js');
+			for (let i = 0; i < max; i++) {
+				if (!trackedSubscribe(first.ws, `cap-fill:${i}`)) throw new Error('could not fill the subscription cap');
+			}
+			expect(first.ws.getUserData()[WS_SUBSCRIPTIONS].size).toBe(max);
+		}
 		wsModule.pending[1].resolve(true);
-		await expect.poll(() => frames.find(f => f.ref === 2)).toMatchObject({ type: 'subscribe-denied', reason: 'FORBIDDEN' });
+		await expect.poll(() => frames.find(f => f.ref === 2)).toMatchObject({ type: 'subscribe-denied', reason: refusal === 'cap' ? 'RATE_LIMITED' : 'FORBIDDEN' });
+		if (refusal === 'cap') platform.unsubscribe(first.ws, 'cap-fill:0');
 		const ud = first.ws.getUserData();
 		// A plugin finishing the revoked hook installs tracked membership in
 		// its own await window. The refused sibling supplies no authority for it.
