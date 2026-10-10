@@ -144,6 +144,9 @@ export const counters = {
 	leaseSaturationPeak: 0,
 	/** The wall ratio the last sample measured (sizes lease grants). */
 	lastHeapUsedRatio: 0,
+	/** @type {number | null} No sample or no known memory wall. */
+	lastMeasuredHeapUsedRatio: null,
+	memoryWallPermanent: false,
 	/**
 	 * Live protection posture, null until the realtime module builds one and
 	 * null for the whole life of a `'normal'` deployment. Every read in the

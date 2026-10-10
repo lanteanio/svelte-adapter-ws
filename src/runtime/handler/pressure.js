@@ -101,9 +101,12 @@ export function samplePressureOnce(thresholds) {
 	// Distance to the nearest memory WALL, not arena fullness: heapUsed
 	// against the V8 limit, rss against the cgroup limit - the kernel's OOM
 	// killer charges the whole resident set, never the JS heap alone.
-	const heapUsedRatio = memoryWall.ratio(mem);
+	const measuredHeapUsedRatio = memoryWall.measure(mem);
+	const heapUsedRatio = measuredHeapUsedRatio ?? 0;
 	const memoryMB = mem.rss / (1024 * 1024);
 	counters.lastHeapUsedRatio = heapUsedRatio;
+	counters.lastMeasuredHeapUsedRatio = measuredHeapUsedRatio;
+	counters.memoryWallPermanent = memoryWall.hasEngineLimit();
 	counters.lastResidentBytes = mem.rss;
 
 	const os = osPressure.sample(thresholds.sampleIntervalMs);

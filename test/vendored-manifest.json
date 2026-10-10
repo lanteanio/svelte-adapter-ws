@@ -990,6 +990,10 @@
 			{
 				"lead": "\t// connections. `getBufferedAmount()` is one C++ call per connection; the\n",
 				"ours": "\t// connections. `bufferedAmount` is one property read per connection; the\n"
+			},
+			{
+				"lead": "\t// heapUsed against the V8 limit, rss against the cgroup limit - because\n\t// the kernel's OOM killer charges the whole resident set, never the JS\n\t// heap alone.\n\tconst heapUsedRatio = memoryWall.ratio(mem);\n\tconst memoryMB = mem.rss / (1024 * 1024);\n\t// Both retained for the metrics hook. Resident memory is process-wide\n\t// (worker threads share one address space); the wall ratio's heap arm is\n\t// per-isolate while its rss arm is that same process-wide value, so\n\t// workers report identically whenever the container wall dominates.\n\tcounters.lastHeapUsedRatio = heapUsedRatio;\n\tcounters.lastResidentBytes = mem.rss;\n\n\t// Kernel signals for this window. Null per source when unavailable; the\n",
+				"ours": "\t// heapUsed against the V8 limit, rss against the cgroup limit - because\n\t// the kernel's OOM killer charges the whole resident set, never the JS\n\t// heap alone.\n\tconst measuredHeapUsedRatio = memoryWall.measure(mem);\n\tconst heapUsedRatio = measuredHeapUsedRatio ?? 0;\n\tconst memoryMB = mem.rss / (1024 * 1024);\n\t// Both retained for the metrics hook. Resident memory is process-wide\n\t// (worker threads share one address space); the wall ratio's heap arm is\n\t// per-isolate while its rss arm is that same process-wide value, so\n\t// workers report identically whenever the container wall dominates.\n\tcounters.lastHeapUsedRatio = heapUsedRatio;\n\tcounters.lastMeasuredHeapUsedRatio = measuredHeapUsedRatio;\n\tcounters.memoryWallPermanent = memoryWall.hasEngineLimit();\n\tcounters.lastResidentBytes = mem.rss;\n\n\t// Kernel signals for this window. Null per source when unavailable; the\n"
 			}
 		]
 	},
@@ -1065,7 +1069,13 @@
 		"file": "src/runtime/metrics-collector.js"
 	},
 	{
-		"file": "src/runtime/observability-manifest.js"
+		"file": "src/runtime/observability-manifest.js",
+		"adaptations": [
+			{
+				"lead": "\t// The heap arm is per-isolate, so each worker thread has its own reading;\n\t// the rss arm is process-wide, so workers converge whenever the container\n\t// wall dominates. The worst worker is the one nearest a wall.\n\t{ name: 'heap_used_ratio', type: 'gauge', labels: [], unit: 'ratio', scope: 'worker', aggregate: 'max', help: 'Used fraction of the nearest memory wall (heap vs the V8 limit, resident set vs the cgroup memory limit, worst-of)' },\n\t{ name: 'psi_cpu_some_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall CPU some avg10' },\n\t{ name: 'psi_memory_full_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall memory full avg10' },\n\t{ name: 'psi_io_full_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall IO full avg10' },\n",
+				"ours": "\t// The heap arm is per-isolate, so each worker thread has its own reading;\n\t// the rss arm is process-wide, so workers converge whenever the container\n\t// wall dominates. The worst worker is the one nearest a wall.\n\t{ name: 'heap_used_ratio', optional: true, type: 'gauge', labels: [], unit: 'ratio', scope: 'worker', aggregate: 'max', help: 'Used fraction of the nearest memory wall (heap vs the V8 limit, resident set vs the cgroup memory limit, worst-of)' },\n\t{ name: 'psi_cpu_some_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall CPU some avg10' },\n\t{ name: 'psi_memory_full_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall memory full avg10' },\n\t{ name: 'psi_io_full_avg10', type: 'gauge', labels: [], unit: 'percent', scope: 'process', aggregate: 'max', optional: true, help: 'Kernel pressure-stall IO full avg10' },\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/posture-collector.js"
@@ -1214,7 +1224,17 @@
 		"file": "src/runtime/utils/metrics-merge.js"
 	},
 	{
-		"file": "src/runtime/utils/metrics.js"
+		"file": "src/runtime/utils/metrics.js",
+		"adaptations": [
+			{
+				"lead": "\t\tset(/** @type {any} */ value) {\n\t\t\tif (typeof value === 'number') record(name, undefined, value, true);\n\t\t\tinstrument?.set(value);\n\t\t}\n\t}));\n\tif (typeof registry.histogram === 'function') {\n",
+				"ours": "\t\tset(/** @type {any} */ value) {\n\t\t\tif (typeof value === 'number') record(name, undefined, value, true);\n\t\t\tinstrument?.set(value);\n\t\t},\n\t\tremove() {\n\t\t\tmirror.get(name)?.clear();\n\t\t\tinstrument?.remove?.();\n\t\t},\n\t\t// Optional sources must be able to retract a previous sample. A legacy\n\t\t// registry can expose only readings whose availability is permanent;\n\t\t// the worker mirror supports removal independently of that registry.\n\t\tsetOptional(/** @type {number | null} */ value, /** @type {boolean} */ permanent) {\n\t\t\tif (value === null) {\n\t\t\t\tmirror.get(name)?.clear();\n\t\t\t\tinstrument?.remove?.();\n\t\t\t\treturn;\n\t\t\t}\n\t\t\trecord(name, undefined, value, true);\n\t\t\tif (permanent || typeof instrument?.remove === 'function') instrument?.set(value);\n\t\t}\n\t}));\n\tif (typeof registry.histogram === 'function') {\n"
+			},
+			{
+				"lead": "\t};\n\t/** @type {any} */\n\tconst wrapped = {};\n\tfor (const method of ['inc', 'dec', 'set', 'observe']) {\n\t\tif (typeof instrument[method] === 'function') wrapped[method] = contain(instrument[method]);\n\t}\n\treturn wrapped;\n",
+				"ours": "\t};\n\t/** @type {any} */\n\tconst wrapped = {};\n\tfor (const method of ['inc', 'dec', 'set', 'observe', 'remove', 'setOptional']) {\n\t\tif (typeof instrument[method] === 'function') wrapped[method] = contain(instrument[method]);\n\t}\n\treturn wrapped;\n"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/mime.js"
@@ -3188,5 +3208,8 @@
 	},
 	{
 		"file": "test/fixtures/external-respawner.mjs"
+	},
+	{
+		"file": "test/memory-wall.test.js"
 	}
 ]
