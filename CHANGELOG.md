@@ -372,6 +372,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Auth preflights send `x-requested-with: XMLHttpRequest`, allowing the bundled
+  client to connect when `Origin` and `Sec-Fetch-Site` are absent. Custom
+  middleware checking the previous `svelte-adapter-ws` value must accept
+  `XMLHttpRequest`.
+
 - Error reference entries follow the shared catalog order and retain the cluster
   operator link.
 

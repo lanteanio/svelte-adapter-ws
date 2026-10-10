@@ -629,8 +629,11 @@ HTTP/2 and the entire observability ecosystem
    welcome, hello/caps with the lease grant, subscribe and subscribe-batch
    with resume-on-subscribe gap-fill barriers, unsubscribe, resume, reply,
    request-n, game, and the oversized-control-frame refusal. The
-   `authenticate` preflight endpoint with CSRF defense and rate limiting is
-   in; app hooks fire through the same lifecycle as the lead adapter (init
+   `authenticate` preflight endpoint has CSRF defense and rate limiting.
+   `connect({ auth: true })` sends `x-requested-with: XMLHttpRequest` before
+   opening the socket. Custom middleware that checks this header must accept
+   `XMLHttpRequest`; the client no longer sends `svelte-adapter-ws`.
+   App hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). Every `websocket.*`
    option the family declares ships here. The per-connection caps are the
    family's: 1,000,000 for the large retained-state maps, 65,536 for

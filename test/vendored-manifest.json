@@ -94,7 +94,13 @@
 		"file": "src/client.d.ts"
 	},
 	{
-		"file": "src/client.js"
+		"file": "src/client.js",
+		"adaptations": [
+			{
+				"lead": "headers: { 'x-requested-with': 'svelte-adapter-ws' },",
+				"ours": "headers: { 'x-requested-with': 'XMLHttpRequest' },"
+			}
+		]
 	},
 	{
 		"file": "src/config-guards.js"
