@@ -25,8 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A completed request that closes its connection releases its buffered answer before the socket ends.
 
-- Refused handshakes close with a draining server instead of reopening an idle HTTP connection.
-
 - HTTP read buffers use the native response byte count at their exact release boundary, including queued TLS replies and application headers.
 
 - Parser-generated header errors discard small responses buffered earlier in the same read.
@@ -381,6 +379,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid-target refusals preserve GET bodies and bodyless HEAD framing when the HTTP connection is reused.
 
 - Completed static and realtime HTTP responses that fill the response buffer for a read reach the client before a later pipelined refusal.
+
+- Draining changes readiness without adding a WebSocket admission refusal. Pending upgrade hooks can complete, and refused handshakes retain their HTTP connection after the listener closes.
 
 - Test server unmatched routes return `404 File Not Found` with the complete
   HTML body, including HEAD and WebSocket navigation without an admission limit.

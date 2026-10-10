@@ -258,9 +258,8 @@ function upgradeRequest(headerPairs) {
 
 /**
  * Boot a payload and hand back its upgrade listener. The port is never dialed -
- * every drive below hands the listener a socket stub directly - but the server
- * still has to reach `ready`, because an upgrade arriving before that is
- * refused as draining, ahead of every branch under test.
+ * every drive below hands the listener a socket stub directly. The full boot
+ * runs application initialization before the listener is exercised.
  */
 async function bootRealtime(wsOptions, wsHandlerSource) {
 	const payload = buildRuntime({

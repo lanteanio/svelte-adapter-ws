@@ -166,7 +166,7 @@ export function abortInFlightRequests() {
 export async function start(server, host, port, opts = {}) {
 	// A lifecycle that ran to completion leaves the state 'closed' and the drain
 	// latched, and neither ever cleared - so a second start served a runtime that
-	// was permanently draining, refusing every upgrade with 503, and a third
+	// was permanently draining, reporting readiness 503, and a third
 	// called listen() on a still-listening server.
 	//
 	// Re-armed HERE, at the top, and never by forcing 'ready' at the end. The

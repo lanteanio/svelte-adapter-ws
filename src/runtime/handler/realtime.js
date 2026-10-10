@@ -97,7 +97,6 @@ import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqF
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
-import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
@@ -1290,7 +1289,7 @@ export async function handleUpgrade(req, socket, head) {
 	// so a 404 on some other path never seats a series here.
 	if (hUpgradeDuration !== undefined) upgradeTimings.set(socket, { started: monotonicNow() });
 
-	// AHEAD of every capacity answer below, and of the drain refusal: a
+	// AHEAD of every capacity answer below: a
 	// handshake whose Transfer-Encoding names anything but chunked says the
 	// sender and a server in front may disagree about where the request even
 	// ends, and it is refused under its own reason before any other door is
@@ -1316,11 +1315,6 @@ export async function handleUpgrade(req, socket, head) {
 		noteUpgradeRejection(undefined, 'malformed_handshake', req);
 		if (handshakeRefusal === 426) refuseUpgrade(socket, 426, 'Upgrade Required', [['Sec-WebSocket-Version', WEBSOCKET_VERSION]]);
 		else refuseUpgrade(socket, 400, 'Bad Request');
-		return;
-	}
-
-	if (isDraining()) {
-		refuseUpgrade(socket, 503, 'Service Unavailable');
 		return;
 	}
 
@@ -1606,16 +1600,6 @@ export async function handleUpgrade(req, socket, head) {
 	const acceptUpgrade = () => {
 		// Between admission and a paced execution the client may have hung up.
 		if (socket.destroyed) { observeUpgradeOutcome(socket, 'aborted'); releaseInFlight(); return; }
-		// The drain check above ran before the app's upgrade hook. A shutdown
-		// that began while the hook was pending has since told every live
-		// socket to go; a connection opened now would be one the sweep never
-		// saw, holding the listener's close for as long as the client stays.
-		// Refused the way an upgrade during the drain is refused.
-		if (isDraining()) {
-			refuseUpgrade(socket, 503, 'Service Unavailable');
-			releaseInFlight();
-			return;
-		}
 		try {
 			const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
 			const merged = { remoteAddress, .../** @type {any} */ (userData) };

@@ -704,8 +704,10 @@ HTTP/2 and the entire observability ecosystem
    subscribe is answered `subscribe-denied` with `RATE_LIMITED` and
    everything held stays.
    Graceful shutdown drains live sockets itself (`http.close()` never
-   completes while one is open): new upgrades are refused the moment drain
-   begins, every client gets the reconnect advisory with the
+   completes while one is open). Readiness becomes unavailable when drain
+   begins; upgrades on accepted connections still follow ordinary admission.
+   Refused handshakes keep their HTTP connection usable after the listener
+   closes. Every live client gets the reconnect advisory with the
    `RECONNECT_DISPERSAL_MS` window (default 5000, 0 disables the advisory)
    and a 1001 close, and whatever ignores the close frame past the budget is
    terminated.

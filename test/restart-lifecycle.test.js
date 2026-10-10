@@ -1,16 +1,7 @@
 // A handler module can be started again after it has been shut down.
-//
-// The drain latches and the lifecycle state are per-LIFECYCLE, but both were
-// module-scope and neither was ever cleared. So a second `start()` on the same
-// module instance ran against a state left at 'closed': `isDraining()` is
-// `state !== 'ready'`, and the realtime upgrade path refuses while draining, so
-// the second boot bound a port and then answered every WebSocket upgrade with
-// 503. A third called `listen()` on a server that was still listening, whose
-// rejection path ends in `process.exit(1)`.
-//
-// The assertions here are deliberately BEHAVIOURAL as well as state-reading: a
-// runtime that reports 'ready' while refusing upgrades is the failure this file
-// exists for, so reading the state alone would not have caught it.
+// Drain latches and lifecycle state reset between starts. Every restart must
+// reach readiness and accept WebSocket traffic, and a completed shutdown must
+// unbind the listener before the next start.
 
 import net from 'node:net';
 import path from 'node:path';
@@ -69,9 +60,7 @@ describe('a handler module can begin a new lifecycle after it has closed', () =>
 		await handler.shutdown({ timeoutMs: 1000 });
 		expect(handler.lifecycleState()).toBe('closed');
 
-		// The second boot is where a stale 'closed' state bound a port and then
-		// answered every upgrade with 503 - bound, reachable over HTTP, and
-		// useless for the thing this adapter exists to do.
+		// A fresh lifecycle clears the closed state and accepts traffic again.
 		const second = await freePort();
 		await handler.start('127.0.0.1', second);
 		expect(handler.lifecycleState(), 'a new lifecycle must reach ready').toBe('ready');

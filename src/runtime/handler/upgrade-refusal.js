@@ -33,7 +33,7 @@ export function finishUpgradeRefusal(socket, response, closeConnection) {
 	const state = refusals.get(socket);
 	refusals.delete(socket);
 	if (socket.destroyed) return;
-	if (closeConnection || !state || !socket.server || socket.server.listening === false) {
+	if (closeConnection || !state || !socket.server) {
 		try { socket.end(response, () => socket.destroy()); } catch { socket.destroy(); }
 		return;
 	}
@@ -42,7 +42,7 @@ export function finishUpgradeRefusal(socket, response, closeConnection) {
 	socket.pause();
 	try {
 		socket.write(response, (error) => {
-			if (error || socket.destroyed || socket.server.listening === false) { socket.destroy(); return; }
+			if (error || socket.destroyed) { socket.destroy(); return; }
 			try {
 				socket.removeListener('error', state.onError);
 				_connectionListener.call(socket.server, socket);

@@ -96,18 +96,24 @@ describe('managed WebSocket drain', () => {
 		}
 	});
 
-	it('refuses a new upgrade the moment drain begins', async () => {
+	it('admits an upgrade during drain and includes it in managed shutdown', async () => {
 		const payload = buildRuntime({
 			replace: { WS_ENABLED: JSON.stringify(true), WS_OPTIONS: JSON.stringify(WS_OPTS) },
 			wsHandlerSource: 'export function close() {}\n'
 		});
+		let rt;
+		let late;
 		try {
-			const rt = await bootRuntime(payload);
+			rt = await bootRuntime(payload);
 			rt.handler.beginDrain();
-			const late = dial(rt.port);
-			await expect(late.open()).rejects.toThrow();
+			late = dial(rt.port);
+			await late.open();
+			const closed = late.closed();
 			await rt.handler.shutdown({ timeoutMs: 1000 });
+			expect(await closed).toBe(1001);
 		} finally {
+			late?.ws.terminate();
+			await rt?.close();
 			payload.cleanup();
 		}
 	});
