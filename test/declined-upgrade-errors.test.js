@@ -36,7 +36,7 @@ for(const lane of ['TCP','TLS','harness']) describe(`malformed requests after a 
  afterAll(async()=>{await server?.close();payload?.cleanup();for(const key of ['SSL_CERT','SSL_KEY','SSL_WATCH'])delete process.env[prefix+key];});
  for(const [name,invalid,status] of cases)for(const delayed of [false,true])it(`refuses a malformed ${name} in ${delayed?'a later':'the same'} read`,async()=>{
   const raw=await exchange(server.port,lane==='TLS',invalid,delayed);
-  expect([...raw.matchAll(/HTTP\/1\.1 (\d+)/g)].map(match=>match[1])).toEqual(['200',status]);
+  expect([...raw.matchAll(/HTTP\/1\.1 (\d+)/g)].map(match=>match[1])).toEqual(delayed ? ['200',status] : [status]);
   expect(raw.toLowerCase()).toContain('connection: close');
  });
 });
