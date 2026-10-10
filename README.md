@@ -80,6 +80,10 @@ does not resolve, or if this package declares a subpath the lead does not.
 | `svelte-adapter-ws/plugins/webhooks` | SSRF-gated webhook delivery | Node runtime | supported | none |
 <!-- public-entry-points:end -->
 
+`createTestServer` from `svelte-adapter-ws/testing` answers unmatched HTTP routes
+with `404 File Not Found` and an HTML body, including on HEAD. Without an
+admission limit, a plain GET to the WebSocket path uses the same answer.
+
 ## Install
 
 ```sh

@@ -56,7 +56,7 @@ const FOLLOW_UP = { lines: ['GET /healthz HTTP/1.1'] };
 
 /**
  * @typedef {{ status: string, lines: string[], body: string }} Answer
- * @typedef {{ lines: string[], body?: string }} Ask
+ * @typedef {{ lines: string[], body?: string, headBody?: boolean }} Ask
  */
 
 /**
@@ -64,9 +64,10 @@ const FOLLOW_UP = { lines: ['GET /healthz HTTP/1.1'] };
  *
  * @param {string} raw latin1
  * @param {string[]} methods
+ * @param {boolean[]} headBodies
  * @returns {Answer[]}
  */
-function parseAnswers(raw, methods) {
+function parseAnswers(raw, methods, headBodies) {
 	/** @type {Answer[]} */
 	const out = [];
 	let at = 0;
@@ -80,7 +81,7 @@ function parseAnswers(raw, methods) {
 		const header = (name) => lines.find((l) => l.startsWith(name + ':'))?.slice(name.length + 1).trim();
 		let next = end + 4;
 		let body = '';
-		if (methods[out.length] === 'HEAD' || status === '101' || status === '204' || status === '304') {
+		if ((methods[out.length] === 'HEAD' && !headBodies[out.length]) || status === '101' || status === '204' || status === '304') {
 			// No payload.
 		} else if (header('transfer-encoding') === 'chunked') {
 			for (;;) {
@@ -114,6 +115,7 @@ function parseAnswers(raw, methods) {
  */
 function exchange(port, asks) {
 	const methods = asks.map((a) => a.lines[0].slice(0, a.lines[0].indexOf(' ')));
+	const headBodies = asks.map((a) => a.headBody === true);
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(port, '127.0.0.1');
 		let raw = '';
@@ -128,13 +130,13 @@ function exchange(port, asks) {
 			done = true;
 			clearTimeout(timer);
 			socket.destroy();
-			resolve(parseAnswers(raw, methods));
+			resolve(parseAnswers(raw, methods, headBodies));
 		};
 		const timer = setTimeout(finish, 3000);
 		socket.on('connect', send);
 		socket.on('data', (chunk) => {
 			raw += chunk.toString('latin1');
-			const answered = parseAnswers(raw, methods);
+			const answered = parseAnswers(raw, methods, headBodies);
 			if (answered.length === asks.length || answered.at(-1)?.status === '101') finish();
 			else if (answered.length === sent) send();
 		});
@@ -166,11 +168,12 @@ const comparable = (answer) => ({
  * @param {string[]} lines request line and any headers of its own
  * @param {string[]} [handshake] the upgrade headers added to the second send
  * @param {string} [body] sent behind the head both times
+ * @param {boolean} [headBody] the test server default route writes a HEAD payload
  * @returns {Promise<Answer>} the answer to the handshake
  */
-async function expectOrdinary(port, lines, handshake = HANDSHAKE, body = undefined) {
-	const plain = await exchange(port, [{ lines, body }, FOLLOW_UP]);
-	const asked = await exchange(port, [{ lines: [...lines, ...handshake], body }, FOLLOW_UP]);
+async function expectOrdinary(port, lines, handshake = HANDSHAKE, body = undefined, headBody = false) {
+	const plain = await exchange(port, [{ lines, body, headBody }, FOLLOW_UP]);
+	const asked = await exchange(port, [{ lines: [...lines, ...handshake], body, headBody }, FOLLOW_UP]);
 	expect(plain, 'the control is answered and keeps its connection').toHaveLength(2);
 	expect(asked.length, 'the connection answers the request after the handshake').toBe(2);
 	expect(comparable(asked[0])).toEqual(comparable(plain[0]));
@@ -406,7 +409,7 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 			await expectOrdinary(mirror.port, ['GET /elsewhere HTTP/1.1']);
 			await expectOrdinary(mirror.port, ['POST /ws HTTP/1.1', 'Content-Length: 0']);
 			await expectOrdinary(mirror.port, ['POST /ws HTTP/1.1', 'Content-Length: 5'], HANDSHAKE, 'hello');
-			await expectOrdinary(mirror.port, ['HEAD /ws HTTP/1.1']);
+			await expectOrdinary(mirror.port, ['HEAD /ws HTTP/1.1'], HANDSHAKE, undefined, true);
 			await expectOrdinary(mirror.port, ['GET /ws/ HTTP/1.1']);
 			expect((await expectOrdinary(mirror.port, ['GET /healthz HTTP/1.1'], H2C)).body).toBe('OK');
 		});

@@ -140,6 +140,14 @@ function detachedRequestFacadeT(snapshot) {
 	};
 }
 
+/** @param {{ cork: Function, writeStatus: Function, end: Function }} res */
+function sendNotFoundT(res) {
+	res.cork(() => {
+		res.writeStatus('404 File Not Found');
+		res.end('<html><body><h1>File Not Found</h1><hr><i>uWebSockets/20 Server</i></body></html>');
+	});
+}
+
 const DEFAULT_SHUTDOWN_TIMEOUT_S = 30;
 
 /**
@@ -522,8 +530,9 @@ function createNodeApp() {
 			}
 		}
 		if (!handler) {
-			nodeRes.writeHead(404, { 'content-type': 'text/plain', 'content-length': '9' });
-			nodeRes.end('Not Found');
+			// The default route writes its HTML payload on HEAD as well.
+			/** @type {any} */ (nodeRes)._hasBody = true;
+			sendNotFoundT(makeHttpResDouble(nodeReq, nodeRes));
 			return;
 		}
 		handler(makeHttpResDouble(nodeReq, nodeRes), makeReqDouble(nodeReq, pathname, query));
@@ -4352,11 +4361,7 @@ export async function createTestServer(options = {}) {
 				return;
 			}
 			if (!admissionCeiling) {
-				res.cork(() => {
-					res.writeStatus('404 Not Found');
-					res.writeHeader('content-type', 'text/plain');
-					res.end('Not Found');
-				});
+				sendNotFoundT(res);
 				return;
 			}
 			res.onAborted(() => {});

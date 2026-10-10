@@ -1844,7 +1844,7 @@ describe('createTestServer', () => {
 		try {
 			expectLengthFramed(await pipeline(mirror.port, [['GET /nowhere HTTP/1.1'], ['GET /healthz HTTP/1.1']]), {
 				status: '404',
-				body: 'Not Found'
+				body: '<html><body><h1>File Not Found</h1><hr><i>uWebSockets/20 Server</i></body></html>'
 			});
 		} finally {
 			await mirror.close();

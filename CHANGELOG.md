@@ -376,6 +376,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Test server unmatched routes return `404 File Not Found` with the complete
+  HTML body, including HEAD and WebSocket navigation without an admission limit.
+
 - Parser refusals over TLS no longer terminate the server while an earlier
   response is still being written.
 
