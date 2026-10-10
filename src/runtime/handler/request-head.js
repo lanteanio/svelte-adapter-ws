@@ -1,4 +1,5 @@
 import { METHODS } from 'node:http';
+import { endParserRefusal } from './read-turn.js';
 import { normalizeHeaderEdges } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
 import { executeAfterDeclines } from './http-helpers.js';
@@ -71,7 +72,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	const refuse = (status, headOnly = false) => {
 		clearPending(); stopped = true;
 		const phrase = status === 505 ? 'HTTP Version Not Supported' : status === 400 ? 'Bad Request' : 'Request Header Fields Too Large';
-		socket.end('HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase), () => socket.destroy());
+		endParserRefusal(socket, 'HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase));
 	};
 	const tryFast = (data) => {
 		if (stopped) return data.length;

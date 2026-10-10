@@ -6,7 +6,7 @@ import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderV
 import { createRequire } from 'node:module';
 import { webSocketKeyByteLength } from './header-values.js';
 import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
-import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal } from './read-turn.js';
+import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal, httpCallbackCheckpoint } from './read-turn.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
@@ -356,10 +356,6 @@ export function servePipelined(req, res, serve) {
  * @param {Line} line
  * @param {import('node:http').ServerResponse} res
  */
-/**
- * @param {Line} line
- * @param {import('node:http').ServerResponse} res
- */
 function handOut(line, res) {
 	line.ahead = res;
 	/** @type {any} */ (res)[LINE] = line;
@@ -430,8 +426,6 @@ function aheadFinished() {
 	if (line.ahead === this) line.ahead = this._last ? FINISHED_CLOSING : FINISHED;
 }
 
-let checkpointActive = false;
-
 /**
  * @param {any} socket
  * @param {Line} line
@@ -444,10 +438,7 @@ function nextInLine(socket, line) {
 	// first. Node's own checkpoint gives promises their turn without admitting
 	// another I/O or timer callback. A nested application callback must not
 	// recursively enter that checkpoint.
-	if (!checkpointActive) {
-		checkpointActive = true;
-		try { /** @type {any} */ (process)._tickCallback(); } finally { checkpointActive = false; }
-	}
+	httpCallbackCheckpoint();
 
 	line.scheduled = false;
 	const ahead = line.ahead;
