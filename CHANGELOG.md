@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
 
+- **Linux recovery drill verifies external process restarts.** The respawner
+  command wedges a clustered worker, checks the whole-process hard exit, and
+  verifies replacement readiness after both that failure and a primary kill.
+  CI runs it separately; systemd and container deployment examples include
+  readiness, restart policy and termination grace.
+
 - **Source reachability check rejects disconnected modules.** Package exports and
   justified file-loaded entries root the import graph, including dynamic imports
   and re-exports. Detached cycles fail too. The unused Node bridge was removed.

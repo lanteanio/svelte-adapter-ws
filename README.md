@@ -769,6 +769,13 @@ manager has processed each one before it exits; an older manager may fail to
 attribute a datagram whose sender has already exited and silently drop it,
 so below systemd 246 run the unit as `Type=simple` without `WatchdogSec=`.
 
+Deployment examples include a [systemd unit](./examples/deployment/svelte-adapter-ws.service)
+and [container configuration](./examples/deployment/compose.yaml) with readiness,
+restart policy and shutdown grace. On Linux, run `npm run drill:respawner` to
+verify recovery after a worker wedges and after the primary process is killed.
+The drill uses its own token-protected fixture and checks that each replacement
+process becomes ready before continuing.
+
 ## License
 
 MIT

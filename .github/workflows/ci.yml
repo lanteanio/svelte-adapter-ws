@@ -65,3 +65,18 @@ jobs:
       # first commit so the rule is never retrofitted onto a grown tree.
       - name: Determinism seam scan
         run: node scripts/check-determinism.js
+
+  respawner-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Install fixture dependencies
+        working-directory: test/fixture
+        run: npm install --no-audit --no-fund
+      - name: Restart after a wedged worker and a primary kill
+        run: npm run drill:respawner

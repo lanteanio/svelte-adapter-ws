@@ -2626,5 +2626,27 @@
 				"ours": ""
 			}
 		]
+	},
+	{
+		"file": "examples/deployment/compose.yaml"
+	},
+	{
+		"file": "examples/deployment/svelte-adapter-ws.service",
+		"leadFile": "examples/deployment/svelte-adapter-uws.service"
+	},
+	{
+		"file": "scripts/drill-respawner.js"
+	},
+	{
+		"file": "test/deployment-recovery-contract.test.js",
+		"adaptations": [
+			{
+				"lead": "const workflow = read('.github/workflows/test.yml');",
+				"ours": "const workflow = read('.github/workflows/ci.yml');"
+			}
+		]
+	},
+	{
+		"file": "test/fixtures/external-respawner.mjs"
 	}
 ]
