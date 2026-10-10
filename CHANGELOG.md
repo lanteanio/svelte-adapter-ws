@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Wire publish tests verify relay success, per-entry relay payloads, resume cutover capture and JSON-only relay for declined codec frames.
+
 - Production subscription cleanup tests cover throwing and rejecting unsubscribe hooks across wire, recover, platform and observer authorization unwinds.
 
 - Live subscription tests verify that a refused attempt cannot preserve membership installed by a revoked sibling.
