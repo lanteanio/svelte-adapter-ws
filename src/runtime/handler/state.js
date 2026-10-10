@@ -11,6 +11,7 @@ import { createDivergenceDiagnosticStore } from '../divergence-diagnostics.js';
  *   contentType: string,
  *   etag: string,
  *   lastModifiedMs?: number,
+ *   lastModified?: string,
  *   headers: [string, string][],
  *   headersFlat: (string | number)[],
  *   revalidationHeadersFlat: string[],

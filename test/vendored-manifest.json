@@ -2186,7 +2186,7 @@
 		"file": "test/fixture/static/deep/.hidden.txt"
 	},
 	{
-		"file": "test/fixture/static/maß.txt"
+		"file": "test/fixture/static/ma\u00c3\u0178.txt"
 	},
 	{
 		"file": "test/fixture/static/test.txt"
@@ -2911,6 +2911,10 @@
 			{
 				"lead": "function bindingLoads() {\n\ttry {\n\t\tcreateRequire(import.meta.url).resolve('uWebSockets.js');\n\t\treturn true;\n\t} catch {\n\t\treturn false;\n\t}\n}",
 				"ours": "function bindingLoads() {\n\t// The fixture build resolves on this adapter's transport, which is always\n\t// present; the native probe would only ever answer no here.\n\treturn true;\n}"
+			},
+			{
+				"lead": "\t\texpect(serve({ headOnly: true, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t});\n\n\tit('an immutable entry ignores preconditions entirely, exactly as before the date validator', () => {\n\t\texpect(serve({ entry: immutableEntry, ifModifiedSince: LATER }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: 'W/\"stranger\"' }).status).toBe('200 OK');\n\t});\n\n\tit('a configured last-modified cannot displace the file time', () => {\n",
+				"ours": "\t\texpect(serve({ headOnly: true, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t});\n\n\tit('an immutable entry ignores absent date validators but evaluates entity conditions', () => {\n\t\texpect(serve({ entry: immutableEntry, ifModifiedSince: LATER }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: '*' }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifNoneMatch: '*' }).status).toBe('304 Not Modified');\n\t});\n\n\tit('a configured last-modified cannot displace the file time', () => {\n"
 			}
 		]
 	},

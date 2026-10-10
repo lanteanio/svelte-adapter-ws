@@ -9,10 +9,12 @@ import { excludedDotPath } from '../utils/dot-path.js';
 import { mimeLookup } from '../utils/mime.js';
 import { contentDispositionValue, mergeStaticHeaders, resolveStaticCacheControl } from '../utils/static-headers.js';
 import { parseRange } from '../utils/byte-range.js';
+import { parseHttpDate } from '../utils/http-date.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
 import { locationTarget } from '../utils/location-target.js';
 import { revalidationHeaders } from '../utils/revalidation-headers.js';
-import { monotonicNow } from '../runtime.js';
+import { monotonicNow, now } from '../runtime.js';
+import { staticLastModifiedTime } from './static-last-modified.js';
 import { staticCache, prerenderedDirStyle, decodeCache } from './state.js';
 import { send400, wireValue } from './http-helpers.js';
 import { releaseHttpReadIfFull } from './read-turn.js';
@@ -189,21 +191,19 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 		];
 		let etag = '';
 		let lastModifiedMs;
+		let lastModified;
 		if (immutable && relPath.startsWith(`${manifest.appPath}/immutable/`)) {
 			headers.push(['cache-control', 'public, max-age=31536000, immutable']);
 		} else {
 			etag = `W/"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
 			const configuredCacheControl = resolveStaticCacheControl(relPath, staticCacheControl);
-			// Last-Modified rides beside the ETag with HTTP-date (whole second)
-			// resolution; the parsed millisecond value is kept on the entry so an
-			// If-Modified-Since comparison is a number compare, not a re-parse.
-			const lastModified = new Date(stat.mtimeMs).toUTCString(); // determinism-allow: converts the file's own mtime, reads no clock
-			lastModifiedMs = Date.parse(lastModified);
-			headers.push(
-				['cache-control', configuredCacheControl || 'no-cache'],
-				['etag', etag],
-				['last-modified', lastModified]
-			);
+			// Future and pre-1900 file times cannot supply an HTTP date.
+			lastModifiedMs = staticLastModifiedTime(stat.mtimeMs, now());
+			if (lastModifiedMs !== undefined) {
+				lastModified = new Date(lastModifiedMs).toUTCString(); // determinism-allow: formats a held file time
+			}
+			headers.push(['cache-control', configuredCacheControl || 'no-cache'], ['etag', etag]);
+			if (lastModified !== undefined) headers.push(['last-modified', lastModified]);
 		}
 
 		const ext = path.extname(relPath).toLowerCase();
@@ -224,6 +224,7 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 			contentType,
 			etag,
 			lastModifiedMs,
+			lastModified,
 			headers: merged,
 			headersFlat: flattenHeaders(merged, contentType, buffer.byteLength),
 			revalidationHeadersFlat: flattenRevalidation(merged)
@@ -341,11 +342,12 @@ function sendNotModified(res, revalidation) {
  * splits on commas, which no validator this lane issues can contain.
  *
  * @param {string} header
- * @param {string} tag - a non-empty validator this lane issued
+ * @param {string} tag - the issued validator, empty for an immutable entry
  * @returns {boolean}
  */
 function etagListHas(header, tag) {
 	if (header === '*') return true;
+	if (!tag) return false;
 	let start = 0;
 	while (start < header.length) {
 		let comma = header.indexOf(',', start);
@@ -357,7 +359,7 @@ function etagListHas(header, tag) {
 }
 
 /**
- * Evaluate the request's preconditions against a mutable entry, in the RFC's
+ * Evaluate the request's preconditions against an existing entry, in the RFC's
  * order (RFC 9110 13.2.2): If-Match first, If-Unmodified-Since only in its
  * absence, then If-None-Match, then If-Modified-Since only when no entity
  * validator was sent - so a failed If-Match is never converted into a 304 by
@@ -375,9 +377,9 @@ function etagListHas(header, tag) {
  * `>` are exact against the HTTP-date the client echoes; an unparseable date
  * is an ignored header, never a refusal.
  *
- * Pure and exported for the case table; the caller guards on the entry
- * carrying a validator at all (immutable assets carry none - their versioned
- * filename is the validator - and skip evaluation entirely).
+ * Immutable entries carry no ETag or Last-Modified. A wildcard still tests
+ * their existence; specific entity tags cannot match an absent validator.
+ * Pure and exported for the case table.
  *
  * @param {import('./state.js').StaticEntry} entry
  * @param {string} repEtag - the selected representation's validator
@@ -422,13 +424,13 @@ export function staticPreconditions(entry, repEtag, ifMatch, ifUnmodifiedSince, 
 			(entry.gzEtag !== undefined && etagListHas(ifMatch, entry.gzEtag));
 		if (!held) return 412;
 	} else if (ifUnmodifiedSince !== '' && entry.lastModifiedMs !== undefined) {
-		const t = Date.parse(ifUnmodifiedSince);
+		const t = ifUnmodifiedSince === entry.lastModified ? entry.lastModifiedMs : parseHttpDate(ifUnmodifiedSince);
 		if (!Number.isNaN(t) && entry.lastModifiedMs > t) return 412;
 	}
 	if (ifNoneMatch !== '') {
 		if (etagListHas(ifNoneMatch, repEtag)) return 304;
 	} else if (ifModifiedSince !== '' && entry.lastModifiedMs !== undefined) {
-		const t = Date.parse(ifModifiedSince);
+		const t = ifModifiedSince === entry.lastModified ? entry.lastModifiedMs : parseHttpDate(ifModifiedSince);
 		if (!Number.isNaN(t) && entry.lastModifiedMs <= t) return 304;
 	}
 	return 0;
@@ -482,9 +484,9 @@ export function serveStatic(res, entry, acceptEncoding, ifNoneMatch, headOnly = 
 	// RFC's own order and against the validator of the representation this
 	// request would actually receive - matching the identity ETag for a
 	// client that negotiated brotli would answer 304 for bytes that client
-	// never held. Only entries carrying validators evaluate; immutable
-	// assets carry none, their versioned filename is the validator.
-	if (repEtag && (ifNoneMatch !== '' || ifMatch !== '' || ifUnmodifiedSince !== '' || ifModifiedSince !== '')) {
+	// never held. Immutable entries also evaluate entity conditions: a wildcard
+	// tests their existence even though they carry no validator.
+	if (ifNoneMatch !== '' || ifMatch !== '' || ifUnmodifiedSince !== '' || ifModifiedSince !== '') {
 		const verdict = staticPreconditions(entry, repEtag, ifMatch, ifUnmodifiedSince, ifNoneMatch, ifModifiedSince);
 		if (verdict === 412) {
 			// The precondition the caller staked the request on does not hold.
