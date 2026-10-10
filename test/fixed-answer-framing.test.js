@@ -46,7 +46,8 @@ const DISPOSITION_SRC = "const DISPOSITION = 'attachment; filename=\"' + String.
 // Every route answers with a shape whose framing is the writer's decision,
 // never the Response's own Content-Length. A route whose header node refuses
 // also carries `x-app`, an ordinary header staged ahead of the refused one,
-// which the 500 that answers it must not carry.
+// which the 500 that answers it must not carry. Cookie headers are staged
+// after the ordinary headers, independent of their Headers iteration order.
 // `vary` keeps the request-dedup leader from buffering the streamed body into
 // one chunk.
 const SERVER = `
@@ -78,6 +79,7 @@ export class Server {
 		if (p === '/declared-bodyless') return new Response(null, { headers: { 'content-length': '12' } });
 		if (p === '/declared-304') return new Response(null, { status: 304, headers: { 'content-length': '12' } });
 		if (p === '/declared-204') return new Response(null, { status: 204, headers: { 'content-length': '0' } });
+		if (p === '/refused-gzip') return new Response('<html>' + 'g'.repeat(4096) + '</html>', { headers: { 'content-type': 'text/html', 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		if (p === '/refused-header') {
 			return new Response('x', { headers: { 'x-app': 'leak', 'x-bad': 'a' + String.fromCharCode(127) + 'b' } });
 		}
@@ -493,6 +495,7 @@ export function authenticate({ headers, cookies }) {
 	if (mode === 'expires-control') {
 		// A cookie the API lets through and node refuses: an expires whose
 		// toUTCString() carries a control character.
+		cookies.set('good', 'v', { path: '/' });
 		cookies.set('a', 'v', { path: '/', expires: { toUTCString: () => 'x' + String.fromCharCode(1) + 'y' } });
 		return undefined;
 	}
@@ -939,6 +942,13 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(splitFirst(state).rest).toBe('true');
 	});
 
+	it('discards compression and default response headers on a compressible refused page', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /refused-gzip HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
+		const first = expectPageFailure(result, failures);
+		expect(header(first.lines, 'content-encoding')).toEqual([]);
+		expect(header(first.lines, 'x-content-type-options')).toEqual([]);
+	});
+
 	it('answers the same way on a body that turns out empty', async () => {
 		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /refused-empty-stream HTTP/1.1', 'Cookie: s=1'], OK]));
 		expectPageFailure(result, failures);
@@ -949,7 +959,11 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		const before = await renders();
 		const { result, failures } = await withSsrFailures(() => Promise.all([0, 1, 2].map(() =>
 			pipeline(open.rt.port, [['GET /refused-shared HTTP/1.1'], OK]))));
-		const ids = result.map((raw) => header(expectLengthFramed(raw, { status: '500', body: 'Internal Server Error' }).lines, 'x-request-id')[0]);
+		const ids = result.map((raw) => {
+			const first = expectLengthFramed(raw, { status: '500', body: 'Internal Server Error' });
+			expect(header(first.lines, 'x-app'), 'each waiter discards the shared response headers').toEqual([]);
+			return header(first.lines, 'x-request-id')[0];
+		});
 		expect(new Set(ids).size).toBe(3);
 		expect(failures.map((record) => record.attributes?.requestId).sort()).toEqual([...ids].sort());
 		expect(await renders() - before, 'one render shared by all three').toBe(1);
@@ -1390,6 +1404,7 @@ describe('the admin lane frames what it writes', () => {
 			body: '{"error":"internal error"}'
 		});
 		expect(header(first.lines, 'date')).toHaveLength(1);
+		expect(header(first.lines, 'date')).not.toEqual(['Thu, 01 Jan 2026 00:00:00 GMT']);
 	});
 
 	it('drops a relayed Trailer', async () => {
@@ -1595,6 +1610,7 @@ describe('a waiting-room renderer header node refuses', () => {
 			body: 'Internal Server Error'
 		});
 		expect(first.status).toBe('HTTP/1.1 500 Internal Server Error');
+		for (const name of ['cache-control', 'content-language', 'vary']) expect(header(first.lines, name)).toEqual([]);
 	});
 
 	it('serves the runtime holding page without a Trailer its renderer set', async () => {
@@ -1629,10 +1645,11 @@ describe('a waiting-room renderer header node refuses', () => {
 			}
 		});
 		try {
-			expectLengthFramed(await pipeline(mirror.port, [['GET /__waiting-room HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]), {
+			const first = expectLengthFramed(await pipeline(mirror.port, [['GET /__waiting-room HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]), {
 				status: '500',
 				body: 'Internal Server Error'
 			});
+			for (const name of ['cache-control', 'content-language', 'vary']) expect(header(first.lines, name)).toEqual([]);
 			const served = await pipeline(mirror.port, [['GET /__waiting-room?trailer HTTP/1.1', 'Accept: text/html'], ['GET /healthz HTTP/1.1']]);
 			readLengthFramed(served, '200');
 			expect(header(splitFirst(served).lines, 'trailer')).toEqual([]);
