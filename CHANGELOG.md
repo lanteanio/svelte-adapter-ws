@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   section now shows the code or event, searchable message prefix, operator
   shortlink, runtime help route and emitting source links in the family format.
 
+- Test-server routing checks cover HEAD on the WebSocket, admission poll and
+  waiting-room paths with and without admission enabled.
+
 - **`event.request.signal` aborts when the client disconnects and when
   shutdown stops waiting.** The Request handed to SvelteKit, and to an
   `admin()` handler, carried no signal, so it never fired. It now aborts
@@ -327,7 +330,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a hook's Response as production does, and the auth and dashboard mounts
   answer only their own paths.
 - **A header value past ASCII goes out as its UTF-8 bytes.** node writes a
-  header value one byte per character, so `x-note: café` went out as the
+  header value one byte per character, so `x-note: cafÃ©` went out as the
   single byte `e9`, and a character past U+00FF was answered with a `500`.
   Every lane that writes an app or configured header - pages, the auth
   endpoint, the admin route, the waiting-room renderer, built assets and
@@ -493,10 +496,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A prerendered trailing-slash redirect is percent-encoded, and a route
   named past Latin-1 no longer takes the process down.** The lookup matches
   the DECODED path and wrote it verbatim into `Location`. node writes a header
-  value as Latin-1, so a route named `café` redirected with the raw byte
+  value as Latin-1, so a route named `cafÃ©` redirected with the raw byte
   `0xE9` in the header rather than a request target, and it refuses a
   character past Latin-1 outright, so a trailing-slash request to a route
-  named `łódź`, or a bare request to a directory-style route named `żółw`,
+  named `Å‚Ã³dÅº`, or a bare request to a directory-style route named `Å¼Ã³Å‚w`,
   threw `ERR_INVALID_CHAR` out of the request listener, where nothing caught
   it. The target is now spelled as a request target
   (`utils/location-target.js`, the family's own), path segments and query
