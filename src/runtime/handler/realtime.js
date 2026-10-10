@@ -64,7 +64,7 @@ import {
 	controlFrameTooLargeFrame, DEFAULT_GRANT
 } from '../wire.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomUuid, wallEpoch, setTimer, setIntervalTimer, clearIntervalTimer, clearTimer } from '../runtime.js';
-import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { emitOperationalEvent, diagnosticError, formatDiagnostic } from '../diagnostic.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorDefinition, adapterErrorMessage } from '../error-registry.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import {
@@ -94,7 +94,7 @@ import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
-import { origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
+import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
 import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
@@ -1942,6 +1942,14 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				// shared topic, so an unsubscribed client stops receiving its
 				// cohort-split publishes. No-op for an ordinary topic.
 				if (sharedTopics.has(msg.topic)) leaveSharedCohort(facade, userData, msg.topic);
+				if (wsDebug) console.log(formatDiagnostic({
+					source: 'svelte-adapter-ws',
+					component: 'runtime.subscription',
+					event: 'runtime.subscription.removed',
+					severity: 'debug',
+					message: 'A client topic subscription was removed.',
+					attributes: { topic: msg.topic }
+				}));
 				releaseDerivedSubscriptions(facade, msg.topic);
 				runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
 				return;
@@ -2228,6 +2236,14 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// into the right cohort (announcing the server-wide id now) so the
 	// next cohort-split publish reaches it. No-op for an ordinary topic.
 	if (sharedTopics.has(msg.topic)) joinSharedCohort(facade, userData, msg.topic, sharedTopics.get(msg.topic));
+	if (wsDebug) console.log(formatDiagnostic({
+		source: 'svelte-adapter-ws',
+		component: 'runtime.subscription',
+		event: 'runtime.subscription.accepted',
+		severity: 'debug',
+		message: 'A client topic subscription was installed.',
+		attributes: { topic: msg.topic }
+	}));
 	sendSubscribed(facade, msg.topic, ref);
 }
 

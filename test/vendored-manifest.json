@@ -2613,5 +2613,18 @@
 	},
 	{
 		"file": "test/ws-handshake-real.test.js"
+	},
+	{
+		"file": "test/surface-policy-parity.test.js",
+		"adaptations": [
+			{
+				"lead": "'src/runtime/handler.js'",
+				"ours": "'src/runtime/handler/realtime.js'"
+			},
+			{
+				"lead": "\t'src/runtime/handler/subscribe-hooks.js',\n",
+				"ours": ""
+			}
+		]
 	}
 ]

@@ -17,7 +17,6 @@ export * from './utils/fd-limit.js';
 export * from './utils/topic.js';
 export * from './utils/origin.js';
 export * from './utils/address.js';
-export * from './utils/subscribe-policy.js';
 export * from './utils/assertions.js';
 export * from './utils/static-headers.js';
 export * from './utils/chaos.js';
