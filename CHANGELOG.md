@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The runtime environment reference documents `WS_DEBUG`.
 
+- Client connections expose `simulateOffline()` and `resumeOnline()` to pause and
+  resume connectivity while preserving subscriptions, listeners, queued messages
+  and the retry budget. Resume uses a fresh authentication preflight.
+
 - WebSocket debug logging includes connection lifecycle, capability negotiation, resume, ingress fallback and publish activity; topic and event identifiers remain private.
 
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.
@@ -371,6 +375,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Authentication rate-limit refusals round fractional windows up before jitter so `Retry-After` contains whole seconds.
+
+- Client socket closes report `disconnected` before the closing handshake ends.
+  `send()` returns local socket admission as a boolean while preserving
+  serialization and transport exceptions. Delayed callbacks cannot overwrite a
+  replacement connection or its subscription retries.
 
 - Auth preflights send `x-requested-with: XMLHttpRequest`, allowing the bundled
   client to connect when `Origin` and `Sec-Fetch-Site` are absent. Custom

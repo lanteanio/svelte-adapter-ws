@@ -127,6 +127,20 @@ surface the lead adapter exposes - `publish`, `send`, `subscribe`,
 connect to either. Family options whose lanes have not shipped here refuse
 the build loudly rather than silently no-op'ing.
 
+The bundled client connection is available from `svelte-adapter-ws/client`.
+Its `send(data)` method returns `true` when the frame is handed to the current
+open socket, or `false` when disconnected or paused. This reports local
+admission; serialization and transport exceptions propagate. A self-initiated
+socket close reports `disconnected` before its closing handshake finishes.
+
+Use `connection.simulateOffline()` and `connection.resumeOnline()` for temporary
+offline simulation. Pause cancels socket and authentication attempts and
+suppresses retries and browser reconnect triggers while preserving subscriptions,
+listeners, queued messages and the retry budget. Resume uses the configured URL
+and a fresh authentication preflight, then restores subscriptions and queued
+sends in FIFO order. Both methods are idempotent and inert during SSR without a
+URL. Permanent close, server refusal and exhausted retries remain terminal.
+
 ## Configuration
 
 Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,

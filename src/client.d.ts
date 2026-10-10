@@ -212,7 +212,7 @@ export function on<T = unknown>(topic: string, event: string): TopicStore<{ data
  * - `'open'` - connected, live data is flowing
  * - `'suspended'` - WS is technically open but the tab is in the background;
  *   server may close idle backgrounded sockets, so live data is best-effort
- * - `'disconnected'` - lost connection, will retry automatically
+ * - `'disconnected'` - lost connection; retries automatically unless simulateOffline() paused it
  * - `'failed'` - terminal: auth denied, max retries exhausted, or `close()` called
  *
  * @example
@@ -619,13 +619,16 @@ export interface WSConnection {
 	unsubscribe(topic: string): void;
 
 	/**
-	 * Send a custom message to the server. Dropped silently if not connected.
+	 * Send a custom message to the server. Returns true when the frame was
+	 * handed to the current OPEN socket, or false when disconnected or paused.
+	 * This is local admission, not acknowledgement or delivery confirmation.
+	 * Serialization and transport exceptions propagate.
 	 *
 	 * Strings and JSON-serializable objects are sent as text frames after
 	 * `JSON.stringify`. `ArrayBuffer` and any `ArrayBufferView` (Uint8Array,
 	 * DataView, etc) are sent as binary frames unchanged.
 	 */
-	send(data: unknown): void;
+	send(data: unknown): boolean;
 
 	/**
 	 * Send a message, queuing it if not currently connected.
@@ -661,6 +664,22 @@ export interface WSConnection {
 	 * ```
 	 */
 	readonly bufferedAmount: number;
+
+	/**
+	 * Pause this connection until resumeOnline(). Cancels the current socket or
+	 * auth attempt and emits disconnected immediately, preserving subscriptions,
+	 * listeners and queued messages. Browser events and retry timers cannot
+	 * reconnect while paused; canceled retries do not spend the retry
+	 * budget. Repeated calls are harmless. Inert during SSR without a URL.
+	 */
+	simulateOffline(): void;
+
+	/**
+	 * Resume a paused connection immediately with its configured URL and a fresh
+	 * auth preflight, when enabled. Normal resubscription and queued sends follow.
+	 * Repeated calls are harmless. Cannot revive a permanently closed connection.
+	 */
+	resumeOnline(): void;
 
 	/** Close the connection permanently. Will not auto-reconnect. */
 	close(): void;
