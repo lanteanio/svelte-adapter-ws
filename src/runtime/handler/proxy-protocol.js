@@ -3,7 +3,7 @@
 import { Server as HttpServer } from 'node:http';
 import { clearTimer, setTimer } from '../runtime.js';
 import { createRequestHeadExecutor } from './request-head.js';
-import { beginHttpRead, endHttpRead, endParserRefusal } from './read-turn.js';
+import { beginHttpRead, endHttpRead, endParserRefusal, clearHttpRead } from './read-turn.js';
 
 const SIGNATURE = Buffer.from([13, 10, 13, 10, 0, 13, 10, 81, 85, 73, 84, 10]);
 const PREFIX = SIGNATURE.subarray(0, 4);
@@ -63,6 +63,7 @@ export function installProxyProtocolSocket(socket) {
 		target = 16;
 	};
 	const restore = () => {
+		if (socket.destroyed) clearHttpRead(socket);
 		heads.restore();
 		clearPending();
 		socket.removeListener('close', restore);

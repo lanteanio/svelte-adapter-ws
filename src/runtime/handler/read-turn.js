@@ -21,7 +21,6 @@ export function beginHttpRead(socket) {
 			return uncork.call(this);
 		};
 		reads.set(socket, state);
-		socket.once('close', () => { socket.uncork = uncork; reads.delete(socket); });
 	}
 	if (state.terminal) return;
 	state.holding = true;
@@ -30,6 +29,14 @@ export function beginHttpRead(socket) {
 	state.queuedBytes = 0;
 	socket.uncork = state.wrappedUncork;
 	socket.cork();
+}
+
+export function clearHttpRead(socket) {
+	const state = reads.get(socket);
+	if (!state) return;
+	socket.uncork = state.uncork;
+	state.queued.clear();
+	reads.delete(socket);
 }
 
 export function httpReadHeld(socket) {
