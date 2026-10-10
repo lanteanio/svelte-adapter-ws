@@ -1,7 +1,7 @@
 import { METHODS } from 'node:http';
 import { isAscii } from 'node:buffer';
 import { endParserRefusal } from './read-turn.js';
-import { normalizeHeaderEdges } from './header-edges.js';
+import { normalizeHeaderEdges, normalizeHeaderDel } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
 import { executeAfterDeclines, executePlainHttp } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
@@ -49,6 +49,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let answer = null;
 	let current = null;
 	let currentAscii = true;
+	let currentDelValues = null;
 	let stopped = false;
 	let chunkSize = 0;
 	let chunkDigitsEnded = false;
@@ -56,6 +57,13 @@ export function createRequestHeadExecutor(parser, socket) {
 	const originalIncoming = parser.onIncoming;
 	const onIncoming = function(req, keepAlive) {
 		if (current) {
+			if (currentDelValues) {
+				for (const [index, value] of currentDelValues) {
+					if (index < req.rawHeaders.length) req.rawHeaders[index] = value;
+				}
+				req.headers = null;
+				req.headersDistinct = null;
+			}
 			if (!currentAscii) decodeRequestHeaders(req);
 			req.method = current.method;
 			req.url = current.target;
@@ -175,6 +183,9 @@ export function createRequestHeadExecutor(parser, socket) {
 						part = available.subarray(0, length);
 						currentAscii = isAscii(part);
 						part = normalizeHeaderEdges(part, currentAscii);
+						const del = normalizeHeaderDel(part);
+						currentDelValues = del?.values || null;
+						if (del) part = del.head;
 						const safeMethod = METHODS_SET.has(line.method) ? line.method : 'GET';
 						const safeTarget = line.target.replace(/[^\x21-\x7e]/g, '_');
 						if (safeMethod !== available.toString('latin1', 0, available.indexOf(32)) || safeTarget !== line.target) {
