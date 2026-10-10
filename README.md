@@ -890,3 +890,12 @@ process becomes ready before continuing.
 ## License
 
 MIT
+
+Set `CANONICAL_HOST_ALIASES` to comma-separated, case-insensitive exact authorities
+(such as `www.example.com,preview.example.com:8443`) to return a 308 redirect to
+`ORIGIN` before static delivery or SSR. Ports match exactly. `ORIGIN` must be an
+HTTP(S) origin without credentials, path, query or fragment, and its authority
+cannot be an alias. Raw paths and queries and the request method are preserved.
+Mounted health and readiness probes remain available. Unlisted hosts serve
+normally; configured proxy host, port and protocol headers keep their existing
+trust behavior. This feature is disabled by default.

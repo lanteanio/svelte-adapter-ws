@@ -914,6 +914,10 @@
 			{
 				"lead": "/* global ENV_PREFIX */\n\nconst expected = new Set([",
 				"ours": "/* global ENV_PREFIX */\n\n// The full family env surface, shared with svelte-adapter-uws so a prefixed\n// deployment can swap adapters without its environment tripping the conflict\n// check. Vars a given adapter does not consume are simply unread.\nconst expected = new Set(["
+			},
+			{
+				"lead": "\t'ORIGIN',\n\t'XFF_DEPTH',",
+				"ours": "\t'ORIGIN',\n\t'CANONICAL_HOST_ALIASES',\n\t'XFF_DEPTH',"
 			}
 		]
 	},
@@ -2305,6 +2309,14 @@
 			{
 				"lead": "\tconst handler = await import(pathToFileURL(builtHandler).href);\n\n\t// The import above is a CACHE READ",
 				"ours": "\tconst handler = await import(pathToFileURL(builtHandler).href);\n\n\t// Each fixture installs its own production callback when evaluated. A\n\t// cached fixture must reclaim that same callback after another build ran.\n\tif (!runtimeAccountingHooks.has(handler)) {\n\t\tconst hook = /** @type {any} */ (globalThis)[subscriptionAccountingSlot];\n\t\tif (typeof hook === 'function') runtimeAccountingHooks.set(handler, hook);\n\t}\n\tconst accountingHook = runtimeAccountingHooks.get(handler);\n\tif (accountingHook) {\n\t\tconst { setSubscriptionAccountingHook } = await import(pathToFileURL(\n\t\t\tpath.join(fixtureDir, variantOut(variant), 'utils', 'ws-symbols.js')\n\t\t).href);\n\t\tsetSubscriptionAccountingHook(accountingHook);\n\t}\n\n\t// The import above is a CACHE READ"
+			},
+			{
+				"lead": "'ADDRESS_HEADER', 'BODY_SIZE_LIMIT', 'HOST_HEADER', 'ORIGIN', 'PORT_HEADER',",
+				"ours": "'ADDRESS_HEADER', 'BODY_SIZE_LIMIT', 'CANONICAL_HOST_ALIASES', 'HOST_HEADER', 'ORIGIN', 'PORT_HEADER',"
+			},
+			{
+				"lead": "\t{ env: 'ORIGIN', read: (c) => c.origin, expect: (raw) => parse_origin(raw) },",
+				"ours": "\t{ env: 'ORIGIN', read: (c) => c.origin, expect: (raw) => parse_origin(raw) },\n\t{ env: 'CANONICAL_HOST_ALIASES', read: (c) => c.canonical_host_aliases, expect: (raw) => [...new Set((raw ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean))] },"
 			}
 		]
 	},

@@ -9,6 +9,7 @@
 
 import { proxiedAddress } from './proxy-protocol.js';
 import { env } from '../env.js';
+import { parseCanonicalHostAliases } from '../utils/canonical-host.js';
 import { parse_as_bytes, parse_origin } from '../utils/parse.js';
 import { originFromHeaders, OriginHeaderError, refusedHeaderSetting } from '../utils/origin.js';
 import { createTrustedProxyMatcher, createClientIpResolver } from '../utils/trusted-proxies.js';
@@ -50,7 +51,9 @@ export const ssl_reload_debounce_ms = Number.isFinite(_ssl_debounce_raw) && _ssl
 /** Optional comma-separated SNI host override; empty = discover certificate SAN DNS names, then subject CN. */
 export const ssl_sni_hosts = env('SSL_SNI_HOSTS', '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
-export const origin = parse_origin(env('ORIGIN', undefined));
+const originEnv = env('ORIGIN', undefined);
+export const origin = parse_origin(originEnv);
+export const canonical_host_aliases = parseCanonicalHostAliases(env('CANONICAL_HOST_ALIASES', ''), originEnv);
 
 export const xff_depth = parseInt(env('XFF_DEPTH', '1'), 10);
 

@@ -18,6 +18,7 @@ import { ADMIN_PATH, resolveTransportAddress } from './config.js';
 import { adminMounted } from './admin.js';
 import { windowsReservedPath } from '../utils/windows-path.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
+import { canonicalRedirectEnabled, tryCanonicalHostRedirect } from './canonical-host.js';
 import { addExactMount, entersExactMount } from './exact-mounts.js';
 
 // Read once: the platform does not change under a running process.
@@ -240,6 +241,8 @@ function serveRequest(req, res) {
 		// methods either.
 		if (realtimeRoutes.tryAdminRoute(req, res, pathname, state)) return;
 	}
+
+	if (canonicalRedirectEnabled && tryCanonicalHostRedirect(res, req, pathname, query, method)) return;
 
 	// Static fast path: one Map lookup on the RAW undecoded pathname, seven
 	// header reads, nothing else. Because the index holds prerendered HTML

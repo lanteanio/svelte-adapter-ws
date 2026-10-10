@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text. The method reports local transport acceptance, preserves the text exactly,
   and never retains it for reconnect.
 
+- `CANONICAL_HOST_ALIASES` optionally redirects exact host authorities to `ORIGIN` before static delivery and SSR, while keeping health and readiness probes available.
+
 - Smooth authorities accept an optional positive integer `maxCommandsPerTick`
   to bound client command work per entity, retaining ordered tails and
   acknowledging only applied work. Omitted preserves full draining; trusted
