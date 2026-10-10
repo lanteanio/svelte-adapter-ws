@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A completed request that closes its connection releases its buffered answer before the socket ends.
+
 - Refused handshakes close with a draining server instead of reopening an idle HTTP connection.
 
 - HTTP read buffers use the native response byte count at their exact release boundary, including queued TLS replies and application headers.

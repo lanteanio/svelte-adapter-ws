@@ -84,7 +84,7 @@ export function installProxyProtocolSocket(socket) {
 			if (pending === null && boundary && refusedBytes === 0) {
 				const fast = heads.tryFast(data);
 				if (fast !== null) {
-					parserFailed = typeof fast !== 'number';
+					parserFailed = typeof fast !== 'number' && fast?.code !== 'HPE_CLOSED_CONNECTION';
 					boundary = heads.boundary;
 					if (this.incoming?.upgrade) restore();
 					return fast;
@@ -153,7 +153,7 @@ export function installProxyProtocolSocket(socket) {
 				const result = heads.execute(offset === 0 && end === data.length ? data : data.subarray(offset, end), data.length - end);
 				boundary = heads.boundary;
 				if (typeof result !== 'number') {
-					parserFailed = true;
+					parserFailed = result?.code !== 'HPE_CLOSED_CONNECTION';
 					if (typeof result?.bytesParsed === 'number') result.bytesParsed += offset;
 					return result;
 				}
