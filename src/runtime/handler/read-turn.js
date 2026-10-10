@@ -125,6 +125,22 @@ export function endParserRefusal(socket, raw) {
 	state.terminal = true;
 	// Bypass only the pending corked responses. Node owns their callbacks and
 	// discards them when the terminal refusal has drained and the socket ends.
-	try { socket._write(raw, 'utf8', () => socket.destroy()); }
-	catch { socket.destroy(); }
+	const writeRefusal = () => {
+		if (socket.destroyed) return;
+		const writable = socket._writableState;
+		if (writable?.writing) {
+			// A previous read can still own a TLS write. Keep this read corked
+			// while it completes, then check again after its callback has run.
+			const callback = writable.writecb;
+			if (typeof callback !== 'function') { socket.destroy(); return; }
+			writable.writecb = function(...args) {
+				try { callback.apply(this, args); }
+				finally { if (args[0]) socket.destroy(args[0]); else writeRefusal(); }
+			};
+			return;
+		}
+		try { socket._write(raw, 'utf8', () => socket.destroy()); }
+		catch { socket.destroy(); }
+	};
+	writeRefusal();
 }

@@ -376,6 +376,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Parser refusals over TLS no longer terminate the server while an earlier
+  response is still being written.
+
 - Restore the UTF-8 examples in older changelog entries and check tracked text
   for accidental double encoding with `check:source-encoding` and in CI.
 
