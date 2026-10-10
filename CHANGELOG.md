@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
+
 - Refusal response tests verify that shared renders, cookie errors, compressible pages, admin responses and waiting pages discard headers staged before a 500.
 
 - Wire publish tests verify relay success, per-entry relay payloads, resume cutover capture and JSON-only relay for declined codec frames.

@@ -96,7 +96,7 @@ import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, armCloseHookAccounting } from './config.js';
 import { isDraining } from './lifecycle.js';
-import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -2959,11 +2959,21 @@ function httpRefusalResponse(res) {
  * @param {import('node:http').ServerResponse} res
  * @param {string} pathname
  * @param {string} search - the query string including its leading '?', or ''
+ * @param {{ websocketUpgrade: boolean }} state
  * @returns {boolean} true when the request was answered here
  */
-export function serveWsPathGet(req, res, pathname, search) {
+export function serveWsPathGet(req, res, pathname, search, state) {
 	if (isWebSocketUpgradeAttempt(readRawHandshake(req.rawHeaders))) {
+		// The native route selects a 24-byte key even without the Upgrade
+		// headers node requires before dispatching its upgrade event.
+		// Its refusal belongs to upgrade metrics, while shorter keys stay
+		// on the ordinary HTTP route and retain HTTP completion metrics.
+		if (takesWebSocketRoute(req, WS_PATH)) {
+			state.websocketUpgrade = true;
+			if (hUpgradeDuration !== undefined) upgradeTimings.set(req.socket, { started: monotonicNow() });
+		}
 		noteUpgradeRejection(undefined, 'malformed_handshake', req);
+		if (state.websocketUpgrade) observeUpgradeOutcome(req.socket, 'rejected');
 		send400(res);
 		return true;
 	}
