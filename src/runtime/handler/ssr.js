@@ -81,8 +81,8 @@ export function readBody(req, limit, state, res) {
 	return new ReadableStream({
 		start(controller) {
 			if (state.aborted) { done = true; controller.error(new Error('Request aborted')); }
-			// The application may answer without consuming its request. Drop
-			// queued bytes and keep reading after that answer so the next
+			// The application may answer without consuming its request. Stop
+			// queuing bytes and keep reading after that answer so the next
 			// request is not stranded behind a paused IncomingMessage.
 			const discard = () => {
 				if (!done) { done = true; controller.close(); }
