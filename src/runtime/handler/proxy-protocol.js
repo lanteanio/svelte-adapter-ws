@@ -1,11 +1,9 @@
 // Consume connection metadata at HTTP request boundaries. HTTP framing stays
 // with node's parser, including chunked bodies and WebSocket upgrade tails.
-import { createRequire } from 'node:module';
 import { Server as HttpServer } from 'node:http';
 import { clearTimer, setTimer } from '../runtime.js';
-import { executeAfterDeclines } from './http-helpers.js';
+import { createRequestHeadExecutor } from './request-head.js';
 
-const { HTTPParser } = createRequire(import.meta.url)('_http_common');
 const SIGNATURE = Buffer.from([13, 10, 13, 10, 0, 13, 10, 81, 85, 73, 84, 10]);
 const PREFIX = SIGNATURE.subarray(0, 4);
 const MAX_PAYLOAD = 36;
@@ -41,6 +39,7 @@ export function installProxyProtocol(server) {
 	server.on(server instanceof HttpServer ? 'connection' : 'secureConnection', (socket) => {
 		const parser = socket.parser;
 		if (!parser) return;
+		const heads = createRequestHeadExecutor(parser, socket);
 		let boundary = true;
 		/** @type {Buffer | null} */
 		let pending = null;
@@ -48,8 +47,7 @@ export function installProxyProtocol(server) {
 		let target = 16;
 		let timer = null;
 		let refusedBytes = 0;
-		const originalBegin = parser[HTTPParser.kOnMessageBegin];
-		const originalComplete = parser[HTTPParser.kOnMessageComplete];
+
 		const originalExecute = Object.getOwnPropertyDescriptor(parser, 'execute');
 		const clearPending = () => {
 			if (timer !== null) clearTimer(timer);
@@ -59,24 +57,14 @@ export function installProxyProtocol(server) {
 			target = 16;
 		};
 		const restore = () => {
+			heads.restore();
 			clearPending();
 			socket.removeListener('close', restore);
 			if (parser.socket && parser.socket !== socket) return;
-			parser[HTTPParser.kOnMessageBegin] = originalBegin;
-			parser[HTTPParser.kOnMessageComplete] = originalComplete;
+
 			if (originalExecute) Object.defineProperty(parser, 'execute', originalExecute);
 			else delete parser.execute;
 		};
-		const begin = function () {
-			boundary = false;
-			return originalBegin?.call(this);
-		};
-		const complete = function () {
-			boundary = true;
-			return originalComplete.call(this);
-		};
-		parser[HTTPParser.kOnMessageBegin] = begin;
-		parser[HTTPParser.kOnMessageComplete] = complete;
 		parser.execute = function (data) {
 			let offset = 0;
 			const refuse = (bytes) => {
@@ -137,7 +125,9 @@ export function installProxyProtocol(server) {
 					? Math.min(data.length, next + PREFIX.length)
 					: next;
 				const length = end - offset;
-				const result = executeAfterDeclines.call(this, offset === 0 && end === data.length ? data : data.subarray(offset, end));
+				boundary = false;
+				const result = heads.execute(offset === 0 && end === data.length ? data : data.subarray(offset, end), data.length - end);
+				boundary = heads.boundary;
 				if (typeof result !== 'number') {
 					if (typeof result?.bytesParsed === 'number') result.bytesParsed += offset;
 					return result;

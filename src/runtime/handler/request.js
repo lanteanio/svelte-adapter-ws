@@ -163,7 +163,7 @@ function serveRequest(req, res) {
 	const pathname = q === -1 ? url : url.slice(0, q);
 	const search = q === -1 ? '' : url.slice(q);
 	const query = q === -1 ? '' : url.slice(q + 1);
-	const method = req.method || 'GET';
+	const method = req.method ?? 'GET';
 	const isGetLike = method === 'GET' || method === 'HEAD';
 
 	// Two things RFC 9112 does not allow in a target, refused in the path and

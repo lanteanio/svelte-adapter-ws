@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Request lines retain their original boundaries across fragmented reads. Invalid
+  versions are refused promptly, unreadable lines stay buffered, and forbidden
+  methods retain HTTP keep-alive framing.
+
 - Request bodies left unread after an answer are drained, including bodies
   rejected by the authentication size cap, so keep-alive requests continue.
 

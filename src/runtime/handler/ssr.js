@@ -150,7 +150,7 @@ export function readBody(req, limit, state, res) {
  * @returns {Request | null} null when the declared length already exceeds the limit
  */
 export function buildRequest(req, baseOrigin, headers, state, res) {
-	const method = req.method || 'GET';
+	const method = req.method ?? 'GET';
 	let body;
 	if (method !== 'GET' && method !== 'HEAD') {
 		const cl = parseInt(headers['content-length'], 10);
