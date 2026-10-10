@@ -351,7 +351,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Complete ASCII HTTP batches avoid repeated transport-prefix scans, and Host checks read raw fields directly.
+- Complete ASCII HTTP batches avoid repeated transport-prefix scans and upgrade bookkeeping, and Host checks read raw fields directly.
 
 
 - Incoming header values now use the native UTF-8 string decoding before application validation; WebSocket routing retains the original key byte count.

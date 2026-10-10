@@ -2,14 +2,14 @@ import { METHODS } from 'node:http';
 import { endParserRefusal } from './read-turn.js';
 import { normalizeHeaderEdges } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
-import { executeAfterDeclines } from './http-helpers.js';
+import { executeAfterDeclines, executePlainHttp } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
 
 const METHODS_SET = new Set(METHODS.filter(method => method !== 'CONNECT'));
 const VERSION = Buffer.from(' HTTP/1.1\r\n');
 const LIMIT = 4096;
 const FAST_HEADS = /^(?:(?:GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE) \/[!-~]* HTTP\/1\.1\r\n(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+:[\t -~]*\r\n)*\r\n)+$/;
-const FRAMED = /\r\n(?:content-length|transfer-encoding):/i;
+const FRAMED = /\r\n(?:content-length|transfer-encoding|upgrade):/i;
 const WAIT = 0;
 const REFUSE = 1;
 
@@ -80,7 +80,7 @@ export function createRequestHeadExecutor(parser, socket) {
 		const text = data.toString('latin1');
 		if (FRAMED.test(text) || !FAST_HEADS.test(text)) return null;
 		current = null;
-		return executeAfterDeclines.call(parser, data);
+		return executePlainHttp.call(parser, data);
 	};
 	return {
 		tryFast,

@@ -1014,6 +1014,8 @@ const ParserError = (() => {
 	try { return nodeExecute.call(parser, Buffer.from('!')).constructor; }
 	finally { parser.close(); }
 })();
+// For a prevalidated batch that cannot request an upgrade, no decline state can change.
+export const executePlainHttp = nodeExecute;
 // On the socket, which node never pools. Registered, so that every copy of
 // this module in a process reads the same slot.
 const DECLINED = Symbol.for('svelte-adapter-ws.declinedUpgrade');

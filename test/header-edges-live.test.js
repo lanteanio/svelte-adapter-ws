@@ -46,6 +46,14 @@ for (const surface of ['runtime', 'mirror']) {
 			expect(answer.status, answer.raw).toBe(101);
 			expect(answer.raw).toMatch(/sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK\+xOo=/i);
 		});
+		it('keeps a high-byte Upgrade field on the normalizing path', async () => {
+			const headers = handshake('dGhlIHNhbXBsZSBub25jZQ==').map(header =>
+				header.startsWith('Upgrade:') ? 'Upgrade: \xe9 websocket \xe9' : header
+			);
+			const answer = await probe(port(), '/ws', headers);
+			expect(answer.status, answer.raw).toBe(101);
+			expect(answer.raw).toMatch(/sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK\+xOo=/i);
+		});
 		it.each(['\xe9'.repeat(24), 'a'.repeat(22) + '\xc3\xa9'])('routes trimmed non-24-byte key through kept HTTP refusal', async key => {
 			const answer = await probe(port(), '/ws', handshake(key));
 			expect(answer.status).toBe(400);
