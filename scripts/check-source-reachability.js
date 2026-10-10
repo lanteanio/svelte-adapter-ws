@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { relativeImports } from './check-tracked-imports.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// These roots are loaded by a path instead of a JavaScript import.
+// Generated/file-loaded entries and explicitly retained family utilities.
 export const SOURCE_ENTRY_POINTS = Object.freeze({
 	'src/runtime/index.js': 'Copied by the adapter to the generated server process entry.',
 	'src/plugins/cursor/cursor-worker.js': 'Loaded by the cursor client with Worker(new URL(..., import.meta.url)).',
