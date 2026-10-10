@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Production subscription cleanup tests cover throwing and rejecting unsubscribe hooks across wire, recover, platform and observer authorization unwinds.
+
 - Live subscription tests verify that a refused attempt cannot preserve membership installed by a revoked sibling.
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
