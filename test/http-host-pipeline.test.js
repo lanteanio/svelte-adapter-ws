@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 
-function exchange(port, secure, firstPath, duplicate, later) {
+function exchange(port, secure, firstPath, duplicate, later, upgrade = '', trailingPath = null) {
  const first = `GET ${firstPath} HTTP/1.1\r\nHost: localhost\r\n\r\n`;
- const refused = 'GET /refused HTTP/1.1\r\n' + (duplicate ? 'Host: x\r\nHost: y\r\n' : '') + '\r\n';
+ const refused = `GET ${upgrade ? '/ws' : '/refused'} HTTP/1.1\r\n` + (duplicate ? 'Host: x\r\nHost: y\r\n' : '') + upgrade + '\r\n' +
+  (trailingPath ? `GET ${trailingPath} HTTP/1.1\r\nHost: localhost\r\n\r\n` : '');
  return new Promise((resolve, reject) => {
   const socket = secure ? tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false }) : net.connect(port, '127.0.0.1');
   let raw = '', sent = false, ended = false;
@@ -30,10 +31,15 @@ function exchange(port, secure, firstPath, duplicate, later) {
 for (const lane of ['TCP', 'TLS', 'harness']) describe(`pipelined Host refusals on ${lane}`, () => {
  let runtime, payload;
  const prefix = `HOST_PIPELINE_${lane}_`;
+ const callbackKey = `__hostPipelineCallbacks_${lane}`;
+ const trailingPath = lane === 'harness' ? '/__realtime/trailing' : '/trailing';
  beforeAll(async () => {
   if (lane === 'harness') {
    const { createTestServer } = await import('../src/testing.js');
-   runtime = await createTestServer({ handler: {} });
+   runtime = await createTestServer({ handler: {
+    upgrade() { globalThis[callbackKey]?.push('upgrade'); return {}; },
+    admin() { globalThis[callbackKey]?.push('http'); return new Response('trailing'); }
+   } });
    return;
   }
   if (lane === 'TLS') {
@@ -43,13 +49,21 @@ for (const lane of ['TCP', 'TLS', 'harness']) describe(`pipelined Host refusals 
    process.env[prefix + 'SSL_WATCH'] = '0';
   }
   payload = buildRuntime({
-   replace: { ENV_PREFIX: JSON.stringify(prefix) },
-   serverSource: `export class Server { async init() {} respond() { return new Response('sync'); } }`
+   replace: {
+    ENV_PREFIX: JSON.stringify(prefix), WS_ENABLED: 'true',
+    WS_OPTIONS: JSON.stringify({ allowedOrigins: '*', compression: false, adminAuthAcknowledged: true })
+   },
+   wsHandlerSource: `export function upgrade() { globalThis[${JSON.stringify(callbackKey)}]?.push('upgrade'); return {}; }`,
+   serverSource: `export class Server { async init() {} respond(request) {
+    if (new URL(request.url).pathname === '/trailing') globalThis[${JSON.stringify(callbackKey)}]?.push('http');
+    return new Response('sync');
+   } }`
   });
   runtime = await bootRuntime(payload);
  }, 60000);
  afterAll(async () => {
   await runtime?.close(); payload?.cleanup();
+  delete globalThis[callbackKey];
   for (const key of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH']) delete process.env[prefix + key];
  });
  for (const firstPath of lane === 'harness' ? ['/healthz'] : ['/healthz', '/sync']) {
@@ -62,4 +76,23 @@ for (const lane of ['TCP', 'TLS', 'harness']) describe(`pipelined Host refusals 
    });
   }
  }
+ it('observes the trailing route when sent before the refusal', async () => {
+  globalThis[callbackKey] = [];
+  const { raw } = await exchange(runtime.port, lane === 'TLS', trailingPath, false, true);
+  expect([...raw.matchAll(/HTTP\/1\.1 (\d+)/g)].map(match => match[1])).toEqual(['200', '400']);
+  expect(globalThis[callbackKey]).toEqual(['http']);
+ });
+ for (const [protocol, upgrade] of [
+  ['h2c', 'Connection: Upgrade\r\nUpgrade: h2c\r\n'],
+  ['websocket', 'Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n']
+ ]) for (const duplicate of [false, true]) for (const later of [false, true]) {
+  it(`${protocol} with ${duplicate ? 'duplicate' : 'missing'} Host in ${later ? 'a later' : 'the same'} read stops trailing callbacks`, async () => {
+   globalThis[callbackKey] = [];
+   const { raw, ended } = await exchange(runtime.port, lane === 'TLS', '/healthz', duplicate, later, upgrade, trailingPath);
+   expect([...raw.matchAll(/HTTP\/1\.1 (\d+)/g)].map(match => match[1])).toEqual(later ? ['200', '400'] : ['400']);
+   expect(ended).toBe(true);
+   expect(globalThis[callbackKey]).toEqual([]);
+  });
+ }
+
 });
