@@ -916,6 +916,9 @@ export function refuseUnparsedForbiddenMethods(server) {
  * @param {() => void} fn
  */
 export function onExchangeClosed(req, res, fn) {
+	// Node owns closure of a response already assigned to its socket. Only
+	// queued responses can lose the connection without receiving close.
+	if (res.socket != null) { res.once('close', fn); return; }
 	const socket = req.socket;
 	let done = false;
 	const settle = () => {

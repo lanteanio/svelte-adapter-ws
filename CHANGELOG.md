@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Assigned HTTP responses use their own close notification; queued responses retain socket-close accounting.
+
 - A completed request that closes its connection releases its buffered answer before the socket ends.
 
 - Refused handshakes close with a draining server instead of reopening an idle HTTP connection.
