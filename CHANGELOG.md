@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subscription-cap refusals cannot authorize membership installed by an overlapping revoked subscribe attempt.
 
+- WebSocket debug logging includes connection lifecycle, capability negotiation, resume, ingress fallback and publish activity; topic and event identifiers remain private.
+
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.
 
 - Assigned HTTP responses use their own close notification; queued responses retain socket-close accounting.

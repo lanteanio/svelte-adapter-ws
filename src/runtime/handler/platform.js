@@ -34,6 +34,7 @@ import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomU
 import { trace, activeTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
+import { privateValueMetadata } from '../utils/observability-privacy.js';
 import { wsModule } from '../ws-handler-bridge.js';
 import { metricsRegistry } from '../metrics-bridge.js';
 import { metricsSnapshot } from './metrics-snapshot.js';
@@ -64,10 +65,16 @@ import {
 const RELAY_RECEIVE = Symbol('adapter-ws.relay-receive');
 import { GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload, assertGameLaneClusterSafe } from './game-ingress.js';
 import { allSockets, numSubscribers, socketHolds, subscribersOf } from './topic-registry.js';
-import { WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS } from './config.js';
+import { WS_COMPRESSION_ON, ALLOW_NON_ASCII_TOPICS, wsDebug } from './config.js';
 import { bumpOut } from './conn-stats.js';
 import { isWarmupRequest } from './warmup-registry.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
+
+function logWirePublish(topic, event, payloadBytes) {
+	console.log('[ws] publishWire topicRef=%s eventRef=%s payloadBytes=%d',
+		privateValueMetadata(topic, 'topic').ref,
+		privateValueMetadata(event, 'event').ref, payloadBytes);
+}
 
 const OPEN = 1;
 
@@ -444,6 +451,12 @@ function publish(topic, event, data, options) {
 		// receiving worker never re-parses the envelope string.
 		batchRelay(topic, envelope, compress, seq);
 	}
+	if (wsDebug) {
+		console.log('[ws] publish topicRef=%s eventRef=%s bytes=%d delivered=%s',
+			privateValueMetadata(topic, 'topic').ref,
+			privateValueMetadata(event, 'event').ref,
+			envelope.length, sent || relayed);
+	}
 	// In clustered mode subscribers may live on other workers, and a caller
 	// cannot query cross-worker subscriber counts - so a fired relay counts
 	// as delivery even when this worker has no local subscriber.
@@ -784,6 +797,12 @@ export const platform = {
 		// answer it gives: what the one frame reached, not what the registry
 		// held for the first topic when the batch was admitted.
 		counters.publishOutcomeHook?.(reached);
+		if (wsDebug) {
+			const fanoutTopic = allSameTopic ? firstTopic : messages[0].topic;
+			console.log('[ws] publishBatched events=%d single-topic=%s fanoutTopicRef=%s delivered=%s',
+				events.length, allSameTopic,
+				fanoutTopic === null ? 'mixed' : privateValueMetadata(fanoutTopic, 'topic').ref, reached);
+		}
 	},
 
 	/**
@@ -1053,7 +1072,10 @@ export const platform = {
 				else batchRelay(topic, envelope, compressIntent, seq, relayCap, relayEvent, relayData);
 			}
 			const subscribers = subscribersOf(topic);
-			if (!subscribers) return relayed;
+			if (!subscribers) {
+				if (wsDebug && payload != null) logWirePublish(topic, event, payload.length);
+				return relayed;
+			}
 			const targets = [];
 			for (const rawWs of subscribers) {
 				if (rawWs.readyState !== 1) continue;
@@ -1072,6 +1094,7 @@ export const platform = {
 				compress,
 				counters
 			});
+			if (wsDebug && payload != null) logWirePublish(topic, event, payload.length);
 			return delivered || relayed;
 		}
 

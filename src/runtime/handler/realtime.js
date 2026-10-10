@@ -1817,6 +1817,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	rawWs.on('pong', () => { lastActivity = monotonicNow(); });
 
 	sendControl(facade, '{"type":"welcome","sessionId":"' + sessionId + '"}');
+	if (wsDebug) console.log('[ws] open connections=%d session=%s', wsConnections.size, sessionId);
 
 	rawWs.on('message', (raw, isBinary) => {
 		// The message handler's own turn, on the native tier: every open HTTP
@@ -1995,6 +1996,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 					sendControl(facade, '{"type":"lease-ok"}');
 					sendControl(facade, leaseGrantFrame(grantCount, DEFAULT_GRANT.ttlMs));
 				}
+				if (wsDebug) console.log('[ws] hello caps=%o', [...caps]);
 				return;
 			}
 			if (msg.type === 'reply' && (typeof msg.ref === 'number' || typeof msg.ref === 'string')) {
@@ -2018,6 +2020,8 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				// destination. Unknown kind: no bind, no ack, JSON fallback.
 				if (bindIngress(userData, facade, msg.id, msg.kind, msg.target)) {
 					sendControl(facade, ingressBoundFrame(msg.id));
+				} else if (wsDebug) {
+					console.log('[ws] ingress-bind for unregistered kind=%s (kept on JSON fallback)', msg.kind);
 				}
 				return;
 			}
@@ -2548,6 +2552,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 		}
 	}
 	sendControl(facade, '{"type":"resumed"}');
+	if (wsDebug) console.log('[ws] resume sessionId=%s', msg.sessionId);
 }
 
 /**
@@ -2625,6 +2630,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	if (sharedCohorts) { for (const t of sharedCohorts) releaseSharedWireId(t); sharedCohorts.clear(); }
 	unregisterSocket(rawWs);
 	wsWrappers.delete(rawWs);
+	if (wsDebug) console.log('[ws] close code=%d connections=%d', code, wsConnections.size);
 }
 
 // - Authenticate preflight endpoint ------------------------------------------

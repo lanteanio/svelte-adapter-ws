@@ -4,6 +4,7 @@
 
 // Substituted by the adapter's build step; a free identifier until then.
 /* global WS_OPTIONS */
+/* global WS_ENABLED */
 /* global ENV_PREFIX */
 
 import { proxiedAddress } from './proxy-protocol.js';
@@ -103,7 +104,7 @@ export const reconnect_dispersal_ms = Number.isFinite(_reconnect_dispersal_raw) 
 
 // WS_DEBUG=1 enables per-event logging for the wire lanes. Read once at
 // module load so it is never sampled inside a hot callback.
-export const wsDebug = env('WS_DEBUG', '') === '1';
+export const wsDebug = WS_ENABLED && env('WS_DEBUG', '') === '1';
 
 let warnedUntrustedClaim = false;
 /**
