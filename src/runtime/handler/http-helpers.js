@@ -844,7 +844,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		// node ends the connection after it.
 		if (err && err.code === 'HPE_CLOSED_CONNECTION' && socket.writable && closeAfterLastTurn(socket)) return;
 		const inFlight = /** @type {any} */ (socket)._httpMessage;
-		if (!socket.writable || (err && err.code === 'ECONNRESET') || (inFlight && inFlight._headerSent)) {
+		if (!socket.writable || (err && err.code === 'ECONNRESET') || (inFlight && inFlight._headerSent && !inFlight.writableEnded)) {
 			socket.destroy(err);
 			return;
 		}
@@ -1005,6 +1005,15 @@ const HTTPParser = (() => {
 })();
 const kOnExecute = typeof HTTPParser?.kOnExecute === 'number' ? HTTPParser.kOnExecute : -1;
 const nodeExecute = HTTPParser?.prototype?.execute;
+// Node checks parser results against its own Error constructor. Obtain that
+// constructor from the binding so callers in another realm work as well.
+const ParserError = (() => {
+	if (!HTTPParser) return Error;
+	const parser = new HTTPParser();
+	parser.initialize(HTTPParser.REQUEST, {}, 0, 0);
+	try { return nodeExecute.call(parser, Buffer.from('!')).constructor; }
+	finally { parser.close(); }
+})();
 // On the socket, which node never pools. Registered, so that every copy of
 // this module in a process reads the same slot.
 const DECLINED = Symbol.for('svelte-adapter-ws.declinedUpgrade');
@@ -1100,7 +1109,17 @@ export function executeAfterDeclines(data) {
 		result = offset;
 		// Only a declined request that ended in this pass stopped it early.
 		const declined = socket?.[DECLINED];
-		if (!declined?.complete || (declined === before && !pending)) break;
+		if (!declined?.complete || (declined === before && !pending)) {
+			// A declined upgrade leaves llhttp's upgrade flag set. Node then
+			// returns the consumed prefix instead of its later parse error.
+			// Only a real upgrade may stop a read without consuming it here.
+			if (offset < data.length && !this.incoming?.upgrade) {
+				result = Object.assign(new ParserError('Parse Error'), {
+					code: 'HPE_INVALID_MESSAGE', bytesParsed: offset
+				});
+			}
+			break;
+		}
 		socket[DECLINED] = undefined;
 		if (offset >= data.length) break;
 	}
