@@ -192,16 +192,17 @@ async function boot(wsOptions) {
 }
 
 /**
- * A CONNECT keeps its own answer and closes: node never asks the upgrade
- * decision about one. In origin form, the one form the native tier reads, it
- * is the method's 405.
+ * An origin-form CONNECT is ordinary HTTP and keeps the connection usable.
+ * The runtime refuses the method; the test harness has no matching route.
  *
  * @param {number} port
+ * @param {string} status
  */
-async function expectConnectRefused(port) {
-	const [answer] = await exchange(port, [{ lines: ['CONNECT /x HTTP/1.1'] }]);
-	expect(answer?.status).toBe('405');
-	expect(answer?.lines).toContain('connection: close');
+async function expectConnectAnswer(port, status) {
+	const answers = await exchange(port, [{ lines: ['CONNECT /x HTTP/1.1'] }, FOLLOW_UP]);
+	expect(answers.map(answer => answer.status)).toEqual([status, '200']);
+	expect(answers[0].lines).not.toContain('connection: close');
+	expect(answers[1].body).toBe('OK');
 }
 
 /**
@@ -251,7 +252,9 @@ async function withListening(build) {
 function expectFallbackWhereNeeded(server) {
 	const option = /** @type {any} */ (server).shouldUpgradeCallback;
 	const tookOption = typeof option === 'function' && option !== listenerDecides;
-	expect(server.listenerCount('connection')).toBe(tookOption ? 1 : 2);
+	const listeners = server.listeners('connection');
+	expect(listeners.filter(listener => listener.name === 'installProxyProtocolSocket')).toHaveLength(1);
+	expect(listeners.filter(listener => listener.name !== 'installProxyProtocolSocket')).toHaveLength(tookOption ? 1 : 2);
 }
 
 afterAll(restoreUpgradeOption);
@@ -315,7 +318,7 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 		});
 
 		it('leaves a CONNECT to its own answer', async () => {
-			await expectConnectRefused(open.rt.port);
+			await expectConnectAnswer(open.rt.port, '405');
 		});
 
 		it('answers a handshake in HTTP/1.0 with the 505, ending the connection', async () => {
@@ -409,7 +412,7 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 		});
 
 		it('leaves a CONNECT to its own answer', async () => {
-			await expectConnectRefused(mirror.port);
+			await expectConnectAnswer(mirror.port, '404');
 		});
 
 		it('answers a handshake in HTTP/1.0 with the 505, ending the connection', async () => {

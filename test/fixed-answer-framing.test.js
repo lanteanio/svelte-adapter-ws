@@ -1661,20 +1661,24 @@ describe('a waiting-room renderer header node refuses', () => {
 	});
 });
 
-describe("the 400 for a target node's parser refuses", () => {
-	it('carries its body to a GET and its length alone to a HEAD', async () => {
-		const ask = (/** @type {string} */ method, /** @type {string} */ ahead = '') => exchange(
-			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
-			[`${ahead}${method} /café HTTP/1.1`, 'Host: 127.0.0.1']
-		);
-		// The method is read past the empty lines in front of the line too.
-		for (const [method, body, ahead] of [['GET', 'Bad Request', ''], ['HEAD', '', ''], ['HEAD', '', '\r\n\r\n'], ['HEAD', '', '\r']]) {
-			const answer = await ask(method, ahead);
-			const first = splitFirst(answer.buffer);
-			expect(first.status, method + ahead).toBe('HTTP/1.1 400 Bad Request');
-			expect(header(first.lines, 'content-length'), method + ahead).toEqual(['11']);
-			expect(first.rest, method + ahead).toBe(body);
-			expect(answer.how, method + ahead).toBe('end');
+describe('the 400 for a non-ASCII target', () => {
+	it('carries its body to a GET and its length alone to a HEAD, keeping the connection', async () => {
+		expectLengthFramed(await pipeline(open.rt.port, [['GET /café HTTP/1.1'], OK]), {
+			status: '400', body: 'Bad Request'
+		});
+		expectBodyless(await pipeline(open.rt.port, [['HEAD /café HTTP/1.1'], OK]), {
+			status: '400', length: 11
+		});
+	});
+
+	it('bounds unrecognized bytes before the request line instead of skipping them', async () => {
+		for (const ahead of ['\r\n\r\n', '\r']) {
+			const answer = await exchange(
+				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
+				[`${ahead}HEAD /café HTTP/1.1`, 'Host: 127.0.0.1', 'x'.repeat(4096)]
+			);
+			expect(splitFirst(answer.buffer).status, JSON.stringify(ahead)).toBe('HTTP/1.1 431 Request Header Fields Too Large');
+			expect(answer.how, JSON.stringify(ahead)).toBe('end');
 		}
 	});
 });
