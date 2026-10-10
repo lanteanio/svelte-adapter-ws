@@ -2421,6 +2421,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		}
 	}
 
+	let subscribed = 0;
 	for (let i = 0; i < valid.length; i++) {
 		const topic = valid[i];
 		const held = udSubs.has(topic);
@@ -2465,6 +2466,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			continue;
 		}
 		addLogicalSubscription(udSubs, topic);
+		subscribed++;
 		// A close here ends the connection, so the topics after this one
 		// have nobody to ack and nothing to flush to. Stop the loop; the
 		// discard below still closes their buffers, and it reads no socket.
@@ -2479,6 +2481,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		sendSubscribed(facade, topic, ref);
 	}
 	if (batchCapture) discardResumeCapture(batchCapture);
+	if (wsDebug) console.log('[ws] subscribe-batch count=%d', subscribed);
 }
 
 /**

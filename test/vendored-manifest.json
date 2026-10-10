@@ -2418,6 +2418,9 @@
 		"file": "test/subscribe-pending-cap.test.js"
 	},
 	{
+		"file": "test/subscribe-policy.test.js"
+	},
+	{
 		"file": "test/subscription-accounting.test.js"
 	},
 	{

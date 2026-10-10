@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Live subscription tests verify that a refused attempt cannot preserve membership installed by a revoked sibling.
 
-- Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`; subscription policy checks cover production, development and the test server.
+- Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`, and batched subscriptions report the number of newly installed topics.
 - **Pipelined HTTP dispatch follows application callback boundaries.** Promise
   jobs finish before the next request is considered; delayed responses close
   an unanswered pipeline. Application `Connection: close` headers retain their

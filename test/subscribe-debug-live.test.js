@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 
 const handler = `
-export function subscribe() { return true; }
+export function subscribe(_ws, topic) { return topic !== 'batch-denied'; }
 export function message(ws, { platform }) { platform.send(ws, 'probe', 'alive', {}); }
 `;
 
@@ -36,7 +36,28 @@ for (const enabled of [false, true]) {
 				expect(lines[0]).toContain('A client topic subscription was installed.');
 				expect(lines[1]).toContain('runtime.subscription.removed');
 				expect(lines[1]).toContain('A client topic subscription was removed.');
-				for (const line of lines) expect(line).toContain('debug-topic');
+				for (const line of lines) {
+					expect(line).toContain('debug-topic');
+					expect(line).toContain(' component=runtime.subscription ');
+					expect(line).toContain(' severity=debug]');
+					const record = JSON.parse(line.slice(line.indexOf('{')));
+					expect(record).toMatchObject({ source: 'svelte-adapter-ws', component: 'runtime.subscription', severity: 'debug', level: 'debug' });
+				}
+			}
+			const frames = [];
+			ws.on('message', data => frames.push(JSON.parse(data.toString())));
+			for (const [ref, topics, expected] of [
+				[2, ['batch-a', 'batch-b', 'batch-a', 'batch-denied'], 2],
+				[3, ['batch-a', 'batch-b', 'batch-c', 'batch-denied'], 1],
+				[4, ['batch-a', 'batch-denied'], 0]
+			]) {
+				ws.send(JSON.stringify({ type: 'subscribe-batch', topics, ref }));
+				await vi.waitFor(() => expect(frames.filter(frame => frame.ref === ref)).toHaveLength(topics.length));
+				expect(frames.filter(frame => frame.ref === ref && frame.topic === 'batch-denied'))
+					.toEqual([expect.objectContaining({ type: 'subscribe-denied', reason: 'FORBIDDEN' })]);
+				const batchLines = log.mock.calls.filter(call => call[0] === '[ws] subscribe-batch count=%d');
+				expect(batchLines).toHaveLength(enabled ? ref - 1 : 0);
+				if (enabled) expect(batchLines.at(-1)).toEqual(['[ws] subscribe-batch count=%d', expected]);
 			}
 		} finally {
 			ws?.terminate();

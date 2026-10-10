@@ -136,7 +136,7 @@
 	},
 	{
 		"file": "src/runtime/utils.js",
-		"reason": "the lead's barrel plus the subscribe-policy, dot-path and seq-bound modules this runtime keeps under utils/",
+		"reason": "the lead's barrel plus the dot-path and seq-bound modules this runtime keeps under utils/",
 		"lead": "c6ab617069ddd127ce8dd31713c07a4466f0d2fe"
 	},
 	{
