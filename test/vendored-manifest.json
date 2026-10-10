@@ -859,10 +859,6 @@
 				"ours": " * The string key the request id used to cross the upgrade on. Nothing is\n"
 			},
 			{
-				"lead": "export const WS_REQUEST_ID_KEY = '__adapter_uws_request_id__';\n",
-				"ours": "export const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';\n"
-			},
-			{
 				"lead": " * Keys the runtime carries per-connection values under from `res.upgrade()` to\n * `open`.\n",
 				"ours": " * Keys a per-connection value is carried under from the upgrade to `open`.\n"
 			},
@@ -1103,10 +1099,6 @@
 			{
 				"lead": " * `res.upgrade()` on. Nothing is stamped on it any more: uWS copies upgrade\n * userData with plain assignments, which an accessor on `Object.prototype`\n * for a nameable key can intercept, so the id now crosses on a key private\n * to the runtime. Read `userData[WS_PLATFORM].requestId` instead.\n",
 				"ours": " * `res.upgrade()` on. Nothing is stamped on it any more: a carrier that\n * copies upgrade userData with plain assignments, as the family's native\n * tier does, hands a nameable key to an accessor on `Object.prototype`, so\n * the id now crosses on a key private to the runtime. Read\n * `userData[WS_PLATFORM].requestId` instead.\n"
-			},
-			{
-				"lead": "export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';\n",
-				"ours": "export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';\n"
 			}
 		]
 	},

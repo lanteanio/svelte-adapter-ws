@@ -495,4 +495,4 @@ export const WS_ATTRIBUTION: unique symbol;
  *
  * @deprecated Names no slot; kept so an import of it still resolves.
  */
-export const WS_REQUEST_ID_KEY: '__adapter_ws_request_id__';
+export const WS_REQUEST_ID_KEY: '__adapter_uws_request_id__';

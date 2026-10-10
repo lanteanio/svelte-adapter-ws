@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The deprecated `WS_REQUEST_ID_KEY` constant and its declaration now use
+  `__adapter_uws_request_id__`, matching the native adapter.
+
 - **A request line the family's native tier does not read is refused with
   `505`, and its connection ends.** HTTP/1.0 was served, a streamed answer
   close-delimited unless the request asked for chunked. A request whose line

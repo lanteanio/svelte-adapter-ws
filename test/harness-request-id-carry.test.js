@@ -11,10 +11,15 @@ import { describe, it, expect, afterEach } from 'vitest';
 import WebSocket from 'ws';
 
 /** The name WS_REQUEST_ID_KEY spells, which no carry slot uses. */
-const REQUEST_ID_NAME = '__adapter_ws_request_id__';
+const REQUEST_ID_NAME = '__adapter_uws_request_id__';
 
 /** @type {any} */
 let server = null;
+
+it('exports the deprecated request-id key with the native adapter spelling', async () => {
+	const { WS_REQUEST_ID_KEY } = await import('../src/testing.js');
+	expect(WS_REQUEST_ID_KEY).toBe(REQUEST_ID_NAME);
+});
 
 afterEach(async () => {
 	await server?.close();

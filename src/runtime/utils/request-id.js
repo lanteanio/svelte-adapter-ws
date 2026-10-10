@@ -4,7 +4,7 @@
  * `userData[WS_PLATFORM].requestId` from `open` on - and it stays exported so
  * an import of it still resolves.
  */
-export const WS_REQUEST_ID_KEY = '__adapter_ws_request_id__';
+export const WS_REQUEST_ID_KEY = '__adapter_uws_request_id__';
 
 /**
  * Keys a per-connection value is carried under from the upgrade to `open`.

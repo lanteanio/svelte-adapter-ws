@@ -8,7 +8,7 @@ import WebSocket from 'ws';
 import { bootViteDev } from './helpers/vite-dev.js';
 
 /** The name WS_REQUEST_ID_KEY spells, which no carry slot uses. */
-const REQUEST_ID_NAME = '__adapter_ws_request_id__';
+const REQUEST_ID_NAME = '__adapter_uws_request_id__';
 
 const savedOrigin = process.env.ORIGIN;
 
