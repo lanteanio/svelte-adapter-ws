@@ -84,7 +84,10 @@ export function installRealtimeRoutes(routes) {
  * @param {import('node:http').ServerResponse} res
  */
 export function handleRequest(req, res) {
-	servePipelined(req, res, serveRequest);
+	// Exact probe requests finish inside the listener and need no later turn callback.
+	const synchronous = (req.method === 'GET' || req.method === 'HEAD') &&
+		(req.url === HEALTH_CHECK_PATH || req.url === READINESS_CHECK_PATH);
+	servePipelined(req, res, serveRequest, synchronous);
 }
 
 /**

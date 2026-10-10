@@ -297,7 +297,7 @@ const TURN_CORK_BYTES = 16384;
 const openTurns = new Map();
 
 /**
- * @typedef {{ req: import('node:http').IncomingMessage | null, res: import('node:http').ServerResponse | null, serve: (req: any, res: any) => void }} Waiting
+ * @typedef {{ req: import('node:http').IncomingMessage | null, res: import('node:http').ServerResponse | null, serve: (req: any, res: any) => void, synchronous?: boolean }} Waiting
  * @typedef {{ ahead: any, waiting: Waiting[], serve: (req: any, res: any) => void, scheduled: boolean }} Line
  */
 
@@ -332,8 +332,9 @@ const openTurns = new Map();
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void} serve
+ * @param {boolean} [synchronous] a built-in answer that finishes before returning
  */
-export function servePipelined(req, res, serve) {
+export function servePipelined(req, res, serve, synchronous = false) {
 	const socket = /** @type {any} */ (req.socket);
 	/** @type {Line} */
 	let line = socket[LINE];
@@ -344,11 +345,11 @@ export function servePipelined(req, res, serve) {
 	const ahead = line.ahead;
 	if (line.waiting.length === 0 && (ahead === null || ahead.writableEnded)) {
 		if (ahead !== null && ahead._last) return;
-		handOut(line, res);
-		serve(req, res);
+		if (synchronous) serveSynchronous(line, req, res, serve);
+		else { handOut(line, res); serve(req, res); }
 		return;
 	}
-	line.waiting.push({ req, res, serve: line.serve });
+	line.waiting.push({ req, res, serve: line.serve, synchronous });
 	if (!line.scheduled) nextInLine(socket, line);
 }
 
@@ -368,6 +369,27 @@ function handOut(line, res) {
 	if (socket !== null) socket.cork();
 	openTurns.set(res, { socket, timer: null });
 	setImmediateTimer(endTurn, res);
+}
+
+// Built-in probes call no application handler and end before returning. The
+// read hold already protects their bytes from a later pipelined refusal.
+/**
+ * @param {Line} line
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {Waiting['serve']} serve
+ */
+function serveSynchronous(line, req, res, serve) {
+	endOpenTurns();
+	line.ahead = res;
+	/** @type {any} */ (res)[TURN] = true;
+	try { serve(req, res); }
+	finally {
+		/** @type {any} */ (res)[TURN] = false;
+		if (res.writableEnded) {
+			if (line.ahead === res) line.ahead = /** @type {any} */ (res)._last ? FINISHED_CLOSING : FINISHED;
+		} else handOut(line, res);
+	}
 }
 
 /**
@@ -458,8 +480,11 @@ function nextInLine(socket, line) {
 		return;
 	}
 	line.waiting.shift();
-	if (next.res !== null) handOut(line, next.res);
-	next.serve(next.req, next.res);
+	if (next.res !== null && next.synchronous) serveSynchronous(line, next.req, next.res, next.serve);
+	else {
+		if (next.res !== null) handOut(line, next.res);
+		next.serve(next.req, next.res);
+	}
 	if (line.waiting.length > 0) nextInLine(socket, line);
 }
 
