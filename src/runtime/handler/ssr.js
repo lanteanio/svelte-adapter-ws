@@ -235,6 +235,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 	if (!response.body) {
 		writeHeaders(res, response, state, bodylessLength(response.status, response.headers.get('content-length'), headOnly));
 		res.end();
+		releaseTurnIfFull(res);
 		return;
 	}
 	if (response.body.locked) {
@@ -261,6 +262,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		response.body.cancel().catch(() => {});
 		writeHeaders(res, response, state, bodylessLength(response.status, response.headers.get('content-length'), true));
 		res.end();
+		releaseTurnIfFull(res);
 		return;
 	}
 
@@ -273,6 +275,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		if (first.done) {
 			writeHeaders(res, response, state, 0);
 			res.end();
+			releaseTurnIfFull(res);
 			return;
 		}
 		// The second read decides single-chunk vs streaming, as on the family's
@@ -319,6 +322,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			const whole = compressWhole(response, firstBytes ?? EMPTY, typeof first.value === 'string' ? '' : acceptEncoding || '');
 			writeHeaders(res, response, state, whole.body.byteLength, whole.encoding);
 			res.end(whole.body);
+			releaseTurnIfFull(res);
 			return;
 		}
 
@@ -351,6 +355,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 		if (streaming && !state.aborted) {
 			if (streamDone) {
 				res.end();
+				releaseTurnIfFull(res);
 			} else {
 				state.closedByServer = true;
 				cut(res);
@@ -459,6 +464,14 @@ function writeHeaders(res, response, state, length, encoding = '', chunked = fal
 	}
 	if (length !== null) res.setHeader('content-length', String(length));
 	res.writeHead(response.status);
+	// A user-supplied Connection field is serialized verbatim by the native
+	// writer; only its explicit close operation ends the transport. Node also
+	// interprets that field as a close instruction while writing the head.
+	// Undo that transport flag for application responses after serialization.
+	if (/(?:^|,)\s*close\s*(?:,|$)/i.test(response.headers.get('connection') || '')) {
+		/** @type {any} */ (res)._last = false;
+		res.shouldKeepAlive = true;
+	}
 }
 
 /**

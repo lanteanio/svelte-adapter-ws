@@ -6,6 +6,7 @@ import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderV
 import { createRequire } from 'node:module';
 import { webSocketKeyByteLength } from './header-values.js';
 import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
+import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal } from './read-turn.js';
 
 // The methods this adapter can deliver to a route. Node's parser only accepts
 // registered methods, so the gate here is about the three the fetch spec
@@ -48,6 +49,7 @@ export function endText(res, status, headers, text) {
 	res.statusMessage = status === 413 ? 'Content Too Large' : STATUS_CODES[status] || '';
 	res.writeHead(status, { ...headers, 'content-length': String(Buffer.byteLength(text)) });
 	res.end(text);
+	releaseHttpReadIfFull(res);
 }
 
 /**
@@ -309,8 +311,8 @@ const openTurns = new Map();
  * connection left unanswered. It reads nothing behind an answer that ends the
  * connection, a 505 or a refusal that closes it. node parses on
  * and queues each response behind the last, so a request with an answer
- * ahead still open is decided once the turn is over, by `setImmediate`; one
- * with nothing ahead, or an answer ahead that has ended, is served at once.
+ * ahead still open is decided after a microtask checkpoint, before another
+ * I/O or timer callback; an answer already ended is served at once.
  *
  * A request held here or dropped is not handed to `serve`, so nothing counts
  * it: node never ends a response it queued when the connection goes.
@@ -322,12 +324,8 @@ const openTurns = new Map();
  * ends when the next request or WebSocket message is handed to the
  * application on any connection, which on the native tier is that handler's
  * own turn, or at the `setImmediate` that follows the hand-out. A request
- * handed out from the line in the check phase would keep its turn into the
- * next iteration, so its turn also ends at a timer queued at the hand-out,
- * which the next timers phase runs before any timer the handler queued
- * after it; a callback of that iteration's poll phase that is not a hand-out
- * (an upstream socket feeding a stream) is still inside the turn, since node
- * offers no boundary there. The hold also ends once the bytes it keeps pass
+ * handed out from the line follows the same callback boundary. The hold also
+ * ends once the bytes it keeps pass
  * the native tier's cork buffer, see releaseTurnIfFull. node flushes a
  * response that ends in its turn at once, as a complete answer.
  *
@@ -361,9 +359,8 @@ export function servePipelined(req, res, serve) {
 /**
  * @param {Line} line
  * @param {import('node:http').ServerResponse} res
- * @param {boolean} [fromLine] handed out by nextInLine, in the check phase
  */
-function handOut(line, res, fromLine = false) {
+function handOut(line, res) {
 	line.ahead = res;
 	/** @type {any} */ (res)[LINE] = line;
 	res.on('finish', aheadFinished);
@@ -373,7 +370,7 @@ function handOut(line, res, fromLine = false) {
 	// node holds its output itself until the one ahead has finished.
 	const socket = res.socket;
 	if (socket !== null) socket.cork();
-	openTurns.set(res, { socket, timer: fromLine ? setTimer(endTurn, 1, res) : null });
+	openTurns.set(res, { socket, timer: null });
 	setImmediateTimer(endTurn, res);
 }
 
@@ -396,7 +393,7 @@ function endTurn(res) {
 	if (open === undefined) return;
 	if (open.timer !== null) clearTimer(open.timer);
 	const socket = open.socket;
-	if (socket != null && !socket.destroyed) {
+	if (socket != null && !socket.destroyed && !httpReadHeld(socket)) {
 		while (socket.writableCorked > 0) socket.uncork();
 	}
 }
@@ -421,6 +418,7 @@ export function inOwnTurn(res) {
  * @param {import('node:http').ServerResponse} res
  */
 export function releaseTurnIfFull(res) {
+	releaseHttpReadIfFull(res);
 	if (/** @type {any} */ (res)[TURN] !== true) return;
 	const socket = openTurns.get(res)?.socket;
 	if (socket != null && socket.writableLength >= TURN_CORK_BYTES) endTurn(res);
@@ -432,35 +430,46 @@ function aheadFinished() {
 	if (line.ahead === this) line.ahead = this._last ? FINISHED_CLOSING : FINISHED;
 }
 
+let checkpointActive = false;
+
 /**
  * @param {any} socket
  * @param {Line} line
  */
 function nextInLine(socket, line) {
 	line.scheduled = true;
-	setImmediateTimer(() => {
-		line.scheduled = false;
-		const ahead = line.ahead;
-		const next = line.waiting[0];
-		if (socket.destroyed || next === undefined) {
-			line.waiting.length = 0;
-			return;
-		}
-		if (ahead !== null && !ahead.writableEnded) {
-			line.waiting.length = 0;
-			if (next.req === null) socket.destroy();
-			else closeBehindWaitingAnswer(next.req);
-			return;
-		}
-		if (ahead !== null && ahead._last) {
-			line.waiting.length = 0;
-			return;
-		}
-		line.waiting.shift();
-		if (next.res !== null) handOut(line, next.res, true);
-		next.serve(next.req, next.res);
-		if (line.waiting.length > 0) nextInLine(socket, line);
-	});
+	// uWS drains the preceding handler's ticks and promise jobs before reading
+	// the next pipelined request. A check-phase callback runs too late: an
+	// application setImmediate or another poll callback can finish the answer
+	// first. Node's own checkpoint gives promises their turn without admitting
+	// another I/O or timer callback. A nested application callback must not
+	// recursively enter that checkpoint.
+	if (!checkpointActive) {
+		checkpointActive = true;
+		try { /** @type {any} */ (process)._tickCallback(); } finally { checkpointActive = false; }
+	}
+
+	line.scheduled = false;
+	const ahead = line.ahead;
+	const next = line.waiting[0];
+	if (socket.destroyed || next === undefined) {
+		line.waiting.length = 0;
+		return;
+	}
+	if (ahead !== null && !ahead.writableEnded) {
+		line.waiting.length = 0;
+		if (next.req === null) socket.destroy();
+		else closeBehindWaitingAnswer(next.req);
+		return;
+	}
+	if (ahead !== null && ahead._last) {
+		line.waiting.length = 0;
+		return;
+	}
+	line.waiting.shift();
+	if (next.res !== null) handOut(line, next.res);
+	next.serve(next.req, next.res);
+	if (line.waiting.length > 0) nextInLine(socket, line);
 }
 
 /**
@@ -558,7 +567,7 @@ function closeBehindWaitingAnswer(req) {
 		socket.destroy();
 		return;
 	}
-	socket.end(refusal, () => socket.destroy());
+	endParserRefusal(socket, refusal);
 }
 
 /** @param {import('node:http').ServerResponse} res */
@@ -756,7 +765,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 	 * @param {string} raw
 	 */
 	const answerAndClose = (socket, raw) => {
-		socket.end(raw, () => socket.destroy());
+		endParserRefusal(socket, raw);
 	};
 	// CONNECT parses, but node hands it to the 'connect' event rather than the
 	// request listener, and a server with no listener for it drops the socket.
