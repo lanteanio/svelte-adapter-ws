@@ -362,6 +362,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI installs npm 11.8.0 before resolving dependencies on Node 22, avoiding the
   bundled npm 10 resolver crash during clean installs.
 
+- Serial client test runs isolate connection singletons and runtime overrides
+  between files, so a prior mock connection cannot replace a real socket.
+
 - Readers of an incomplete request body reject if the response finishes first.
   The connection drains unread bytes for later requests.
 

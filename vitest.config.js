@@ -36,9 +36,10 @@ export default defineConfig({
 		// `vite build` - which on a loaded machine becomes a failure that only
 		// reproduces under full parallelism. See the helper.
 		globalSetup: ['./test/helpers/global-setup.js'],
-		// Restore `globalThis.WebSocket` / `window` after each test FILE, and
-		// stop any runtime a suite left listening. See the helpers.
-		setupFiles: ['./test/helpers/restore-globals.js', './test/helpers/stop-leaked-runtimes.js'],
+		// Reset application modules before capturing globals and cleanup registries.
+		// Restore browser globals and stop runtimes each file leaves behind.
+		setupFiles: ['./test/helpers/reset-module-state.js', './test/helpers/restore-globals.js', './test/helpers/stop-leaked-runtimes.js'],
+		sequence: { setupFiles: 'list' },
 		testTimeout: 15000,
 		hookTimeout: 15000,
 		projects: [
