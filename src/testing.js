@@ -7,7 +7,7 @@ import { runOpenHook, runDrainHook, runCloseHook } from './runtime/utils/hook-bo
 import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { invalidRequestTarget, invalidHost } from './runtime/utils/request-target.js';
-import { ALLOW_HEADER, FORBIDDEN_METHODS, upgradeTurn, endOpenTurns, applyShouldUpgradeCallback, missesHost, sendHost400, answerExpectations, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send400, send505, servePipelined, acceptsRequestLine, stageHeaders, assertWritableStatus, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
+import { ALLOW_HEADER, FORBIDDEN_METHODS, upgradeTurn, endOpenTurns, applyShouldUpgradeCallback, missesHost, sendHost400, answerExpectations, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send400, send505, servePipelined, acceptsRequestLine, stageHeaders, assertWritableStatus, assertResponseStatus, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
 import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
@@ -4546,7 +4546,7 @@ export async function createTestServer(options = {}) {
 							res.writeStatus(String(response.status));
 							let hasCTO = false;
 							for (const [k, v] of response.headers) {
-								if (k === 'content-length' || k === 'transfer-encoding' || k === 'trailer' || k === 'set-cookie') continue;
+								if (k === 'content-length' || k === 'transfer-encoding' || k === 'trailer' || k === 'set-cookie' || k === 'date') continue;
 								if (k === 'x-content-type-options') hasCTO = true;
 								res.writeHeader(k, v);
 							}
@@ -4576,6 +4576,7 @@ export async function createTestServer(options = {}) {
 					.then((response) => {
 						if (adminAborted) return;
 						if (!(response instanceof Response)) { failAdmin(500); return; }
+						assertResponseStatus(response.status);
 						writeAdmin(response);
 					})
 					.catch(() => failAdmin(500));

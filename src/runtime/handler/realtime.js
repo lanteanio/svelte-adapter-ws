@@ -97,7 +97,7 @@ import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqF
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
-import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus, takesWebSocketRoute } from './http-helpers.js';
+import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { readBody } from './ssr.js';
@@ -2769,6 +2769,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 			}
 
 			if (result instanceof Response) {
+				assertResponseStatus(result.status);
 				// A body writes the length it has, as uWS derives it from the
 				// body it is handed; a bodyless answer follows bodylessLength's
 				// rule. Cookies set through `cookies.set()` are merged in, so
@@ -2782,7 +2783,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 					// from fetch() beside that length is a message no HTTP/1.1
 					// client will read, and node refuses a Trailer on an answer
 					// framed by its length.
-					if (hk === 'set-cookie' || hk === 'content-length' || hk === 'transfer-encoding' || hk === 'trailer') continue;
+					if (hk === 'set-cookie' || hk === 'content-length' || hk === 'transfer-encoding' || hk === 'trailer' || hk === 'date') continue;
 					outHeaders.push([hk, hv]);
 				}
 				const outCookies = [
@@ -2795,7 +2796,6 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 				// Staged before the status, so a refused header reaches the 500
 				// below with nothing committed; a status node cannot write is
 				// refused before anything is staged.
-				assertWritableStatus(result.status);
 				stageHeaders(res, outHeaders);
 				res.writeHead(result.status);
 				markShortHttpStatus(res);

@@ -2067,10 +2067,22 @@
 		"file": "test/fixture/src/hooks.ws.grant.js"
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.hookcrash.js"
+		"file": "test/fixture/src/hooks.ws.hookcrash.js",
+		"adaptations": [
+			{
+				"lead": "export function admin(request) {\n",
+				"ours": "export function admin(request) {\n\tif (request.headers.get('x-response-error') === '1') return Response.error();\n\tif (request.headers.get('x-response-date') === '1') return new Response('dated', { headers: { date: 'Thu, 01 Jan 1970 00:00:00 GMT' } });\n"
+			}
+		]
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.js"
+		"file": "test/fixture/src/hooks.ws.js",
+		"adaptations": [
+			{
+				"lead": "export function authenticate({ cookies, headers, url, request }) {\n",
+				"ours": "export function authenticate({ cookies, headers, url, request }) {\n\tif (headers['x-auth-response'] === 'date') return new Response('dated', { headers: { date: 'Thu, 01 Jan 1970 00:00:00 GMT' } });\n\tif (headers['x-auth-response'] === 'error') {\n\t\tcookies.set('error_cookie', 'must-not-escape', { path: '/' });\n\t\treturn Response.error();\n\t}\n\tif (headers['x-auth-response'] === '304-custom') {\n\t\treturn new Response(null, { status: 304, headers: { 'content-length': headers['x-auth-length'] || 'abc' } });\n\t}\n"
+			}
+		]
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.park.js"

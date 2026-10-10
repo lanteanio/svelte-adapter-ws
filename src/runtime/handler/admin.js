@@ -12,7 +12,7 @@
 // throws or rejects yields a generic 500 with no detail leaked to the client.
 
 import { origin, get_origin, body_size_limit, ADMIN_PATH } from './config.js';
-import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { FORBIDDEN_METHODS, send405, endText, bodylessLength, stageHeaders, assertResponseStatus } from './http-helpers.js';
 import { markShortHttpStatus, releaseHttpReadIfFull } from './read-turn.js';
 import { buildRequest } from './ssr.js';
 import { openRequestSignal, closeRequestSignal } from './lifecycle.js';
@@ -97,7 +97,7 @@ async function writeAdminResponse(res, response, state, headOnly) {
 		// HTTP/1.1 client will read, and node refuses a Trailer on an answer
 		// framed by its length. set-cookie is emitted via getSetCookie() so
 		// multiple cookies are not folded.
-		if (key === 'content-length' || key === 'transfer-encoding' || key === 'trailer' || key === 'set-cookie') continue;
+		if (key === 'content-length' || key === 'transfer-encoding' || key === 'trailer' || key === 'set-cookie' || key === 'date') continue;
 		if (key === 'x-content-type-options') hasContentTypeOptions = true;
 		headers.push([key, value]);
 	}
@@ -109,7 +109,6 @@ async function writeAdminResponse(res, response, state, headOnly) {
 	const whole = body !== null && body.byteLength > 0;
 	const length = whole ? body.byteLength : bodylessLength(response.status, response.headers.get('content-length'), headOnly);
 	if (length !== null) headers.push(['content-length', String(length)]);
-	assertWritableStatus(response.status);
 	stageHeaders(res, headers);
 	res.writeHead(response.status);
 	markShortHttpStatus(res);
@@ -137,6 +136,7 @@ function runAdminHandler(request, res, state, span) {
 				sendAdminError(res, 500, 'internal error');
 				return;
 			}
+			assertResponseStatus(response.status);
 			return writeAdminResponse(res, response, state, request.method === 'HEAD');
 		})
 		.catch((err) => {

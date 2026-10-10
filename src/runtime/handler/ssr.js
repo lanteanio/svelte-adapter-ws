@@ -5,7 +5,7 @@ import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import { randomUuid, setTimer, clearTimer } from '../runtime.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
+import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
@@ -228,6 +228,7 @@ function compressWhole(response, body, acceptEncoding) {
  *   body never does
  */
 async function writeResponse(res, response, state, acceptEncoding, headOnly = false) {
+	assertResponseStatus(response.status);
 	if (state.aborted) {
 		// Nothing will consume this body; cancel it so the render's upstream
 		// (a fetch response, a DB cursor held by the stream source) is
@@ -404,7 +405,7 @@ function writeHeaders(res, response, state, length, encoding = '', chunked = fal
 		// through beside the length written for a whole body is a message no
 		// HTTP/1.1 client will read. A Trailer goes out only on a chunked
 		// answer; node refuses it on any other.
-		if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding') continue;
+		if (key === 'set-cookie' || key === 'content-length' || key === 'transfer-encoding' || key === 'date') continue;
 		if (key === 'trailer' && !chunked) continue;
 		if (key === 'x-content-type-options') hasContentTypeOptions = true;
 		staged.push([key, value]);
@@ -413,7 +414,6 @@ function writeHeaders(res, response, state, length, encoding = '', chunked = fal
 	if (cookies.length > 0) staged.push(['set-cookie', cookies]);
 	// Checked whole before the first is set, so a refused header (a cookie
 	// value included) leaves nothing staged for the 500 that answers it.
-	assertWritableStatus(response.status);
 	stageHeaders(res, staged);
 	state.responseStarted = true;
 	if (!hasContentTypeOptions) res.setHeader('x-content-type-options', 'nosniff');

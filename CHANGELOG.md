@@ -360,6 +360,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Header values retain DEL bytes at any position across HTTP and TLS, including repeated fields, without changing request-head size limits.
+- Application HTTP responses retain one native Date field. Invalid final status
+  codes yield a clean server error, and bodyless responses omit unsafe declared lengths.
 
 - CI installs npm 11.8.0 before resolving dependencies on Node 22, avoiding the
   bundled npm 10 resolver crash during clean installs.

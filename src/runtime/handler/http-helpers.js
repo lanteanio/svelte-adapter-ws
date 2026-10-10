@@ -68,6 +68,18 @@ export function assertWritableStatus(status) {
 }
 
 /**
+ * A network-error Response has status 0, which cannot be written as an HTTP
+ * final response. Validate before any application headers or cookies escape.
+ *
+ * @param {number} status
+ */
+export function assertResponseStatus(status) {
+	if (!(Number.isInteger(status) && status >= 200 && status <= 999)) {
+		throw new RangeError('Response has no valid final HTTP status: ' + status);
+	}
+}
+
+/**
  * A header value as the bytes the native tier puts on the wire. uWS writes
  * text as its UTF-8 bytes; node's HTTP/1.1 writer takes one byte per
  * character and refuses one past U+00FF, so a value past ASCII goes to node
@@ -196,7 +208,7 @@ export function bodylessLength(status, declaredLength, headOnly) {
 	if (status === 304 || headOnly) {
 		if (!declaredLength) return null;
 		const length = parseInt(declaredLength, 10);
-		return length >= 0 ? length : null;
+		return Number.isSafeInteger(length) && length >= 0 ? length : null;
 	}
 	return 0;
 }
