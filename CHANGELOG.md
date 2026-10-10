@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Unreadable pipelined input leaves preceding answers and event streams running.
+
 - Invalid-target pipeline tests verify response ordering and refusal bodies after GET and HEAD.
 
 - Split non-ASCII request targets retain HEAD response framing over HTTP and HTTPS.
