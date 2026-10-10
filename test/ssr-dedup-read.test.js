@@ -80,14 +80,13 @@ describe('readBodyUpTo', () => {
 		expect(cancelled).toBeInstanceOf(TypeError);
 	});
 
-	it('says when the whole body was one string chunk', async () => {
+	it('normalizes one or multiple string chunks before sharing', async () => {
 		const one = await readBodyUpTo(stream(['h\u00e9']), 100);
-		expect(one.complete && one.oneString).toBe(true);
+		expect(one.complete).toBe(true);
 		if (one.complete) expect(Buffer.from(one.bytes).toString('utf8')).toBe('h\u00e9');
 		const two = await readBodyUpTo(stream(['a', 'b']), 100);
-		expect(two.complete && two.oneString).toBe(false);
-		const buffer = await readBodyUpTo(stream([bytes(3, 1)]), 100);
-		expect(buffer.complete && buffer.oneString).toBe(false);
+		expect(two.complete).toBe(true);
+		if (two.complete) expect(Buffer.from(two.bytes).toString('utf8')).toBe('ab');
 	});
 
 	it('cancelling the continuation cancels the source', async () => {

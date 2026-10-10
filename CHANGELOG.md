@@ -367,6 +367,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serial client test runs isolate connection singletons and runtime overrides
   between files, so a prior mock connection cannot replace a real socket.
 
+- Response streams preserve exact buffer/view bytes and UTF-8 strings in shared and direct delivery. Invalid chunks cancel their producer. Single-string bodies now qualify for dynamic compression with the existing credentialed-response protection.
+
 - Static assets omit Last-Modified for future or pre-1900 file timestamps while retaining their ETag.
 - Static date preconditions accept the three HTTP date formats and ignore invalid dates, including years before 1900. Two-digit years follow the rolling 50-year boundary.
 - Immutable assets evaluate entity preconditions: `If-None-Match: *` returns 304, `If-Match: *` succeeds, and specific or empty list entries cannot match an absent validator.

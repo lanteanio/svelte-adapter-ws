@@ -1,3 +1,5 @@
+import { responseChunkBytes } from './response-body.js';
+
 /**
  * Whether an SSR response may be buffered whole for cross-waiter dedup.
  *
@@ -10,11 +12,11 @@
  * do NOT require a `content-length`: SvelteKit's dynamically-rendered pages
  * carry none, so gating on that header would silently disable dedup for the
  * exact thundering-herd workload it exists to protect. The never-ending
- * content-type is the only reliable signal, and the response writer already
+ * content-type is the only reliable signal, and `writeResponse` already
  * chunk-streams the excluded case without buffering it.
  *
- * Kept in its own dependency-free module so it is unit-testable without
- * pulling in the build-time runtime init chain that `ssr.js` depends on.
+ * Kept separate so it is unit-testable without pulling
+ * in the build-time runtime init chain that `ssr.js` depends on.
  *
  * @param {Response} response
  * @returns {boolean}
@@ -26,7 +28,7 @@ export function isDedupBufferable(response) {
 
 /**
  * Whether a response's declared length already rules sharing out, so the
- * leader can go straight to streaming without reading a byte. `false` means
+ * leader can go straight to streaming without reading a byte. `null` means
  * the length is unknown or within the cap and the body has to be read to
  * decide.
  *
@@ -42,26 +44,6 @@ export function declaresBodyPastCap(response, cap) {
 }
 
 /**
- * A body chunk as bytes. A Response built on a stream the app wrote hands back
- * whatever was enqueued, and the family's native tier writes a string, an
- * ArrayBuffer or a SharedArrayBuffer as readily as a view, so all are taken
- * here; anything else is a body that cannot go on the wire, and the throw
- * reaches the failure path like a source that errored. Both readers of a response body take their
- * chunks through this: the writer, and the dedup leader below, which would
- * otherwise copy an ArrayBuffer or a string into its buffer as zeros.
- *
- * @param {unknown} chunk
- * @returns {Uint8Array}
- */
-export function chunkBytes(chunk) {
-	if (chunk instanceof Uint8Array) return chunk;
-	if (typeof chunk === 'string') return Buffer.from(chunk);
-	if (chunk instanceof ArrayBuffer || chunk instanceof SharedArrayBuffer) return new Uint8Array(chunk);
-	if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-	throw new TypeError('A response body chunk must be a string, an ArrayBuffer or a typed array');
-}
-
-/**
  * Read a body until it ends or its bytes pass `cap`, whichever comes first.
  *
  * The cap is a ceiling on what is HELD, not a check made after the whole
@@ -73,48 +55,34 @@ export function chunkBytes(chunk) {
  * chunks and then continues from the reader, so the leader streams the body
  * it decided not to share without re-rendering or losing a byte.
  *
- * A body that was one string chunk says so (`oneString`): the writer sends such
- * a body uncompressed, as the family's native tier does, and the buffered
- * copy has to keep that answer.
- *
- * @param {ReadableStream<Uint8Array>} body
+ * @param {ReadableStream<unknown>} body
  * @param {number} cap
- * @returns {Promise<{ complete: true, bytes: Uint8Array, oneString: boolean } | { complete: false, stream: ReadableStream<Uint8Array> }>}
+ * @returns {Promise<{ complete: true, bytes: Uint8Array } | { complete: false, stream: ReadableStream<Uint8Array> }>}
  */
 export async function readBodyUpTo(body, cap) {
 	const reader = body.getReader();
-	// The chunks as the source yielded them: a body that passes the cap is
-	// replayed to the writer unchanged, so it meets the writer's own rules
-	// for each shape. Only a complete body is turned into bytes.
-	/** @type {unknown[]} */
+	/** @type {Uint8Array[]} */
 	const chunks = [];
 	let total = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) {
-			reader.releaseLock();
-			const bytes = new Uint8Array(total);
-			let offset = 0;
-			for (const chunk of chunks) {
-				const view = chunkBytes(chunk);
-				bytes.set(view, offset);
-				offset += view.byteLength;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				reader.releaseLock();
+				const bytes = new Uint8Array(total);
+				let offset = 0;
+				for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+				return { complete: true, bytes };
 			}
-			return { complete: true, bytes, oneString: chunks.length === 1 && typeof chunks[0] === 'string' };
+			const bytes = responseChunkBytes(value);
+			chunks.push(bytes);
+			total += bytes.byteLength;
+			if (total > cap) break;
 		}
-		// Counted by its bytes, and refused here if it has none, so a string
-		// is held to the cap like any other chunk. A string's UTF-8 length is
-		// read without encoding it.
-		let size;
-		try {
-			size = typeof value === 'string' ? Buffer.byteLength(value) : chunkBytes(value).byteLength;
-		} catch (err) {
-			reader.cancel(err).catch(() => {});
-			throw err;
-		}
-		chunks.push(value);
-		total += size;
-		if (total > cap) break;
+	} catch (error) {
+		reader.cancel(error).catch(() => {});
+		reader.releaseLock();
+		throw error;
 	}
 	// Past the cap: replay what is held, then continue from the source. The
 	// held chunks are released as they are replayed, so the prefix is not
@@ -129,12 +97,21 @@ export async function readBodyUpTo(body, cap) {
 				controller.enqueue(chunk);
 				return;
 			}
-			const { done, value } = await reader.read();
-			if (done) controller.close();
-			else controller.enqueue(value);
+			try {
+				const { done, value } = await reader.read();
+				if (done) { reader.releaseLock(); controller.close(); }
+				else controller.enqueue(responseChunkBytes(value));
+			} catch (error) {
+				reader.cancel(error).catch(() => {});
+				reader.releaseLock();
+				throw error;
+			}
 		},
 		cancel(reason) {
-			return reader.cancel(reason);
+			chunks.length = 0;
+			const cancelled = reader.cancel(reason);
+			reader.releaseLock();
+			return cancelled;
 		}
 	});
 	return { complete: false, stream };

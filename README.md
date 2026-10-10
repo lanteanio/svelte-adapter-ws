@@ -899,3 +899,9 @@ cannot be an alias. Raw paths and queries and the request method are preserved.
 Mounted health and readiness probes remain available. Unlisted hosts serve
 normally; configured proxy host, port and protocol headers keep their existing
 trust behavior. This feature is disabled by default.
+
+Response streams normalize strings to UTF-8 and preserve the exact bytes of
+ArrayBuffers and typed-array/DataView slices. Invalid chunks fail the response
+and cancel the producer. A finite single-string body has the same dynamic
+compression eligibility as its byte equivalent; credentialed response compression
+remains disabled unless explicitly enabled.

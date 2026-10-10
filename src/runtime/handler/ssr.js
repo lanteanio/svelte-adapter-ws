@@ -1,3 +1,4 @@
+import { responseChunkBytes } from './response-body.js';
 import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib';
 import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
@@ -6,7 +7,7 @@ import { randomUuid, setTimer, clearTimer } from '../runtime.js';
 import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertWritableStatus } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
-import { chunkBytes, declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
+import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
 import { inOwnTurn, releaseTurnIfFull } from './http-helpers.js';
 import { httpReadHeld, markShortHttpStatus } from './read-turn.js';
 import { negotiateEncoding } from '../utils/content-coding.js';
@@ -23,7 +24,7 @@ const MAX_SSR_DEDUP = 500;
 const MAX_SSR_DEDUP_BODY = 512 * 1024;
 
 /**
- * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array, oneString: boolean }} SharedResponse
+ * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array }} SharedResponse
  */
 
 /**
@@ -282,48 +283,12 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			releaseTurnIfFull(res);
 			return;
 		}
-		// The second read decides single-chunk vs streaming, as on the family's
-		// native tier: a body whose end follows its first chunk is one
-		// length-framed answer, compressed when it qualifies, however late that
-		// end arrives.
+		const firstBytes = responseChunkBytes(first.value);
 		const second = await reader.read();
 		if (state.aborted) return;
-		// The native tier writes the headers and these two chunks in one cork,
-		// so a chunk it cannot send fails after the headers and the chunk ahead
-		// of it were written: the client keeps nothing of them in the request's
-		// own turn, and in a later turn the headers and the first chunk. A read
-		// that fails is still answered 500.
-		/** @type {Uint8Array | null} */
-		let firstBytes;
-		try {
-			firstBytes = writableBytes(first.value);
-		} catch (err) {
-			state.responseStarted = true;
-			state.closedByServer = true;
-			cut(res);
-			throw err;
-		}
-		/** @type {Uint8Array | null} */
-		let secondBytes = null;
-		if (!second.done) {
-			try {
-				secondBytes = writableBytes(second.value);
-			} catch (err) {
-				// Written as the native tier had written them by then; cut decides
-				// what the client keeps of them.
-				writeHeaders(res, response, state, null, '', true);
-				if (firstBytes !== null) res.write(firstBytes);
-				else res.flushHeaders();
-				releaseTurnIfFull(res);
-				state.closedByServer = true;
-				cut(res);
-				throw err;
-			}
-		}
+		const secondBytes = second.done ? null : responseChunkBytes(second.value);
 		if (second.done) {
-			// A string chunk goes out as is: the family's native tier decides
-			// on the chunk's own byteLength, and a string has none.
-			const whole = compressWhole(response, firstBytes ?? EMPTY, typeof first.value === 'string' ? '' : acceptEncoding || '');
+			const whole = compressWhole(response, firstBytes, acceptEncoding || '');
 			writeHeaders(res, response, state, whole.body.byteLength, whole.encoding);
 			res.end(whole.body);
 			releaseTurnIfFull(res);
@@ -345,8 +310,7 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			const read = await reader.read();
 			if (read.done) { streamDone = true; break; }
 			if (state.aborted) break;
-			const value = writableBytes(read.value);
-			if (value === null) continue;
+			const value = responseChunkBytes(read.value);
 			const accepted = res.write(value);
 			releaseTurnIfFull(res);
 			if (!accepted) {
@@ -366,20 +330,8 @@ async function writeResponse(res, response, state, acceptEncoding, headOnly = fa
 			}
 		}
 		reader.cancel().catch(() => {});
+		reader.releaseLock();
 	}
-}
-
-const EMPTY = new Uint8Array(0);
-
-/**
- * A body chunk as the bytes to write, or null for one that writes nothing:
- * the native tier writes nothing for `undefined`, and refuses every other
- * value that is not a string, an ArrayBuffer or a view, see chunkBytes.
- *
- * @param {unknown} value
- */
-function writableBytes(value) {
-	return value === undefined ? null : chunkBytes(value);
 }
 
 /**
@@ -651,7 +603,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: shared.headers
 						}),
 						state,
-						shared.oneString ? '' : respAcceptEncoding,
+						respAcceptEncoding,
 						headOnly
 					);
 					return;
@@ -746,8 +698,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 						status: response.status,
 						statusText: response.statusText,
 						headers: /** @type {[string, string][]} */ ([...response.headers]),
-						body: read.bytes,
-						oneString: read.oneString
+						body: read.bytes
 					}));
 
 					// Serve the leader's own response from the same buffer
@@ -759,7 +710,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 							headers: response.headers
 						}),
 						state,
-						read.oneString ? '' : respAcceptEncoding,
+						respAcceptEncoding,
 						headOnly
 					);
 				} catch (err) {
