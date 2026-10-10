@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The test server answers invalid admin response statuses with a clean 500,
+  matching production without carrying headers from the refused response.
+
 - Full request-path and envelope-prefix caches discard their oldest half
   every 60 seconds, allowing stale entries to age out after traffic changes.
 
