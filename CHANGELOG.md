@@ -56,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Refused WebSocket handshakes keep their HTTP connection.** Safe refusals
   accept later requests and synchronous pipelines; ambiguous framing still
-  closes, and a request arriving behind a pending admission hook is refused.
+  closes, and a request arriving behind a pending admission hook closes the
+  connection without an HTTP answer.
 
 - **Custom handshake header tests pin the supported byte range.** Values beyond
   Latin-1, including lone surrogates, are rejected before the 101 response;
@@ -372,6 +373,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Oversized request heads return one complete HTML refusal, including split request lines. Missing native parser internals leave ordinary HTTP handling available, and an invalid error probe fails startup.
+
 - Module client stores, accumulated helpers and binary ingress handles follow
   explicit connections created after close. Implicit store and plugin access
   after close stays inert, while connection-bound stores remain bound.
@@ -441,7 +444,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 - Repeated Host fields now receive a closing 400 before routing, matching the native parser.
-- TLS records remain queued while completed pipelined responses drain, preserving requests that arrive in the same TCP read.
+- The HTTP transport reader retains paused TLS records while completed pipelined responses drain.
 
 - Requests pipelined behind the first declined upgrade remain readable when another component attaches a TCP or TLS data listener.
 

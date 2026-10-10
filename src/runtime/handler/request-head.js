@@ -8,6 +8,7 @@ import { setTimer, clearTimer } from '../runtime.js';
 const METHODS_SET = new Set(METHODS.filter(method => method !== 'CONNECT'));
 const VERSION = Buffer.from(' HTTP/1.1\r\n');
 const LIMIT = 4096;
+export const HEADER_TOO_LARGE = 'HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n<h1>Request Header Fields Too Large</h1><hr><i>uWebSockets/20 Server</i>';
 const FAST_HEADS = /^(?:(?:GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE) \/[!-~]* HTTP\/1\.1\r\n(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+:[\t -~]*\r\n)*\r\n)+$/;
 const FRAMED = /\r\n(?:content-length|transfer-encoding|upgrade):/i;
 const WAIT = 0;
@@ -39,6 +40,7 @@ function requestLine(data, trailingBytes) {
 
 /** Keep request heads intact across reads; node remains responsible for validation. */
 export function createRequestHeadExecutor(parser, socket) {
+	if (typeof executePlainHttp !== 'function') return null;
 	let mode = 'head';
 	let remaining = 0;
 	let pending = null;
@@ -92,7 +94,8 @@ export function createRequestHeadExecutor(parser, socket) {
 	};
 	const refuse = (status, headOnly = false) => {
 		clearPending(); stopped = true;
-		const phrase = status === 505 ? 'HTTP Version Not Supported' : status === 400 ? 'Bad Request' : 'Request Header Fields Too Large';
+		if (status === 431) { endParserRefusal(socket, HEADER_TOO_LARGE); return; }
+		const phrase = status === 505 ? 'HTTP Version Not Supported' : 'Bad Request';
 		endParserRefusal(socket, 'HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase));
 	};
 	const tryFast = (data) => {

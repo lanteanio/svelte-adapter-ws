@@ -4,6 +4,7 @@
 
 import { STATUS_CODES, Server as HttpServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { createRequire } from 'node:module';
+import { isNativeError } from 'node:util/types';
 import { webSocketKeyByteLength } from './header-values.js';
 import { clearTimer, setImmediateTimer, setTimer } from '../runtime.js';
 import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal, httpCallbackCheckpoint } from './read-turn.js';
@@ -1068,11 +1069,14 @@ const nodeExecute = HTTPParser?.prototype?.execute;
 // Node checks parser results against its own Error constructor. Obtain that
 // constructor from the binding so callers in another realm work as well.
 const ParserError = (() => {
-	if (!HTTPParser) return Error;
+	if (!HTTPParser || typeof nodeExecute !== 'function') return Error;
 	const parser = new HTTPParser();
 	parser.initialize(HTTPParser.REQUEST, {}, 0, 0);
-	try { return nodeExecute.call(parser, Buffer.from('!')).constructor; }
-	finally { parser.close(); }
+	try {
+		const error = nodeExecute.call(parser, Buffer.from('!'));
+		if (!isNativeError(error)) throw new TypeError('HTTP parser error probe did not return a native Error');
+		return error.constructor;
+	} finally { parser.close(); }
 })();
 // For a prevalidated batch that cannot request an upgrade, no decline state can change.
 export const executePlainHttp = nodeExecute;
