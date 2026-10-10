@@ -12,6 +12,8 @@ import { pathToFileURL } from 'node:url';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
+import { createTestServer } from '../src/testing.js';
+import * as mirrorHelpers from '../src/runtime/handler/http-helpers.js';
 
 const WS_OPTS = {
 	maxPayloadLength: 64 * 1024,
@@ -127,11 +129,9 @@ describe('the built runtime', () => {
 
 describe('createTestServer', () => {
 	/** @type {any} */ let mirror;
-	/** @type {any} */ let helpers;
+	const helpers = mirrorHelpers;
 
 	beforeAll(async () => {
-		const { createTestServer } = await import('../src/testing.js');
-		helpers = await import('../src/runtime/handler/http-helpers.js');
 		mirror = await createTestServer({
 			handler: {
 				message() { /** @type {any} */ (globalThis).__turnProbe?.('message'); },
