@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Declined codec frames with excluded recipients relay only their JSON envelope and omit codec metadata.
-
-- Subscription-cap refusals cannot authorize membership installed by an overlapping revoked subscribe attempt.
-
 - WebSocket debug logging includes connection lifecycle, capability negotiation, resume, ingress fallback and publish activity; topic and event identifiers remain private.
 
 - Missing and duplicate Host fields replace small responses buffered earlier in the same read.
@@ -41,11 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Refusal response tests verify that shared renders, cookie errors, compressible pages, admin responses and waiting pages discard headers staged before a 500.
 
-- Wire publish tests verify relay success, per-entry relay payloads, resume cutover capture and JSON-only relay for declined codec frames.
+- Wire publish tests verify relay success, per-entry relay payloads, resume cutover capture and JSON-only relay for declined codec frames, including excluded recipients.
 
 - Production subscription cleanup tests cover throwing and rejecting unsubscribe hooks across wire, recover, platform and observer authorization unwinds.
 
-- Live subscription tests verify that a refused attempt cannot preserve membership installed by a revoked sibling.
+- Live subscription tests verify that a refused attempt, including a subscription-cap refusal, cannot preserve membership installed by a revoked sibling.
 
 - Subscription acceptance and removal emit structured diagnostics with `WS_DEBUG=1`, and batched subscriptions report the number of newly installed topics.
 - **Pipelined HTTP dispatch follows application callback boundaries.** Promise
@@ -379,8 +375,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Vite plugin uses the adapter's `envPrefix` for the authentication request URL and both same-origin checks. A configured prefix ignores bare `ORIGIN`; an empty prefix keeps using it.
 
-- Error reference entries follow the shared catalog order and retain the cluster
-  operator link.
+- Error reference entries follow the shared catalog order and include the previously
+  missing cluster operator link. Registry-order tests read the pinned lead catalog.
 
 - The test server answers invalid admin response statuses with a clean 500,
   matching production without carrying headers from the refused response.

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { LEAD, readLeadAtPin, uwsRoot } from './lead-pin.js';
 import { ADAPTER_ERROR_IDS, ADAPTER_ERROR_REGISTRY, adapterConsoleLine } from '../src/runtime/error-registry.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,32 +48,22 @@ function emitSites(entry) {
 }
 
 describe('error catalog', () => {
-	it('retains the shared registry order and cluster operator link', () => {
-		// Shared catalog order; the native loader entry has no ws counterpart.
-		const keys = [
-			'LISTEN', 'VITE_LOAD', 'VITE_RELOAD', 'REQUEST_TIMEOUT',
-			'REQUEST_CLOSED', 'ADMIN_HANDLER', 'RELAY_FRAME_OVERSIZED', 'RELAY_FRAME_REFUSED',
-			'RELAY_SPILL_OVERFLOW', 'CLUSTER_WORKER_ERROR', 'DIVERGENCE', 'DIVERGENCE_QUIET',
-			'INVARIANT', 'METRICS_MERGE', 'METRICS_MIRROR_READ', 'WARMUP_RENDER',
-			'METRICS_PRIMARY_UNREACHABLE', 'SINK_FAILED', 'PRESSURE_LISTENER', 'PRESSURE_RATE_LISTENER',
-			'PRESSURE_RUNAWAY_PUBLISHER', 'PRESSURE_TOPIC_REGISTRY', 'EGRESS_REFUSED', 'EGRESS_EVICTED',
-			'EGRESS_TENANT_RESOLVER', 'RESUME_HOOK', 'RESUME_HOOK_READ', 'AUTHENTICATE',
-			'RELAY_GAP', 'SSR', 'UPGRADE_HOOK', 'SUBSCRIPTION_SINK_DISPLACED',
-			'CONTROL_EGRESS_EXHAUSTED', 'ATTRIBUTION_HOOK', 'SUBSCRIBE_BATCH_HOOK', 'SUBSCRIBE_BATCH_RESULT',
-			'SUBSCRIBE_HOOK', 'UNSUBSCRIBE_HOOK', 'TLS_RELOAD_SKIPPED', 'TLS_SWAP',
-			'TLS_WATCH', 'TLS_WATCH_LOST', 'CLUSTER_CONFIG_WORKERS', 'CLUSTER_CONFIG_COMPUTE',
-			'CLUSTER_CONFIG_MODE', 'CLUSTER_CONFIG_PORT', 'CLUSTER_CONFIG_REUSEPORT', 'TLS_PRIMARY_BOOT_READ',
-			'TLS_PRIMARY_RELOAD_READ', 'TLS_PRIMARY_WATCH', 'TLS_PRIMARY_WATCH_LOST', 'SHUTDOWN_LISTENER_REJECTED',
-			'SHUTDOWN_LISTENER_THREW', 'SHUTDOWN_REQUESTS_DROPPED', 'SHUTDOWN_LISTENERS_UNSETTLED', 'SHUTDOWN_FAILED',
-			'WORKER_RESTART_LIMIT', 'TLS_DEGRADED_EXPIRY', 'SENDTO_ASYNC_FILTER', 'WS_SHUTDOWN_HOOK_THREW',
-			'WS_SHUTDOWN_HOOK_UNSETTLED', 'MESSAGE_HOOK', 'OPEN_HOOK', 'DRAIN_HOOK',
-			'CLOSE_HOOK', 'COALESCED_UNSERIALIZABLE', 'RECOVER_HOOK', 'METRICS_MODULE_SHAPE',
-			'METRICS_INSTRUMENT', 'POSTURE_EXPORT_DISABLED', 'POSTURE_OBSERVER', 'UPGRADE_DEFERRED',
-			'WAITING_ROOM_FALLBACK', 'DIAGNOSTIC_RECORD_SHAPE', 'DIAGNOSTIC_RENDER_COLLAPSE', 'DIAGNOSTIC_CONSOLE_WRITE',
-			'DIAGNOSTIC_SINK_NOTICE', 'RESOURCE_GROWTH', 'RELAY_SPILL_QUARANTINE', 'POSTURE_TRANSITION',
-			'WORKER_EXIT_SIGKILL'
-		];
-		expect(ADAPTER_ERROR_REGISTRY.map(entry => entry.id)).toEqual(keys.map(key => ADAPTER_ERROR_IDS[key]));
+	it('follows the pinned lead registry order', async () => {
+		const leadSource = readLeadAtPin(['src/runtime/error-registry.js']).get('src/runtime/error-registry.js');
+		expect(
+			leadSource,
+			`the lead checkout at ${uwsRoot} has no src/runtime/error-registry.js at ${LEAD.rev}`
+		).toBeTypeOf('string');
+		const lead = await import('data:text/javascript;base64,' + Buffer.from(leadSource).toString('base64'));
+		// The native loader entry has no counterpart in this Node transport.
+		const sharedOrder = lead.ADAPTER_ERROR_REGISTRY
+			.filter(entry => entry.id !== lead.ADAPTER_ERROR_IDS.NATIVE_LOAD)
+			.map(entry => entry.id);
+		expect(sharedOrder.length).toBeGreaterThan(0);
+		expect(ADAPTER_ERROR_REGISTRY.map(entry => entry.id)).toEqual(sharedOrder);
+	});
+
+	it('links the cluster configuration error to operator guidance', () => {
 		expect(ADAPTER_ERROR_REGISTRY.find(entry => entry.id === ADAPTER_ERROR_IDS.CLUSTER_CONFIG_REUSEPORT).link).toBe('https://svti.me/cluster-mode');
 	});
 
