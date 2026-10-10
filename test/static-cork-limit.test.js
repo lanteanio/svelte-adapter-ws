@@ -7,6 +7,7 @@ import { rawConversation } from './helpers/raw-http.js';
 const small = 'small static answer';
 const large = 's'.repeat(17 * 1024);
 const prefixBody = 'p'.repeat(15000);
+const huge = 'h'.repeat(64 * 1024);
 const bad = 'GET /bad HTTP/1.0\r\nHost: localhost\r\n\r\n';
 const request = (target, headers = '', method = 'GET') =>
 	`${method} ${target} HTTP/1.1\r\nHost: localhost\r\n${headers}\r\n`;
@@ -43,6 +44,7 @@ describe.each([false, true])('static and SSR pipeline cork limit with TLS=%s', s
 				'client/small.txt': small,
 				'client/large.txt': large,
 				'client/prefix.txt': prefixBody,
+				'client/huge.txt': huge,
 				'prerendered/docs/index.html': small,
 				'prerendered/about.html': large
 			},
@@ -86,6 +88,31 @@ describe.each([false, true])('static and SSR pipeline cork limit with TLS=%s', s
 		expect(answers.slice(0, -1).map(answer => answer.body)).toEqual(expected.map(([, body]) => body));
 		expect(answers.at(-1).body).toContain('HTTP Version Not Supported');
 	});
+
+	it.each([
+		['small answer', request('/small.txt'), []],
+		['17 KiB answer', request('/large.txt'), [large]],
+		['64 KiB answer', request('/huge.txt'), [huge]],
+		['two 15000-byte answers', request('/prefix.txt').repeat(2), [prefixBody, prefixBody]]
+	].flatMap(([layout, input, bodies]) => [
+		['duplicate Host', request('/bad', 'Host: duplicate\r\n'), 400],
+		['missing Host', 'GET /bad HTTP/1.1\r\n\r\n', 400],
+		['malformed header', request('/bad', 'Bad Header: value\r\n'), 400],
+		['unsupported target', 'OPTIONS * HTTP/1.1\r\nHost: localhost\r\n\r\n', 505]
+	].map(([refusal, tail, status]) => [layout, refusal, input + tail, bodies, status])))
+	('preserves completed static %s before %s refusal', async (_layout, refusal, input, bodies, status) => {
+		const { raw, closed } = await rawConversation(runtime.port, [[0, input]], { secure, wait: 2000 });
+		expect(closed).toBe(true);
+		const headerRefusal = 'HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n';
+		const emptyRefusal = refusal === 'malformed header';
+		if (emptyRefusal) expect(raw.endsWith(headerRefusal)).toBe(true);
+		const answers = responses(emptyRefusal ? raw.slice(0, -headerRefusal.length) : raw);
+		if (emptyRefusal) answers.push({ status: 400, body: '' });
+		expect(answers.map(answer => answer.status)).toEqual([...bodies.map(() => 200), status]);
+		expect(answers.slice(0, -1).map(answer => answer.body)).toEqual(bodies);
+		if (!emptyRefusal) expect(answers.at(-1).body).toContain(status === 400 ? 'Bad Request' : 'HTTP Version Not Supported');
+	});
+
 });
 
 
