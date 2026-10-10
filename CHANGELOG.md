@@ -35,8 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Unreadable pipelined input leaves preceding answers and event streams running.
 
-- Invalid-target pipeline tests verify response ordering and refusal bodies after GET and HEAD.
-
 - Split non-ASCII request targets retain HEAD response framing over HTTP and HTTPS.
 
 - A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
@@ -375,6 +373,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page.
 
 ### Fixed
+
+- Invalid-target refusals preserve GET bodies and bodyless HEAD framing when the HTTP connection is reused.
 
 - Completed static and realtime HTTP responses that fill the response buffer for a read reach the client before a later pipelined refusal.
 

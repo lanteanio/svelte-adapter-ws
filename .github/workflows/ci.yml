@@ -72,6 +72,7 @@ jobs:
         run: node scripts/check-determinism.js
 
   respawner-drill:
+    name: Respawner recovery drill
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
