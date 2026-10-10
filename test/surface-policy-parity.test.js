@@ -804,6 +804,8 @@ const SAFE_SUBSCRIPTION_CALLEES = new Set([
 	'addLogicalSubscription',
 	'removeLogicalSubscription',
 	'accountClosedLogicalSubscriptions',
+	// Registry lifetime reads only the canonical settled WeakSet, never a cap.
+	'isSettledSubscriptionRegistry',
 	'deniesUngrantedObserve'
 ]);
 

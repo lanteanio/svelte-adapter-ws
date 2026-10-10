@@ -9,7 +9,7 @@
 /* global WS_OPTIONS */
 import {
 	WS_ATTRIBUTION, WS_CAPS, WS_COALESCED, WS_PENDING_REQUESTS, WS_PLATFORM,
-	WS_PUBLISH_GRANT, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE, WS_SESSION_ID, WS_SUBSCRIPTIONS,
+	WS_PUBLISH_GRANT, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE, WS_RELEASE_MEMBERSHIP, WS_SESSION_ID, WS_SUBSCRIPTIONS,
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
 	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
 	tombstonePendingSubscribe, releaseDerivedSubscriptions,
@@ -648,6 +648,10 @@ export const platform = {
 	// trackedSubscribe / trackedUnsubscribe join and leave this worker's shared
 	// cohorts through these slots, so a plugin's server-side membership on a
 	// shared topic is served the cohort-split publish. See WS_COHORT_JOIN.
+	[WS_RELEASE_MEMBERSHIP](ws, ud, topic) {
+		try { ws.unsubscribe(topic); } catch { return null; }
+		return removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);
+	},
 	[WS_COHORT_JOIN](ws, ud, topic) {
 		if (sharedTopics.has(topic)) joinSharedCohort(ws, ud, topic, sharedTopics.get(topic));
 	},

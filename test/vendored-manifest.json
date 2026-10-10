@@ -1128,6 +1128,14 @@
 			{
 				"lead": " * assignment and pays nothing. The declaration cannot ride the upgrade object\n * instead - uWS copies that object into its own with `[[Set]]`, so a slot\n * declared there is intercepted on the way across and arrives absent.\n",
 				"ours": " * assignment and pays nothing.\n"
+			},
+			{
+				"lead": "export const WS_COHORT_JOIN = Symbol.for('adapter-uws.platform.cohort-join');\nexport const WS_COHORT_LEAVE = Symbol.for('adapter-uws.platform.cohort-leave');\n\n// Logical-subscription accounting has a duplicated-bundle constraint: the\n// bundler gives a plugin package and the runtime SEPARATE instances of this\n// module, while every copy mutates the same connection Set. One slot on\n",
+				"ours": "export const WS_COHORT_JOIN = Symbol.for('adapter-uws.platform.cohort-join');\nexport const WS_COHORT_LEAVE = Symbol.for('adapter-uws.platform.cohort-leave');\n\n// Each surface owns its membership accounting. Returns null for a closed\n// handle, otherwise whether native/logical membership was removed.\nexport const WS_RELEASE_MEMBERSHIP = Symbol.for('adapter-uws.platform.release-membership');\n\n// Logical-subscription accounting has a duplicated-bundle constraint: the\n// bundler gives a plugin package and the runtime SEPARATE instances of this\n// module, while every copy mutates the same connection Set. One slot on\n"
+			},
+			{
+				"lead": "\treturn ok;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n",
+				"ours": "\treturn ok;\n}\n\n/**\n * Remove admitted membership without cancelling independent subscribe awaits.\n * Framework rollback owns its application cleanup and does not run the app's\n * unsubscribe hook. Explicit revocation still uses trackedUnsubscribe or\n * platform.unsubscribe, which advance the pending attempt's epoch.\n * @param {any} ws\n * @param {string} topic\n * @returns {boolean} whether any membership or publish grant was removed\n */\nexport function releaseSubscription(ws, topic) {\n\tlet ud;\n\ttry { ud = ws.getUserData(); } catch { return false; }\n\tconst subs = ud[WS_SUBSCRIPTIONS];\n\tif (!(subs instanceof Set) || isSettledSubscriptionRegistry(subs)) return false;\n\tlet removed = releaseMembership(ws, ud, topic);\n\tfor (const prefix of _derivedTopicPrefixes) {\n\t\tif (topic.startsWith(prefix)) continue;\n\t\tif (releaseMembership(ws, ud, prefix + topic)) removed = true;\n\t}\n\treturn removed;\n}\n\n/** @param {any} ws @param {any} ud @param {string} topic */\nfunction releaseMembership(ws, ud, topic) {\n\t// Withdraw completed authority without changing the epoch that an\n\t// independently pending authorization must present when it lands.\n\tconst pending = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\tif (pending) pending.granted = false;\n\tconst release = ud[WS_PLATFORM]?.[WS_RELEASE_MEMBERSHIP];\n\tlet removed;\n\tif (typeof release === 'function') {\n\t\tremoved = release(ws, ud, topic);\n\t\tif (removed === null) return false;\n\t} else {\n\t\ttry { ws.unsubscribe(topic); } catch { return false; }\n\t\tremoved = removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);\n\t}\n\tif (ud[WS_PUBLISH_GRANT] === topic) {\n\t\tud[WS_PUBLISH_GRANT] = undefined;\n\t\tremoved = true;\n\t}\n\tud[WS_PLATFORM]?.[WS_COHORT_LEAVE]?.(ws, ud, topic);\n\treturn removed;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n"
 			}
 		]
 	},
@@ -1196,10 +1204,22 @@
 		"file": "src/static-scan.js"
 	},
 	{
-		"file": "src/subscriptions.d.ts"
+		"file": "src/subscriptions.d.ts",
+		"adaptations": [
+			{
+				"lead": " * @returns false when the socket was already closed.\n */\nexport function trackedUnsubscribe(ws: SubscribableConnection, topic: string): boolean;\n",
+				"ours": " * @returns false when the socket was already closed.\n */\nexport function trackedUnsubscribe(ws: SubscribableConnection, topic: string): boolean;\n\n/**\n * Release a framework's admitted membership after its loader or setup fails.\n * Removes native and logical membership, registered derived subscriptions,\n * shared-codec cohorts and the topic's publish grant, with accounted cleanup.\n * Independently pending subscribe attempts remain eligible to complete their\n * own authorization. This does not revive an attempt already revoked.\n *\n * This removes the physical membership, not an ownership reference. The caller\n * must coordinate already-completed concurrent admissions and perform its own\n * application cleanup. No application unsubscribe hook runs. For an explicit\n * unsubscribe, kick or revocation that must cancel pending attempts, use\n * `platform.unsubscribe` or `trackedUnsubscribe` instead.\n *\n * @returns true when membership or a publish grant was removed; false when\n *   already released, missing, or closed. Safe to repeat.\n */\nexport function releaseSubscription(ws: SubscribableConnection, topic: string): boolean;\n"
+			}
+		]
 	},
 	{
-		"file": "src/subscriptions.js"
+		"file": "src/subscriptions.js",
+		"adaptations": [
+			{
+				"lead": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe } from './runtime/utils/ws-symbols.js';\n",
+				"ours": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe, releaseSubscription } from './runtime/utils/ws-symbols.js';\n"
+			}
+		]
 	},
 	{
 		"file": "src/testing.d.ts",
@@ -1324,6 +1344,18 @@
 			{
 				"lead": "\t\t\t// and aborts dev startup, which is the point: it is the same error the\n\t\t\t// build raises, surfaced at the earliest moment an app can see it.\n\t\t\tconst adapterOption = await adapterHandlerOption(root, server.config);\n\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// The metrics registry, on the same mechanism as the handler and for\n",
 				"ours": "\t\t\t// and aborts dev startup, which is the point: it is the same error the\n\t\t\t// build raises, surfaced at the earliest moment an app can see it.\n\t\t\tconst adapterOption = await adapterHandlerOption(root, server.config);\n\t\t\tPINNED_ORIGIN_V = parse_origin(process.env[adapterOption.envPrefix + 'ORIGIN'] || undefined);\n\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// The metrics registry, on the same mechanism as the handler and for\n"
+			},
+			{
+				"lead": "import { isAuthorizationHook, releaseDerivedSubscriptions, beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, WS_REVOKED_UNSUBSCRIBE } from './runtime/utils/ws-symbols.js';",
+				"ours": "import { isAuthorizationHook, releaseDerivedSubscriptions, beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, WS_REVOKED_UNSUBSCRIBE, WS_RELEASE_MEMBERSHIP } from './runtime/utils/ws-symbols.js';"
+			},
+			{
+				"lead": "\t\t\t\tconst wsPlatform = Object.create(platform);\n\t\t\t\tconst carriedRequestId = userData[CARRY_REQUEST_ID];\n",
+				"ours": "\t\t\t\tconst wsPlatform = Object.create(platform);\n\t\t\t\twsPlatform[WS_RELEASE_MEMBERSHIP] = (_wrapped, ud, topic) => {\n\t\t\t\t\tif (ws.readyState !== 1) return null;\n\t\t\t\t\tsubscriptions.get(ws)?.delete(topic);\n\t\t\t\t\treturn ud[WS_SUBSCRIPTIONS].delete(topic);\n\t\t\t\t};\n\t\t\t\tconst carriedRequestId = userData[CARRY_REQUEST_ID];\n"
+			},
+			{
+				"lead": "\t\t// Mirror production's per-subscriber walk over the ws -> Set<topic>\n\t\t// map that also backs subscribers(). Passes (ws, userData) so dev\n\t\t// exercises the same culling / backpressure call shape as prod.\n\t\t// getUserData() is called unguarded, matching production handler.js and\n\t\t// the dev subscribe/unsubscribe paths above (the `ws` library does not\n\t\t// throw on a closed socket, so no guard is needed or wanted here).\n\t\tforEachSubscriber(topic, fn) {\n\t\t\tfor (const [ws, topics] of subscriptions) {\n\t\t\t\tif (!topics.has(topic)) continue;\n\t\t\t\tfn(ws, /** @type {any} */ (ws).getUserData());\n\t\t\t}\n\t\t},\n\t\t// Broadcast-request to every local subscriber of `topic`, mirroring\n",
+				"ours": "\t\t// Mirror production's per-subscriber walk over the ws -> Set<topic>\n\t\t// map that also backs subscribers(). Passes (ws, userData) so dev\n\t\t// exercises the same culling / backpressure call shape as prod.\n\t\t// The registry keys are raw transport sockets; hooks receive their\n\t\t// cached adapter wrappers and the same user data they expose.\n\t\tforEachSubscriber(topic, fn) {\n\t\t\tfor (const [ws, topics] of subscriptions) {\n\t\t\t\tif (!topics.has(topic)) continue;\n\t\t\t\tconst wrapped = wsWrappers.get(ws);\n\t\t\t\tif (wrapped) fn(wrapped, wrapped.getUserData());\n\t\t\t}\n\t\t},\n\t\t// Broadcast-request to every local subscriber of `topic`, mirroring\n"
 			}
 		]
 	},
@@ -1883,7 +1915,13 @@
 		"file": "test/fixture/svelte.config.js"
 	},
 	{
-		"file": "test/fixture/variants.js"
+		"file": "test/fixture/variants.js",
+		"adaptations": [
+			{
+				"lead": "export const FIXTURE_VARIANTS = {\n\t// The long-standing default.",
+				"ours": "export const FIXTURE_VARIANTS = {\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
+			}
+		]
 	},
 	{
 		"file": "test/fixture/vite.config.js"
@@ -2773,6 +2811,10 @@
 			{
 				"lead": "\t'src/runtime/handler/subscribe-hooks.js',\n",
 				"ours": ""
+			},
+			{
+				"lead": "\t'addLogicalSubscription',\n\t'removeLogicalSubscription',\n\t'accountClosedLogicalSubscriptions',\n\t'deniesUngrantedObserve'\n]);\n\n",
+				"ours": "\t'addLogicalSubscription',\n\t'removeLogicalSubscription',\n\t'accountClosedLogicalSubscriptions',\n\t// Registry lifetime reads only the canonical settled WeakSet, never a cap.\n\t'isSettledSubscriptionRegistry',\n\t'deniesUngrantedObserve'\n]);\n\n"
 			}
 		]
 	},

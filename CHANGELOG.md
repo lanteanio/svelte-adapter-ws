@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `releaseSubscription` in the subscriptions subpath removes failed framework admissions, including derived and publish access, while independently pending authorizations can still complete. Explicit unsubscribe continues to cancel pending attempts.
+
 - The runtime environment reference documents `WS_DEBUG`.
 
 - Client connections expose `simulateOffline()` and `resumeOnline()` to pause and
@@ -376,6 +378,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Restore the UTF-8 examples in older changelog entries and check tracked text
   for accidental double encoding with `check:source-encoding` and in CI.
+
+- Vite subscriber iteration passes the adapter socket and its user data to callbacks, so matching subscribers can be inspected and sent messages without throwing.
 
 - Authentication rate-limit refusals round fractional windows up before jitter so `Retry-After` contains whole seconds.
 

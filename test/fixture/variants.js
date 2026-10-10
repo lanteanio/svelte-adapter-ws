@@ -26,6 +26,11 @@ export const POSTURE_EXPORT_PATH = process.platform === 'win32'
 	: join(tmpdir(), 'svelte-adapter-ws-fixture-posture.sock');
 
 export const FIXTURE_VARIANTS = {
+	subscriptionrelease: {
+		out: 'build-subscription-release',
+		handler: './src/hooks.ws.subscription-release.js',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
+	},
 	// The long-standing default. Several suites already boot `build/`, so this
 	// entry must keep both its output directory and its options unchanged.
 	default: {
