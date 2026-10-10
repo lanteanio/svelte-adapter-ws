@@ -404,9 +404,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client address resolution avoids allocating temporary transport metadata on each request.
 
-- TLS renewal watches only the certificate directory, including in the cluster primary.
-  A key stored in another directory is read during renewal without adding another watcher.
-
 - **An SSR stream that fails in a later turn than its request's own, right
   after its last writes, delivers them before the cut.** A source that
   errors, or hands over a chunk that is not bytes, in the same tick as
@@ -747,6 +744,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed the separate `SSL_KEY` directory watcher. TLS renewal watches only
+  the certificate directory, including in the cluster primary. A key stored
+  in another directory is read during renewal, but changes in that directory
+  no longer trigger a reload.
 - Removed comma-separated multi-certificate `SSL_CERT`/`SSL_KEY` lists and
   semicolon-grouped `SSL_SNI_HOSTS` overrides. Each path now names one literal
   file, and `SSL_SNI_HOSTS` is one flat comma-separated renewal hostname list.

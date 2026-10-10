@@ -638,7 +638,7 @@ HTTP/2 and the entire observability ecosystem
    `authenticate` preflight endpoint has CSRF defense and rate limiting.
    `connect({ auth: true })` sends `x-requested-with: XMLHttpRequest` before
    opening the socket. Custom middleware that checks this header must accept
-   `XMLHttpRequest`; the client no longer sends `svelte-adapter-ws`.
+   `XMLHttpRequest`.
    App hooks fire through the same lifecycle as the lead adapter (init
    before readiness, shutdown inside the drain budget). Every `websocket.*`
    option the family declares ships here. The per-connection caps are the
