@@ -353,6 +353,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 - Repeated Host fields now receive a closing 400 before routing, matching the native parser.
+- TLS records remain queued while completed pipelined responses drain, preserving requests that arrive in the same TCP read.
 
 - Requests pipelined behind the first declined upgrade remain readable when another component attaches a TCP or TLS data listener.
 
