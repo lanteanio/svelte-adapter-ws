@@ -1,5 +1,6 @@
 import { METHODS } from 'node:http';
 import { normalizeHeaderEdges } from './header-edges.js';
+import { decodeRequestHeaders } from './header-values.js';
 import { executeAfterDeclines } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
 
@@ -48,9 +49,13 @@ export function createRequestHeadExecutor(parser, socket) {
 	let trailerBytes = 0;
 	const originalIncoming = parser.onIncoming;
 	parser.onIncoming = function(req, keepAlive) {
-		if (current) { req.method = current.method; req.url = current.target; }
-		if (req.headers['transfer-encoding']) mode = 'chunk-line';
-		else { remaining = Number(req.headers['content-length'] || 0); mode = remaining ? 'body' : 'head'; }
+		if (current) {
+			decodeRequestHeaders(req);
+			req.method = current.method;
+			req.url = current.target;
+			if (req.headers['transfer-encoding']) mode = 'chunk-line';
+			else { remaining = Number(req.headers['content-length'] || 0); mode = remaining ? 'body' : 'head'; }
+		}
 		return originalIncoming.call(this, req, keepAlive);
 	};
 	const clearPending = () => { pending = null; if (timer !== null) clearTimer(timer); timer = null; };
