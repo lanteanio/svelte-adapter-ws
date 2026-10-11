@@ -174,7 +174,7 @@ function serveRequest(req, res) {
 	// Two things RFC 9112 does not allow in a target, refused in the path and
 	// the query on every lane, the probes and the built asset below included:
 	// a byte outside visible ASCII and a fragment. The request-head reader
-	// substitutes parser-safe bytes, then restores the original target here.
+	// hands node parser-safe bytes and restores the original target on req.url.
 	// Refuse it before a fragment or URL normalization can reroute the request.
 	if (invalidRequestTarget(pathname, query)) {
 		send400(res);
