@@ -12,6 +12,21 @@
 		"test/memory-wall-sampler.test.js": "3ce7ff0",
 		"test/close-subscriptions-real.test.js": "ab321f9",
 		"test/fixture/src/hooks.ws.close-subscriptions.js": "ab321f9",
-		"src/runtime/error-registry.js": "4aca50aab470f8a6718863da2339bb19992a4d90"
+		"src/runtime/error-registry.js": "4aca50aab470f8a6718863da2339bb19992a4d90",
+		"test/fixture/src/hooks.ws.reuse-data.js": "e398600",
+		"test/fixture/src/reuse-data-handler.js": "e398600",
+		"test/helpers/upgrade-user-data-child.mjs": "e398600",
+		"test/upgrade-user-data-real.test.js": "e398600",
+		"test/fixture/src/hooks.ws.recover-ref.js": "5c06511",
+		"test/fixture/src/hooks.ws.subscription-state.js": "5c06511",
+		"test/recover-ref-batch-real.test.js": "5c06511",
+		"test/subscription-authority-real.test.js": "5c06511",
+		"docs/subscription-lifecycle.md": "6eedf42",
+		"test/static-date-header-real.test.js": "7106fe8",
+		"test/static-future-mtime-real.test.js": "7106fe8",
+		"test/static-last-modified.test.js": "7106fe8",
+		"test/subscription-release-real.test.js": "7106fe8",
+		"test/vite-subscriber-walk-real.test.js": "7106fe8",
+		"test/smooth-drain-budget-real.test.js": "7106fe8"
 	}
 }

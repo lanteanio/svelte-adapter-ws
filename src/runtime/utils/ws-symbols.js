@@ -12,8 +12,8 @@
 // '__subscriptions') prevents collisions with arbitrary user upgrade
 // hook returns: a user that does `return { __subscriptions: ... }`
 // from upgrade() can no longer clobber the adapter's tracking, and
-// Object.keys / JSON.stringify / spread on userData skip these slots
-// so they do not leak into client serializations.
+// Object.keys and JSON.stringify skip these slots. Object spread copies
+// enumerable symbols, so upgrade returns must discard old connection slots.
 //
 // The symbols use Symbol.for(...) so handler.js, vite.js, and testing.js
 // (and downstream consumers like svelte-adapter-uws-extensions/redis/registry)
@@ -82,6 +82,45 @@ export const WS_PENDING_SUBSCRIBES_TOTAL = Symbol.for('adapter-uws.ws.pending-su
  */
 export function pendingSubscribeTotal(ud) {
 	return ud[WS_PENDING_SUBSCRIBES_TOTAL] ?? 0;
+}
+
+/**
+ * A hook may install membership before its authorization settles. Until a
+ * successful attempt confirms it, that membership is not a server grant.
+ * @param {any} ud
+ * @param {string} topic
+ * @returns {boolean}
+ */
+export function membershipUnconfirmed(ud, topic) {
+	if (ud[WS_PENDING_SUBSCRIBES_TOTAL] === 0) return false;
+	const entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);
+	return entry !== undefined && !entry.granted;
+}
+
+/**
+ * Read the held landing's verdict without settling the attempt. Recovery must
+ * establish this authority before handing message history to the resume hook.
+ * @param {any} ud
+ * @param {string} topic
+ * @param {number} token
+ * @returns {boolean}
+ */
+export function heldLandingWouldAck(ud, topic, token) {
+	const entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);
+	return !entry || entry.epoch === token || entry.granted === true;
+}
+
+/**
+ * The wire grant gate accepts a completed grant, or the current attempt's
+ * plugin-owned join. An ordinary hook install cannot mint a server grant.
+ * @param {any} ud
+ * @param {string} topic
+ * @param {number} token
+ * @returns {boolean}
+ */
+export function heldSubscribeIsAuthorized(ud, topic, token) {
+	return !membershipUnconfirmed(ud, topic)
+		|| (isPluginOwnedTopic(topic) && heldLandingWouldAck(ud, topic, token));
 }
 
 /**
@@ -1136,6 +1175,25 @@ export const CONNECTION_SLOTS = Object.freeze([
 	WS_LEASE,
 	WS_CONTROL_BUDGET
 ]);
+
+const connectionSlotSet = new Set(CONNECTION_SLOTS);
+
+/**
+ * Copy application-owned upgrade data without carrying another connection's
+ * adapter state. Skip reserved keys before reading their values, and leave the
+ * source object untouched. Application string and Symbol keys remain enumerable.
+ *
+ * @param {object | null | undefined} source
+ * @returns {Record<string | symbol, any>}
+ */
+export function copyUpgradeUserData(source) {
+	const copy = {};
+	for (const key of Reflect.ownKeys(source ?? {})) {
+		if (connectionSlotSet.has(key) || !Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+		defineSlot(copy, key, source[key]);
+	}
+	return copy;
+}
 
 /**
  * Write a slot onto an object the application can reach, without consulting

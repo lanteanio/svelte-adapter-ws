@@ -15,9 +15,9 @@ import {
 	WS_ATTRIBUTION, WS_CAPS, WS_CONNECTION_PERMIT, WS_LEASE, WS_PENDING_REQUESTS, WS_PLATFORM,
 	WS_PUBLISH_GRANT, WS_SESSION_ID, WS_SHARED_COHORTS, WS_STATS, WS_SUBSCRIPTIONS,
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
-	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
+	settleHeldSubscribe, membershipUnconfirmed, heldLandingWouldAck, heldSubscribeIsAuthorized, settleDeniedSubscribe, unwindRevokedMembership,
 	tombstonePendingSubscribe, isPendingSubscribeCancelled,
-	releaseDerivedSubscriptions, declareConnectionSlots
+	releaseDerivedSubscriptions, declareConnectionSlots, copyUpgradeUserData
 } from '../utils/ws-symbols.js';
 import { MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION } from '../utils/caps.js';
 import {
@@ -1602,8 +1602,8 @@ export async function handleUpgrade(req, socket, head) {
 		// Between admission and a paced execution the client may have hung up.
 		if (socket.destroyed) { observeUpgradeOutcome(socket, 'aborted'); releaseInFlight(); return; }
 		try {
-			const remoteAddress = /** @type {any} */ (userData).remoteAddress || clientIp;
-			const merged = { remoteAddress, .../** @type {any} */ (userData) };
+			const merged = copyUpgradeUserData(userData);
+			if (!merged.remoteAddress) merged.remoteAddress = clientIp;
 			// The whole-lifetime permit rides the handshake on userData and is
 			// promoted to its symbol slot at open, so close - and only close -
 			// hands it back. Rolled back here if the handshake itself throws,
@@ -2117,7 +2117,7 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 		sendDenied(facade, msg.topic, ref, 'RATE_LIMITED');
 		return;
 	}
-	if (deniesWireSubscribePreHook({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: !isNew, topic: msg.topic })) {
+	if (deniesWireSubscribePreHook({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: !isNew && !membershipUnconfirmed(userData, msg.topic), topic: msg.topic })) {
 		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
 		return;
 	}
@@ -2140,6 +2140,14 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	// Post-await held re-check - except when a gap-fill was requested: live
 	// membership arriving during the await carries no history.
 	const _wantsRecover = wantsRecover({ hasResumeHook: wsModule.resume, recover: msg.recover });
+	if (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(userData, msg.topic, pendingToken), topic: msg.topic })) {
+		if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+			unwindRevokedMembership(facade, msg.topic);
+			runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
+		}
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
+		return;
+	}
 	if (subs.has(msg.topic) && !_wantsRecover) {
 		const heldVerdict = settleHeldSubscribe(userData, msg.topic, pendingToken);
 		if (heldVerdict === 'ack') {
@@ -2170,11 +2178,19 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 	let capture = null;
 	let covered;
 	const _recoverRevoked = recoverIsRevoked({
-		held: subs instanceof Set && subs.has(msg.topic),
+		held: subs instanceof Set && subs.has(msg.topic) && heldLandingWouldAck(userData, msg.topic, pendingToken),
 		wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !hasUserSubscribeHook()),
 		cancelled: isPendingSubscribeCancelled(userData, msg.topic, pendingToken),
 		topic: msg.topic
 	});
+	if (_recoverRevoked && _wantsRecover) {
+		if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+			unwindRevokedMembership(facade, msg.topic);
+			runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
+		}
+		sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
+		return;
+	}
 	if (!_recoverRevoked && _wantsRecover) {
 		const epochs = Number.isInteger(msg.recover.epoch) ? { [msg.topic]: msg.recover.epoch } : undefined;
 		capture = beginResumeCapture([msg.topic], facade);
@@ -2187,6 +2203,15 @@ async function handleSubscribe(rawWs, facade, userData, msg) {
 			});
 		} catch (err) {
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RECOVER_HOOK), err);
+		}
+		if (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: hasUserSubscribeHook() && !subscribeAuth.strict, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(userData, msg.topic, pendingToken), topic: msg.topic })) {
+			discardResumeCapture(capture);
+			if (settleDeniedSubscribe(userData, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+				unwindRevokedMembership(facade, msg.topic);
+				runUnsubscribeHook(wsModule.unsubscribe, facade, msg.topic, { platform: userData[WS_PLATFORM] });
+			}
+			sendDenied(facade, msg.topic, ref, 'FORBIDDEN');
+			return;
 		}
 		if (subs.has(msg.topic)) {
 			const heldVerdictR = settleHeldSubscribe(userData, msg.topic, pendingToken);
@@ -2292,7 +2317,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	const _wireAuthz = subscribeAuth.enabled && (subscribeAuth.strict || !_hasUserHook);
 	const _authzSubs = userData[WS_SUBSCRIPTIONS];
 	const authzDenied = _wireAuthz
-		? valid.map((t) => deniesWireSubscribePreHook({ armed: subscribeAuth.enabled, hasUserHook: _hasUserHook && !subscribeAuth.strict, held: _authzSubs instanceof Set && _authzSubs.has(t), topic: t }))
+		? valid.map((t) => deniesWireSubscribePreHook({ armed: subscribeAuth.enabled, hasUserHook: _hasUserHook && !subscribeAuth.strict, held: _authzSubs instanceof Set && _authzSubs.has(t) && !membershipUnconfirmed(userData, t), topic: t }))
 		: null;
 	// In-flight authorization capacity: topics beyond the pending budget take
 	// no further part in the frame.
@@ -2387,7 +2412,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 			// hook appearing or vanishing mid-await must not split one batch
 			// across two authorization models.
 			const denial = (authzDenied !== null && authzDenied[i] ? 'FORBIDDEN' : null)
-				?? (recoverIsRevoked({ held, wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !_hasUserHook), cancelled: isPendingSubscribeCancelled(userData, t, batchTokens[i]), topic: t }) ? 'FORBIDDEN' : null)
+				?? (recoverIsRevoked({ held: held && heldLandingWouldAck(userData, t, batchTokens[i]) && (!subscribeAuth.enabled || (_hasUserHook && !subscribeAuth.strict) || heldSubscribeIsAuthorized(userData, t, batchTokens[i])), wireAuthz: subscribeAuth.enabled && (subscribeAuth.strict || !_hasUserHook), cancelled: isPendingSubscribeCancelled(userData, t, batchTokens[i]), topic: t }) ? 'FORBIDDEN' : null)
 				?? (batchDenials !== null ? (batchDenials[t] ?? null) : (perTopicDenials !== null ? perTopicDenials[i] : null));
 			if (denial !== null) continue;
 			const rec = msg.recover[t];
@@ -2419,7 +2444,8 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 	for (let i = 0; i < valid.length; i++) {
 		const topic = valid[i];
 		const held = udSubs.has(topic);
-		const denial = (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: _hasUserHook && !subscribeAuth.strict, held, topic }) ? 'FORBIDDEN' : null)
+		const denial = (authzDenied?.[i] ? 'FORBIDDEN' : null)
+			?? (deniesWireSubscribeLanding({ armed: subscribeAuth.enabled, hasUserHook: _hasUserHook && !subscribeAuth.strict, held: held && heldSubscribeIsAuthorized(userData, topic, batchTokens[i]), topic }) ? 'FORBIDDEN' : null)
 			?? (batchDenials !== null
 				? (batchDenials[topic] ?? null)
 				: (perTopicDenials !== null ? perTopicDenials[i] : null));
@@ -2511,7 +2537,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 			const allowed = Object.create(null);
 			let droppedCount = 0;
 			for (const t of Object.keys(map)) {
-				if (deniesUngrantedObserve(true, false, grants, t)) { droppedCount++; continue; }
+				if (deniesUngrantedObserve(true, false, membershipUnconfirmed(userData, t) ? null : grants, t)) { droppedCount++; continue; }
 				allowed[t] = map[t];
 			}
 			return droppedCount > 0 ? allowed : map;

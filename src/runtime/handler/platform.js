@@ -11,7 +11,7 @@ import {
 	WS_ATTRIBUTION, WS_CAPS, WS_COALESCED, WS_PENDING_REQUESTS, WS_PLATFORM,
 	WS_PUBLISH_GRANT, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE, WS_RELEASE_MEMBERSHIP, WS_SESSION_ID, WS_SUBSCRIPTIONS,
 	beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe,
-	settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership,
+	settleHeldSubscribe, membershipUnconfirmed, settleDeniedSubscribe, unwindRevokedMembership,
 	tombstonePendingSubscribe, releaseDerivedSubscriptions,
 	addLogicalSubscription, removeLogicalSubscription, isAuthorizationHook
 } from '../utils/ws-symbols.js';
@@ -1852,7 +1852,7 @@ export const platform = {
 		// caught above and returns early, so this only runs on a live connection.
 		fatal(subs instanceof Set, 'subs.shape', null);
 		const held = subs.has(topic);
-		if (held) return null;
+		if (held && !membershipUnconfirmed(ud, topic)) return null;
 		if (exceedsSubscriptionCap({ held, size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';
 		if (exceedsPendingSubscribeCap({ pending: pendingSubscribeTotal(ud), max: MAX_PENDING_SUBSCRIBES_PER_CONNECTION })) return 'RATE_LIMITED';
 		// Track the in-flight subscribe so a revocation landing during the
@@ -1914,7 +1914,7 @@ export const platform = {
 		if (requireGrant) {
 			observerHasUserHook = hasUserSubscribeHook();
 			let granted;
-			try { granted = /** @type {any} */ (facade).getUserData()[WS_SUBSCRIPTIONS]; }
+			try { const ud = /** @type {any} */ (facade).getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }
 			catch { counters.closedWsAborts++; return 'FORBIDDEN'; }
 			if (deniesUngrantedObserve(subscribeAuth.enabled, observerHasUserHook && !subscribeAuth.strict, granted, topic)) {
 				return 'FORBIDDEN';
@@ -1926,7 +1926,7 @@ export const platform = {
 			// Re-read after the async hook: a grant revoked inside that await
 			// must not produce an allow answer after it is gone.
 			let granted;
-			try { granted = /** @type {any} */ (facade).getUserData()[WS_SUBSCRIPTIONS]; }
+			try { const ud = /** @type {any} */ (facade).getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }
 			catch { counters.closedWsAborts++; return 'FORBIDDEN'; }
 			if (deniesUngrantedObserve(subscribeAuth.enabled, observerHasUserHook && !subscribeAuth.strict, granted, topic)) {
 				return 'FORBIDDEN';

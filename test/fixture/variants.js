@@ -26,6 +26,21 @@ export const POSTURE_EXPORT_PATH = process.platform === 'win32'
 	: join(tmpdir(), 'svelte-adapter-ws-fixture-posture.sock');
 
 export const FIXTURE_VARIANTS = {
+	recoverref: {
+		out: 'build-recover-ref',
+		handler: './src/hooks.ws.recover-ref.js',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
+	},
+	subscriptionstate: {
+		out: 'build-subscription-state',
+		handler: './src/hooks.ws.subscription-state.js',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
+	},
+	reusedata: {
+		out: 'build-reuse-data',
+		handler: './src/hooks.ws.reuse-data.js',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
+	},
 	closesubscriptions: {
 		out: 'build-close-subscriptions',
 		handler: './src/hooks.ws.close-subscriptions.js',

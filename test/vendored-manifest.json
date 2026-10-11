@@ -940,6 +940,10 @@
 			{
 				"lead": "\tbumpOut(ws, payload);",
 				"ours": "\tbumpOut(ws.getUserData(), payload);"
+			},
+			{
+				"lead": "// connection that blows the bound is cut rather than served.\n//\n// MEASURED, on this runtime: one 8,121-byte `subscribe-batch` carrying 1,344\n// shortest-legal topics is answered with 1,344 frames and 97,484 bytes, twelve\n",
+				"ours": "// connection that blows the bound is cut rather than served.\n//\n// MEASURED, on this runtime: one 8,121-byte `subscribe-batch` carrying 1,344\n// two-to-four-character topic names from the test loop is answered with 1,344\n// frames and 97,484 bytes, twelve\n"
 			}
 		]
 	},
@@ -1169,7 +1173,17 @@
 		"file": "src/runtime/utils/backpressure.js"
 	},
 	{
-		"file": "src/runtime/utils/byte-budget.js"
+		"file": "src/runtime/utils/byte-budget.js",
+		"adaptations": [
+			{
+				"lead": "/**\n * Bytes of control frames one connection may be sent per window.\n *\n * Derived from the worst legitimate burst rather than picked. A subscribe\n * batch carries at most 256 topics (the bundled client chunks at 200), and 256\n * acks at the ack's own size is roughly 15 KB; a client restoring 5,000 topics sends twenty\n * such batches for roughly 300 KB. This sits about 270 times above the first and\n * about 13 times above the second, while the worst measured amplifier reaches\n * it from about 20 KB/s of sustained inbound - a rate no real client produces on the\n * control lane, where traffic is bursty at reconnect and quiet after.\n *\n * Here rather than beside the sender because all three socket surfaces need it:\n * the production handler, the published test server and the dev plugin each own\n * their own plumbing, and two spellings of one ceiling is how the surfaces drift.\n */\n",
+				"ours": "/**\n * Bytes of control frames one connection may be sent per window.\n *\n * Sized against representative legitimate bursts. A subscribe\n * batch carries at most 256 topics (the bundled client chunks at 200), and 256\n * acks at the ack's own size is roughly 15 KB. A client restoring 5,000 topics\n * sends twenty-five 200-topic batches for roughly 300 KB. This sits about 270\n * times above the first and about 13 times above the second for the bundled client's short numeric refs.\n * One measured numeric-ref amplifier reaches it from about 20 KB/s of sustained\n * inbound; larger echoed refs need less. Healthy control traffic is bursty at\n * reconnect and quiet afterward.\n *\n * Here rather than beside the sender because all three socket surfaces need it:\n * the production handler, the published test server and the dev plugin each own\n * their own plumbing, and two spellings of one ceiling is how the surfaces drift.\n */\n"
+			},
+			{
+				"lead": "A byte allowance over a rolling window, as one closure.",
+				"ours": "A byte allowance over a fixed window, as one closure."
+			}
+		]
 	},
 	{
 		"file": "src/runtime/utils/byte-range.js"
@@ -1436,6 +1450,18 @@
 			{
 				"lead": "\treturn ok;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n",
 				"ours": "\treturn ok;\n}\n\n/**\n * Remove admitted membership without cancelling independent subscribe awaits.\n * Framework rollback owns its application cleanup and does not run the app's\n * unsubscribe hook. Explicit revocation still uses trackedUnsubscribe or\n * platform.unsubscribe, which advance the pending attempt's epoch.\n * @param {any} ws\n * @param {string} topic\n * @returns {boolean} whether any membership or publish grant was removed\n */\nexport function releaseSubscription(ws, topic) {\n\tlet ud;\n\ttry { ud = ws.getUserData(); } catch { return false; }\n\tconst subs = ud[WS_SUBSCRIPTIONS];\n\tif (!(subs instanceof Set) || isSettledSubscriptionRegistry(subs)) return false;\n\tlet removed = releaseMembership(ws, ud, topic);\n\tfor (const prefix of _derivedTopicPrefixes) {\n\t\tif (topic.startsWith(prefix)) continue;\n\t\tif (releaseMembership(ws, ud, prefix + topic)) removed = true;\n\t}\n\treturn removed;\n}\n\n/** @param {any} ws @param {any} ud @param {string} topic */\nfunction releaseMembership(ws, ud, topic) {\n\t// Withdraw completed authority without changing the epoch that an\n\t// independently pending authorization must present when it lands.\n\tconst pending = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\tif (pending) pending.granted = false;\n\tconst release = ud[WS_PLATFORM]?.[WS_RELEASE_MEMBERSHIP];\n\tlet removed;\n\tif (typeof release === 'function') {\n\t\tremoved = release(ws, ud, topic);\n\t\tif (removed === null) return false;\n\t} else {\n\t\ttry { ws.unsubscribe(topic); } catch { return false; }\n\t\tremoved = removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);\n\t}\n\tif (ud[WS_PUBLISH_GRANT] === topic) {\n\t\tud[WS_PUBLISH_GRANT] = undefined;\n\t\tremoved = true;\n\t}\n\tud[WS_PLATFORM]?.[WS_COHORT_LEAVE]?.(ws, ud, topic);\n\treturn removed;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n"
+			},
+			{
+				"lead": "// '__subscriptions') prevents collisions with arbitrary user upgrade\n// hook returns: a user that does `return { __subscriptions: ... }`\n// from upgrade() can no longer clobber the adapter's tracking, and\n// Object.keys / JSON.stringify / spread on userData skip these slots\n// so they do not leak into client serializations.\n//\n// The symbols use Symbol.for(...) so handler.js, vite.js, and testing.js\n",
+				"ours": "// '__subscriptions') prevents collisions with arbitrary user upgrade\n// hook returns: a user that does `return { __subscriptions: ... }`\n// from upgrade() can no longer clobber the adapter's tracking, and\n// Object.keys and JSON.stringify skip these slots. Object spread copies\n// enumerable symbols, so upgrade returns must discard old connection slots.\n//\n// The symbols use Symbol.for(...) so handler.js, vite.js, and testing.js\n"
+			},
+			{
+				"lead": "\tWS_CONTROL_BUDGET\n]);\n\n/**\n * Write a slot onto an object the application can reach, without consulting\n * the prototype chain. For the one-off targets - `globalThis`, a hook function\n",
+				"ours": "\tWS_CONTROL_BUDGET\n]);\n\nconst connectionSlotSet = new Set(CONNECTION_SLOTS);\n\n/**\n * Copy application-owned upgrade data without carrying another connection's\n * adapter state. Skip reserved keys before reading their values, and leave the\n * source object untouched. Application string and Symbol keys remain enumerable.\n *\n * @param {object | null | undefined} source\n * @returns {Record<string | symbol, any>}\n */\nexport function copyUpgradeUserData(source) {\n\tconst copy = {};\n\tfor (const key of Reflect.ownKeys(source ?? {})) {\n\t\tif (connectionSlotSet.has(key) || !Object.prototype.propertyIsEnumerable.call(source, key)) continue;\n\t\tdefineSlot(copy, key, source[key]);\n\t}\n\treturn copy;\n}\n\n/**\n * Write a slot onto an object the application can reach, without consulting\n * the prototype chain. For the one-off targets - `globalThis`, a hook function\n"
+			},
+			{
+				"lead": "\treturn ud[WS_PENDING_SUBSCRIBES_TOTAL] ?? 0;\n}\n\n/**\n * Open an in-flight subscribe for `topic`, returning the token the landing\n * must present to {@link settlePendingSubscribe}. The token is the topic's\n",
+				"ours": "\treturn ud[WS_PENDING_SUBSCRIBES_TOTAL] ?? 0;\n}\n\n/**\n * A hook may install membership before its authorization settles. Until a\n * successful attempt confirms it, that membership is not a server grant.\n * @param {any} ud\n * @param {string} topic\n * @returns {boolean}\n */\nexport function membershipUnconfirmed(ud, topic) {\n\tif (ud[WS_PENDING_SUBSCRIBES_TOTAL] === 0) return false;\n\tconst entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\treturn entry !== undefined && !entry.granted;\n}\n\n/**\n * Read the held landing's verdict without settling the attempt. Recovery must\n * establish this authority before handing message history to the resume hook.\n * @param {any} ud\n * @param {string} topic\n * @param {number} token\n * @returns {boolean}\n */\nexport function heldLandingWouldAck(ud, topic, token) {\n\tconst entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\treturn !entry || entry.epoch === token || entry.granted === true;\n}\n\n/**\n * The wire grant gate accepts a completed grant, or the current attempt's\n * plugin-owned join. An ordinary hook install cannot mint a server grant.\n * @param {any} ud\n * @param {string} topic\n * @param {number} token\n * @returns {boolean}\n */\nexport function heldSubscribeIsAuthorized(ud, topic, token) {\n\treturn !membershipUnconfirmed(ud, topic)\n\t\t|| (isPluginOwnedTopic(topic) && heldLandingWouldAck(ud, topic, token));\n}\n\n/**\n * Open an in-flight subscribe for `topic`, returning the token the landing\n * must present to {@link settlePendingSubscribe}. The token is the topic's\n"
 			}
 		]
 	},
@@ -1518,6 +1544,10 @@
 			{
 				"lead": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe } from './runtime/utils/ws-symbols.js';\n",
 				"ours": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe, releaseSubscription } from './runtime/utils/ws-symbols.js';\n"
+			},
+			{
+				"lead": "// topics outside the wire protocol - a presence join, a cursor snapshot, a\n// group lane, a plugin in another package.\n//\n// Calling `ws.subscribe` directly, or writing the connection's subscription\n// registry by hand, leaves the worker's subscription accounting behind: the\n// registry grows while the counter the consistency auditor compares it with\n// does not, which reports as `subs.total-mismatch`, and the release at close\n// then drives that counter below zero (`subs.total-negative`). These are the\n// runtime's own helpers, the ones its bundled plugins use: native membership,\n// the registry, the per-connection cap, the shared-codec cohort and the\n// accounting move together. Every slot they touch is a registered symbol or a\n// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n",
+				"ours": "// topics outside the wire protocol - a presence join, a cursor snapshot, a\n// group lane, a plugin in another package.\n//\n// Calling `ws.subscribe` directly changes native membership only: it bypasses\n// the registry used for per-connection caps and subscriber walks such as\n// publishWire. A hand-written registry entry instead raises the auditor's\n// membership count without charging the worker counter (`subs.total-mismatch`);\n// releasing that entry at close can drive the counter below zero\n// (`subs.total-negative`). These are the runtime's own helpers, the ones its\n// bundled plugins use: native membership, the registry, the per-connection\n// cap, the shared-codec cohort and the\n// accounting move together. Every slot they touch is a registered symbol or a\n// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n"
 			}
 		]
 	},
@@ -1664,6 +1694,74 @@
 			{
 				"lead": "\t\t\t\t\tconst reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);\n\t\t\t\t\tconst ud = /** @type {any} */ (ws).__userData || {};\n\t\t\t\t\tmessageAdmission.close(wrapped);\n\t\t\t\t\tconst subs = ud[WS_SUBSCRIPTIONS] || new Set();\n\t\t\t\t\tconst pending = ud[WS_PENDING_REQUESTS];\n\t\t\t\t\tif (pending && pending.size > 0) {\n\t\t\t\t\t\tfor (const entry of pending.values()) {\n",
 				"ours": "\t\t\t\t\tconst reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);\n\t\t\t\t\tconst ud = /** @type {any} */ (ws).__userData || {};\n\t\t\t\t\tmessageAdmission.close(wrapped);\n\t\t\t\t\tconst subscriptionSlot = ud[WS_SUBSCRIPTIONS];\n\t\t\t\t\tconst subs = isSet(subscriptionSlot) ? subscriptionSlot : new Set();\n\t\t\t\t\tconst pending = ud[WS_PENDING_REQUESTS];\n\t\t\t\t\tif (pending && pending.size > 0) {\n\t\t\t\t\t\tfor (const entry of pending.values()) {\n"
+			},
+			{
+				"lead": "declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION",
+				"ours": "declareConnectionSlots, copyUpgradeUserData, MAX_SUBSCRIPTIONS_PER_CONNECTION"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\tuserData = result || {};\n\t\t\t\t\t\t}\n\t\t\t\t\t} catch (err)",
+				"ours": "\t\t\t\t\t\t\tuserData = result || {};\n\t\t\t\t\t\t}\n\t\t\t\t\t\tuserData = copyUpgradeUserData(userData);\n\t\t\t\t\t} catch (err)"
+			},
+			{
+				"lead": "deniesRefLessRecover, recoverRequiresRefFrame",
+				"ours": "deniesRefLessRecover, deniesRefLessRecoverBatch, recoverRequiresRefFrame"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t// Landing settle. A revocation that bumped this subscribe's\n\t\t\t\t\t\t\t\t// epoch while the hook was parked means the grant must be\n\t\t\t\t\t\t\t\t// discarded rather than installed, and the client's ref'd\n",
+				"ours": "\t\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t// The resume hook can await while strict authorization arms.\n\t\t\t\t\t\t\t\t// Re-check a fresh landing after every user await, as production does.\n\t\t\t\t\t\t\t\tif (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: hasUserSubscribeHookV() && !SUBSCRIBE_AUTHZ_STRICT_V, held: subs.has(msg.topic), topic: msg.topic })) {\n\t\t\t\t\t\t\t\t\tsettlePendingSubscribe(pendingUdV, msg.topic, pendingTokenV);\n\t\t\t\t\t\t\t\t\tif (_cap) discardResumeCaptureV(_cap);\n\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t// Landing settle. A revocation that bumped this subscribe's\n\t\t\t\t\t\t\t\t// epoch while the hook was parked means the grant must be\n\t\t\t\t\t\t\t\t// discarded rather than installed, and the client's ref'd\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\tconst subs = subscriptions.get(ws);\n\t\t\t\t\t\t\t\tconst topics = msg.topics.slice(0, 256);\n\t\t\t\t\t\t\t\tconst ref = hasRefValue(msg.ref) ? msg.ref : null;\n\t\t\t\t\t\t\t\tfor (let i = 256; i < msg.topics.length; i++) {\n\t\t\t\t\t\t\t\t\tif (typeof msg.topics[i] === 'string') {\n\t\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topics[i], ref, 'BATCH_OVERFLOW');\n",
+				"ours": "\t\t\t\t\t\t\t\tconst subs = subscriptions.get(ws);\n\t\t\t\t\t\t\t\tconst topics = msg.topics.slice(0, 256);\n\t\t\t\t\t\t\t\tconst ref = hasRefValue(msg.ref) ? msg.ref : null;\n\t\t\t\t\t\t\t\tif (deniesRefLessRecoverBatch({ hasResumeHook: userHandlers.resume, recover: msg.recover, ref })) {\n\t\t\t\t\t\t\t\t\tsendControlV(ws, recoverRequiresRefFrame(null));\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tfor (let i = 256; i < msg.topics.length; i++) {\n\t\t\t\t\t\t\t\t\tif (typeof msg.topics[i] === 'string') {\n\t\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topics[i], ref, 'BATCH_OVERFLOW');\n"
+			},
+			{
+				"lead": "settleHeldSubscribe, settleDeniedSubscribe",
+				"ours": "settleHeldSubscribe, membershipUnconfirmed, heldLandingWouldAck, heldSubscribeIsAuthorized, settleDeniedSubscribe"
+			},
+			{
+				"lead": "\t\t\tconst ud = ws.getUserData();\n\t\t\tconst subs = ud?.[WS_SUBSCRIPTIONS];\n\t\t\tif (!(subs instanceof Set)) return 'INVALID_TOPIC';\n\t\t\tif (subs.has(topic)) return null;\n\t\t\tif (exceedsSubscriptionCap({ held: subs.has(topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';\n\t\t\t// In-flight authorization is bounded before the hook await, the same\n\t\t\t// bound production applies: pending attempts are live hook work the\n",
+				"ours": "\t\t\tconst ud = ws.getUserData();\n\t\t\tconst subs = ud?.[WS_SUBSCRIPTIONS];\n\t\t\tif (!(subs instanceof Set)) return 'INVALID_TOPIC';\n\t\t\tif (subs.has(topic) && !membershipUnconfirmed(ud, topic)) return null;\n\t\t\tif (exceedsSubscriptionCap({ held: subs.has(topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';\n\t\t\t// In-flight authorization is bounded before the hook await, the same\n\t\t\t// bound production applies: pending attempts are live hook work the\n"
+			},
+			{
+				"lead": "\t\t\tif (requireGrant) {\n\t\t\t\tobserverHasUserHook = hasUserSubscribeHookV();\n\t\t\t\tlet granted;\n\t\t\t\ttry { granted = ws.getUserData()[WS_SUBSCRIPTIONS]; }\n\t\t\t\tcatch { return 'FORBIDDEN'; }\n\t\t\t\tif (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_V, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_V, granted, topic)) {\n\t\t\t\t\treturn 'FORBIDDEN';\n",
+				"ours": "\t\t\tif (requireGrant) {\n\t\t\t\tobserverHasUserHook = hasUserSubscribeHookV();\n\t\t\t\tlet granted;\n\t\t\t\ttry { const ud = ws.getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }\n\t\t\t\tcatch { return 'FORBIDDEN'; }\n\t\t\t\tif (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_V, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_V, granted, topic)) {\n\t\t\t\t\treturn 'FORBIDDEN';\n"
+			},
+			{
+				"lead": "\t\t\t\t// Re-read after the async hook: a grant revoked inside that await must\n\t\t\t\t// not produce an allow answer after it is gone.\n\t\t\t\tlet granted;\n\t\t\t\ttry { granted = ws.getUserData()[WS_SUBSCRIPTIONS]; }\n\t\t\t\tcatch { return 'FORBIDDEN'; }\n\t\t\t\tif (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_V, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_V, granted, topic)) {\n\t\t\t\t\treturn 'FORBIDDEN';\n",
+				"ours": "\t\t\t\t// Re-read after the async hook: a grant revoked inside that await must\n\t\t\t\t// not produce an allow answer after it is gone.\n\t\t\t\tlet granted;\n\t\t\t\ttry { const ud = ws.getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }\n\t\t\t\tcatch { return 'FORBIDDEN'; }\n\t\t\t\tif (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_V, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_V, granted, topic)) {\n\t\t\t\t\treturn 'FORBIDDEN';\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t// on microtask coalescing. Paired with the landing re-check\n\t\t\t\t\t\t\t\t// below, which is what keeps the exemption from BEING the\n\t\t\t\t\t\t\t\t// gate here.\n\t\t\t\t\t\t\t\tif (deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: hasUserSubscribeHookV() && !SUBSCRIBE_AUTHZ_STRICT_V, held: !isNew, topic: msg.topic })) {\n\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n",
+				"ours": "\t\t\t\t\t\t\t\t// on microtask coalescing. Paired with the landing re-check\n\t\t\t\t\t\t\t\t// below, which is what keeps the exemption from BEING the\n\t\t\t\t\t\t\t\t// gate here.\n\t\t\t\t\t\t\t\tif (deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: hasUserSubscribeHookV() && !SUBSCRIBE_AUTHZ_STRICT_V, held: !isNew && !membershipUnconfirmed(wrapped.getUserData(), msg.topic), topic: msg.topic })) {\n\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t// here leaves a client that asked to recover believing\n\t\t\t\t\t\t\t\t// itself caught up. Mirrors production.\n\t\t\t\t\t\t\t\tconst _wantsRecoverV = wantsRecover({ hasResumeHook: userHandlers.resume, recover: msg.recover });\n\t\t\t\t\t\t\t\tif (subs.has(msg.topic) && !_wantsRecoverV) {\n\t\t\t\t\t\t\t\t\t// Held is not enough: the membership may have been installed\n\t\t\t\t\t\t\t\t\t// mid-await by THIS attempt's own hook after a revocation\n",
+				"ours": "\t\t\t\t\t\t\t\t// here leaves a client that asked to recover believing\n\t\t\t\t\t\t\t\t// itself caught up. Mirrors production.\n\t\t\t\t\t\t\t\tconst _wantsRecoverV = wantsRecover({ hasResumeHook: userHandlers.resume, recover: msg.recover });\n\t\t\t\t\t\t\t\tif (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: hasUserSubscribeHookV() && !SUBSCRIBE_AUTHZ_STRICT_V, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(pendingUdV, msg.topic, pendingTokenV), topic: msg.topic })) {\n\t\t\t\t\t\t\t\t\tif (settleDeniedSubscribe(pendingUdV, msg.topic, pendingTokenV, subs.has(msg.topic)) === 'deny-unwind') {\n\t\t\t\t\t\t\t\t\t\tunwindRevokedMembership(wrapped, msg.topic);\n\t\t\t\t\t\t\t\t\t\trunUnsubscribeHook(userHandlers.unsubscribe, wrapped, msg.topic, { platform: pendingUdV[WS_PLATFORM] });\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (subs.has(msg.topic) && !_wantsRecoverV) {\n\t\t\t\t\t\t\t\t\t// Held is not enough: the membership may have been installed\n\t\t\t\t\t\t\t\t\t// mid-await by THIS attempt's own hook after a revocation\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t// HISTORY, and the landing refuses the subscription only\n\t\t\t\t\t\t\t\t// afterwards - by which time the messages have gone out.\n\t\t\t\t\t\t\t\tconst _recoverRevokedV = recoverIsRevoked({\n\t\t\t\t\t\t\t\t\theld: subs instanceof Set && subs.has(msg.topic),\n\t\t\t\t\t\t\t\t\twireAuthz: SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !hasUserSubscribeHookV()),\n\t\t\t\t\t\t\t\t\tcancelled: isPendingSubscribeCancelled(pendingUdV, msg.topic, pendingTokenV),\n\t\t\t\t\t\t\t\t\ttopic: msg.topic\n\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\tif (!_recoverRevokedV && _wantsRecoverV) {\n\t\t\t\t\t\t\t\t\tconst _rEpochs = Number.isInteger(msg.recover.epoch) ? { [msg.topic]: msg.recover.epoch } : undefined;\n\t\t\t\t\t\t\t\t\t_cap = beginResumeCaptureV([msg.topic], ws);\n\t\t\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, { sessionId: wrapped.getUserData()[WS_SESSION_ID], lastSeenSeqs: { [msg.topic]: msg.recover.offset }, lastSeenEpochs: _rEpochs, platform: wrapped.getUserData()[WS_PLATFORM] });\n\t\t\t\t\t\t\t\t\t} catch (err) { console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RECOVER_HOOK), err); }\n\t\t\t\t\t\t\t\t\tif (subs.has(msg.topic)) {\n\t\t\t\t\t\t\t\t\t\tconst heldVerdictVR = settleHeldSubscribe(pendingUdV, msg.topic, pendingTokenV);\n\t\t\t\t\t\t\t\t\t\tif (heldVerdictVR === 'ack') { discardResumeCaptureV(_cap); sendSubscribedV(ws, msg.topic, ref); return; }\n",
+				"ours": "\t\t\t\t\t\t\t\t// HISTORY, and the landing refuses the subscription only\n\t\t\t\t\t\t\t\t// afterwards - by which time the messages have gone out.\n\t\t\t\t\t\t\t\tconst _recoverRevokedV = recoverIsRevoked({\n\t\t\t\t\t\t\t\t\theld: subs instanceof Set && subs.has(msg.topic) && heldLandingWouldAck(pendingUdV, msg.topic, pendingTokenV),\n\t\t\t\t\t\t\t\t\twireAuthz: SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !hasUserSubscribeHookV()),\n\t\t\t\t\t\t\t\t\tcancelled: isPendingSubscribeCancelled(pendingUdV, msg.topic, pendingTokenV),\n\t\t\t\t\t\t\t\t\ttopic: msg.topic\n\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\tif (_recoverRevokedV && _wantsRecoverV) {\n\t\t\t\t\t\t\t\t\tif (settleDeniedSubscribe(pendingUdV, msg.topic, pendingTokenV, subs.has(msg.topic)) === 'deny-unwind') {\n\t\t\t\t\t\t\t\t\t\tunwindRevokedMembership(wrapped, msg.topic);\n\t\t\t\t\t\t\t\t\t\trunUnsubscribeHook(userHandlers.unsubscribe, wrapped, msg.topic, { platform: pendingUdV[WS_PLATFORM] });\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (!_recoverRevokedV && _wantsRecoverV) {\n\t\t\t\t\t\t\t\t\tconst _rEpochs = Number.isInteger(msg.recover.epoch) ? { [msg.topic]: msg.recover.epoch } : undefined;\n\t\t\t\t\t\t\t\t\t_cap = beginResumeCaptureV([msg.topic], ws);\n\t\t\t\t\t\t\t\t\ttry {\n\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, { sessionId: wrapped.getUserData()[WS_SESSION_ID], lastSeenSeqs: { [msg.topic]: msg.recover.offset }, lastSeenEpochs: _rEpochs, platform: wrapped.getUserData()[WS_PLATFORM] });\n\t\t\t\t\t\t\t\t\t} catch (err) { console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RECOVER_HOOK), err); }\n\t\t\t\t\t\t\t\t\tif (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: hasUserSubscribeHookV() && !SUBSCRIBE_AUTHZ_STRICT_V, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(pendingUdV, msg.topic, pendingTokenV), topic: msg.topic })) {\n\t\t\t\t\t\t\t\t\t\tif (settleDeniedSubscribe(pendingUdV, msg.topic, pendingTokenV, subs.has(msg.topic)) === 'deny-unwind') {\n\t\t\t\t\t\t\t\t\t\t\tunwindRevokedMembership(wrapped, msg.topic);\n\t\t\t\t\t\t\t\t\t\t\trunUnsubscribeHook(userHandlers.unsubscribe, wrapped, msg.topic, { platform: pendingUdV[WS_PLATFORM] });\n\t\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\t\tdiscardResumeCaptureV(_cap);\n\t\t\t\t\t\t\t\t\t\tsendDenied(ws, msg.topic, ref, 'FORBIDDEN');\n\t\t\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\tif (subs.has(msg.topic)) {\n\t\t\t\t\t\t\t\t\t\tconst heldVerdictVR = settleHeldSubscribe(pendingUdV, msg.topic, pendingTokenV);\n\t\t\t\t\t\t\t\t\t\tif (heldVerdictVR === 'ack') { discardResumeCaptureV(_cap); sendSubscribedV(ws, msg.topic, ref); return; }\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t// has authorized nothing on this connection\".\n\t\t\t\t\t\t\t\tconst _authzSubsV = /** @type {any} */ (ws).__userData?.[WS_SUBSCRIPTIONS];\n\t\t\t\t\t\t\t\tconst authzDeniedV = _wireAuthzV\n\t\t\t\t\t\t\t\t\t? valid.map((t) => deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: _hasUserHookV && !SUBSCRIBE_AUTHZ_STRICT_V, held: _authzSubsV instanceof Set && _authzSubsV.has(t), topic: t }))\n\t\t\t\t\t\t\t\t\t: null;\n\t\t\t\t\t\t\t\t// In-flight authorization capacity, mirroring production's\n\t\t\t\t\t\t\t\t// batch lane: topics beyond the pending-attempt budget take\n",
+				"ours": "\t\t\t\t\t\t\t\t// has authorized nothing on this connection\".\n\t\t\t\t\t\t\t\tconst _authzSubsV = /** @type {any} */ (ws).__userData?.[WS_SUBSCRIPTIONS];\n\t\t\t\t\t\t\t\tconst authzDeniedV = _wireAuthzV\n\t\t\t\t\t\t\t\t\t? valid.map((t) => deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: _hasUserHookV && !SUBSCRIBE_AUTHZ_STRICT_V, held: _authzSubsV instanceof Set && _authzSubsV.has(t) && !membershipUnconfirmed(wrapped.getUserData(), t), topic: t }))\n\t\t\t\t\t\t\t\t\t: null;\n\t\t\t\t\t\t\t\t// In-flight authorization capacity, mirroring production's\n\t\t\t\t\t\t\t\t// batch lane: topics beyond the pending-attempt budget take\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t\t\t// reads them - otherwise the two sites disagree inside one\n\t\t\t\t\t\t\t\t\t\t// frame, which is how this repair failed the first time.\n\t\t\t\t\t\t\t\t\t\tconst _denial = (authzDeniedV !== null && authzDeniedV[i] ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t\t?? (recoverIsRevoked({ held: _heldV, wireAuthz: SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !_hasUserHookV), cancelled: batchTokensV === null || isPendingSubscribeCancelled(batchUdV, _t, batchTokensV[i]), topic: _t }) ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t\t?? (batchDenials !== null ? (batchDenials[_t] ?? null) : (perTopicDenials !== null ? perTopicDenials[i] : null));\n\t\t\t\t\t\t\t\t\t\tif (_denial !== null) continue;\n\t\t\t\t\t\t\t\t\t\tconst _rec = msg.recover[_t];\n",
+				"ours": "\t\t\t\t\t\t\t\t\t\t// reads them - otherwise the two sites disagree inside one\n\t\t\t\t\t\t\t\t\t\t// frame, which is how this repair failed the first time.\n\t\t\t\t\t\t\t\t\t\tconst _denial = (authzDeniedV !== null && authzDeniedV[i] ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t\t?? (recoverIsRevoked({ held: _heldV && (!SUBSCRIBE_AUTHZ_V || (_hasUserHookV && !SUBSCRIBE_AUTHZ_STRICT_V) || heldSubscribeIsAuthorized(batchUdV, _t, batchTokensV?.[i])) && (batchTokensV === null || heldLandingWouldAck(batchUdV, _t, batchTokensV[i])), wireAuthz: SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !_hasUserHookV), cancelled: batchTokensV === null || isPendingSubscribeCancelled(batchUdV, _t, batchTokensV[i]), topic: _t }) ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t\t?? (batchDenials !== null ? (batchDenials[_t] ?? null) : (perTopicDenials !== null ? perTopicDenials[i] : null));\n\t\t\t\t\t\t\t\t\t\tif (_denial !== null) continue;\n\t\t\t\t\t\t\t\t\t\tconst _rec = msg.recover[_t];\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t\t// Read once and handed to both decisions below; nothing\n\t\t\t\t\t\t\t\t\t// between here and the subscribe mutates it for this topic.\n\t\t\t\t\t\t\t\t\tconst held = udSubs.has(topic);\n\t\t\t\t\t\t\t\t\tconst denial = (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: _hasUserHookV && !SUBSCRIBE_AUTHZ_STRICT_V, held, topic }) ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t?? (batchDenials !== null\n\t\t\t\t\t\t\t\t\t\t\t? (batchDenials[topic] ?? null)\n\t\t\t\t\t\t\t\t\t\t\t: (perTopicDenials !== null ? perTopicDenials[i] : null));\n",
+				"ours": "\t\t\t\t\t\t\t\t\t// Read once and handed to both decisions below; nothing\n\t\t\t\t\t\t\t\t\t// between here and the subscribe mutates it for this topic.\n\t\t\t\t\t\t\t\t\tconst held = udSubs.has(topic);\n\t\t\t\t\t\t\t\t\tconst denial = (authzDeniedV?.[i] ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t?? (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_V, hasUserHook: _hasUserHookV && !SUBSCRIBE_AUTHZ_STRICT_V, held: held && heldSubscribeIsAuthorized(batchUdV, topic, batchTokensV?.[i]), topic }) ? 'FORBIDDEN' : null)\n\t\t\t\t\t\t\t\t\t\t?? (batchDenials !== null\n\t\t\t\t\t\t\t\t\t\t\t? (batchDenials[topic] ?? null)\n\t\t\t\t\t\t\t\t\t\t\t: (perTopicDenials !== null ? perTopicDenials[i] : null));\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t// looser rule than production is how an app ends up\n\t\t\t\t\t\t\t\t// developing against a gate that is not there.\n\t\t\t\t\t\t\t\tlet resumeSeqsV = msg.lastSeenSeqs;\n\t\t\t\t\t\t\t\tif (SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !hasUserSubscribeHookV()) && resumeSeqsV && typeof resumeSeqsV === 'object') {\n\t\t\t\t\t\t\t\t\tconst grantsV = /** @type {any} */ (ws).__userData?.[WS_SUBSCRIPTIONS];\n\t\t\t\t\t\t\t\t\t/** @type {Record<string, unknown>} */\n\t\t\t\t\t\t\t\t\tconst allowedV = Object.create(null);\n\t\t\t\t\t\t\t\t\tlet droppedV = 0;\n\t\t\t\t\t\t\t\t\tfor (const t of Object.keys(resumeSeqsV)) {\n\t\t\t\t\t\t\t\t\t\tif (deniesUngrantedObserve(true, false, grantsV, t)) { droppedV++; continue; }\n\t\t\t\t\t\t\t\t\t\tallowedV[t] = resumeSeqsV[t];\n\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\tif (droppedV > 0) resumeSeqsV = allowedV;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (userHandlers.resume) {\n\t\t\t\t\t\t\t\t\ttry {\n",
+				"ours": "\t\t\t\t\t\t\t\t// looser rule than production is how an app ends up\n\t\t\t\t\t\t\t\t// developing against a gate that is not there.\n\t\t\t\t\t\t\t\tlet resumeSeqsV = msg.lastSeenSeqs;\n\t\t\t\t\t\t\t\tlet resumeEpochsV = lastSeenEpochs;\n\t\t\t\t\t\t\t\tif (SUBSCRIBE_AUTHZ_V && (SUBSCRIBE_AUTHZ_STRICT_V || !hasUserSubscribeHookV())) {\n\t\t\t\t\t\t\t\t\tconst ud = wrapped.getUserData();\n\t\t\t\t\t\t\t\t\tconst grants = ud[WS_SUBSCRIPTIONS];\n\t\t\t\t\t\t\t\t\tconst filterGranted = (map) => {\n\t\t\t\t\t\t\t\t\t\tconst allowed = Object.create(null);\n\t\t\t\t\t\t\t\t\t\tlet dropped = false;\n\t\t\t\t\t\t\t\t\t\tfor (const t of Object.keys(map)) {\n\t\t\t\t\t\t\t\t\t\t\tif (deniesUngrantedObserve(true, false, membershipUnconfirmed(ud, t) ? null : grants, t)) { dropped = true; continue; }\n\t\t\t\t\t\t\t\t\t\t\tallowed[t] = map[t];\n\t\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\t\treturn dropped ? allowed : map;\n\t\t\t\t\t\t\t\t\t};\n\t\t\t\t\t\t\t\t\tresumeSeqsV = filterGranted(resumeSeqsV);\n\t\t\t\t\t\t\t\t\tif (resumeEpochsV) resumeEpochsV = filterGranted(resumeEpochsV);\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (userHandlers.resume) {\n\t\t\t\t\t\t\t\t\ttry {\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, {\n\t\t\t\t\t\t\t\t\t\t\tsessionId: msg.sessionId,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenSeqs: resumeSeqsV,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenEpochs,\n\t\t\t\t\t\t\t\t\t\t\tplatform: wrapped.getUserData()[WS_PLATFORM]\n\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t} catch (err) {\n",
+				"ours": "\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, {\n\t\t\t\t\t\t\t\t\t\t\tsessionId: msg.sessionId,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenSeqs: resumeSeqsV,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenEpochs: resumeEpochsV,\n\t\t\t\t\t\t\t\t\t\t\tplatform: wrapped.getUserData()[WS_PLATFORM]\n\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t} catch (err) {\n"
 			}
 		]
 	},
@@ -1920,6 +2018,10 @@
 			{
 				"lead": "\t\texpectStatementBlock(read('../src/runtime/handler.js'), [\n\t\t\t'const runIngressApplicationWork = (ws, context) =>',\n\t\t\t'dispatchIngressFrame(ws, ws.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler.js');\n",
 				"ours": "\t\texpectStatementBlock(read('../src/runtime/handler/realtime.js'), [\n\t\t\t'const runIngressApplicationWork = (facade, context) =>',\n\t\t\t'dispatchIngressFrame(facade, facade.getUserData(), context.data, context.platform, sendControl);'\n\t\t], 'handler/realtime.js');\n"
+			},
+			{
+				"lead": "//\n// A client names a topic in a few bytes and is answered with a whole frame.\n// Measured on this runtime: one 8,121-byte `subscribe-batch` of 1,344\n// shortest-legal topics comes back as 1,344 frames and 97,484 bytes - twelve\n// times what it cost to ask. Filling the 256-topic cap and padding the rest\n",
+				"ours": "//\n// A client names a topic in a few bytes and is answered with a whole frame.\n// Measured on this runtime: one 8,121-byte `subscribe-batch` of 1,344\n// two-to-four-character topic names from the test loop comes back as 1,344\n// frames and 97,484 bytes - twelve\n// times what it cost to ask. Filling the 256-topic cap and padding the rest\n"
 			}
 		]
 	},
@@ -2257,15 +2359,7 @@
 		"adaptations": [
 			{
 				"lead": "export const FIXTURE_VARIANTS = {\n\t// The long-standing default.",
-				"ours": "export const FIXTURE_VARIANTS = {\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
-			},
-			{
-				"lead": "export const FIXTURE_VARIANTS = {\n",
-				"ours": "export const FIXTURE_VARIANTS = {\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n"
-			},
-			{
-				"lead": "\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n",
-				"ours": "\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n"
+				"ours": "export const FIXTURE_VARIANTS = {\n\trecoverref: {\n\t\tout: 'build-recover-ref',\n\t\thandler: './src/hooks.ws.recover-ref.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsubscriptionstate: {\n\t\tout: 'build-subscription-state',\n\t\thandler: './src/hooks.ws.subscription-state.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\treusedata: {\n\t\tout: 'build-reuse-data',\n\t\thandler: './src/hooks.ws.reuse-data.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tclosesubscriptions: {\n\t\tout: 'build-close-subscriptions',\n\t\thandler: './src/hooks.ws.close-subscriptions.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
 			}
 		]
 	},
@@ -3272,5 +3366,56 @@
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.close-subscriptions.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.reuse-data.js"
+	},
+	{
+		"file": "test/fixture/src/reuse-data-handler.js"
+	},
+	{
+		"file": "test/helpers/upgrade-user-data-child.mjs",
+		"adaptations": [
+			{
+				"lead": "} finally { first?.close(); second?.close(); await server.stop(); }",
+				"ours": "}\nfinally {\n\tfirst?.close(); second?.close();\n\tlet deadline;\n\ttry {\n\t\tawait Promise.race([\n\t\t\tserver.stop(),\n\t\t\tnew Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })\n\t\t]);\n\t} finally { clearTimeout(deadline); }\n}"
+			}
+		]
+	},
+	{
+		"file": "test/upgrade-user-data-real.test.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.recover-ref.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.subscription-state.js"
+	},
+	{
+		"file": "test/recover-ref-batch-real.test.js"
+	},
+	{
+		"file": "test/subscription-authority-real.test.js"
+	},
+	{
+		"file": "docs/subscription-lifecycle.md"
+	},
+	{
+		"file": "test/static-date-header-real.test.js"
+	},
+	{
+		"file": "test/static-future-mtime-real.test.js"
+	},
+	{
+		"file": "test/static-last-modified.test.js"
+	},
+	{
+		"file": "test/subscription-release-real.test.js"
+	},
+	{
+		"file": "test/vite-subscriber-walk-real.test.js"
+	},
+	{
+		"file": "test/smooth-drain-budget-real.test.js"
 	}
 ]

@@ -9,7 +9,7 @@ import { closeFrameReason } from './runtime/utils/close-frame.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from './runtime/utils/ws-handshake.js';
 import { invalidRequestTarget, invalidHost } from './runtime/utils/request-target.js';
 import { ALLOW_HEADER, FORBIDDEN_METHODS, upgradeTurn, endOpenTurns, applyShouldUpgradeCallback, missesHost, sendHost400, answerExpectations, refuseUnparsedForbiddenMethods, bodylessLength, resumeAfterDeclinedUpgrade, send400, send505, servePipelined, acceptsRequestLine, stageHeaders, assertWritableStatus, assertResponseStatus, takesWebSocketRoute } from './runtime/handler/http-helpers.js';
-import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
+import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processEpoch, topicEpochValue, mintTopicEpoch, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, drainCoalesced, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, WS_REQUEST_ID_KEY, CARRY_REQUEST_ID, createChaosState, createUpgradeAdmission, negotiateRejection, buildAccessibleCapacityRefusalPage, isCursorLaneUpgrade, resolveWaitingRoom, createWaitingRoomRequest, sendWaitingRoomPage, jitterRetryAfter, REFUSAL_RETRY_AFTER_SECONDS, createPollCounter, containMetricInstrument, mirrorRegistry, readMetricMirror, applyCapacityReason, createPosture, readAssertionCounts, assert, fatal, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_COALESCED, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, WS_CONNECTION_PERMIT, WS_CAPS, WS_ATTRIBUTION, WS_TOPIC_IDS, WS_WIRE_STATE, WS_LEASE, WS_SHARED_COHORTS, WS_CONTROL_BUDGET, declareConnectionSlots, copyUpgradeUserData, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, MAX_COALESCED_KEYS_PER_CONNECTION, TOPIC_SEQS_WARN_THRESHOLD, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
 import { mergeSamples } from './runtime/utils/metrics-merge.js';
@@ -17,8 +17,8 @@ import { buildBinaryFrame, allocWireId, wireIdAnnounce, createCapCounts, createL
 import { createSharedWireIdTable } from './runtime/handler/shared-wire-id.js';
 import { deliverStatefulWireBatch, deliverStatelessWireFanout, encodeStatelessWirePayload } from './runtime/handler/wire-fanout.js';
 import { snapshotUpgradeHeaders, warnSetCookieOnUpgradeOnce } from './runtime/utils/upgrade-headers.js';
-import { carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';
-import { beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, releaseDerivedSubscriptions, isAuthorizationHook, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE, WS_RELEASE_MEMBERSHIP } from './runtime/utils/ws-symbols.js';
+import { carriesPreParsedEnvelope, deniesWireSystemTopicSubscribe, deniesWireSubscribePreHook, deniesWireSubscribeLanding, wantsRecover, recoverIsRevoked, deniesRefLessRecover, deniesRefLessRecoverBatch, recoverRequiresRefFrame, exceedsSubscriptionCap, exceedsPendingSubscribeCap, deniesUngrantedObserve } from './runtime/utils/subscribe-policy.js';
+import { beginPendingSubscribe, pendingSubscribeTotal, settlePendingSubscribe, settleHeldSubscribe, membershipUnconfirmed, heldLandingWouldAck, heldSubscribeIsAuthorized, settleDeniedSubscribe, unwindRevokedMembership, tombstonePendingSubscribe, isPendingSubscribeCancelled, releaseDerivedSubscriptions, isAuthorizationHook, WS_REVOKED_UNSUBSCRIBE, WS_COHORT_JOIN, WS_COHORT_LEAVE, WS_RELEASE_MEMBERSHIP } from './runtime/utils/ws-symbols.js';
 import { dispatchIngressFrame, bindIngress, ingressOkFrame, ingressBoundFrame, WIRE_INGRESS_CAP } from './runtime/handler/ingress.js';
 import { registerGameIngress, GAME_FANOUT_CAP, GAME_FANOUT_SCHEMA_VERSION, encodeGameFanoutPayload } from './runtime/handler/game-ingress.js';
 import { createMessageAdmission, messageOverloadedFrame, runAdmittedMessageHook, runAdmittedMessageWork } from './runtime/utils/message-admission.js';
@@ -2559,7 +2559,7 @@ export async function createTestServer(options = {}) {
 			catch { closedWsAbortsT++; return null; }
 			const subs = ud[WS_SUBSCRIPTIONS];
 			if (!(subs instanceof Set)) return 'INVALID_TOPIC';
-			if (subs.has(topic)) return null;
+			if (subs.has(topic) && !membershipUnconfirmed(ud, topic)) return null;
 			if (exceedsSubscriptionCap({ held: subs.has(topic), size: subs.size, max: MAX_SUBSCRIPTIONS_PER_CONNECTION })) return 'RATE_LIMITED';
 			// Track this subscribe across its authorization await. A revocation
 			// landing in that gap cannot remove a subscription that does not exist
@@ -2629,7 +2629,7 @@ export async function createTestServer(options = {}) {
 			if (requireGrant) {
 				observerHasUserHook = hasUserSubscribeHookT();
 				let granted;
-				try { granted = ws.getUserData()[WS_SUBSCRIPTIONS]; }
+				try { const ud = ws.getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }
 				catch { closedWsAbortsT++; return 'FORBIDDEN'; }
 				if (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_T, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_T, granted, topic)) {
 					return 'FORBIDDEN';
@@ -2641,7 +2641,7 @@ export async function createTestServer(options = {}) {
 				// Re-read after the async hook: a grant revoked inside that await must
 				// not produce an allow answer after it is gone.
 				let granted;
-				try { granted = ws.getUserData()[WS_SUBSCRIPTIONS]; }
+				try { const ud = ws.getUserData(); granted = membershipUnconfirmed(ud, topic) ? null : ud[WS_SUBSCRIPTIONS]; }
 				catch { closedWsAbortsT++; return 'FORBIDDEN'; }
 				if (deniesUngrantedObserve(SUBSCRIBE_AUTHZ_T, observerHasUserHook && !SUBSCRIBE_AUTHZ_STRICT_T, granted, topic)) {
 					return 'FORBIDDEN';
@@ -3558,6 +3558,7 @@ export async function createTestServer(options = {}) {
 					} else {
 						userData = result || {};
 					}
+					userData = copyUpgradeUserData(userData);
 					if (!userData.remoteAddress) userData.remoteAddress = rawIp;
 					userData[CARRY_REQUEST_ID] = wsRequestId;
 					const pacingOutcome = admission.admit(() => {
@@ -3763,7 +3764,7 @@ export async function createTestServer(options = {}) {
 							// documented group join worked or failed on microtask
 							// coalescing. Safe here for the same reason as production: the
 							// landing re-check below re-tests real membership.
-							if (deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: hasUserSubscribeHookT() && !SUBSCRIBE_AUTHZ_STRICT_T, held: subs.has(msg.topic), topic: msg.topic })) {
+							if (deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: hasUserSubscribeHookT() && !SUBSCRIBE_AUTHZ_STRICT_T, held: subs.has(msg.topic) && !membershipUnconfirmed(ws.getUserData(), msg.topic), topic: msg.topic })) {
 								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
 								return;
 							}
@@ -3805,6 +3806,14 @@ export async function createTestServer(options = {}) {
 							// re-grant carries no HISTORY. Fall through to the recover
 							// lane, which acks through its own already-subscribed branch.
 							const _wantsRecoverT = wantsRecover({ hasResumeHook: handler.resume, recover: msg.recover });
+							if (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: hasUserSubscribeHookT() && !SUBSCRIBE_AUTHZ_STRICT_T, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(pendingUd, msg.topic, pendingToken), topic: msg.topic })) {
+								if (settleDeniedSubscribe(pendingUd, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+									unwindRevokedMembership(ws, msg.topic);
+									runUnsubscribeHook(handler.unsubscribe, ws, msg.topic, { platform: pendingUd[WS_PLATFORM] });
+								}
+								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
+								return;
+							}
 							if (subs.has(msg.topic) && !_wantsRecoverT) {
 								// Held is not enough: the membership may have been installed
 								// mid-await by THIS attempt's own hook after a revocation
@@ -3839,19 +3848,36 @@ export async function createTestServer(options = {}) {
 							// does not hold the topic, so a revoke-then-re-grant inside
 							// one await window is still served.
 							const _recoverRevokedT = recoverIsRevoked({
-								held: subs instanceof Set && subs.has(msg.topic),
+								held: subs instanceof Set && subs.has(msg.topic) && heldLandingWouldAck(pendingUd, msg.topic, pendingToken),
 								wireAuthz: SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !hasUserSubscribeHookT()),
 								cancelled: isPendingSubscribeCancelled(pendingUd, msg.topic, pendingToken),
 								topic: msg.topic
 							});
 							let _cap = null;
 							let _covered;
+							if (_recoverRevokedT && _wantsRecoverT) {
+								if (settleDeniedSubscribe(pendingUd, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+									unwindRevokedMembership(ws, msg.topic);
+									runUnsubscribeHook(handler.unsubscribe, ws, msg.topic, { platform: pendingUd[WS_PLATFORM] });
+								}
+								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
+								return;
+							}
 							if (!_recoverRevokedT && _wantsRecoverT) {
 								const _rEpochs = Number.isInteger(msg.recover.epoch) ? { [msg.topic]: msg.recover.epoch } : undefined;
 								_cap = beginResumeCaptureT([msg.topic], ws);
 								try {
 									_covered = await handler.resume(ws, { sessionId: ws.getUserData()[WS_SESSION_ID], lastSeenSeqs: { [msg.topic]: msg.recover.offset }, lastSeenEpochs: _rEpochs, platform: ws.getUserData()[WS_PLATFORM] });
 								} catch (err) { console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.RECOVER_HOOK), err); }
+								if (subs.has(msg.topic) && deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: hasUserSubscribeHookT() && !SUBSCRIBE_AUTHZ_STRICT_T, held: subs.has(msg.topic) && heldSubscribeIsAuthorized(pendingUd, msg.topic, pendingToken), topic: msg.topic })) {
+									if (settleDeniedSubscribe(pendingUd, msg.topic, pendingToken, subs.has(msg.topic)) === 'deny-unwind') {
+										unwindRevokedMembership(ws, msg.topic);
+										runUnsubscribeHook(handler.unsubscribe, ws, msg.topic, { platform: pendingUd[WS_PLATFORM] });
+									}
+									discardResumeCaptureT(_cap);
+									sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
+									return;
+								}
 								if (subs.has(msg.topic)) {
 									const heldVerdictR = settleHeldSubscribe(pendingUd, msg.topic, pendingToken);
 									if (heldVerdictR === 'ack') { discardResumeCaptureT(_cap); sendSubscribedT(ws, msg.topic, ref); return; }
@@ -3871,11 +3897,6 @@ export async function createTestServer(options = {}) {
 							// discard the grant rather than subscribing, and answer the
 							// client's ref'd frame with a denial so its awaited subscribe
 							// resolves truthfully.
-							if (!settlePendingSubscribe(pendingUd, msg.topic, pendingToken, true)) {
-								if (_cap) discardResumeCaptureT(_cap);
-								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
-								return;
-							}
 							// Re-check the server-grant gate against the CURRENT grant set,
 							// not the reading taken before the awaits: the tombstone above
 							// fires only for revocation paths that bump the epoch. Mirrors
@@ -3884,6 +3905,12 @@ export async function createTestServer(options = {}) {
 							// server-side path that MINTS grants - a grant check there would
 							// refuse every server-initiated subscribe.
 							if (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: hasUserSubscribeHookT() && !SUBSCRIBE_AUTHZ_STRICT_T, held: subs.has(msg.topic), topic: msg.topic })) {
+								settlePendingSubscribe(pendingUd, msg.topic, pendingToken);
+								if (_cap) discardResumeCaptureT(_cap);
+								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
+								return;
+							}
+							if (!settlePendingSubscribe(pendingUd, msg.topic, pendingToken, true)) {
 								if (_cap) discardResumeCaptureT(_cap);
 								sendDeniedT(ws, msg.topic, ref, 'FORBIDDEN');
 								return;
@@ -3950,6 +3977,10 @@ export async function createTestServer(options = {}) {
 						}
 						if (msg.type === 'subscribe-batch' && Array.isArray(msg.topics)) {
 							const ref = hasRefT(msg.ref) ? msg.ref : null;
+							if (deniesRefLessRecoverBatch({ hasResumeHook: handler.resume, recover: msg.recover, ref })) {
+								sendControlT(ws, recoverRequiresRefFrame(null));
+								return;
+							}
 							// Topics past the 256 cap are denied loudly, never silently
 							// dropped (same rule as the production runtime).
 							for (let i = 256; i < msg.topics.length; i++) {
@@ -3979,7 +4010,7 @@ export async function createTestServer(options = {}) {
 							const _hasUserHookT = hasUserSubscribeHookT();
 							const _wireAuthzT = SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !_hasUserHookT);
 							const authzDeniedT = _wireAuthzT
-								? valid.map((t) => deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: _hasUserHookT && !SUBSCRIBE_AUTHZ_STRICT_T, held: ws.getUserData()[WS_SUBSCRIPTIONS].has(t), topic: t }))
+								? valid.map((t) => deniesWireSubscribePreHook({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: _hasUserHookT && !SUBSCRIBE_AUTHZ_STRICT_T, held: ws.getUserData()[WS_SUBSCRIPTIONS].has(t) && !membershipUnconfirmed(ws.getUserData(), t), topic: t }))
 								: null;
 							// Track every topic in this batch as in-flight, for the same reason
 							// the single path does: platform.unsubscribe cannot remove a
@@ -4055,7 +4086,7 @@ export async function createTestServer(options = {}) {
 									// hook pass, so nothing downstream would catch it), and both halves
 									// of wireAuthz read exactly as the landing reads them.
 									const _denial = (authzDeniedT !== null && authzDeniedT[i] ? 'FORBIDDEN' : null)
-										?? (recoverIsRevoked({ held: _heldT, wireAuthz: SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !_hasUserHookT), cancelled: isPendingSubscribeCancelled(batchUd, _t, batchTokens[i]), topic: _t }) ? 'FORBIDDEN' : null)
+										?? (recoverIsRevoked({ held: _heldT && (!SUBSCRIBE_AUTHZ_T || (_hasUserHookT && !SUBSCRIBE_AUTHZ_STRICT_T) || heldSubscribeIsAuthorized(batchUd, _t, batchTokens[i])) && heldLandingWouldAck(batchUd, _t, batchTokens[i]), wireAuthz: SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !_hasUserHookT), cancelled: isPendingSubscribeCancelled(batchUd, _t, batchTokens[i]), topic: _t }) ? 'FORBIDDEN' : null)
 										?? (batchDenials !== null ? (batchDenials[_t] ?? null) : (perTopicDenials !== null ? perTopicDenials[i] : null));
 									if (_denial !== null) continue;
 									const _rec = msg.recover[_t];
@@ -4083,7 +4114,8 @@ export async function createTestServer(options = {}) {
 								// Read once and handed to both decisions below; nothing between
 								// here and the subscribe mutates the set for this topic.
 								const held = udSubs.has(topic);
-								const denial = (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: _hasUserHookT && !SUBSCRIBE_AUTHZ_STRICT_T, held, topic }) ? 'FORBIDDEN' : null)
+								const denial = (authzDeniedT?.[i] ? 'FORBIDDEN' : null)
+									?? (deniesWireSubscribeLanding({ armed: SUBSCRIBE_AUTHZ_T, hasUserHook: _hasUserHookT && !SUBSCRIBE_AUTHZ_STRICT_T, held: held && heldSubscribeIsAuthorized(batchUd, topic, batchTokens[i]), topic }) ? 'FORBIDDEN' : null)
 									?? (batchDenials !== null
 										? (batchDenials[topic] ?? null)
 										: (perTopicDenials !== null ? perTopicDenials[i] : null));
@@ -4175,16 +4207,21 @@ export async function createTestServer(options = {}) {
 							// hands the app's replay backend topics production
 							// refuses passes exactly the case it exists to catch.
 							let resumeSeqsT = msg.lastSeenSeqs;
-							if (SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !hasUserSubscribeHookT()) && resumeSeqsT && typeof resumeSeqsT === 'object') {
-								const grantsT = ws.getUserData()[WS_SUBSCRIPTIONS];
-								/** @type {Record<string, unknown>} */
-								const allowedT = Object.create(null);
-								let droppedT = 0;
-								for (const t of Object.keys(resumeSeqsT)) {
-									if (deniesUngrantedObserve(true, false, grantsT, t)) { droppedT++; continue; }
-									allowedT[t] = resumeSeqsT[t];
-								}
-								if (droppedT > 0) resumeSeqsT = allowedT;
+							let resumeEpochsT = lastSeenEpochs;
+							if (SUBSCRIBE_AUTHZ_T && (SUBSCRIBE_AUTHZ_STRICT_T || !hasUserSubscribeHookT())) {
+								const ud = ws.getUserData();
+								const grants = ud[WS_SUBSCRIPTIONS];
+								const filterGranted = (map) => {
+									const allowed = Object.create(null);
+									let dropped = false;
+									for (const t of Object.keys(map)) {
+										if (deniesUngrantedObserve(true, false, membershipUnconfirmed(ud, t) ? null : grants, t)) { dropped = true; continue; }
+										allowed[t] = map[t];
+									}
+									return dropped ? allowed : map;
+								};
+								resumeSeqsT = filterGranted(resumeSeqsT);
+								if (resumeEpochsT) resumeEpochsT = filterGranted(resumeEpochsT);
 							}
 							if (handler.resume) {
 								try {
@@ -4195,7 +4232,7 @@ export async function createTestServer(options = {}) {
 									await handler.resume(ws, {
 										sessionId: msg.sessionId,
 										lastSeenSeqs: resumeSeqsT,
-										lastSeenEpochs,
+										lastSeenEpochs: resumeEpochsT,
 										platform: ws.getUserData()[WS_PLATFORM]
 									});
 								} catch (err) {

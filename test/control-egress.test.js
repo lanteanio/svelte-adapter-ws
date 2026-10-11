@@ -2,7 +2,8 @@
 //
 // A client names a topic in a few bytes and is answered with a whole frame.
 // Measured on this runtime: one 8,121-byte `subscribe-batch` of 1,344
-// shortest-legal topics comes back as 1,344 frames and 97,484 bytes - twelve
+// two-to-four-character topic names from the test loop comes back as 1,344
+// frames and 97,484 bytes - twelve
 // times what it cost to ask. Filling the 256-topic cap and padding the rest
 // with empty strings does worse: 2,466 frames and 174,956 bytes for 8,175 in,
 // twenty-one times. Both repeat, because the frame is legal and nothing
