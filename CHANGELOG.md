@@ -34,11 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A completed request that closes its connection releases its buffered answer before the socket ends.
 
-- HTTP read buffers use the native response byte count at their exact release boundary, including queued TLS replies and application headers.
-
 - Parser-generated header errors discard small responses buffered earlier in the same read.
 
-- Pipelined reads hold small responses until request validation completes and release large responses without losing their write callbacks.
+- Pipelined reads hold small responses until request validation completes and deliver large completed responses before a later refusal.
 
 - Unreadable pipelined input leaves preceding answers and event streams running.
 
@@ -55,16 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept later requests and synchronous pipelines; ambiguous framing still
   closes, and a request arriving behind a pending admission hook closes the
   connection without an HTTP answer.
-
-- **Linux recovery drill verifies external process restarts.** The respawner
-  command wedges a clustered worker, checks the whole-process hard exit, and
-  verifies replacement readiness after both that failure and a primary kill.
-  CI runs it separately; systemd and container deployment examples include
-  readiness, restart policy and termination grace.
-
-- **Source reachability check rejects disconnected modules.** Package exports and
-  file-loaded entries and explicitly retained family utilities root the import graph, including dynamic imports
-  and re-exports. Detached cycles fail too. The unused Node bridge was removed.
 
 - **Error reference details include explicit anchors and runtime guidance.** Each
   section now shows the code or event, searchable message prefix, operator
@@ -108,13 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Reduced ASCII header processing for requests with bodies and WebSocket handshakes.
-
-- Probe GET responses use implicit length framing without allocating a header object; HEAD keeps its explicit body length.
-
-- Plain HTTP batches skip redundant parser callback forwarding while later framed requests and UTF-8 headers retain normalization.
-
-- Built-in health and readiness probes avoid per-response turn scheduling while retaining pipelined response ordering.
+- Probe GET responses use implicit length framing; HEAD keeps its explicit body length.
 
 - Request lines retain their original boundaries across fragmented reads. Invalid
   versions are refused promptly, unreadable lines stay buffered, and forbidden
@@ -367,12 +349,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codes yield a clean server error, and bodyless responses omit unsafe declared lengths.
 - Memory pressure metrics omit unavailable readings and retract obsolete cgroup samples. Custom gauge registries can implement `remove()` to clear their samples. Cgroup measurements follow changing limits and retain the last known wall through temporary read failures.
 
-- CI installs npm 11.8.0 before resolving dependencies on Node 22, avoiding the
-  bundled npm 10 resolver crash during clean installs.
-
-- Serial client test runs isolate connection singletons and runtime overrides
-  between files, so a prior mock connection cannot replace a real socket.
-
 - Deferred SSR and SSE bodies flush ready first bytes before later producer work. Disconnects cancel and release response readers, including after completed POST bodies and when source cancellation never settles. Ready finite bodies retain length framing and compression.
 
 - Response streams preserve exact buffer/view bytes and UTF-8 strings in shared and direct delivery. Invalid chunks cancel their producer. Single-string bodies now qualify for dynamic compression with the existing credentialed-response protection.
@@ -394,7 +370,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
 
-- Oversized request heads return one complete HTML refusal, including split request lines. Missing native parser internals leave ordinary HTTP handling available, and an invalid error probe fails startup.
+- Oversized request heads return one complete HTML refusal, including split request lines. Ordinary HTTP handling remains available when native parser internals are absent.
 
 - Module client stores, accumulated helpers and binary ingress handles follow
   explicit connections created after close. Implicit store and plugin access
@@ -415,14 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser refusals over TLS no longer terminate the server while an earlier
   response is still being written.
 
-- Restore the UTF-8 examples in older changelog entries and check tracked text
-  for accidental double encoding with `check:source-encoding` and in CI.
-
-- Test runtime fixtures restore their subscription accounting callback when a cached build restarts after another fixture.
-
 - Vite subscriber iteration passes the adapter socket and its user data to callbacks, so matching subscribers can be inspected and sent messages without throwing.
-
-- SSE regression checks wait for a frame after unreadable input instead of assuming a timer tick rate.
 
 - Incomplete request heads no longer time out an active SSE stream or delayed HTTP response.
 
@@ -447,31 +416,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Vite plugin uses the adapter's `envPrefix` for the authentication request URL and both same-origin checks. A configured prefix ignores bare `ORIGIN`; an empty prefix keeps using it.
 
 - Error reference entries follow the shared catalog order and include the previously
-  missing cluster operator link. Registry-order tests read the pinned lead catalog.
+  missing cluster operator link.
 
 - The test server answers invalid admin response statuses with a clean 500,
   matching production without carrying headers from the refused response.
 
 - Large probe pipelines release completed responses when the read cork fills before a later request is refused.
 
-- Complete ASCII HTTP batches avoid repeated transport-prefix scans and upgrade bookkeeping, and Host checks read raw fields directly.
-
-
 - Incoming header values now use the native UTF-8 string decoding before application validation; WebSocket routing retains the original key byte count.
 
 - Header values trim high bytes at their edges before framing and WebSocket routing, matching the native parser while preserving interior bytes.
 
 - Repeated Host fields now receive a closing 400 before routing, matching the native parser.
-
-
-- Repeated Host fields now receive a closing 400 before routing, matching the native parser.
-- The HTTP transport reader retains paused TLS records while completed pipelined responses drain.
+- Requests pipelined over TLS remain readable while earlier completed responses drain.
 
 - Requests pipelined behind the first declined upgrade remain readable when another component attaches a TCP or TLS data listener.
 
 - Malformed headers after a declined upgrade receive a 400 response and close the connection instead of silently stalling.
-
-- Client address resolution avoids allocating temporary transport metadata on each request.
 
 - **An SSR stream that fails in a later turn than its request's own, right
   after its last writes, delivers them before the cut.** A source that
@@ -791,9 +752,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The conformance-index links in `PROTOCOL.md` appendix F and in
   `test-vectors/README.md` open the page on svelte-adapter-uws. They pointed
   at `docs/protocol-conformance.md`, which this package does not ship. The
-  protocol contract test the vectors README names now runs in this
-  repository too, and the README links it on this repository's `main`
-  branch rather than a `dev` branch it does not have.
+  vectors README links this repository's `main` branch.
 - **A request pipelined behind an upgrade request the server declines is
   answered.** A request that asks to upgrade but is not the WebSocket
   route's - an `h2c` upgrade, a handshake on another path or with another
