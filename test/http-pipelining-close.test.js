@@ -175,8 +175,8 @@ describe('the built runtime', () => {
 		expect(timer.raw, 'behind an answer due on a timer').toBe('');
 		expect(timer.closed).toBe(true);
 		const closing = await converse(open.rt.port, [[0, get('/api/tiny', 'Connection: close\r\n') + get('/api/tiny')]]);
-		expect(statusLines(closing.raw), 'an answer done within the turn ahead of bytes after its close').toEqual(['HTTP/1.1 200 OK']);
-		expect(closing.closed).toBe(true);
+		expect(statusLines(closing.raw), 'a later complete request replaces the buffered close policy').toEqual(['HTTP/1.1 200 OK', 'HTTP/1.1 200 OK']);
+		expect(closing.closed).toBe(false);
 		const handshake = await converse(open.rt.port, [[0, get('/api/hold?ms=0') + get('/ws', HANDSHAKE)]]);
 		expect(handshake.raw, 'a handshake behind an answer due on a timer').toBe('');
 	});
