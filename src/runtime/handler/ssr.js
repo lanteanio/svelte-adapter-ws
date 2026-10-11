@@ -64,47 +64,30 @@ const COMPRESSIBLE_TYPES = new Set([
  * enforced as the chunks arrive and trips as PayloadTooLargeError inside the
  * stream, so a route that pipes the body into its response sees the failure
  * mid-stream, where the exchange is then aborted rather than ended cleanly.
- * Backpressure pauses the socket while the consumer is behind.
+ * Receipt continues after the response so a late reader retains the complete body.
  *
  * @param {import('node:http').IncomingMessage} req
  * @param {number} limit - bytes, or Infinity
  * @param {{ aborted: boolean, bodyReceived?: boolean }} state - `bodyReceived`
  *   is set once the last chunk of the body has arrived
- * @param {import('node:http').ServerResponse} [res] - answer completion discards unread bytes
+ * @param {import('node:http').ServerResponse} [res]
  * @returns {ReadableStream<Uint8Array>}
  */
 export function readBody(req, limit, state, res) {
 	let initialized = false;
-	// Set once the stream is finished, from either side: the request ended,
-	// failed or passed the limit, or the consumer cancelled. The listeners
-	// stand down from then on. A chunk still arriving after a cancel would
-	// otherwise be enqueued into a closed controller, which throws inside the
-	// request's event listener, where nothing catches it and the process exits.
 	let done = false;
+	const contentLength = Number(req.headers['content-length']);
+	const preallocated = Number.isSafeInteger(contentLength) && contentLength >= 0 &&
+		contentLength <= 65536 && contentLength <= limit ? Buffer.alloc(contentLength) : null;
 	return new ReadableStream({
 		start(controller) {
 			if (state.aborted) { done = true; controller.error(new Error('Request aborted')); }
-			// The application may answer without consuming its request. Stop
-			// queuing bytes and keep reading after that answer so the next
-			// request is not stranded behind a paused IncomingMessage.
-			const discard = () => {
-				if (!done) {
-					done = true;
-					controller.error(new Error('Request body discarded after response completed'));
-				}
-				req.resume();
-			};
-			res?.once('finish', discard);
-			req.once('close', () => res?.off('finish', discard));
 		},
 		pull(controller) {
-			if (done) return;
+			if (done || initialized) return;
 			if (state.aborted) {
-				try { controller.error(new Error('Request aborted')); } catch { /* already closed */ }
-				return;
-			}
-			if (initialized) {
-				req.resume();
+				done = true;
+				controller.error(new Error('Request aborted'));
 				return;
 			}
 			initialized = true;
@@ -115,16 +98,16 @@ export function readBody(req, limit, state, res) {
 				if (limit !== Infinity && size > limit) {
 					done = true;
 					controller.error(new PayloadTooLargeError());
-					req.pause();
 					return;
 				}
-				controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
-				if (controller.desiredSize !== null && controller.desiredSize <= 0) req.pause();
+				if (preallocated) preallocated.set(chunk, size - chunk.byteLength);
+				else controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
 			});
 			req.on('end', () => {
+				state.bodyReceived = true;
 				if (done) return;
 				done = true;
-				state.bodyReceived = true;
+				if (preallocated) controller.enqueue(preallocated.subarray(0, size));
 				controller.close();
 			});
 			req.on('error', (err) => {
@@ -134,8 +117,7 @@ export function readBody(req, limit, state, res) {
 			});
 		},
 		cancel() {
-			// What is still on its way is discarded, and the socket keeps being
-			// read so the connection reaches its next request.
+			// Continue receiving so the parser can reach the following request.
 			done = true;
 			req.resume();
 		}

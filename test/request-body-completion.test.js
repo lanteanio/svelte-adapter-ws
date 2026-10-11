@@ -14,6 +14,10 @@ export class Server {
 	async init() {}
 	async respond(request) {
 		if (request.method !== 'POST') return new Response('ok');
+		if (new URL(request.url).pathname === '/unread') {
+			globalThis[Symbol.for('body-completion-test-reader')] = { read: () => request.text() };
+			return new Response('ok');
+		}
 		const reader = request.body.getReader();
 		const first = await reader.read();
 		const mode = new URL(request.url).pathname.slice(1);
@@ -21,7 +25,7 @@ export class Server {
 		const pending = mode === 'pending' ? outcome(reader.read()) : null;
 		globalThis[Symbol.for('body-completion-test-reader')] = {
 			first: { done: first.done, bytes: first.value?.byteLength || 0 },
-			read: () => pending || outcome(reader.read())
+			read: (() => { let next = pending; return () => { const value = next || outcome(reader.read()); next = null; return value; }; })()
 		};
 		return new Response('ok');
 	}
@@ -82,18 +86,40 @@ describe.each([false, true])('request readers after response completion over TLS
 		await runtime?.close(); payload?.cleanup(); delete globalThis[slot];
 		for (const name of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH']) delete process.env[prefix + name];
 	});
-	it.each(['pending', 'late'])('rejects a %s reader when only a body prefix arrived', async mode => {
+	it.each(['pending', 'late'])('continues a %s reader after the response with a partial body', async mode => {
 		const wire = conversation(runtime.port, secure);
 		try {
 			await wire.connected;
-			wire.socket.write(`POST /${mode} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 8\r\n\r\nabc`);
+			wire.socket.write(`POST /${mode} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 70000\r\n\r\nabc`);
 			await wire.until(1);
 			expect(wire.answers).toEqual([{ status: 200, body: 'ok' }]);
 			expect(globalThis[slot].first).toEqual({ done: false, bytes: 3 });
-			expect(await globalThis[slot].read()).toEqual({ error: 'Request body discarded after response completed' });
-			wire.socket.write('defghGET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+			const remainder = 'd'.repeat(69997);
+			wire.socket.write(remainder + 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+			let bytes = 0;
+			for (;;) {
+				const chunk = await globalThis[slot].read();
+				expect(chunk.error).toBeUndefined();
+				bytes += chunk.bytes;
+				if (chunk.done) break;
+			}
+			expect(bytes).toBe(69997);
 			await wire.until(2);
 			expect(wire.answers).toEqual([{ status: 200, body: 'ok' }, { status: 200, body: 'OK' }]);
+		} finally { wire.socket.destroy(); }
+	});
+	it.each([3, 200000])('preserves %i bytes first read after the response', async bytes => {
+		const wire = conversation(runtime.port, secure);
+		try {
+			await wire.connected;
+			const body = 'x'.repeat(bytes);
+			wire.socket.write(`POST /unread HTTP/1.1\r\nHost: localhost\r\nContent-Length: ${bytes}\r\n\r\n${body}`);
+			await wire.until(1);
+			await new Promise(resolve => setTimeout(resolve, 300));
+			expect(await globalThis[slot].read()).toBe(body);
+			wire.socket.write('GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+			await wire.until(2);
+			expect(wire.answers[1]).toEqual({ status: 200, body: 'OK' });
 		} finally { wire.socket.destroy(); }
 	});
 	it.each(['abc', ''])('preserves a completely consumed body of %s', async body => {
