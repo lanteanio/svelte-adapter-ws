@@ -1839,6 +1839,11 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	// The app open hook runs LAST, with every listener armed: a throw or a
 	// rejection closes the connection with 1011, and its close path runs.
 	if (wsModule.open) runOpenHook(wsModule, facade, { platform: userData[WS_PLATFORM] });
+	// An admission hook can finish after the drain's connection sweep. Its
+	// accepted socket still receives the same closing handshake.
+	if (socketsDraining) {
+		try { facade.end(1001, 'Server draining'); } catch { rawWs.terminate(); }
+	}
 }
 
 /**
@@ -3073,6 +3078,8 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 	return false;
 }
 
+let socketsDraining = false;
+
 /**
  * Managed WebSocket drain: `http.close()` never completes while a socket is
  * open and live sockets keep working after it, so shutdown closes them
@@ -3088,6 +3095,7 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
  * @returns {Promise<void>}
  */
 export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50, signal = null }) {
+	socketsDraining = true;
 	if (wsConnections.size === 0) return;
 	if (dispersalMs > 0) {
 		platform.adviseReconnect({ windowMs: dispersalMs, close: true });

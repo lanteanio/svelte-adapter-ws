@@ -1,3 +1,4 @@
+import WebSocket from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
 import net from 'node:net';
 import tls from 'node:tls';
@@ -78,6 +79,7 @@ for (const secure of [false, true]) describe(`upgrade admission during drain ove
 	let runtime;
 	let hooks;
 	async function boot() {
+		process.env[prefix + 'RECONNECT_DISPERSAL_MS'] = '0';
 		if (secure) {
 			const certs = fileURLToPath(new URL('./fixtures/tls/', import.meta.url));
 			process.env[prefix + 'SSL_CERT'] = path.join(certs, 'localhost.crt');
@@ -100,7 +102,7 @@ for (const secure of [false, true]) describe(`upgrade admission during drain ove
 		hooks?.releaseUpgrade();
 		await runtime?.close();
 		payload?.cleanup();
-		for (const key of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH']) delete process.env[prefix + key];
+		for (const key of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH', 'RECONNECT_DISPERSAL_MS']) delete process.env[prefix + key];
 		delete globalThis[controlSlot];
 		hooks = runtime = payload = undefined;
 	});
@@ -139,4 +141,29 @@ for (const secure of [false, true]) describe(`upgrade admission during drain ove
 		expect(responses[0].headers.connection).not.toBe('close');
 		expect(responses[1].body).toBe('OK');
 	});
+	it.each([0, 3000])('closes an upgrade accepted after the first shutdown sweep with budget %i', async timeoutMs => {
+		await boot();
+		const client = new WebSocket(`${secure ? 'wss' : 'ws'}://127.0.0.1:${runtime.port}/ws?wait`, { rejectUnauthorized: false });
+		const opened = new Promise((resolve, reject) => { client.once('open', resolve); client.once('error', reject); });
+		const closed = new Promise(resolve => client.once('close', code => resolve(code)));
+		let release;
+		let deadline;
+		try {
+			await hooks.entered;
+			const started = Date.now();
+			const shutdown = runtime.handler.shutdown({ timeoutMs });
+			release = setTimeout(() => hooks.releaseUpgrade(), 150);
+			await opened;
+			expect(await Promise.race([
+				shutdown,
+				new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Late upgrade held shutdown open')), 1800); })
+			])).toBe(true);
+			expect(await closed).toBe(1001);
+			expect(Date.now() - started).toBeLessThan(1500);
+			expect(client.readyState).toBe(WebSocket.CLOSED);
+		} finally {
+			clearTimeout(release); clearTimeout(deadline); client.terminate();
+		}
+	});
+
 });
