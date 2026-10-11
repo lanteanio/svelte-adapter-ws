@@ -308,7 +308,10 @@ export async function start(host, port, opts = {}) {
 	// replacing rather than the fresh one. The latch is what makes two
 	// concurrent callers share a single drain, so it is cleared between
 	// lifecycles and never within one.
-	if (lifecycleState() === 'closed') shutdownRun = null;
+	if (lifecycleState() === 'closed') {
+		shutdownRun = null;
+		realtime?.resetSocketDrain();
+	}
 	return lifecycleStart(server, host, port, {
 		warmupPaths: WARMUP_PATHS,
 		listen: opts.listen,

@@ -98,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Shutdown closes every WebSocket with 1001 `Server shutting down`, also when a
+  reconnect dispersal window is set; the close reason was `Server draining`.
+
 - Probe GET responses use implicit length framing; HEAD keeps its explicit body length.
 
 - Request lines retain their original boundaries across fragmented reads. Invalid
@@ -370,7 +373,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Completed static, realtime and probe responses pipelined ahead of a refused
   request reach the client in full, even past 16 KiB in one read.
 
-- Draining changes readiness without adding a WebSocket admission refusal. Pending upgrade hooks can complete, and refused handshakes retain their HTTP connection after the listener closes.
+- WebSocket upgrades are admitted while the server drains. Pending upgrade hooks can complete, and refused handshakes retain their HTTP connection after the listener closes.
 
 - Long HTTP pipelines no longer accumulate connection close listeners or emit
   listener-limit warnings; aborted queued requests still settle once.

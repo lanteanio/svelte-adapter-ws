@@ -141,11 +141,32 @@ for (const secure of [false, true]) describe(`upgrade admission during drain ove
 		expect(responses[0].headers.connection).not.toBe('close');
 		expect(responses[1].body).toBe('OK');
 	});
+	it('keeps sockets usable after restarting the same handler', async () => {
+		await boot();
+		for (let round = 0; round < 3; round++) {
+			if (round > 0) await runtime.handler.start('127.0.0.1', 0);
+			const port = runtime.handler.server.address().port;
+			const client = new WebSocket(`${secure ? 'wss' : 'ws'}://127.0.0.1:${port}/ws`, { rejectUnauthorized: false });
+			const closed = new Promise(resolve => client.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
+			try {
+				await new Promise((resolve, reject) => { client.once('open', resolve); client.once('error', reject); });
+				await new Promise((resolve, reject) => {
+					const deadline = setTimeout(() => reject(new Error('Restarted socket did not answer ping')), 2000);
+					client.once('pong', () => { clearTimeout(deadline); resolve(); });
+					client.once('close', () => { clearTimeout(deadline); reject(new Error('Restarted socket closed before pong')); });
+					client.ping('restart');
+				});
+				expect(client.readyState).toBe(WebSocket.OPEN);
+				expect(await runtime.handler.shutdown({ timeoutMs: 2000 })).toBe(true);
+				expect(await closed).toEqual({ code: 1001, reason: 'Server shutting down' });
+			} finally { client.terminate(); }
+		}
+	});
 	it.each([0, 3000])('closes an upgrade accepted after the first shutdown sweep with budget %i', async timeoutMs => {
 		await boot();
 		const client = new WebSocket(`${secure ? 'wss' : 'ws'}://127.0.0.1:${runtime.port}/ws?wait`, { rejectUnauthorized: false });
 		const opened = new Promise((resolve, reject) => { client.once('open', resolve); client.once('error', reject); });
-		const closed = new Promise(resolve => client.once('close', code => resolve(code)));
+		const closed = new Promise(resolve => client.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
 		let release;
 		let deadline;
 		try {
@@ -158,7 +179,7 @@ for (const secure of [false, true]) describe(`upgrade admission during drain ove
 				shutdown,
 				new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Late upgrade held shutdown open')), 1800); })
 			])).toBe(true);
-			expect(await closed).toBe(1001);
+			expect(await closed).toEqual({ code: 1001, reason: 'Server shutting down' });
 			expect(Date.now() - started).toBeLessThan(1500);
 			expect(client.readyState).toBe(WebSocket.CLOSED);
 		} finally {

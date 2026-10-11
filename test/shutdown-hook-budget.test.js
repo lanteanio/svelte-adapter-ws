@@ -266,12 +266,9 @@ describe('the app shutdown hook runs ahead of the close, and the drains get what
 
 describe('the close path is bounded by the budget whatever a handshake is doing', () => {
 	it('does not let an upgrade caught inside its hook hold the exit past the budget', async () => {
-		// The upgrade hook is checked for draining BEFORE it runs. A shutdown
-		// that begins while the hook is pending has swept the live sockets by
-		// the time the hook resolves, so a connection opened then would be one
-		// nothing sweeps again - and the listener's close never fires while it
-		// is open. The accept re-checks and refuses, and the wait on the close
-		// is bounded by the same budget either way.
+		// A hook that settles after the socket sweep still admits its connection.
+		// The new connection receives the shutdown close immediately, so it
+		// cannot hold the listener open until the budget expires.
 		process.env.WS_UPGRADE_DELAY_MS = '800';
 		await handler.start('127.0.0.1', 0);
 		const port = handler.server.address().port;
@@ -281,11 +278,11 @@ describe('the close path is bounded by the budget whatever a handshake is doing'
 		ws.on('open', () => outcome.push('open'));
 		ws.on('unexpected-response', (_req, res) => outcome.push('refused:' + res.statusCode));
 		ws.on('error', (err) => outcome.push('error:' + err.message));
-		ws.on('close', (code) => outcome.push('close:' + code));
+		ws.on('close', (code, reason) => outcome.push('close:' + code + ':' + reason.toString()));
 		await new Promise((r) => setTimeout(r, 100));
 
 		const t0 = Date.now();
-		await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 1500 });
+		const drained = await handler.shutdown({ reason: 'SIGTERM', timeoutMs: 1500 });
 		const elapsed = Date.now() - t0;
 		await new Promise((r) => setTimeout(r, 100));
 		try { ws.terminate(); } catch { /* already gone */ }
@@ -293,8 +290,8 @@ describe('the close path is bounded by the budget whatever a handshake is doing'
 		// Down once the pending handshake settled (~700ms), well inside the
 		// budget - not at the budget, and not never.
 		expect(elapsed).toBeLessThan(1300);
-		expect(outcome.some((o) => o === 'open'), `the handshake was accepted under a closing server: ${outcome.join(', ')}`).toBe(false);
-		expect(outcome.some((o) => o.startsWith('refused:503') || o.startsWith('error:')), outcome.join(', ')).toBe(true);
+		expect(drained).toBe(true);
+		expect(outcome).toEqual(['open', 'close:1001:Server shutting down']);
 	}, 20000);
 
 	it('bounds the wait on the listener close when a handshake outlives the whole budget', async () => {

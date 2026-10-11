@@ -1842,7 +1842,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	// An admission hook can finish after the drain's connection sweep. Its
 	// accepted socket still receives the same closing handshake.
 	if (socketsDraining) {
-		try { facade.end(1001, 'Server draining'); } catch { rawWs.terminate(); }
+		try { facade.end(1001, 'Server shutting down'); } catch { rawWs.terminate(); }
 	}
 }
 
@@ -3106,6 +3106,11 @@ export function tryWaitingRoomRoute(req, res, pathname, search) {
 
 let socketsDraining = false;
 
+/** Re-arm socket admission when a closed handler starts a new lifecycle. */
+export function resetSocketDrain() {
+	socketsDraining = false;
+}
+
 /**
  * Managed WebSocket drain: `http.close()` never completes while a socket is
  * open and live sockets keep working after it, so shutdown closes them
@@ -3124,11 +3129,10 @@ export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50, signa
 	socketsDraining = true;
 	if (wsConnections.size === 0) return;
 	if (dispersalMs > 0) {
-		platform.adviseReconnect({ windowMs: dispersalMs, close: true });
-	} else {
-		for (const facade of [...wsConnections]) {
-			try { /** @type {any} */ (facade).end(1001, 'Server draining'); } catch { /* already gone */ }
-		}
+		platform.adviseReconnect({ windowMs: dispersalMs, close: false });
+	}
+	for (const facade of [...wsConnections]) {
+		try { /** @type {any} */ (facade).end(1001, 'Server shutting down'); } catch { /* already gone */ }
 	}
 	// Wait for the close handshakes to land, bounded by the deadline; then
 	// terminate whatever is still holding a socket open.

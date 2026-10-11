@@ -38,7 +38,7 @@ function dial(port) {
 			ws.once('open', resolve);
 			ws.once('error', reject);
 		}),
-		closed: () => new Promise((resolve) => ws.once('close', (code) => resolve(code)))
+		closed: () => new Promise((resolve) => ws.once('close', (code, reason) => resolve({ code, reason: reason.toString() })))
 	};
 }
 
@@ -59,8 +59,8 @@ describe('managed WebSocket drain', () => {
 			const bClosed = b.closed();
 			await rt.handler.shutdown({ timeoutMs: 5000 });
 
-			expect(await aClosed).toBe(1001);
-			expect(await bClosed).toBe(1001);
+			expect(await aClosed).toEqual({ code: 1001, reason: 'Server shutting down' });
+			expect(await bClosed).toEqual({ code: 1001, reason: 'Server shutting down' });
 			for (const client of [a, b]) {
 				const advisory = client.frames.find((f) => f.type === 'reconnect');
 				expect(advisory).toBeDefined();
@@ -88,7 +88,7 @@ describe('managed WebSocket drain', () => {
 			await client.open();
 			const closed = client.closed();
 			await rt.handler.shutdown({ timeoutMs: 5000 });
-			expect(await closed).toBe(1001);
+			expect(await closed).toEqual({ code: 1001, reason: 'Server shutting down' });
 			expect(client.frames.find((f) => f.type === 'reconnect')).toBeUndefined();
 		} finally {
 			delete process.env.SAW_DR0_RECONNECT_DISPERSAL_MS;
@@ -110,7 +110,7 @@ describe('managed WebSocket drain', () => {
 			await late.open();
 			const closed = late.closed();
 			await rt.handler.shutdown({ timeoutMs: 1000 });
-			expect(await closed).toBe(1001);
+			expect(await closed).toEqual({ code: 1001, reason: 'Server shutting down' });
 		} finally {
 			late?.ws.terminate();
 			await rt?.close();
