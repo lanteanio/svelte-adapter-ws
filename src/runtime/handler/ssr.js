@@ -583,19 +583,19 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 		const method = request.method;
 		const headOnly = method === 'HEAD';
 
-		// Dedup: for anonymous GET/HEAD requests that arrive concurrently for the
+		// Dedup: for anonymous GET requests that arrive concurrently for the
 		// same URL, only the first (the leader) calls server.respond(). Subsequent
 		// requests (waiters) await the leader's promise and reconstruct a Response
 		// from the shared buffer. This prevents redundant SSR work during traffic
 		// spikes on public pages.
 		//
 		// Dedup is skipped for:
-		//   - Non-GET/HEAD methods (mutations must not be coalesced)
+		//   - Non-GET methods (HEAD must never consume the response body)
 		//   - Authenticated requests (cookie or authorization header present)
 		//   - When the dedup map is at capacity (safety valve)
 		const isCredentialedRequest = !!(headers.cookie || headers.authorization);
 		const canDedup =
-			(method === 'GET' || method === 'HEAD') &&
+			method === 'GET' &&
 			!isCredentialedRequest &&
 			ssrInflight.size < MAX_SSR_DEDUP;
 		// BREACH defense: suppress the accept-encoding signal for credentialed
