@@ -315,6 +315,20 @@ observe-only counterpart: it trends the SIZE of the live bookkeeping
 collections and logs one throttled warning when a series climbs monotonically,
 the signature of a close, unsubscribe or eviction path that stopped shedding.
 
+### HTTP response streams
+
+Response streams normalize strings to UTF-8 and preserve the exact bytes of
+ArrayBuffers and typed-array/DataView slices. Invalid chunks fail the response
+and cancel the producer. A finite single-string body has the same dynamic
+compression eligibility as its byte equivalent; credentialed response compression
+remains disabled unless explicitly enabled.
+
+Deferred response streams flush their first ready bytes without waiting for
+later producer work. Ready finite bodies retain length framing and compression.
+Streams waiting for later data use chunked framing without shared rendering
+or compression. Socket disconnects cancel and release response readers even
+after a POST body has finished.
+
 ### Metrics
 
 `websocket.metrics` is a **module path**, not a live object - adapter options
@@ -587,6 +601,15 @@ prerendered serving, WebSocket upgrades and per-message hooks, propagates W3C
 the active context as `platform.trace` / `platform.traceContext`. Without the
 option the tracing paths cost one boolean test.
 
+Set `CANONICAL_HOST_ALIASES` to comma-separated, case-insensitive exact authorities
+(such as `www.example.com,preview.example.com:8443`) to return a 308 redirect to
+`ORIGIN` before static delivery or SSR. Ports match exactly. `ORIGIN` must be an
+HTTP(S) origin without credentials, path, query or fragment, and its authority
+cannot be an alias. Raw paths and queries and the request method are preserved.
+Mounted health and readiness probes remain available. Unlisted hosts serve
+normally; configured proxy host, port and protocol headers keep their existing
+trust behavior. This feature is disabled by default.
+
 Runtime environment (prefix configurable via the `envPrefix` option):
 
 The Vite plugin reads the same prefix from the adapter configuration. For
@@ -598,6 +621,7 @@ keeps using `ORIGIN`.
 |---|---|---|
 | `HOST` / `PORT` | `0.0.0.0` / `3000` | Listen address. |
 | `ORIGIN` | - | The app's public origin (behind a TLS-terminating proxy). |
+| `CANONICAL_HOST_ALIASES` | _(disabled)_ | Comma-separated host authorities redirected to `ORIGIN` with 308 before static, prerendered and SSR handling. Example: `www.example.com,preview.example.com:8443`. Matching ignores case and preserves explicit ports; no wildcards. `ORIGIN` must be an HTTP(S) origin without credentials, path, query or fragment and cannot be listed as an alias. |
 | `PROTOCOL_HEADER` / `HOST_HEADER` / `PORT_HEADER` | - | Proxy identity headers when `ORIGIN` is not pinned. Without `ORIGIN`, the URL your app, your `admin()` handler and your `authenticate` hook see is built from these or from the `Host` header, and each must be what it names: a host name, IPv4 address or bracketed IPv6 address with an optional port, a port number, and `http` or `https`. Anything else is answered `400` before your code runs, and a refused configured header prints one warning naming it. |
 | `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
 | `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
@@ -908,24 +932,3 @@ process becomes ready before continuing.
 ## License
 
 MIT
-
-Set `CANONICAL_HOST_ALIASES` to comma-separated, case-insensitive exact authorities
-(such as `www.example.com,preview.example.com:8443`) to return a 308 redirect to
-`ORIGIN` before static delivery or SSR. Ports match exactly. `ORIGIN` must be an
-HTTP(S) origin without credentials, path, query or fragment, and its authority
-cannot be an alias. Raw paths and queries and the request method are preserved.
-Mounted health and readiness probes remain available. Unlisted hosts serve
-normally; configured proxy host, port and protocol headers keep their existing
-trust behavior. This feature is disabled by default.
-
-Response streams normalize strings to UTF-8 and preserve the exact bytes of
-ArrayBuffers and typed-array/DataView slices. Invalid chunks fail the response
-and cancel the producer. A finite single-string body has the same dynamic
-compression eligibility as its byte equivalent; credentialed response compression
-remains disabled unless explicitly enabled.
-
-Deferred response streams flush their first ready bytes without waiting for
-later producer work. A buffered prefix receives one check-phase turn in total
-to settle ready transformations; a pending continuation then streams with chunked
-framing and without shared rendering or compression. Socket disconnects cancel
-and release response readers even after a POST body has finished.
