@@ -547,7 +547,7 @@ rather than on the proxy. Without an `admin` export there is no mount and no
 reservation, and the prefix is an ordinary path your own routes can serve. One
 spelling stays inside the prefix on every reading and is passed through: an
 encoded separator, as in `/__realtime/..%2freflect`, reaches your `admin()`
-handler with the escape as sent. Split the pathname on `/` before decoding any
+handler with the `%2F` intact. Split the pathname on `/` before decoding any
 segment - as `svelte-realtime`'s `admin()` does - so a decoded `..` can never walk
 your own routing.
 
