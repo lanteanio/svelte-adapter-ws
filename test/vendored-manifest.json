@@ -3225,5 +3225,32 @@
 	},
 	{
 		"file": "test/memory-wall.test.js"
+	},
+	{
+		"file": "test/client-worker-isolation.test.js",
+		"adaptations": [
+			{
+				"lead": "svelte-adapter-ws.dashboard-contributors",
+				"ours": "svelte-adapter-uws.dashboard-contributors",
+				"all": true
+			},
+			{
+				"lead": "pool: base.test.pool,",
+				"ours": "pool: base.test.projects.find(project => project.test.name === 'runtime').test.pool,"
+			}
+		]
+	},
+	{
+		"file": "test/helpers/reset-modules.js",
+		"adaptations": [
+			{
+				"lead": "svelte-adapter-ws.ingress-registry",
+				"ours": "svelte-adapter-uws.ingress-registry"
+			},
+			{
+				"lead": "svelte-adapter-ws.dashboard-contributors",
+				"ours": "svelte-adapter-uws.dashboard-contributors"
+			}
+		]
 	}
 ]

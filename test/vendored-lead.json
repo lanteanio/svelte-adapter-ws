@@ -5,6 +5,8 @@
 	"fileRevisions": {
 		"protocol.schema.json": "7bafe5ea27e060f0bca67e4376a8b6e676db30f4",
 		"src/runtime/utils/memory-wall.js": "73230c224b4233d64ec33dd02f6a1a3101f51244",
-		"test/memory-wall.test.js": "5a696164be2cf91d8643753da3fc8ca46bf530f0"
+		"test/memory-wall.test.js": "5a696164be2cf91d8643753da3fc8ca46bf530f0",
+		"test/helpers/reset-modules.js": "00c0a4b",
+		"test/client-worker-isolation.test.js": "00c0a4b"
 	}
 }

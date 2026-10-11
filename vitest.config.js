@@ -38,7 +38,7 @@ export default defineConfig({
 		globalSetup: ['./test/helpers/global-setup.js'],
 		// Reset application modules before capturing globals and cleanup registries.
 		// Restore browser globals and stop runtimes each file leaves behind.
-		setupFiles: ['./test/helpers/reset-module-state.js', './test/helpers/restore-globals.js', './test/helpers/stop-leaked-runtimes.js'],
+		setupFiles: ['./test/helpers/reset-modules.js', './test/helpers/restore-globals.js', './test/helpers/stop-leaked-runtimes.js'],
 		sequence: { setupFiles: 'list' },
 		testTimeout: 15000,
 		hookTimeout: 15000,
@@ -49,12 +49,8 @@ export default defineConfig({
 					name: 'runtime',
 					include: ['test/**/*.test.js'],
 					exclude: [...EXCLUDE, ...VITE_DEV_SUITES],
-					// vmForks, as the lead runs. Still process-based, so a wedged
-					// node:http server cannot hang the runner - and each file gets its
-					// own module registry, which is what the real-runtime suites need:
-					// the runtime reads several settings at module eval, Node cannot
-					// re-evaluate a cached module, and two suites sharing a worker would
-					// otherwise test a server neither of them configured.
+					// Keep real servers in killable processes. The ordered setup resets
+					// application modules and shared registries between VM files.
 					pool: 'vmForks'
 				}
 			},

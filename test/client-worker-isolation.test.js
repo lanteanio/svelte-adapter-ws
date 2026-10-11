@@ -10,10 +10,11 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(import.meta.url);
 const specifier = file => JSON.stringify(pathToFileURL(file).href);
 
-it('gives a real client a fresh connection after a mock suite in one VM worker', async () => {
+it('isolates client modules and application registries between files in one VM worker', async () => {
 	const directory = mkdtempSync(path.join(tmpdir(), 'client-worker-isolation-'));
 	const client = specifier(path.join(root, 'src/client.js'));
 	const runtime = specifier(path.join(root, 'src/client-runtime.js'));
+	const symbols = specifier(path.join(root, 'src/runtime/utils/ws-symbols.js'));
 	const vitestRoot = path.dirname(require.resolve('vitest/package.json'));
 	const vitest = specifier(path.join(vitestRoot, 'dist/index.js'));
 	const ws = specifier(path.join(path.dirname(require.resolve('ws/package.json')), 'wrapper.mjs'));
@@ -22,6 +23,7 @@ it('gives a real client a fresh connection after a mock suite in one VM worker',
 import { expect, it } from ${vitest};
 import * as client from ${client};
 import { setRuntimeEnv } from ${runtime};
+import { setSubscriptionAccountingHook } from ${symbols};
 it('owns an open mock singleton and injected timers', () => {
 	class Socket {
 		static CONNECTING = 0; static OPEN = 1;
@@ -33,14 +35,27 @@ it('owns an open mock singleton and injected timers', () => {
 	setRuntimeEnv({ timers: { set: () => null, setInterval: () => null, setImmediate: () => null, clear() {}, clearInterval() {} } });
 	const connection = client.connect({ url: 'ws://mock.invalid/ws' });
 	expect(connection.send({ kind: 'mock' })).toBe(true);
+	setSubscriptionAccountingHook(() => {});
+	globalThis[Symbol.for('adapter-uws.derived-topic-prefixes')].add('previous-file:');
+	globalThis[Symbol.for('svelte-adapter-uws.dashboard-contributors')] = new Map([['previous-file', true]]);
+	globalThis[Symbol.for('test.unrelated-global')] = 'preserved';
+	globalThis.__uws_dev_platform = { previousFile: true };
 });
 `);
 		writeFileSync(path.join(directory, '02-real.test.js'), `
 import { expect, it } from ${vitest};
 import { once } from 'node:events';
 import { WebSocketServer } from ${ws};
+import { setSubscriptionAccountingHook } from ${symbols};
 import * as client from ${client};
 it('starts connecting and delivers to its own real server', async () => {
+	expect(setSubscriptionAccountingHook(() => {}), 'accounting starts without a previous file sink').toBe(false);
+	setSubscriptionAccountingHook(null);
+	expect(globalThis[Symbol.for('adapter-uws.derived-topic-prefixes')].has('previous-file:')).toBe(false);
+	expect(globalThis[Symbol.for('svelte-adapter-uws.dashboard-contributors')]).toBeUndefined();
+	expect(globalThis.__uws_dev_platform).toBeUndefined();
+	expect(globalThis[Symbol.for('test.unrelated-global')]).toBe('preserved');
+	delete globalThis[Symbol.for('test.unrelated-global')];
 	const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
 	await once(server, 'listening');
 	let connection;
