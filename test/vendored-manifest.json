@@ -3252,5 +3252,11 @@
 				"ours": "svelte-adapter-uws.dashboard-contributors"
 			}
 		]
+	},
+	{
+		"file": "test/memory-wall-availability.test.js"
+	},
+	{
+		"file": "test/memory-wall-sampler.test.js"
 	}
 ]
