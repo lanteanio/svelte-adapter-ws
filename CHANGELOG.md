@@ -365,8 +365,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Missing and duplicate Host refusals now use the same response bytes whether
   an earlier response is buffered or already complete.
 
-- Readers of an incomplete request body reject if the response finishes first.
-  The connection drains unread bytes for later requests.
+- Request bodies remain readable after the response finishes, including bodies
+  first read later. Unread bytes drain so later requests can continue.
 
 - A malformed WebSocket-path request carrying a 24-byte key records a rejected upgrade duration and no HTTP request metric, matching the native route. Other malformed handshakes retain HTTP metrics.
 
