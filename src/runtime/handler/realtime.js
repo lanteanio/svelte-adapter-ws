@@ -2705,6 +2705,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 
 	const contentLength = parseInt(headers['content-length'], 10);
 	if (!isNaN(contentLength) && contentLength > AUTH_BODY_LIMIT) {
+		readBody(req, 0, state, res);
 		send413(res);
 		return true;
 	}

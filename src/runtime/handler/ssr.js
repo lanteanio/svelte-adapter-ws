@@ -76,10 +76,24 @@ const COMPRESSIBLE_TYPES = new Set([
 export function readBody(req, limit, state, res) {
 	let initialized = false;
 	let done = false;
+	let receivedSinceDeadline = 0;
+	let readByApplication = false;
+	let timer;
+	const stopDeadline = () => {
+		if (timer) clearTimer(timer);
+		timer = null;
+	};
+	const armDeadline = () => {
+		stopDeadline();
+		if (!req.readableEnded && !req.destroyed) {
+			timer = setTimer(() => req.socket.destroy(), 10_000);
+			timer?.unref?.();
+		}
+	};
 	const contentLength = Number(req.headers['content-length']);
 	const preallocated = Number.isSafeInteger(contentLength) && contentLength >= 0 &&
 		contentLength <= 65536 && contentLength <= limit ? Buffer.alloc(contentLength) : null;
-	return new ReadableStream({
+	const body = new ReadableStream({
 		start(controller) {
 			if (state.aborted) { done = true; controller.error(new Error('Request aborted')); }
 		},
@@ -91,8 +105,28 @@ export function readBody(req, limit, state, res) {
 				return;
 			}
 			initialized = true;
+			armDeadline();
+			const answered = () => {
+				readByApplication ||= body.locked;
+				armDeadline();
+			};
+			res?.once('finish', answered);
+			req.once('close', () => {
+				stopDeadline();
+				res?.off('finish', answered);
+			});
 			let size = 0;
 			req.on('data', (/** @type {Buffer} */ chunk) => {
+				// A receive deadline advances only after 160 KiB of useful body
+				// progress. Ignored bodies retain the answer's fixed deadline.
+				readByApplication ||= body.locked;
+				if (!res?.writableFinished || readByApplication) {
+					receivedSinceDeadline += chunk.byteLength;
+					if (receivedSinceDeadline >= 160 * 1024) {
+						receivedSinceDeadline = 0;
+						armDeadline();
+					}
+				}
 				if (done || state.aborted) return;
 				size += chunk.byteLength;
 				if (limit !== Infinity && size > limit) {
@@ -104,6 +138,7 @@ export function readBody(req, limit, state, res) {
 				else controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
 			});
 			req.on('end', () => {
+				stopDeadline();
 				state.bodyReceived = true;
 				if (done) return;
 				done = true;
@@ -122,6 +157,7 @@ export function readBody(req, limit, state, res) {
 			req.resume();
 		}
 	});
+	return body;
 }
 
 /**
@@ -142,7 +178,10 @@ export function buildRequest(req, baseOrigin, headers, state, res) {
 	let body;
 	if (method !== 'GET' && method !== 'HEAD') {
 		const cl = parseInt(headers['content-length'], 10);
-		if (!isNaN(cl) && body_size_limit !== Infinity && cl > body_size_limit) return null;
+		if (!isNaN(cl) && body_size_limit !== Infinity && cl > body_size_limit) {
+			readBody(req, 0, state, res);
+			return null;
+		}
 		body = readBody(req, body_size_limit, state, res);
 	}
 	return new Request(baseOrigin + req.url, {
