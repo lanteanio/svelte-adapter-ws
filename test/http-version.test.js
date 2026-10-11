@@ -555,13 +555,15 @@ describe('createTestServer', () => {
 		const hostless = await converse(tcp(mirror.port), [[0, 'TRACK / HTTP/1.1\r\n'], [100, '\r\n']], ['GET']);
 		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 		const allowed = await converse(tcp(mirror.port), [[0, 'TRACK / HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
-		expect(allowed.answers[0]?.statusLine).toBe('HTTP/1.1 404 Not Found');
+		expect(allowed.answers[0]?.statusLine).toBe('HTTP/1.1 404 File Not Found');
+		expect(allowed.answers[0]?.body).toBe('<html><body><h1>File Not Found</h1><hr><i>uWebSockets/20 Server</i></body></html>');
 	});
 
 	it('reads a CONNECT in its connection\'s line, as production does', async () => {
 		expect505(await refusal(tcp(mirror.port), 'OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\nCONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n'), 'CONNECT behind OPTIONS *');
 		const conversation = await converse(tcp(mirror.port), [[0, 'CONNECT /x HTTP/1.1\r\nHost: x\r\n\r\n']], ['GET']);
-		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 404 Not Found');
+		expect(conversation.answers[0]?.statusLine).toBe('HTTP/1.1 404 File Not Found');
+		expect(conversation.answers[0]?.body).toBe('<html><body><h1>File Not Found</h1><hr><i>uWebSockets/20 Server</i></body></html>');
 		const hostless = await converse(tcp(mirror.port), [[0, 'CONNECT /x HTTP/1.1\r\n\r\n']], ['GET']);
 		expect(hostless.answers[0]?.statusLine).toBe('HTTP/1.1 400 Bad Request');
 	});

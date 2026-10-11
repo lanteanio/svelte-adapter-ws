@@ -604,7 +604,7 @@ describe('upgrade waiting room on createTestServer', () => {
 			const unrouted = await rawStatusLine(port, ['GET /__no_such_page__ HTTP/1.1', 'Host: 127.0.0.1']);
 			const plain = await rawStatusLine(port, ['GET /ws HTTP/1.1', 'Host: 127.0.0.1']);
 			const h2c = await rawStatusLine(port, ['GET /ws HTTP/1.1', 'Host: 127.0.0.1', 'Connection: Upgrade', 'Upgrade: h2c']);
-			expect(unrouted).toBe('HTTP/1.1 404 Not Found');
+			expect(unrouted).toBe('HTTP/1.1 404 File Not Found');
 			expect(plain).toBe(unrouted);
 			expect(h2c).toBe(unrouted);
 		});
