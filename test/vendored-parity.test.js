@@ -120,12 +120,16 @@ describe('vendored files stay byte-identical to the lead', () => {
 		/** @type {Array<{ file: string, reason: string, lead: string }>} */
 		const owned = JSON.parse(readFileSync(path.join(repoRoot, 'test', 'owned-shared.json'), 'utf8'));
 		const ownedFiles = new Set(owned.map((entry) => entry.file));
+		const ownedBlobs = execFileSync('git', ['-C', uwsRoot, 'cat-file', '--batch-check=%(objectname)'], {
+			input: owned.map((entry) => `${LEAD.fileRevisions?.[entry.file] || LEAD.rev}:${entry.file}`).join('\n') + '\n',
+			encoding: 'utf8'
+		}).trim().split('\n');
 		expect(owned.length, 'no owned entry twice').toBe(ownedFiles.size);
 		expect(owned.filter((entry) => typeof entry.reason !== 'string' || entry.reason.trim() === ''), 'every owned file names its reason').toEqual([]);
 		expect(owned.map((entry) => entry.file).filter((file) => held.has(file) || heldElsewhere.has(file)), 'owned and vendored at once').toEqual([]);
 		expect(owned.map((entry) => entry.file).filter((file) => !leadTree.has(file) || !tracked.includes(file)), 'owned entries the lead or this repo no longer has').toEqual([]);
 		expect(
-			owned.filter((entry) => leadTree.get(entry.file) !== entry.lead).map((entry) => entry.file),
+			owned.filter((entry, index) => ownedBlobs[index] !== entry.lead).map((entry) => entry.file),
 			'owned files the lead has changed since they were reconciled: read the lead\'s change, carry what applies, then record the blob at the pin'
 		).toEqual([]);
 		const unlisted = shared.filter((file) => !held.has(file) && !heldElsewhere.has(file) && !ownedFiles.has(file));

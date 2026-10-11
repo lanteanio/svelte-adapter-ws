@@ -2343,7 +2343,7 @@
 		"adaptations": [
 			{
 				"lead": "export const FIXTURE_VARIANTS = {\n\t// The long-standing default.",
-				"ours": "export const FIXTURE_VARIANTS = {\n\trecoverref: {\n\t\tout: 'build-recover-ref',\n\t\thandler: './src/hooks.ws.recover-ref.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsubscriptionstate: {\n\t\tout: 'build-subscription-state',\n\t\thandler: './src/hooks.ws.subscription-state.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\treusedata: {\n\t\tout: 'build-reuse-data',\n\t\thandler: './src/hooks.ws.reuse-data.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tclosesubscriptions: {\n\t\tout: 'build-close-subscriptions',\n\t\thandler: './src/hooks.ws.close-subscriptions.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
+				"ours": "export const FIXTURE_VARIANTS = {\n\tsetupfailure: {\n\t\tout: 'build-setup-failure',\n\t\thandler: './src/hooks.ws.setup-failure.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100, upgradeAdmission: { maxConnections: 1 } }\n\t},\n\trecoverref: {\n\t\tout: 'build-recover-ref',\n\t\thandler: './src/hooks.ws.recover-ref.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsubscriptionstate: {\n\t\tout: 'build-subscription-state',\n\t\thandler: './src/hooks.ws.subscription-state.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\treusedata: {\n\t\tout: 'build-reuse-data',\n\t\thandler: './src/hooks.ws.reuse-data.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tclosesubscriptions: {\n\t\tout: 'build-close-subscriptions',\n\t\thandler: './src/hooks.ws.close-subscriptions.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
 			}
 		]
 	},
@@ -3401,5 +3401,20 @@
 	},
 	{
 		"file": "test/smooth-drain-budget-real.test.js"
+	},
+	{
+		"file": "test/connection-setup-real.test.js"
+	},
+	{
+		"file": "test/helpers/setup-failure-child.mjs",
+		"adaptations": [
+			{
+				"lead": "} finally { healthy?.close(); await server.stop(); dispose(); }",
+				"ours": "} finally {\n\thealthy?.close();\n\tlet deadline;\n\ttry {\n\t\tawait Promise.race([\n\t\t\tserver.stop(),\n\t\t\tnew Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })\n\t\t]);\n\t} finally { clearTimeout(deadline); dispose(); }\n}"
+			}
+		]
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.setup-failure.js"
 	}
 ]

@@ -599,7 +599,7 @@ searchable log prefix is:
 - **Code/event:** `runtime.websocket-open.failed`
 - **Message prefix:** `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-open event=runtime.websocket-open.failed severity=error] Connection setup failed after the upgrade completed.`
 - **Cause:** An internal connection setup step threw after the WebSocket handshake completed and before the application open hook ran.
-- **Consequence:** The accepted connection is terminated. Its live-connection entry and admission permit are released. Application open and close hooks do not run for the failed setup; other connections remain available.
+- **Consequence:** The accepted connection is closed with code 1011. Its live-connection entry and admission permit are released. Application open and close hooks do not run for the failed setup; other connections remain available.
 - **Automatic recovery:** The client can reconnect and repeat setup. The worker remains available to accept connections.
 - **Next action:** Read the attached error and requestId. Check custom instrumentation or changes to runtime built-ins, then reproduce the exception with the same adapter version. This event describes internal setup, not an exception thrown by the application open hook.
 - **Runtime help:** `docs/errors.md#adapter-err-connection-setup`

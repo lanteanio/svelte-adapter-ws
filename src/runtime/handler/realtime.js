@@ -1656,7 +1656,7 @@ export async function handleUpgrade(req, socket, head) {
 						wsWrappers.delete(ws);
 						if (facade) wsConnections.delete(facade);
 						releaseConnectionPermitFor(merged);
-						try { ws.terminate(); } catch { /* already gone */ }
+						try { ws.close(1011, 'Connection setup failed'); } catch { /* already gone */ }
 					}
 				});
 			} catch (error) {

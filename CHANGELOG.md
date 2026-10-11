@@ -319,6 +319,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - WebSockets admitted by pending upgrade hooks close cleanly during shutdown.
 
+- A WebSocket whose connection setup fails after the handshake is closed with
+  1011 `Connection setup failed` instead of being dropped without a close frame.
+
 - Parser-level 400 and 505 responses use the native HTML body and connection-close
   framing, including HEAD requests.
 

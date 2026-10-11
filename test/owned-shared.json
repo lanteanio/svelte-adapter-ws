@@ -52,7 +52,7 @@
 	{
 		"file": "src/runtime/error-registry.js",
 		"reason": "the lead's registry with the ids this runtime raises",
-		"lead": "92c32d388d1e2814bfad6e2ad88bda65ac67cda1"
+		"lead": "9c20b93cc4a40e167e74ae23de87b6c1f86a591d"
 	},
 	{
 		"file": "src/runtime/handler.js",
