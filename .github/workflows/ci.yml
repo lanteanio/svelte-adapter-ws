@@ -31,6 +31,8 @@ jobs:
         run: npm run check:source-bytes
       - name: Check source encoding
         run: npm run check:source-encoding
+      - name: Check diagnostic event coverage
+        run: npm run check:errors
       - name: Check source reachability
         run: npm run check:source-reachability
       - name: Run the suite

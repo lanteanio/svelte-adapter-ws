@@ -3,7 +3,7 @@
 Search this page with the exact stable ID, code, event, or beginning of the
 message you saw. Every operator-facing failure the runtime can emit is indexed
 here with its cause, what it means for traffic, whether anything recovers on its
-own, and what to do next: 42 entries carrying a stable ID and operator
+own, and what to do next: 43 entries carrying a stable ID and operator
 guidance, plus 39 indexing consequential plain console lines that never enter
 the diagnostic pipeline - each of those is printed through the registry and
 carries its stable ID tag, so the emitted text cannot drift from the prefix
@@ -51,6 +51,7 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-RELAY-GAP](#adapter-err-relay-gap) | `runtime.relay-gap.detected` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.relay-gap event=runtime.relay-gap.detected severity=error] This worker is missing relayed state that sibling workers received.` |
 | [ADAPTER-ERR-SSR](#adapter-err-ssr) | `runtime.ssr.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.ssr event=runtime.ssr.failed severity=error] SvelteKit request handling failed.` |
 | [ADAPTER-ERR-UPGRADE-HOOK](#adapter-err-upgrade-hook) | `runtime.websocket-upgrade.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-upgrade event=runtime.websocket-upgrade.failed severity=error] The WebSocket upgrade hook failed.` |
+| [ADAPTER-ERR-CONNECTION-SETUP](#adapter-err-connection-setup) | `runtime.websocket-open.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-open event=runtime.websocket-open.failed severity=error] Connection setup failed after the upgrade completed.` |
 | [ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED](#adapter-err-subscription-sink-displaced) | `runtime.subscription-accounting.sink-displaced` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.subscription-accounting event=runtime.subscription-accounting.sink-displaced severity=warn] A second adapter runtime in this worker took over the subscription accounting sink. One subscription total is now frozen and the other is charged releases it never matched.` |
 | [ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED](#adapter-err-control-egress-exhausted) | `control-egress.exhausted` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.control-egress event=control-egress.exhausted severity=warn] A connection exhausted its control-frame egress budget and was closed.` |
 | [ADAPTER-ERR-ATTRIBUTION](#adapter-err-attribution) | `runtime.websocket-attribution.failed` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-attribution event=runtime.websocket-attribution.failed severity=error] The WebSocket attribution hook failed; the connection was refused at open.` |
@@ -102,7 +103,14 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition) | `ws.protection-posture.transition` | `[ws] protection posture ` |
 | [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill) | `cluster.worker-exit-sigkill` | `[primary] worker ` |
 
-## Indexed events and console lines
+## Emitted diagnostic event coverage
+
+This inventory is derived at generation time by scanning `src/runtime/`,
+`src/observability.js`, `src/vite.js`, and `src/testing.js` for emitted diagnostic events; the runtime emits 46 distinct events.
+The 43 indexed above carry stable IDs and full operator guidance; the remaining 3
+are informational. That split is enforced by severity rather than by a list: an emitted event
+is exempt from the indexed reference only while every severity it is emitted at is
+informational, so promoting one to a warning or an error fails generation until it is indexed.
 
 Indexed events:
 
@@ -137,6 +145,7 @@ Indexed events:
 - `runtime.relay-gap.detected` - [ADAPTER-ERR-RELAY-GAP](#adapter-err-relay-gap)
 - `runtime.ssr.failed` - [ADAPTER-ERR-SSR](#adapter-err-ssr)
 - `runtime.websocket-upgrade.failed` - [ADAPTER-ERR-UPGRADE-HOOK](#adapter-err-upgrade-hook)
+- `runtime.websocket-open.failed` - [ADAPTER-ERR-CONNECTION-SETUP](#adapter-err-connection-setup)
 - `runtime.subscription-accounting.sink-displaced` - [ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED](#adapter-err-subscription-sink-displaced)
 - `control-egress.exhausted` - [ADAPTER-ERR-CONTROL-EGRESS-EXHAUSTED](#adapter-err-control-egress-exhausted)
 - `runtime.websocket-attribution.failed` - [ADAPTER-ERR-ATTRIBUTION](#adapter-err-attribution)
@@ -191,6 +200,20 @@ the stable ID tag on the line):
 - `[primary] relay spill quarantining ` - [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine)
 - `[ws] protection posture ` - [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition)
 - `[primary] worker ` - [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill)
+
+### Informational events
+
+These carry no stable ID and no recovery guidance because they report normal operation
+rather than a failure. Each is emitted on the shared diagnostic line format, so its
+searchable log prefix is:
+
+`[lantean/diagnostic source=svelte-adapter-ws component=<component> event=<event> severity=<severity>] <message>`
+
+| Event | Component | Severity | Emitting sources |
+|---|---|---|---|
+| `runtime.subscription.accepted` | `runtime.subscription` | debug | [src/runtime/handler/realtime.js](../src/runtime/handler/realtime.js) |
+| `runtime.subscription.removed` | `runtime.subscription` | debug | [src/runtime/handler/realtime.js](../src/runtime/handler/realtime.js) |
+| `vite.handler.recovered` | `vite.websocket` | info | [src/runtime/utils/operational-diagnostic.js](../src/runtime/utils/operational-diagnostic.js) |
 
 
 <a id="adapter-err-listen"></a>
@@ -569,6 +592,18 @@ the stable ID tag on the line):
 - **Next action:** Read the attached error and fix the hook. Persistent failure presents to users as a connection that never establishes, while HTTP continues to work.
 - **Runtime help:** `docs/errors.md#adapter-err-upgrade-hook`
 - **Runtime sources:** [src/runtime/handler.js](../src/runtime/handler.js)
+
+<a id="adapter-err-connection-setup"></a>
+## `ADAPTER-ERR-CONNECTION-SETUP`
+
+- **Code/event:** `runtime.websocket-open.failed`
+- **Message prefix:** `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket-open event=runtime.websocket-open.failed severity=error] Connection setup failed after the upgrade completed.`
+- **Cause:** An internal connection setup step threw after the WebSocket handshake completed and before the application open hook ran.
+- **Consequence:** The accepted connection is terminated. Its live-connection entry and admission permit are released. Application open and close hooks do not run for the failed setup; other connections remain available.
+- **Automatic recovery:** The client can reconnect and repeat setup. The worker remains available to accept connections.
+- **Next action:** Read the attached error and requestId. Check custom instrumentation or changes to runtime built-ins, then reproduce the exception with the same adapter version. This event describes internal setup, not an exception thrown by the application open hook.
+- **Runtime help:** `docs/errors.md#adapter-err-connection-setup`
+- **Runtime sources:** [src/runtime/handler/realtime.js](../src/runtime/handler/realtime.js)
 
 <a id="adapter-err-subscription-sink-displaced"></a>
 ## `ADAPTER-ERR-SUBSCRIPTION-SINK-DISPLACED`

@@ -16,6 +16,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ADAPTER_ERROR_REGISTRY } from '../src/runtime/error-registry.js';
 import { createRequire } from 'node:module';
+import { DIAGNOSTIC_PREFIX } from '../src/runtime/diagnostic-format.js';
+import { scanEmittedEvents, findGhostRegistryEntries, findUnindexedFailures, validateErrorRegistry } from './error-event-coverage.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -45,6 +47,14 @@ const siblingRef = String(packageVersion).includes('-') ? 'dev' : 'main';
 // them beside the emitted events would overstate what the pipeline carries.
 const consoleEntries = ADAPTER_ERROR_REGISTRY.filter((entry) => entry.emission === 'console');
 const diagnosticEntries = ADAPTER_ERROR_REGISTRY.filter((entry) => entry.emission !== 'console');
+
+const scan = scanEmittedEvents();
+const errors = [...validateErrorRegistry(ADAPTER_ERROR_REGISTRY), ...findGhostRegistryEntries(ADAPTER_ERROR_REGISTRY, scan), ...findUnindexedFailures(scan)];
+if (errors.length) throw new Error(errors.join('\n'));
+const indexedEvents = new Set(ADAPTER_ERROR_REGISTRY.map((entry) => entry.event));
+const unindexed = scan.events.filter((record) => !indexedEvents.has(record.event));
+const scannedNames = new Set(scan.events.map((record) => record.event));
+const emittedCount = scan.events.length + diagnosticEntries.filter((entry) => !scannedNames.has(entry.event)).length;
 
 const lines = [
 	'# Adapter error reference',
@@ -101,8 +111,16 @@ for (const entry of ADAPTER_ERROR_REGISTRY) {
 
 lines.push(
 	'',
-	'## Indexed events and console lines',
+	'## Emitted diagnostic event coverage',
 	'',
+	'This inventory is derived at generation time by scanning `src/runtime/`,',
+	'`src/observability.js`, `src/vite.js`, and `src/testing.js` for emitted diagnostic events; the runtime emits ' + emittedCount + ' distinct events.',
+	'The ' + diagnosticEntries.length + ' indexed above carry stable IDs and full operator guidance; the remaining ' + unindexed.length,
+	'are informational. That split is enforced by severity rather than by a list: an emitted event',
+	'is exempt from the indexed reference only while every severity it is emitted at is',
+	'informational, so promoting one to a warning or an error fails generation until it is indexed.',
+	'',
+
 	'Indexed events:',
 	''
 );
@@ -117,6 +135,27 @@ lines.push(
 );
 for (const entry of consoleEntries) {
 	lines.push('- ' + codeSpan(cell(entry.messagePrefix)) + ' - [' + entry.id + '](#' + entry.anchor + ')');
+}
+lines.push(
+	'',
+	'### Informational events',
+	'',
+	'These carry no stable ID and no recovery guidance because they report normal operation',
+	'rather than a failure. Each is emitted on the shared diagnostic line format, so its',
+	'searchable log prefix is:',
+	'',
+	'`[' + DIAGNOSTIC_PREFIX + ' source=svelte-adapter-ws component=<component> event=<event> severity=<severity>] <message>`',
+	'',
+	'| Event | Component | Severity | Emitting sources |',
+	'|---|---|---|---|'
+);
+for (const record of unindexed) {
+	lines.push(
+		'| `' + record.event + '` | ' +
+		(record.components.length ? record.components.map((component) => '`' + component + '`').join(', ') : 'varies by call site') + ' | ' +
+		(record.severities.length ? record.severities.join(', ') : 'varies by call site') + ' | ' +
+		record.sources.map((source) => '[' + source + '](../' + source + ')').join(', ') + ' |'
+	);
 }
 lines.push('');
 

@@ -127,7 +127,7 @@ describe('error catalog', () => {
 		for (const marker of [
 			'| Stable ID | Code or event | Searchable message prefix |',
 			'|---|---|---|',
-			'## Indexed events and console lines',
+			'## Emitted diagnostic event coverage',
 			'Indexed events:',
 			'Indexed console lines'
 		]) {

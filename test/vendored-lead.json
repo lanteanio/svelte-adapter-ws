@@ -11,6 +11,7 @@
 		"test/memory-wall-availability.test.js": "3ce7ff0",
 		"test/memory-wall-sampler.test.js": "3ce7ff0",
 		"test/close-subscriptions-real.test.js": "ab321f9",
-		"test/fixture/src/hooks.ws.close-subscriptions.js": "ab321f9"
+		"test/fixture/src/hooks.ws.close-subscriptions.js": "ab321f9",
+		"src/runtime/error-registry.js": "4aca50aab470f8a6718863da2339bb19992a4d90"
 	}
 }
