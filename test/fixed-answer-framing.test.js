@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 // How each HTTP lane frames what it writes, on the BUILT runtime over raw
 // sockets. uWS derives a Content-Length from whatever `end()` is handed, while
 // node frames a `writeHead()` that names no length as chunked; a fetch client
@@ -239,6 +240,17 @@ export class Server {
 					c.enqueue(new TextEncoder().encode('hello'));
 					await new Promise((r) => setTimeout(r, 50));
 					c.close();
+				}
+			}), { headers: text });
+		}
+		if (p === '/held-second') {
+			return new Response(new ReadableStream({
+				start(c) {
+					c.enqueue(new TextEncoder().encode('one|'));
+					globalThis.__fafReleaseSecond = () => {
+						c.enqueue(new TextEncoder().encode('two'));
+						c.close();
+					};
 				}
 			}), { headers: text });
 		}
@@ -1003,7 +1015,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(body).toBe('a|b\u20ac|c|d|');
 	});
 
-	it('sends a whole body of one string chunk uncompressed, as the native tier does', async () => {
+	it('compresses a finite string body on the direct writer', async () => {
 		// Uncredentialed and not a GET, so neither the BREACH rule nor the
 		// dedup leader decides: only the chunk's own shape does.
 		const first = splitFirst(await pipeline(open.rt.port, [
@@ -1011,8 +1023,10 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 			OK
 		]));
 		expect(first.status).toContain('200');
-		expect(header(first.lines, 'content-encoding')).toEqual([]);
-		expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
+		expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
+		const length = Number(header(first.lines, 'content-length')[0]);
+		expect(length).toBeGreaterThan(0);
+		expect(gunzipSync(Buffer.from(first.rest.slice(0, length), 'latin1')).toString()).toBe('<html>' + 's'.repeat(4096) + '</html>');
 	});
 
 	it('answers a Set-Cookie value node refuses to write with the length-framed 500, the request id and its event', async () => {
@@ -1045,7 +1059,7 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// later turn and let the first ones out. A stream that hands over each
 		// chunk through process.nextTick is still in the turn, where node on
 		// its own would have flushed the first chunks at the first tick.
-		for (const target of ['/fail-third', '/refuse-third', '/refuse-second-now', '/tick-fail-third', '/refuse-third-after/16000', '/refuse-second-after/16000']) {
+		for (const target of ['/fail-third', '/refuse-third', '/tick-fail-third', '/refuse-third-after/16000']) {
 			delete /** @type {any} */ (globalThis).__fafRefuseCancelled;
 			const { result, failures } = await withSsrFailures(() => exchange(
 				(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
@@ -1066,7 +1080,6 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		// byte differs by this runtime's longer header block.
 		for (const [target, sent] of [
 			['/refuse-third-after/16500', ['a'.repeat(16500), 'part2|']],
-			['/refuse-second-after/16500', ['a'.repeat(16500)]],
 			['/big-first-refuse-third', ['a'.repeat(20 * 1024), 'part2|']],
 			['/big-third-refuse-fourth', ['part1|', 'part2|', 'a'.repeat(20 * 1024)]]
 		]) {
@@ -1153,29 +1166,27 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(result.how).toBe('end');
 		expect(/** @type {any} */ (globalThis).__fafRefuseCancelled, 'the source was cancelled').toBe(true);
 		expect(failures).toHaveLength(1);
-		// A first chunk that wrote nothing leaves the client the headers alone.
-		const bare = await exchange(
-			(onConnect) => net.connect(open.rt.port, '127.0.0.1', onConnect),
-			['GET /undefined-then-refused-late HTTP/1.1', 'Host: 127.0.0.1', 'Cookie: s=1']
-		);
-		const bareFirst = splitFirst(bare.buffer);
-		expect(bareFirst.status).toBe('HTTP/1.1 200 OK');
-		expect(header(bareFirst.lines, 'transfer-encoding')).toEqual(['chunked']);
-		expect(bareFirst.rest).toBe('');
-		expect(bare.how).toBe('end');
 	});
 
-	it('writes nothing for an undefined chunk and a SharedArrayBuffer as its bytes, as the native tier does', async () => {
-		expectLengthFramed(await pipeline(open.rt.port, [['GET /undefined-single HTTP/1.1', 'Cookie: s=1'], OK]), { status: '200', body: '' });
-		expect(readChunked(await pipeline(open.rt.port, [['GET /undefined-stream HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('u1|u3');
-		expect(readChunked(await pipeline(open.rt.port, [['GET /undefined-first-stream HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('u1|u3');
-		expect(readChunked(await pipeline(open.rt.port, [['GET /undefined-third HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('u1|u2|u3');
-		expectLengthFramed(await pipeline(open.rt.port, [['GET /sab-single HTTP/1.1', 'Cookie: s=1'], OK]), { status: '200', body: 'sab' });
+	it('refuses invalid chunks before headers and cancels the source', async () => {
+		for (const target of ['/undefined-single', '/undefined-stream', '/undefined-first-stream', '/sab-single', '/refuse-second-now', '/refuse-second-after/16000', '/refuse-second-after/16500', '/undefined-then-refused-late']) {
+			const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [[`GET ${target} HTTP/1.1`, 'Cookie: s=1'], OK]));
+			expectPageFailure(result, failures);
+		}
 	});
 
-	it('answers a failure on the second read with the length-framed 500', async () => {
-		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /late-fail HTTP/1.1', 'Cookie: s=1'], OK]));
-		expectPageFailure(result, failures);
+	it('drops the buffered answer when its ready third chunk is invalid', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /undefined-third HTTP/1.1', 'Cookie: s=1']]));
+		expect(result).toBe('');
+		expect(failures).toHaveLength(1);
+	});
+
+	it('keeps the ready prefix when a deferred second read fails', async () => {
+		const { result, failures } = await withSsrFailures(() => pipeline(open.rt.port, [['GET /late-fail HTTP/1.1', 'Cookie: s=1']]));
+		expect(splitFirst(result).status).toBe('HTTP/1.1 200 OK');
+		expect(header(splitFirst(result).lines, 'transfer-encoding')).toEqual(['chunked']);
+		expect(result.endsWith('0\r\n\r\n')).toBe(false);
+		expect(failures).toHaveLength(1);
 	});
 
 	it('closes the connection under the answer ahead for a stream queued behind it, reporting the source\'s own failure', async () => {
@@ -1209,29 +1220,43 @@ describe('the SSR writer frames what it was handed, never what the Response decl
 		expect(JSON.stringify(failures[0].attributes?.error)).toContain('source failed');
 	});
 
-	it('length-frames a body whose end comes late after its one chunk, on either path', async () => {
+	it('streams a ready chunk before a deferred end on either path', async () => {
 		// Credentialed, the writer reads it; anonymous, the dedup leader does.
-		// Both wait for the second read, as the native tier does, and agree.
+		// Both flush the ready prefix while the next read is pending.
 		for (const cookie of [['Cookie: s=1'], []]) {
-			expectLengthFramed(await pipeline(open.rt.port, [['GET /late-end HTTP/1.1', ...cookie], OK]), { status: '200', body: 'hello' });
+			expect(readChunked(await pipeline(open.rt.port, [['GET /late-end HTTP/1.1', ...cookie], OK]), '200')).toBe('hello');
 		}
 	});
 
-	it('streams once the second chunk exists, sending both together', async () => {
-		expect(readChunked(await pipeline(open.rt.port, [['GET /late-second HTTP/1.1', 'Cookie: s=1'], OK]), '200')).toBe('one|two');
-		// The source enqueues its second chunk 200 ms after its first.
-		const started = Date.now();
-		const firstByteAt = await new Promise((resolve, reject) => {
+	it('streams the first chunk before the deferred second chunk', async () => {
+		const raw = await new Promise((resolve, reject) => {
+			let raw = '', released = false;
 			const socket = net.connect(open.rt.port, '127.0.0.1', () => {
-				socket.write('GET /late-second HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: s=1\r\nConnection: close\r\n\r\n');
+				socket.write('GET /held-second HTTP/1.1\r\nHost: x\r\nCookie: s=1\r\nConnection: close\r\n\r\n');
 			});
-			socket.once('data', () => {
-				resolve(Date.now());
+			const timer = setTimeout(() => {
+				reject(new Error('Ready prefix was held behind the deferred read'));
+				/** @type {any} */ (globalThis).__fafReleaseSecond?.();
 				socket.destroy();
+			}, 3000);
+			socket.on('data', chunk => {
+				raw += chunk.toString('latin1');
+				if (!released && raw.includes('one|')) {
+					released = true;
+					/** @type {any} */ (globalThis).__fafReleaseSecond();
+				}
 			});
 			socket.on('error', reject);
+			socket.on('close', () => {
+				clearTimeout(timer);
+				delete /** @type {any} */ (globalThis).__fafReleaseSecond;
+				resolve(raw);
+			});
 		});
-		expect(/** @type {number} */ (firstByteAt) - started, 'nothing leaves before the second chunk').toBeGreaterThanOrEqual(150);
+		const first = splitFirst(raw);
+		expect(first.status).toBe('HTTP/1.1 200 OK');
+		expect(header(first.lines, 'transfer-encoding')).toEqual(['chunked']);
+		expect(first.rest).toBe('4\r\none|\r\n3\r\ntwo\r\n0\r\n\r\n');
 	});
 
 	it('drops a Trailer the Response carries, which node refuses on a length-framed answer', async () => {
@@ -1472,7 +1497,7 @@ describe('the request-dedup leader reads a body the way the writer does', () => 
 		expect(splitFirst(state).rest).toBe('true');
 	});
 
-	it('sends a whole body of one string chunk uncompressed, from the leader and to a waiter', async () => {
+	it('compresses a finite string body for the leader and waiter', async () => {
 		const [leader, waiter] = await Promise.all([
 			pipeline(open.rt.port, [['GET /slow-string HTTP/1.1', 'Accept-Encoding: gzip'], OK]),
 			new Promise((r) => setTimeout(r, 50)).then(() => pipeline(open.rt.port, [['GET /slow-string HTTP/1.1', 'Accept-Encoding: gzip'], OK]))
@@ -1480,16 +1505,20 @@ describe('the request-dedup leader reads a body the way the writer does', () => 
 		for (const raw of [leader, /** @type {string} */ (waiter)]) {
 			const first = splitFirst(raw);
 			expect(first.status).toContain('200');
-			expect(header(first.lines, 'content-encoding')).toEqual([]);
-			expect(header(first.lines, 'content-length')).toEqual([String(4096 + '<html></html>'.length)]);
+			expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
+			const length = Number(header(first.lines, 'content-length')[0]);
+			expect(length).toBeGreaterThan(0);
+			expect(gunzipSync(Buffer.from(first.rest.slice(0, length), 'latin1')).toString()).toBe('<html>' + 's'.repeat(4096) + '</html>');
 		}
 	});
 
-	it('sends a one-string body past the sharing cap uncompressed too', async () => {
+	it('compresses a finite string body past the sharing cap', async () => {
 		const first = splitFirst(await pipeline(open.rt.port, [['GET /one-string-past-cap HTTP/1.1', 'Accept-Encoding: gzip'], OK]));
 		expect(first.status).toContain('200');
-		expect(header(first.lines, 'content-encoding')).toEqual([]);
-		expect(header(first.lines, 'content-length')).toEqual([String(600 * 1024 + '<html></html>'.length)]);
+		expect(header(first.lines, 'content-encoding')).toEqual(['gzip']);
+		const length = Number(header(first.lines, 'content-length')[0]);
+		expect(length).toBeGreaterThan(0);
+		expect(gunzipSync(Buffer.from(first.rest.slice(0, length), 'latin1')).toString()).toBe('<html>' + 'b'.repeat(600 * 1024) + '</html>');
 	});
 
 	it('answers a waiting HEAD by the HEAD rule too, not by the shared body', async () => {
