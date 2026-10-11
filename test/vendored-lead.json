@@ -9,6 +9,8 @@
 		"test/helpers/reset-modules.js": "00c0a4b",
 		"test/client-worker-isolation.test.js": "00c0a4b",
 		"test/memory-wall-availability.test.js": "3ce7ff0",
-		"test/memory-wall-sampler.test.js": "3ce7ff0"
+		"test/memory-wall-sampler.test.js": "3ce7ff0",
+		"test/close-subscriptions-real.test.js": "ab321f9",
+		"test/fixture/src/hooks.ws.close-subscriptions.js": "ab321f9"
 	}
 }

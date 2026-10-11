@@ -26,6 +26,11 @@ export const POSTURE_EXPORT_PATH = process.platform === 'win32'
 	: join(tmpdir(), 'svelte-adapter-ws-fixture-posture.sock');
 
 export const FIXTURE_VARIANTS = {
+	closesubscriptions: {
+		out: 'build-close-subscriptions',
+		handler: './src/hooks.ws.close-subscriptions.js',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
+	},
 	ssrbody: { out: 'build-ssr-body', handler: null, websocket: false },
 	ssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },
 	subscriptionrelease: {

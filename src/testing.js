@@ -1,3 +1,4 @@
+import { isSet } from 'node:util/types';
 import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
@@ -4269,7 +4270,8 @@ export async function createTestServer(options = {}) {
 		close(ws, code, message) {
 			const ud = ws.getUserData() || {};
 			messageAdmission.close(ws);
-			const subs = ud[WS_SUBSCRIPTIONS] || new Set();
+			const subscriptionSlot = ud[WS_SUBSCRIPTIONS];
+			const subs = isSet(subscriptionSlot) ? subscriptionSlot : new Set();
 			const pending = ud[WS_PENDING_REQUESTS];
 			if (pending && pending.size > 0) {
 				for (const entry of pending.values()) {

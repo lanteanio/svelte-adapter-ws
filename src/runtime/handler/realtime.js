@@ -1,3 +1,4 @@
+import { isSet } from 'node:util/types';
 // The realtime engine: WebSocket upgrade admission, connection lifecycle,
 // the JSON control-frame demux, and the authenticate preflight endpoint.
 // Semantics mirror the family's native tier; the transport is the `ws`
@@ -2550,7 +2551,8 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	const reasonBuf = reason || Buffer.alloc(0);
 	const reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);
 	messageAdmission.close(facade);
-	const subs = userData[WS_SUBSCRIPTIONS] || new Set();
+	const subscriptionSlot = userData[WS_SUBSCRIPTIONS];
+	const subs = isSet(subscriptionSlot) ? subscriptionSlot : new Set();
 	// Reject pending requests, clearing timers first; delete-then-reject so a
 	// reply racing the close cannot double-settle.
 	const pending = userData[WS_PENDING_REQUESTS];

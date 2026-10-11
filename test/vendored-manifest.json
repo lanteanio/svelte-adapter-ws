@@ -1656,6 +1656,14 @@
 			{
 				"lead": "\t\t// Mirror production's per-subscriber walk over the ws -> Set<topic>\n\t\t// map that also backs subscribers(). Passes (ws, userData) so dev\n\t\t// exercises the same culling / backpressure call shape as prod.\n\t\t// getUserData() is called unguarded, matching production handler.js and\n\t\t// the dev subscribe/unsubscribe paths above (the `ws` library does not\n\t\t// throw on a closed socket, so no guard is needed or wanted here).\n\t\tforEachSubscriber(topic, fn) {\n\t\t\tfor (const [ws, topics] of subscriptions) {\n\t\t\t\tif (!topics.has(topic)) continue;\n\t\t\t\tfn(ws, /** @type {any} */ (ws).getUserData());\n\t\t\t}\n\t\t},\n\t\t// Broadcast-request to every local subscriber of `topic`, mirroring\n",
 				"ours": "\t\t// Mirror production's per-subscriber walk over the ws -> Set<topic>\n\t\t// map that also backs subscribers(). Passes (ws, userData) so dev\n\t\t// exercises the same culling / backpressure call shape as prod.\n\t\t// The registry keys are raw transport sockets; hooks receive their\n\t\t// cached adapter wrappers and the same user data they expose.\n\t\tforEachSubscriber(topic, fn) {\n\t\t\tfor (const [ws, topics] of subscriptions) {\n\t\t\t\tif (!topics.has(topic)) continue;\n\t\t\t\tconst wrapped = wsWrappers.get(ws);\n\t\t\t\tif (wrapped) fn(wrapped, wrapped.getUserData());\n\t\t\t}\n\t\t},\n\t\t// Broadcast-request to every local subscriber of `topic`, mirroring\n"
+			},
+			{
+				"lead": "import path from 'node:path';\nimport { fileURLToPath, pathToFileURL } from 'node:url';\nimport { existsSync } from 'node:fs';\n",
+				"ours": "import { isSet } from 'node:util/types';\nimport path from 'node:path';\nimport { fileURLToPath, pathToFileURL } from 'node:url';\nimport { existsSync } from 'node:fs';\n"
+			},
+			{
+				"lead": "\t\t\t\t\tconst reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);\n\t\t\t\t\tconst ud = /** @type {any} */ (ws).__userData || {};\n\t\t\t\t\tmessageAdmission.close(wrapped);\n\t\t\t\t\tconst subs = ud[WS_SUBSCRIPTIONS] || new Set();\n\t\t\t\t\tconst pending = ud[WS_PENDING_REQUESTS];\n\t\t\t\t\tif (pending && pending.size > 0) {\n\t\t\t\t\t\tfor (const entry of pending.values()) {\n",
+				"ours": "\t\t\t\t\tconst reasonAB = reasonBuf.buffer.slice(reasonBuf.byteOffset, reasonBuf.byteOffset + reasonBuf.byteLength);\n\t\t\t\t\tconst ud = /** @type {any} */ (ws).__userData || {};\n\t\t\t\t\tmessageAdmission.close(wrapped);\n\t\t\t\t\tconst subscriptionSlot = ud[WS_SUBSCRIPTIONS];\n\t\t\t\t\tconst subs = isSet(subscriptionSlot) ? subscriptionSlot : new Set();\n\t\t\t\t\tconst pending = ud[WS_PENDING_REQUESTS];\n\t\t\t\t\tif (pending && pending.size > 0) {\n\t\t\t\t\t\tfor (const entry of pending.values()) {\n"
 			}
 		]
 	},
@@ -3258,5 +3266,11 @@
 	},
 	{
 		"file": "test/memory-wall-sampler.test.js"
+	},
+	{
+		"file": "test/close-subscriptions-real.test.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.close-subscriptions.js"
 	}
 ]
