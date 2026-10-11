@@ -258,7 +258,7 @@ export function acceptsRequestLine(req) {
  */
 export function send505(res) {
 	if (res.headersSent) return;
-	endText(res, 505, { 'content-type': 'text/plain', connection: 'close' }, 'HTTP Version Not Supported');
+	endParserRefusal(res.socket, VERSION_505_RAW);
 }
 
 /**
@@ -269,7 +269,7 @@ export function send505(res) {
 export function sendHost400(req, res) {
 	// The parser owns both the closing bytes and the terminal read state.
 	// Its refusal replaces only answers still held in this read's cork.
-	endParserRefusal(req.socket, req.method === 'HEAD' ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
+	endParserRefusal(req.socket, PARSER_400_RAW);
 }
 
 /**
@@ -598,10 +598,9 @@ function closeAfterLastTurn(socket) {
  */
 function closeBehindWaitingAnswer(req) {
 	const socket = req.socket;
-	const head = req.method === 'HEAD';
 	const refusal = !acceptsRequestLine(req)
-		? (head ? VERSION_505_HEAD_RAW : VERSION_505_RAW)
-		: missesHost(req) ? (head ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW) : null;
+		? VERSION_505_RAW
+		: missesHost(req) ? PARSER_400_RAW : null;
 	if (refusal === null || !socket.writable) {
 		socket.destroy();
 		return;
@@ -636,29 +635,9 @@ const FORBIDDEN_405_RAW =
 	'\r\n' +
 	'Method Not Allowed';
 
-// The native parser's generic refusal is delimited by the connection close.
-const PARSER_400_RAW = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
-
-// The runtime's own 400, as send400 writes it, for a target node's parser
-// refuses: the bytes after it can no longer be read, so it also closes. A HEAD
-// gets the head alone, the length included.
-const BAD_TARGET_400_HEAD_RAW =
-	'HTTP/1.1 400 Bad Request\r\n' +
-	'content-type: text/plain\r\n' +
-	'content-length: 11\r\n' +
-	'connection: close\r\n' +
-	'\r\n';
-const BAD_TARGET_400_RAW = BAD_TARGET_400_HEAD_RAW + 'Bad Request';
-
-// send505 as raw bytes, for the requests node never hands the request
-// listener. A HEAD gets the head alone, the length included.
-const VERSION_505_HEAD_RAW =
-	'HTTP/1.1 505 HTTP Version Not Supported\r\n' +
-	'content-type: text/plain\r\n' +
-	'content-length: 26\r\n' +
-	'connection: close\r\n' +
-	'\r\n';
-const VERSION_505_RAW = VERSION_505_HEAD_RAW + 'HTTP Version Not Supported';
+// Native parser refusals are delimited by the connection close, including HEAD.
+export const PARSER_400_RAW = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
+export const VERSION_505_RAW = 'HTTP/1.1 505 HTTP Version Not Supported\r\nConnection: close\r\n\r\n<h1>HTTP Version Not Supported</h1><p>This server does not support HTTP/1.0.</p><hr><i>uWebSockets/20 Server</i>';
 
 /**
  * Where node's parser refused a request whose line the native tier answers
@@ -709,7 +688,7 @@ function failingLineAt(err) {
  */
 function forbiddenHeadAnswer(head, limit) {
 	for (let i = head.indexOf(10); i !== -1; i = head.indexOf(10, i + 1)) {
-		if (i === 0 || head[i - 1] !== 13) return BAD_TARGET_400_RAW;
+		if (i === 0 || head[i - 1] !== 13) return PARSER_400_RAW;
 	}
 	if (head.length > limit) return 'HTTP/1.1 431 Request Header Fields Too Large\r\nconnection: close\r\n\r\n';
 	const end = head.indexOf('\r\n\r\n');
@@ -717,13 +696,13 @@ function forbiddenHeadAnswer(head, limit) {
 	let host = false;
 	for (const line of head.subarray(0, end).toString('latin1').split('\r\n').slice(1)) {
 		const colon = line.indexOf(':');
-		if (colon <= 0 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(line.slice(0, colon))) return BAD_TARGET_400_RAW;
+		if (colon <= 0 || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(line.slice(0, colon))) return PARSER_400_RAW;
 		if (line.slice(0, colon).toLowerCase() === 'host') {
-			if (host) return BAD_TARGET_400_RAW;
+			if (host) return PARSER_400_RAW;
 			host = true;
 		}
 	}
-	return host ? FORBIDDEN_405_RAW : BAD_TARGET_400_RAW;
+	return host ? FORBIDDEN_405_RAW : PARSER_400_RAW;
 }
 
 /**
@@ -822,7 +801,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		// by the time its turn comes, and nothing is written.
 		const answer = () => {
 			if (!socket.writable) socket.destroy();
-			else answerAndClose(socket, !acceptsRequestLine(req) ? VERSION_505_RAW : missesHost(req) ? BAD_TARGET_400_RAW : FORBIDDEN_405_RAW);
+			else answerAndClose(socket, !acceptsRequestLine(req) ? VERSION_505_RAW : missesHost(req) ? PARSER_400_RAW : FORBIDDEN_405_RAW);
 		};
 		const turn = upgradeTurn(req, socket);
 		if (turn === null) answer();
@@ -905,7 +884,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		// bad target is a 505.
 		const refusedAt = refusedFirstLine(err, socket);
 		if (refusedAt !== -1) {
-			answerAndClose(socket, err.rawPacket.toString('latin1', refusedAt, refusedAt + 5) === 'HEAD ' ? VERSION_505_HEAD_RAW : VERSION_505_RAW);
+			answerAndClose(socket, VERSION_505_RAW);
 			return;
 		}
 		if (err && err.code === 'HPE_INVALID_METHOD' && Buffer.isBuffer(err.rawPacket)) {
@@ -919,8 +898,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		}
 		const code = err && err.code;
 		if (code === 'HPE_INVALID_URL') {
-			const headOnly = Buffer.isBuffer(err.rawPacket) && err.rawPacket.subarray(failingLineAt(err)).subarray(0, 5).toString('latin1') === 'HEAD ';
-			answerAndClose(socket, headOnly ? BAD_TARGET_400_HEAD_RAW : BAD_TARGET_400_RAW);
+			answerAndClose(socket, PARSER_400_RAW);
 			return;
 		}
 		const status = code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large'

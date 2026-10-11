@@ -8,7 +8,7 @@
 // absolute-form target into a request, and refuses the rest in its parser;
 // both paths give the same answer. An HTTP/1.1 request is answered as before,
 // and so is one node's parser refuses for anything else; a line with a CR
-// before its version keeps node's answer, since the native tier reads none
+// before its version stays unanswered, since the native tier reads none
 // from it. A CONNECT reads in its connection's line like any request.
 
 import net from 'node:net';
@@ -77,8 +77,10 @@ function parse(raw, methods) {
 		if (end < 0) break;
 		const [statusLine, ...rest] = raw.slice(at, end).split('\r\n');
 		const lines = rest.map((l) => l.toLowerCase());
-		const length = Number(lines.find((l) => l.startsWith('content-length:'))?.slice(15).trim() ?? 0);
-		const bodyless = methods[answers.length] === 'HEAD' || statusLine.startsWith('HTTP/1.1 101');
+		const declared = lines.find((l) => l.startsWith('content-length:'));
+		const parserRefusal = !declared && lines.includes('connection: close');
+		const length = declared ? Number(declared.slice(15).trim()) : parserRefusal ? raw.length - end - 4 : 0;
+		const bodyless = !parserRefusal && (methods[answers.length] === 'HEAD' || statusLine.startsWith('HTTP/1.1 101'));
 		const next = end + 4 + (bodyless ? 0 : length);
 		if (raw.length < next) break;
 		answers.push({ statusLine, lines, body: raw.slice(end + 4, next) });
@@ -126,13 +128,12 @@ function converse(connect, writes, methods) {
  *
  * @param {Conversation} conversation
  * @param {string} label
- * @param {{ head?: boolean }} [opts] the refused request was a HEAD
  */
-function expect505(conversation, label, opts = {}) {
+function expect505(conversation, label) {
 	const [answer] = conversation.answers;
 	expect(answer?.statusLine, label).toBe('HTTP/1.1 505 HTTP Version Not Supported');
-	expect(answer.lines.filter((l) => !l.startsWith('date:')).sort(), label).toEqual(['connection: close', 'content-length: 26', 'content-type: text/plain']);
-	expect(answer.body, label).toBe(opts.head ? '' : 'HTTP Version Not Supported');
+	expect(answer.lines, label).toEqual(['connection: close']);
+	expect(answer.body, label).toBe('<h1>HTTP Version Not Supported</h1><p>This server does not support HTTP/1.0.</p><hr><i>uWebSockets/20 Server</i>');
 	expect(conversation.answers, label + ': nothing after it').toHaveLength(1);
 	expect(conversation.rest, label + ': nothing after it').toBe('');
 	expect(conversation.closed, label + ': the connection ended').toBe(true);
@@ -403,8 +404,8 @@ describe('the built runtime', () => {
 	});
 
 	it('answers an HTTP/1.0 HEAD with the head alone, its length included', async () => {
-		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\n\r\n', 'HEAD'), 'HEAD', { head: true });
-		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\nBad Header: x\r\n\r\n', 'HEAD'), 'HEAD refused by the parser', { head: true });
+		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\n\r\n', 'HEAD'), 'HEAD');
+		expect505(await refusal(tcp(open.rt.port), 'HEAD /api/tiny HTTP/1.0\r\nBad Header: x\r\n\r\n', 'HEAD'), 'HEAD refused by the parser');
 	});
 
 	it('answers the version before the method, the target, the headers and the framing', async () => {
@@ -576,7 +577,7 @@ describe('createTestServer', () => {
 		for (const [label, request] of [...REFUSED, ...REFUSED_FIRST]) {
 			expect505(await refusal(tcp(mirror.port), request), label);
 		}
-		expect505(await refusal(tcp(mirror.port), 'HEAD / HTTP/1.0\r\n\r\n', 'HEAD'), 'HEAD', { head: true });
+		expect505(await refusal(tcp(mirror.port), 'HEAD / HTTP/1.0\r\n\r\n', 'HEAD'), 'HEAD');
 	});
 
 	it('refuses an HTTP/1.0 handshake without running the upgrade handler', async () => {

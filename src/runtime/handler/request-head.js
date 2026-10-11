@@ -5,7 +5,7 @@ import { normalizeHeaderEdges, normalizeHeaderDel, normalizeConnectionClose, res
 import { decodeRequestHeaders } from './header-values.js';
 import { createRequestCloseController } from './request-close.js';
 import { firstHeaderValue } from '../utils/request-headers.js';
-import { executeAfterDeclines, executePlainHttp } from './http-helpers.js';
+import { executeAfterDeclines, executePlainHttp, PARSER_400_RAW, VERSION_505_RAW } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
 
 const METHODS_SET = new Set(METHODS.filter(method => method !== 'CONNECT'));
@@ -110,11 +110,10 @@ export function createRequestHeadExecutor(parser, socket) {
 		pending = Buffer.from(data);
 		if (timer === null && answer === null) armHoldTimeout();
 	};
-	const refuse = (status, headOnly = false) => {
+	const refuse = status => {
 		clearPending(); closes.clear(); stopped = true;
 		if (status === 431) { endParserRefusal(socket, HEADER_TOO_LARGE); return; }
-		const phrase = status === 505 ? 'HTTP Version Not Supported' : 'Bad Request';
-		endParserRefusal(socket, 'HTTP/1.1 ' + status + ' ' + phrase + '\r\ncontent-type: text/plain\r\ncontent-length: ' + phrase.length + '\r\nconnection: close\r\n\r\n' + (headOnly ? '' : phrase));
+		endParserRefusal(socket, status === 505 ? VERSION_505_RAW : PARSER_400_RAW);
 	};
 	const tryFast = (data) => {
 		if (closes.pending) httpCallbackCheckpoint();
@@ -184,7 +183,7 @@ export function createRequestHeadExecutor(parser, socket) {
 						if (closes.pending) httpCallbackCheckpoint();
 						if (closes.closed) { stopped = true; return data.length; }
 						const line = requestLine(available, trailingBytes);
-						if (line === REFUSE) { refuse(505, available.toString('latin1', 0, 5) === 'HEAD '); return data.length; }
+						if (line === REFUSE) { refuse(505); return data.length; }
 						const end = line === WAIT ? -1 : available.indexOf('\r\n\r\n', line.end - 2);
 						if (end === -1) {
 							if (line !== WAIT && /(?:^|[^\r])\n/.test(available.toString('latin1', line.end))) { refuse(400); return data.length; }

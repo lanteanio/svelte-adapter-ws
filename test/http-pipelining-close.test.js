@@ -221,13 +221,13 @@ describe('the built runtime', () => {
 	it('writes the refusal a request line or a missing Host earns at once behind a waiting answer', async () => {
 		const head = await converse(open.rt.port, [[0, get('/api/slow') + 'HEAD / HTTP/1.0\r\n\r\n']]);
 		expect(statusLines(head.raw)).toEqual(['HTTP/1.1 505 HTTP Version Not Supported']);
-		expect(head.raw.endsWith('\r\n\r\n'), 'a HEAD gets the head alone').toBe(true);
+		expect(head.raw).toBe('HTTP/1.1 505 HTTP Version Not Supported\r\nConnection: close\r\n\r\n<h1>HTTP Version Not Supported</h1><p>This server does not support HTTP/1.0.</p><hr><i>uWebSockets/20 Server</i>');
 		const hostless = await converse(open.rt.port, [[0, get('/api/slow') + 'GET / HTTP/1.1\r\n\r\n']]);
 		expect(statusLines(hostless.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(hostless.closed).toBe(true);
 		const hostlessHead = await converse(open.rt.port, [[0, get('/api/slow') + 'HEAD / HTTP/1.1\r\n\r\n']]);
 		expect(statusLines(hostlessHead.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
-		expect(hostlessHead.raw.endsWith('\r\n\r\n'), 'a HEAD gets the head alone').toBe(true);
+		expect(hostlessHead.raw).toBe('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>');
 		const alone = await converse(open.rt.port, [[0, 'GET / HTTP/1.1\r\n\r\n']]);
 		expect(statusLines(alone.raw)).toEqual(['HTTP/1.1 400 Bad Request']);
 		expect(alone.closed).toBe(true);

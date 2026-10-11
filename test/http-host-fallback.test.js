@@ -8,9 +8,12 @@ import { buildRuntime } from './helpers/build-runtime.js';
 
 const run = promisify(execFile);
 const certs = fileURLToPath(new URL('./fixtures/tls/', import.meta.url));
-const badHead = 'HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 11\r\nconnection: close\r\n\r\n';
+const refusal = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
+const versionRefusal = 'HTTP/1.1 505 HTTP Version Not Supported\r\nConnection: close\r\n\r\n<h1>HTTP Version Not Supported</h1><p>This server does not support HTTP/1.0.</p><hr><i>uWebSockets/20 Server</i>';
 const cases = ['TRACK', 'track', 'connect'].flatMap(method => [false, true].flatMap(pending => [false, true].map(split => ({ method, pending, split, host: 'Host: x\r\nHost: y\r\n', expected: 400 }))));
 cases.push(
+	{ method: 'GET', host: '', expected: 505, version: '1.0' },
+	{ method: 'HEAD', host: '', expected: 505, version: '1.0' },
 	{ method: 'GET', host: '', expected: 400 },
 	{ method: 'HEAD', host: '', expected: 400 },
 	{ method: 'TRACK', host: 'Host: x\r\n', expected: 405 },
@@ -57,7 +60,7 @@ try {
 			socket.on('error', error => { if (error.code === 'ECONNRESET') { closed = true; finish(); } else finish(error); });
 			socket.once(secure ? 'secureConnect' : 'connect', () => {
 				const first = testCase.pending ? 'GET /pending-' + ordinal++ + ' HTTP/1.1\r\nHost: x\r\n\r\n' : '';
-				const request = testCase.method + ' /healthz HTTP/1.1\r\n' + testCase.host + (testCase.expected === 200 ? 'Connection: close\r\n' : '') + '\r\n';
+				const request = testCase.method + ' /healthz HTTP/' + (testCase.version || '1.1') + '\r\n' + testCase.host + (testCase.expected === 200 ? 'Connection: close\r\n' : '') + '\r\n';
 				socket.write(first + (testCase.split ? request.slice(0, 10) : request));
 				if (testCase.split) timers.push(setTimeout(() => { if (!socket.destroyed) socket.write(request.slice(10)); }, 40));
 			});
@@ -105,7 +108,8 @@ describe.each(['tcp', 'tls'])('Host validation with optional native execute abse
 		const result = results[index];
 		expect(result.closed).toBe(true);
 		expect(result.pendingStarted).toBe(testCase.pending ? 1 : 0);
-		if (testCase.expected === 400) expect(result.raw).toBe(badHead + (testCase.method === 'HEAD' ? '' : 'Bad Request'));
+		if (testCase.expected === 400) expect(result.raw).toBe(refusal);
+		else if (testCase.expected === 505) expect(result.raw).toBe(versionRefusal);
 		else if (testCase.expected === 405) {
 			expect(result.raw).toMatch(/^HTTP\/1\.1 405 Method Not Allowed\r\n/);
 			expect(result.raw).toContain('\r\ncontent-length: 18\r\n');

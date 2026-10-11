@@ -19,7 +19,8 @@ function responses(raw) {
 		expect(end).toBeGreaterThanOrEqual(0);
 		const head = raw.slice(0, end);
 		const status = Number(/^HTTP\/1\.1 (\d{3})/.exec(head)?.[1]);
-		const length = status === 204 || status === 304 ? 0 : Number(/\r\ncontent-length: (\d+)/i.exec(head)?.[1]);
+		const declared = /\r\ncontent-length: (\d+)/i.exec(head);
+		const length = status === 204 || status === 304 ? 0 : declared ? Number(declared[1]) : /\r\nconnection: close$/i.test(head) ? raw.length - end - 4 : NaN;
 		expect(Number.isInteger(length)).toBe(true);
 		expect(raw.length).toBeGreaterThanOrEqual(end + 4 + length);
 		answers.push({ status, head, body: raw.slice(end + 4, end + 4 + length) });
@@ -103,14 +104,13 @@ describe.each([false, true])('static and SSR pipeline cork limit with TLS=%s', s
 	('preserves completed static %s before %s refusal', async (_layout, refusal, input, bodies, status) => {
 		const { raw, closed } = await rawConversation(runtime.port, [[0, input]], { secure, wait: 2000 });
 		expect(closed).toBe(true);
-		const headerRefusal = 'HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n';
-		const emptyRefusal = refusal === 'malformed header';
-		if (emptyRefusal) expect(raw.endsWith(headerRefusal)).toBe(true);
-		const answers = responses(emptyRefusal ? raw.slice(0, -headerRefusal.length) : raw);
-		if (emptyRefusal) answers.push({ status: 400, body: '' });
+		const headerRefusal = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
+		const malformed = refusal === 'malformed header';
+		if (malformed) expect(raw.endsWith(headerRefusal)).toBe(true);
+		const answers = responses(raw);
 		expect(answers.map(answer => answer.status)).toEqual([...bodies.map(() => 200), status]);
 		expect(answers.slice(0, -1).map(answer => answer.body)).toEqual(bodies);
-		if (!emptyRefusal) expect(answers.at(-1).body).toContain(status === 400 ? 'Bad Request' : 'HTTP Version Not Supported');
+		expect(answers.at(-1).body).toContain(status === 400 ? 'Bad Request' : 'HTTP Version Not Supported');
 	});
 
 });
