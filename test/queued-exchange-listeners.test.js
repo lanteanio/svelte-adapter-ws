@@ -98,4 +98,30 @@ describe.each([false, true])('queued exchange cleanup with TLS=%s', secure => {
 			for (const socket of sockets) socket.off('newListener', listenerAdded);
 		}
 	});
+	it('settles every socketless response when a deep pipeline disconnects', async () => {
+		const responses = [];
+		const observer = (req, res) => responses.push(res);
+		runtime.handler.server.on('request', observer);
+		const socket = secure ? tls.connect({ host: '127.0.0.1', port: runtime.port, rejectUnauthorized: false }) : net.connect(runtime.port, '127.0.0.1');
+		socket.on('error', () => {});
+		try {
+			await new Promise(resolve => socket.once(secure ? 'secureConnect' : 'connect', resolve));
+			const get = target => `GET ${target} HTTP/1.1\r\nHost: x\r\nCookie: s=1\r\n\r\n`;
+			socket.write(get('/api/bulk') + get('/api/tiny').repeat(30) + get('/api/slow'));
+			socket.pause();
+			for (let i = 0; i < 100 && counters.inFlightCount < 5; i++) await new Promise(resolve => setTimeout(resolve, 5));
+			expect(counters.inFlightCount, 'several exchanges must actually be counted before disconnect').toBeGreaterThanOrEqual(5);
+			expect(responses.filter(res => res.socket === null && !res.writableFinished).length,
+				'several counted responses must still be waiting for a socket').toBeGreaterThanOrEqual(5);
+		} finally {
+			socket.destroy();
+			runtime.handler.server.off('request', observer);
+		}
+		for (let i = 0; i < 100 && counters.inFlightCount !== 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+		expect(counters.inFlightCount).toBe(0);
+		const started = Date.now();
+		expect(await runtime.handler.shutdown({ timeoutMs: 2000 })).toBe(true);
+		expect(Date.now() - started).toBeLessThan(1500);
+	});
+
 });

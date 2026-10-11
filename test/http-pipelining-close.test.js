@@ -276,10 +276,8 @@ describe('the built runtime', () => {
 		await expectNothingInFlight();
 	});
 
-	// Windows hands the whole answer ahead to one overlapped send, so it has
-	// finished before any request behind it is served: the state below is
-	// never reached there, and the kernel's hold on a large answer is what the
-	// case needs.
+	// This shallow queue requires a held kernel write; the cross-platform
+	// deep-queue case lives in queued-exchange-listeners.test.js.
 	it.skipIf(process.platform === 'win32')('leaves nothing counted when a client goes with a request two deep behind an answer still being written', async () => {
 		// node hands the socket only to the first response queued behind the
 		// answer ahead when the connection goes; one further back never gets
