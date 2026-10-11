@@ -117,13 +117,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a method, a target that starts with `/` and `HTTP/1.1` - HTTP/1.0, a
   line with no version, `HTTP/2.0` sent as text, a version in lower case,
   `OPTIONS *`, a target in absolute form, a `CONNECT` to a host and port, a
-  method or a target with a tab or another control character inside it, a
+  method or a target with a byte below SP inside it, a
   line that starts with a bare LF, a space in front of the method unless the
   target follows it at once - is now answered `505 HTTP Version Not
   Supported` and its connection closed before its method, headers or route
   count, as on the family's native tier, on the runtime and in
-  `createTestServer`. The native tier sends an unframed HTML page; this
-  runtime sends a length-framed `text/plain` one. The refusal is not counted
+  `createTestServer`. Each sends the native HTML page framed by connection
+  closure, including HEAD requests. The refusal is not counted
   as a request, and an HTTP/1.0 WebSocket handshake is refused the same way
   without reaching the `upgrade` hook. A `CONNECT` reads in its connection's
   line like any request: behind an answer that ends the connection it goes
@@ -131,9 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its `405` follows the answers ahead of it, and so does a `TRACK`, a
   `TRACE` or a `CONNECT` spelled in lower case. The request-head reader
   normalizes methods for parsing and restores them before the method gate.
-  Those get the `400` for a missing Host ahead of the `405`, once their
-  head has ended, as the native tier reads the line, then the Host, then the
-  method; the head is read as the native tier reads it, so a bare LF or a
+  DEL in a method receives the parser's `400`. Missing Host checks apply
+  to ordinary methods; forbidden methods retain their `405`. The head is read as the native tier reads it, so a bare LF or a
   header name that is not a token in it is a `400` at once, and a head past
   the header limit a `431`. A line with a CR before its version is held
   without an answer, unless its short suffix already rules out a supported
@@ -160,37 +159,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before and its answer was dropped. A request queued behind another was
   counted in flight and never settled when its connection went, so a later
   shutdown waited out its whole budget; it is no longer counted.
-- **An SSR body is written once its second chunk is read, as on the
-  family's native tier.** The writer started streaming a body whose second
-  chunk had not arrived within a few microtasks, so a page streaming a slow
-  promise sent its shell at once, and a body whose end came late after its
-  only chunk went out chunked where the request-dedup path and the native
-  tier length-frame it. It now waits for the second read: a body that ends
-  after one chunk is length-framed, and compressed when it qualifies,
-  however late its end comes, and a streamed page sends its first byte
-  together with its second chunk - and an SSE stream its first event with
-  its second. A source that fails on that second read is now answered `500`
-  with its request id, where it was a `200` cut after the first chunk. A
-  chunk that is not a string or bytes, or a source that fails after the
-  writer has started, ends the connection with what the native tier's close
-  leaves the client: in the request's own turn - the handler and the ticks
-  and microtasks it queues, which the native tier holds in one cork of
-  16 KB - nothing, not even the status line, while the turn's writes fit
-  that cork; past it, and in a later turn, the bytes written before the
-  failure, so a refused second chunk leaves the headers and the first chunk,
-  and the chunked answer is cut before its terminal chunk, node ending the
-  last chunk with its CRLF where the native tier does not. A turn ends when
-  the next request, handshake or WebSocket message is handed to the
-  application on any connection, at the check phase after the hand-out, or
-  for a request served behind an answered one at the next timers phase; a
-  stream fed by another socket's data in the same poll phase is still in its
-  turn, since node has no boundary there. A first chunk that is refused leaves nothing in either
-  turn. A chunk of `undefined` writes nothing, and a `SharedArrayBuffer`
-  goes out as its bytes, as the native tier sends them; both were refused
-  before. A stream queued behind an answer node is still writing is cut by
-  closing the connection under that answer, where it stands. An answer
-  already given on the connection in the same turn is kept and sent before
-  the cut.
 - **A `Host` value that is not an authority is refused with `400`.** With no
   `ORIGIN` set the request URL is the `Host` value plus the target, so
   `Host: a/__realtime/introspect?` had SvelteKit route to a path the request
@@ -340,6 +308,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page.
 
 ### Fixed
+
+- Incomplete request bodies close after the receive deadline; sustained application
+  reads extend it.
+
+- WebSockets admitted by pending upgrade hooks close cleanly during shutdown.
+
+- Parser-level 400 and 505 responses use the native HTML body and connection-close
+  framing, including HEAD requests.
+
+- Anonymous HEAD requests cancel their response bodies unread and do not share
+  rendered bodies with other requests.
+
+- Corrupt subscription registries are normalized to an empty Set before close hooks.
 
 - Generic HTTP parser refusals include the native Bad Request HTML body, including when they replace earlier buffered answers.
 
@@ -629,7 +610,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block at `writeHead`, so without the length a GET got them
   `Transfer-Encoding: chunked` with a terminating empty chunk and a HEAD got
   no length at all, where the family's native tier writes the zero length.
-- **Every generated answer is length-framed.** The authenticate endpoint's
+- **Generated application answers carry their body length.** The authenticate endpoint's
   401, 403, 413, 429 and 500, a Response its hook returns, the socket path's
   capacity 503, the waiting room's poll answers, the SSR lane's two
   generated 500s (a header node refuses to write, a body already read) and a
@@ -647,12 +628,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and dropped a 304's declared length), and every other bodyless answer
   reports zero. A credentialed HEAD to a page or endpoint no longer reads
   the body SvelteKit renders for it: the headers go out with the declared
-  length and the body is cancelled unread. An anonymous one still passes
-  through the request-dedup leader, which buffers a render it may share, as
-  the native tier's does.
+  length and the body is cancelled unread. Anonymous HEAD requests follow
+  the same rule and do not enter response deduplication.
 - **An uncredentialed page that streams strings or ArrayBuffers is no longer
-  corrupted.** The request-dedup leader, which buffers an anonymous GET or
-  HEAD render it may share, copied an ArrayBuffer or a DataView into its
+  corrupted.** The request-dedup leader, which buffers an anonymous GET
+  render it may share, copied an ArrayBuffer or a DataView into its
   buffer as zeros and a wider typed array as the wrong bytes, answered a
   string chunk `500`, and never counted a string toward its 512 KiB sharing
   cap, so a long string stream was held whole before failing. It now reads
