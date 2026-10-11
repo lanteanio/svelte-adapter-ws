@@ -175,9 +175,34 @@ access and plugin construction after close do not reopen the socket; call
 `connect()` to start a new session. Connection-object stores stay bound to that
 object. Existing global subscriptions need no manual rebind.
 
-### Subscription cleanup
+### Plugins
 
-For framework rollback after an admitted loader or setup fails, import `releaseSubscription(ws, topic)` from `svelte-adapter-ws/subscriptions`. It removes native and logical membership, registered derived subscriptions, shared-codec cohorts and the topic's publish grant immediately, while independently pending subscribe attempts can still finish their own authorization. It returns `true` when membership or a publish grant was removed, and `false` when already released, missing or closed. It does not revive previously revoked attempts. The caller performs its own application cleanup; no application unsubscribe hook runs. This operation removes physical membership, so coordinate already-completed concurrent admissions before calling it. Use `platform.unsubscribe` or `trackedUnsubscribe` for explicit unsubscribe, kicks and revocations that must also cancel pending attempts.
+Opt-in modules build on the adapter's public API. Each plugin has separate
+server and client entry points. A plugin that joins or leaves a connection's
+topics outside the wire protocol should use `trackedSubscribe(ws, topic)` /
+`trackedUnsubscribe(ws, topic)` from `svelte-adapter-ws/subscriptions`, as the
+bundled plugins do. Calling `ws.subscribe` directly or writing the subscription
+registry by hand bypasses the worker's subscription accounting. For rollback
+after an admitted loader or setup fails, see
+[subscription rollback](./docs/subscription-lifecycle.md).
+
+#### Authorization model
+
+Plugin action APIs are **authorization-free primitives**: they do not know
+roles or ownership, and execute whatever trusted server code passes. Calling
+`withLock(key, fn)`, `replay.replay(ws, topic, since)`, or
+`idempotency.handle(key, fn)` is no more an authorization check than calling
+`Map.set(key, value)` is one. The narrow exception is a client-facing observer
+handshake: `presence.sync()` and `cursor.snapshot()` consult
+`platform.checkSubscribe` before installing their private tap, because the
+built-in `message` hooks feed them a client-named topic. That transport check
+does not replace your application authorization for mutations or other plugin
+calls.
+
+Your message handler is the gate. Identity is established at connect time by
+the `upgrade()` hook and stashed on the socket via `ws.getUserData()`. Your
+`message()` handler reads that identity, decides whether the action is allowed,
+and only then invokes the plugin.
 
 ### Smooth command pacing
 
