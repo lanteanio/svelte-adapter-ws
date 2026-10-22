@@ -1335,6 +1335,7 @@ export interface CookieSerializeOptions {
 	/** Required by `authenticateCookies.set()` and `.delete()`. */
 	path: string;
 	domain?: string;
+	/** A finite Date; native UTC formatting ignores instance method overrides. */
 	expires?: Date;
 	/** In seconds. */
 	maxAge?: number;

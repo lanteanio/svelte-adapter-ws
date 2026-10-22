@@ -2208,7 +2208,7 @@
 		"adaptations": [
 			{
 				"lead": "export const FIXTURE_VARIANTS = {\n\t// The long-standing default.",
-				"ours": "export const FIXTURE_VARIANTS = {\n\ttopicstats: {\n\t\tout: 'build-topic-stats',\n\t\thandler: './src/hooks.ws.topic-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tdroppedstats: {\n\t\tout: 'build-dropped-stats',\n\t\thandler: './src/hooks.ws.dropped-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100, maxBackpressure: 65536, closeOnBackpressureLimit: false }\n\t},\n\twirestats: {\n\t\tout: 'build-wire-stats',\n\t\thandler: './src/hooks.ws.wire-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsetupfailure: {\n\t\tout: 'build-setup-failure',\n\t\thandler: './src/hooks.ws.setup-failure.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100, upgradeAdmission: { maxConnections: 1 } }\n\t},\n\trecoverref: {\n\t\tout: 'build-recover-ref',\n\t\thandler: './src/hooks.ws.recover-ref.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsubscriptionstate: {\n\t\tout: 'build-subscription-state',\n\t\thandler: './src/hooks.ws.subscription-state.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\treusedata: {\n\t\tout: 'build-reuse-data',\n\t\thandler: './src/hooks.ws.reuse-data.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tclosesubscriptions: {\n\t\tout: 'build-close-subscriptions',\n\t\thandler: './src/hooks.ws.close-subscriptions.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tbodysafety: {\n\t\tout: 'build-body-safety',\n\t\thandler: './src/hooks.ws.body-safety.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tauthAbort: {\n\t\tout: 'build-auth-abort',\n\t\thandler: './src/hooks.ws.auth-abort.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tresponseframing: {\n\t\tout: 'build-response-framing',\n\t\thandler: './src/hooks.ws.response-framing.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
+				"ours": "export const FIXTURE_VARIANTS = {\n\ttopicstats: {\n\t\tout: 'build-topic-stats',\n\t\thandler: './src/hooks.ws.topic-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tdroppedstats: {\n\t\tout: 'build-dropped-stats',\n\t\thandler: './src/hooks.ws.dropped-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100, maxBackpressure: 65536, closeOnBackpressureLimit: false }\n\t},\n\twirestats: {\n\t\tout: 'build-wire-stats',\n\t\thandler: './src/hooks.ws.wire-stats.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsetupfailure: {\n\t\tout: 'build-setup-failure',\n\t\thandler: './src/hooks.ws.setup-failure.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100, upgradeAdmission: { maxConnections: 1 } }\n\t},\n\trecoverref: {\n\t\tout: 'build-recover-ref',\n\t\thandler: './src/hooks.ws.recover-ref.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tsubscriptionstate: {\n\t\tout: 'build-subscription-state',\n\t\thandler: './src/hooks.ws.subscription-state.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\treusedata: {\n\t\tout: 'build-reuse-data',\n\t\thandler: './src/hooks.ws.reuse-data.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tclosesubscriptions: {\n\t\tout: 'build-close-subscriptions',\n\t\thandler: './src/hooks.ws.close-subscriptions.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\tcookiesafety: {\n\t\tout: 'build-cookie-safety',\n\t\thandler: './src/hooks.ws.cookie-safety.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tbodysafety: {\n\t\tout: 'build-body-safety',\n\t\thandler: './src/hooks.ws.body-safety.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tauthAbort: {\n\t\tout: 'build-auth-abort',\n\t\thandler: './src/hooks.ws.auth-abort.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tresponseframing: {\n\t\tout: 'build-response-framing',\n\t\thandler: './src/hooks.ws.response-framing.js',\n\t\twebsocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }\n\t},\n\tssrbody: { out: 'build-ssr-body', handler: null, websocket: false },\n\tssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },\n\tsubscriptionrelease: {\n\t\tout: 'build-subscription-release',\n\t\thandler: './src/hooks.ws.subscription-release.js',\n\t\twebsocket: { allowedOrigins: '*', upgradeRateLimit: 100 }\n\t},\n\t// The long-standing default."
 			}
 		]
 	},
@@ -3033,7 +3033,17 @@
 		]
 	},
 	{
-		"file": "test/vite-dev-request-shape.test.js"
+		"file": "test/vite-dev-request-shape.test.js",
+		"adaptations": [
+			{
+				"lead": "\t\t}\n\t});\n\n\tit('keeps the hook\\'s answer when a header value or cookie is one HTTP/1.1 refuses', async () => {\n\t\tfor (const [lane, status] of [['value', 200], ['set-cookie', 200], ['implicit-expires', 204]]) {\n\t\t\tconst res = await h2Exchange(server.h2Port, {\n\t\t\t\t':method': 'POST',\n\t\t\t\t':path': '/__ws/auth',\n\t\t\t\t':authority': `127.0.0.1:${server.h2Port}`,",
+				"ours": "\t\t}\n\t});\n\n\tit('keeps the hook\\'s answer when a header value or cookie is one HTTP/1.1 refuses', async () => {\n\t\tfor (const [lane, status] of [['value', 200], ['set-cookie', 200]]) {\n\t\t\tconst res = await h2Exchange(server.h2Port, {\n\t\t\t\t':method': 'POST',\n\t\t\t\t':path': '/__ws/auth',\n\t\t\t\t':authority': `127.0.0.1:${server.h2Port}`,"
+			},
+			{
+				"lead": "\t\t\t}\n\t\t}\n\t});\n\n\tit('answers 413 as the body crosses 64 KiB, before the client has sent it all', async () => {\n\t\tconst status = await new Promise((resolve, reject) => {\n\t\t\tconst session = http2Connect(`http://127.0.0.1:${server.h2Port}`);\n\t\t\tsession.once('error', reject);",
+				"ours": "\t\t\t}\n\t\t}\n\t});\n\n\tit('rejects a cookie whose Expires is not a Date over HTTP/2', async () => {\n\t\tconst res = await h2Exchange(server.h2Port, {\n\t\t\t':method': 'POST',\n\t\t\t':path': '/__ws/auth',\n\t\t\t':authority': `127.0.0.1:${server.h2Port}`,\n\t\t\t'x-requested-with': 'XMLHttpRequest',\n\t\t\t'x-refused': 'implicit-expires'\n\t\t});\n\t\texpect(res.status).toBe(500);\n\t\texpect(res.headers['set-cookie']).toBeUndefined();\n\t});\n\n\tit('answers 413 as the body crosses 64 KiB, before the client has sent it all', async () => {\n\t\tconst status = await new Promise((resolve, reject) => {\n\t\t\tconst session = http2Connect(`http://127.0.0.1:${server.h2Port}`);\n\t\t\tsession.once('error', reject);"
+			}
+		]
 	},
 	{
 		"file": "test/vite-grant-conjunct.test.js"
@@ -3424,5 +3434,11 @@
 	},
 	{
 		"file": "test/request-body-cancel-real.test.js"
+	},
+	{
+		"file": "test/cookie-safety-real.test.js"
+	},
+	{
+		"file": "test/fixture/src/hooks.ws.cookie-safety.js"
 	}
 ]

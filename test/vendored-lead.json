@@ -98,6 +98,9 @@
 		"test/fixture/src/hooks.ws.body-safety.js": "bd56f8d",
 		"test/fixture/src/routes/cancel-body/+server.js": "bd56f8d",
 		"test/helpers/body-safety-child.mjs": "bd56f8d",
-		"test/request-body-cancel-real.test.js": "bd56f8d"
+		"test/request-body-cancel-real.test.js": "bd56f8d",
+		"src/runtime/cookies.js": "a3760f5",
+		"test/fixture/src/hooks.ws.cookie-safety.js": "a3760f5",
+		"test/cookie-safety-real.test.js": "a3760f5"
 	}
 }

@@ -2878,8 +2878,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 			const outCookies = cookies._serialize();
 			// Staged like the relayed Response, which spells a name or value past
 			// ASCII as its UTF-8 bytes. A value node refuses throws out to the 500
-			// below with nothing staged: the cookie API checks a name, a value and
-			// most attributes, but writes an `expires` as its toUTCString() gives it.
+			// below with nothing staged.
 			if (outCookies.length > 0) stageHeaders(res, [['set-cookie', outCookies]]);
 			res.writeHead(204);
 			res.end();

@@ -505,8 +505,8 @@ export function authenticate({ headers, cookies }) {
 		return new Response('x', { headers: { 'content-type': 'text/plain', 'content-disposition': DISPOSITION } });
 	}
 	if (mode === 'expires-control') {
-		// A cookie the API lets through and node refuses: an expires whose
-		// toUTCString() carries a control character.
+		// A cookie the API refuses: an expires that is no Date, whose
+		// toUTCString() would carry a control character.
 		cookies.set('good', 'v', { path: '/' });
 		cookies.set('a', 'v', { path: '/', expires: { toUTCString: () => 'x' + String.fromCharCode(1) + 'y' } });
 		return undefined;
@@ -1385,7 +1385,7 @@ describe('the authenticate endpoint length-frames every answer it writes', () =>
 		expect(header(first.lines, 'set-cookie').some((c) => c.startsWith(wire))).toBe(true);
 	});
 
-	it('on a cookie node refuses beside the implicit 204, with a 500 that carries its body', async () => {
+	it('on a cookie the API refuses beside the implicit 204, with a 500 that carries its body', async () => {
 		const first = expectLengthFramed(await pipeline(open.rt.port, [AUTH('x-mode: expires-control'), OK]), {
 			status: '500',
 			body: 'Internal Server Error'
