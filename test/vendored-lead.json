@@ -60,6 +60,8 @@
 		"test/plugin-topic-validation.test.js": "f86401c",
 		"src/plugins/crdt/channel.js": "eea6936",
 		"src/plugins/crdt/channel.d.ts": "eea6936",
-		"test/crdt-channel.test.js": "eea6936"
+		"test/crdt-channel.test.js": "eea6936",
+		"src/plugins/cursor/client.js": "7106fe8",
+		"test/cursor-handle.test.js": "7106fe8"
 	}
 }

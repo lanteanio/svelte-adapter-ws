@@ -374,6 +374,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ms, so a larger value no longer overflows the timer into a 1 ms reconcile
   loop.
 
+- A worker-rendered cursor canvas whose mount fails (a throwing worker
+  constructor or canvas transfer) releases its mount reference, status
+  subscription and topic, so the canvas can mount again, and a stale cleanup
+  from a failed mount no longer tears down a newer one.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the
