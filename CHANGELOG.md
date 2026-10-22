@@ -398,6 +398,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence under a new request id and ignoring frames for the old one. A
   replay store created after `close()` no longer reopens the connection.
 
+- Malformed upgrades and disconnects cannot end the Vite dev server. Invalid
+  WebSocket request targets receive 400, and a peer reset while the handler
+  loads or its asynchronous upgrade hook runs closes only that connection,
+  leaving the same server available for later clients without restarting the
+  development process or losing other live connections.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the
