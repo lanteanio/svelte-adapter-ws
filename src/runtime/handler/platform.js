@@ -28,6 +28,7 @@ import {
 	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
+import { isUint8Array } from 'node:util/types';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
 import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
@@ -1564,6 +1565,7 @@ export const platform = {
 					if (result !== 2) bumpOut(ud, json);
 					continue;
 				}
+				if (!isUint8Array(p)) throw new TypeError('sendWireBatch: wire.encode must return Uint8Array or null');
 				const id = ensureWireId(ws, ud, topic);
 				if (id === -1) {
 					poisonWireState(ws, ud, wire.capability);
@@ -1579,6 +1581,7 @@ export const platform = {
 			}
 			return result;
 		}
+		if (!isUint8Array(payload)) throw new TypeError('sendWireBatch: wire.encode must return Uint8Array or null');
 		const id = ensureWireId(ws, ud, topic);
 		if (id === -1) {
 			// Dropped wire-id announce; the batch encode already advanced this

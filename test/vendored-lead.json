@@ -149,6 +149,8 @@
 		"src/runtime/runtime.js": "87052aa",
 		"src/runtime/sim-core.js": "87052aa",
 		"src/sim.d.ts": "87052aa",
-		"test/response-read-deadline.test.js": "87052aa"
+		"test/response-read-deadline.test.js": "87052aa",
+		"test/send-wire-batch-payload.test.js": "93e6a65",
+		"test/helpers/send-wire-batch-payload-runner.js": "93e6a65"
 	}
 }

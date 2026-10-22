@@ -461,6 +461,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `clearImmediate` no longer has its handles passed to Node's canceller; the
   optional `RuntimeEnv.timers.clearImmediate` cancels a check-phase callback.
 
+- `platform.sendWireBatch` rejects invalid codec payloads before binary
+  admission. A codec returning an object, Promise or other non-byte value could
+  announce a wire id before frame construction failed, or have its value coerced
+  into unexpected bytes; the call now throws `TypeError` before announcing or
+  constructing that frame, on the production runtime and under
+  `createTestServer`. Valid payloads, including `Buffer` and byte-array views
+  from another JavaScript realm, keep their bytes; nullish results keep their
+  fallback and codec exceptions propagate unchanged. A failure on a later entry
+  leaves earlier entries sent.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.

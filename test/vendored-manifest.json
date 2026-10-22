@@ -1565,8 +1565,8 @@
 			{
 				"lead": "\t\t\t\treturn;\n\t\t\t}\n\n\t\t\t// Warn if our WS path collides with the Vite HMR WebSocket path.\n\t\t\tconst hmrConfig = server.config.server?.hmr;\n\t\t\tif (hmrConfig && typeof hmrConfig === 'object' && hmrConfig.path === wsPath) {",
 				"ours": "\t\t\t\treturn;\n\t\t\t}\n\n\t\t\t// Vite installs CORS before configureServer. Insert a refusal-only\n\t\t\t// guard ahead of it through Connect's stack so auth preflights cannot\n\t\t\t// be approved by the application's broader CORS policy. Other paths\n\t\t\t// and methods keep the existing middleware order.\n\t\t\tconst refuseAuthPreflight = (req, res, next) => {\n\t\t\t\tif (req.method !== 'OPTIONS') return next();\n\t\t\t\tconst target = req.originalUrl || req.url || '';\n\t\t\t\tif (target.split('?')[0] !== wsAuthPath) return next();\n\t\t\t\tconst invalid = invalidRequestTarget(target, undefined);\n\t\t\t\tres.statusCode = invalid ? 400 : 405;\n\t\t\t\tif (!invalid) res.setHeader('allow', 'POST');\n\t\t\t\tres.setHeader('content-type', 'text/plain');\n\t\t\t\treq.resume();\n\t\t\t\tres.end(invalid ? 'Bad Request' : 'Method Not Allowed');\n\t\t\t};\n\t\t\tserver.middlewares.stack.unshift({ route: '', handle: refuseAuthPreflight });\n\n\t\t\t// Warn if our WS path collides with the Vite HMR WebSocket path.\n\t\t\tconst hmrConfig = server.config.server?.hmr;\n\t\t\tif (hmrConfig && typeof hmrConfig === 'object' && hmrConfig.path === wsPath) {"
-	},
-	{
+			},
+			{
 				"lead": "\t\tget connections() { return connections.size; },\n\t\t/**\n\t\t * Dev mirror of the production tracing context. The dev server wires\n\t\t * no tracing provider and keeps no per-connection context, so this is\n\t\t * the same `null` production answers when tracing is not configured -\n\t\t * present so `platform.traceContext` reads identically in both modes\n\t\t * instead of being `undefined` under `vite dev`.\n\t\t */\n\t\tget traceContext() { return null; },\n\t\t// The frozen vendor-neutral tracing surface. Without a provider its\n\t\t// run() path is a direct callback and current() stays null - the\n\t\t// exact production behavior when `tracing` is unset.\n\t\ttrace,\n",
 				"ours": "\t\tget connections() { return connections.size; },\n\t\t// Explicit contexts remain available even without a tracing provider.\n\t\tget traceContext() { return trace.current(); },\n\t\ttrace,\n"
 			}
@@ -3525,5 +3525,11 @@
 	},
 	{
 		"file": "test/response-read-deadline.test.js"
+	},
+	{
+		"file": "test/send-wire-batch-payload.test.js"
+	},
+	{
+		"file": "test/helpers/send-wire-batch-payload-runner.js"
 	}
 ]
