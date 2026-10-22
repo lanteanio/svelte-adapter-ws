@@ -113,6 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `runSim` reports framework assertions that fired during a run, including
+  ones the scenario swallowed, as invariant violations named by category with
+  their count, in category order, for single-worker and cluster runs.
+
 - Shutdown closes every WebSocket with 1001 `Server shutting down`, also when a
   reconnect dispersal window is set; the close reason was `Server draining`.
 

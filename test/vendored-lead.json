@@ -131,6 +131,8 @@
 		"test/lifecycle-hook-boundary.test.js": "36e71f9",
 		"test/message-hook-containment.test.js": "36e71f9",
 		"src/build-rollup-lifecycle.js": "1925f07",
-		"test/extra-entry-imports.test.js": "1925f07"
+		"test/extra-entry-imports.test.js": "1925f07",
+		"src/sim.js": "11404d8",
+		"test/sim-framework-assertions.test.js": "11404d8"
 	}
 }

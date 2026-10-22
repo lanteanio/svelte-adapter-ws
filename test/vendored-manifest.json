@@ -3496,5 +3496,8 @@
 	},
 	{
 		"file": "test/fixture/src/routes/delayed-body-read/+server.js"
+	},
+	{
+		"file": "test/sim-framework-assertions.test.js"
 	}
 ]

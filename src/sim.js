@@ -37,6 +37,16 @@ export {
 export { detectGrowth, createResourceTracker, assertNoResourceGrowth, LeakError } from './runtime/leak-detect.js';
 export { structuralResourceProbes, processResourceProbes, createResourceGrowthAuditor } from './runtime/leak-probes.js';
 
+import { readAssertionCounts } from './runtime/utils/assertions.js';
+
+function recordFrameworkAssertions(before, recordViolation) {
+	const counts = readAssertionCounts();
+	for (const category of [...counts.keys()].sort()) {
+		const assertions = counts.get(category) - (before.get(category) ?? 0);
+		if (assertions > 0) recordViolation({ category, context: { assertions } });
+	}
+}
+
 /**
  * Build the plain state snapshot the shared invariant predicates read from the
  * live in-memory app. Structure only: per-connection subscribed set (the one
@@ -240,6 +250,7 @@ export async function runSim(config = {}) {
 	// `subscribed` ack epoch (and any timestamp derived from it) reproduces
 	// bit-for-bit across runs / processes, not the real wall time at module load.
 	resetProcessEpoch();
+	const assertionsBefore = new Map(readAssertionCounts());
 	try {
 		const app = createInMemoryApp({ scheduler, faultEngine });
 		const uws = createInMemoryUwsHelpers(app);
@@ -352,6 +363,7 @@ export async function runSim(config = {}) {
 
 		await server.close();
 		totalSteps += await scheduler.run({ maxSteps, onStep: checkInvariants });
+		recordFrameworkAssertions(assertionsBefore, recordViolation);
 
 		const result = {
 			seed,
@@ -448,6 +460,7 @@ async function runClusterSim(config) {
 
 	setRuntimeEnv(scheduler.buildEnv(rng), { force: true });
 	resetProcessEpoch();
+	const assertionsBefore = new Map(readAssertionCounts());
 	try {
 		/** @type {Array<{ category: string, context: any }>} */
 		const violations = [];
@@ -741,6 +754,7 @@ async function runClusterSim(config) {
 		supervisor.shutdown();
 		for (const w of workers.values()) { try { await w.server.close(); } catch {} }
 		totalSteps += await scheduler.run({ maxSteps, onStep: checkInvariants });
+		recordFrameworkAssertions(assertionsBefore, recordViolation);
 
 		return {
 			seed,
