@@ -117,6 +117,12 @@
 		"test/harness-metrics-surface.test.js": "45ba6f1",
 		"test/vite-max-payload.test.js": "45ba6f1",
 		"test/vite-upgrade-headers.test.js": "45ba6f1",
-		"test/vite.test.js": "45ba6f1"
+		"test/vite.test.js": "45ba6f1",
+		"src/plugins/_shared/sensitive.js": "5a14b77",
+		"src/runtime/utils/location-target.js": "5a14b77",
+		"src/runtime/utils/subscribe-policy.js": "5a14b77",
+		"test/projection-denylist-corpus.test.js": "5a14b77",
+		"test/request-body-delayed-real.test.js": "5a14b77",
+		"test/fixture/src/routes/delayed-body-read/+server.js": "5a14b77"
 	}
 }

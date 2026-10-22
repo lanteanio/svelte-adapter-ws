@@ -996,8 +996,8 @@
 		"file": "src/runtime/utils/location-target.js",
 		"adaptations": [
 			{
-				"lead": " * it redirects to is a decoded string too, and a header value is written to the\n * wire as the UTF-8 bytes of the string it was given. A route named with a\n * non-ASCII character therefore redirected with raw bytes in Location, which\n * RFC 9110 5.5 does not allow and which every client parses by its own rules.\n",
-				"ours": " * it redirects to is a decoded string too, and node writes a header value as\n * Latin-1 and refuses a character past it. A route named with a non-ASCII\n * character therefore threw past Latin-1 and otherwise redirected with raw\n * bytes in Location, which RFC 9110 5.5 does not allow and which every client\n * parses by its own rules.\n"
+				"lead": " * it redirects to is a decoded string too, and a header value is written to the\n * wire as the UTF-8 bytes of the string it was given. A route named with a\n * non-ASCII character would otherwise put raw UTF-8 bytes in Location. Its\n",
+				"ours": " * it redirects to is a decoded string too, and node writes a header value as\n * Latin-1 and refuses a character past it. A route named with a non-ASCII\n * character would otherwise throw past Latin-1 or put raw bytes in Location. Its\n"
 			}
 		]
 	},
@@ -3507,5 +3507,14 @@
 	},
 	{
 		"file": "test/vite-auth-preflight.test.js"
+	},
+	{
+		"file": "test/projection-denylist-corpus.test.js"
+	},
+	{
+		"file": "test/request-body-delayed-real.test.js"
+	},
+	{
+		"file": "test/fixture/src/routes/delayed-body-read/+server.js"
 	}
 ]
