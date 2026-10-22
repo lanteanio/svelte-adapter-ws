@@ -370,6 +370,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publication failure on one topic no longer stops presence diffs and
   heartbeats or the cursor flush for the other topics.
 
+- The CRDT channel caps a positive finite `reconcileIntervalMs` at 2147483647
+  ms, so a larger value no longer overflows the timer into a 1 ms reconcile
+  loop.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the
