@@ -51,6 +51,11 @@ export const FIXTURE_VARIANTS = {
 		handler: './src/hooks.ws.close-subscriptions.js',
 		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
 	},
+	responseframing: {
+		out: 'build-response-framing',
+		handler: './src/hooks.ws.response-framing.js',
+		websocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }
+	},
 	ssrbody: { out: 'build-ssr-body', handler: null, websocket: false },
 	ssrstream: { out: 'build-ssr-stream', handler: null, websocket: false },
 	subscriptionrelease: {
