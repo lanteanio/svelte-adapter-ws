@@ -359,6 +359,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching, the configured key itself and other reserved names remain
   protected, and wire updates still require `clientUpdateFields`.
 
+- Presence resolves the identity key only from an own property of the selected
+  data, so an inherited value (a `constructor` or `__proto__` key, or a
+  selector returning an object whose prototype carries the key) no longer
+  merges unrelated connections into one user.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

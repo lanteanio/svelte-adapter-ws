@@ -3235,5 +3235,8 @@
 	},
 	{
 		"file": "test/presence-unicode-key.test.js"
+	},
+	{
+		"file": "test/presence-key.test.js"
 	}
 ]
