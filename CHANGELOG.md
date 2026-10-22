@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `examples/deployment` carries a systemd unit and a container compose file
   with readiness, restart policy and termination grace.
 
+- A WebSocket upgrade rejected with 429 while keyed on a loopback or private
+  client address and `ADDRESS_HEADER` is unset prints a one-time warning that an
+  address-rewriting proxy may be collapsing every client onto one rate-limit
+  bucket, with the settings that restore real client addresses.
+
 - Client connections expose `sendSerialized(text): boolean` for pre-encoded JSON
   text. The method reports local transport acceptance, preserves the text exactly,
   and never retains it for reconnect.
@@ -323,6 +328,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chunked request bodies skip the two bytes after each chunk's data, as the
   native tier does, instead of refusing the request when they are not CRLF.
+
+- Runtime proxy warnings name the configured environment prefix in their explanations and suggested address, hop-depth, and trusted-proxy settings.
+
+- Non-string `envPrefix` values fail adapter configuration instead of producing different environment lookups in development and production.
 
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 

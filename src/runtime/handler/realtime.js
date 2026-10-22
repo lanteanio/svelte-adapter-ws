@@ -8,6 +8,7 @@ import { isSet } from 'node:util/types';
 /* global WS_OPTIONS */
 /* global WS_PATH */
 /* global WS_AUTH_PATH */
+/* global ENV_PREFIX */
 import { WebSocketServer } from 'ws';
 import { markShortHttpStatus, releaseHttpReadIfFull } from './read-turn.js';
 import { prepareUpgradeRefusal, forgetUpgradeRefusal, finishUpgradeRefusal, watchPendingUpgrade } from './upgrade-refusal.js';
@@ -43,6 +44,7 @@ import { installAttribution } from '../utils/attribution.js';
 import { snapshotUpgradeHeaders } from '../utils/upgrade-headers.js';
 import { collectRequestHeaders, firstHeaderValue, framingRefusal, isFramingHeader } from '../utils/request-headers.js';
 import { createSlidingWindowLimiter } from '../utils/rate-limiter.js';
+import { addressScope } from '../utils/address.js';
 import { activeTraceContext, extractTraceContext, traceOperation, tracingEnabled } from '../tracing.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import {
@@ -97,7 +99,7 @@ import { platform, flushCoalescedFor, hasUserSubscribeHook, runUserSubscribeGate
 import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqFor } from './resume-buffer.js';
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
-import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
+import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, address_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
 import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
@@ -987,6 +989,7 @@ const upgradeRateLimiter = createSlidingWindowLimiter({
 	// dropped, so it is reported per door rather than folded into one number.
 	onEvict: mUpgradeRateEvicted === undefined ? undefined : () => mUpgradeRateEvicted.inc({ door: 'upgrade' })
 });
+let warnedRateLimitProxyCollapse = false;
 const authPathRateLimiter = createSlidingWindowLimiter({
 	maxPerWindow: wsOptions.authPathRateLimit ?? 30,
 	windowMs: (wsOptions.authPathRateLimitWindow ?? 10) * 1000,
@@ -1480,6 +1483,33 @@ export async function handleUpgrade(req, socket, head) {
 		if (counters.activePosture !== null) counters.activePosture.recordRateLimitReject();
 		noteUpgradeRejection(headers, 'ip_rate_limit');
 		refuseUpgrade(socket, 429, 'Too Many Requests');
+		// Proxy-collapse advisory: this rejection was keyed on a
+		// loopback/private address while no ADDRESS_HEADER is configured,
+		// which is the signature of an address-rewriting proxy collapsing
+		// every client onto one rate-limit bucket (so the per-IP cap is
+		// really a global one). Warn once - this is the exact "intermittent
+		// 429 on /ws under trivial traffic" symptom that is otherwise hard
+		// to attribute. A directly internet-facing server sees real public
+		// client IPs here and never trips this.
+		if (!warnedRateLimitProxyCollapse && !address_header) {
+			const scope = addressScope(clientIp);
+			if (scope === 'loopback' || scope === 'private') {
+				warnedRateLimitProxyCollapse = true;
+				console.warn(
+					`[ws] Rejected a WebSocket upgrade (429) keyed on a ${scope} client address ` +
+					`(${clientIp}) while ${ENV_PREFIX}ADDRESS_HEADER is unset. If this server runs behind a ` +
+					'reverse proxy, load balancer, or docker userland-proxy that rewrites the ' +
+					'source address, every client shares one address and the per-IP ' +
+					'`upgradeRateLimit` becomes a single GLOBAL cap (also true for the ' +
+					'plugins/ratelimit per-message limiter, which keys on the same address). ' +
+					'Restore real client IPs with one of:\n' +
+					`  ${ENV_PREFIX}ADDRESS_HEADER=x-forwarded-for (+ ${ENV_PREFIX}XFF_DEPTH for the trusted-proxy hop count)\n` +
+					'  docker `userland-proxy: false` so iptables DNAT preserves the source IP\n' +
+					'  websocket.upgradeRateLimit: 0 to disable the per-IP limit if you throttle upstream\n' +
+					'  See: https://svti.me/upgrade-ratelimit-proxy'
+				);
+			}
+		}
 		releaseInFlight();
 		return;
 	}

@@ -3394,6 +3394,9 @@
 		"file": "test/vite-subscriber-walk-real.test.js"
 	},
 	{
+		"file": "test/vite-config-fallback.test.js"
+	},
+	{
 		"file": "test/smooth-drain-budget-real.test.js"
 	},
 	{

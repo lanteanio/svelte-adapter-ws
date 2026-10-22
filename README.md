@@ -642,7 +642,8 @@ Mounted health and readiness probes remain available. Unlisted hosts serve
 normally; configured proxy host, port and protocol headers keep their existing
 trust behavior. This feature is disabled by default.
 
-Runtime environment (prefix configurable via the `envPrefix` option):
+Runtime environment (prefix configurable via the `envPrefix` option, which
+must be a string; default `''`):
 
 The Vite plugin reads the same prefix from the adapter configuration. For
 `envPrefix: 'MY_APP_'`, set `MY_APP_ORIGIN` to pin the dev authentication
