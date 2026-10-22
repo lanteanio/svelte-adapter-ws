@@ -146,7 +146,7 @@
 	},
 	{
 		"file": "src/runtime/utils/tls-reload.js",
-		"reason": "the lead's module plus a guard around the caller's onError, proposed to the lead as RT-1633; takes the lead's spelling once it ships",
+		"reason": "the lead's module plus a guard around the caller's onError",
 		"lead": "8e36be9c58081c334d2d6a5bfb7b80ddfa061bf1"
 	},
 	{
