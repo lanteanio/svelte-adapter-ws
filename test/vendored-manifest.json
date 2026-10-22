@@ -467,25 +467,7 @@
 		"file": "src/plugins/replay/client.d.ts"
 	},
 	{
-		"file": "src/plugins/replay/client.js",
-		"adaptations": [
-			{
-				"lead": "\n\tfunction startListening() {\n\t\tcancelled = false;\n\t\tconst liveStore = on(topic);\n\t\tconst replayStore = on(TOPIC_PREFIX + topic);\n\n",
-				"ours": "\n\tfunction startListening() {\n\t\tcancelled = false;\n\t\tlet replayPending = false;\n\t\tlet truncated = false;\n\t\tconst liveStore = on(topic);\n\t\tconst replayStore = on(TOPIC_PREFIX + topic);\n\n"
-			},
-			{
-				"lead": "\n\t\t// Subscribe to the replay topic for missed messages + end marker\n\t\treplayUnsub = replayStore.subscribe((event) => {\n\t\t\tif (event === null) return;\n\n\t\t\t// If the server embedded a reqId, ignore responses for other requests.\n\t\t\t// Servers that don't embed reqId (old deployments) omit the field and\n",
-				"ours": "\n\t\t// Subscribe to the replay topic for missed messages + end marker\n\t\treplayUnsub = replayStore.subscribe((event) => {\n\t\t\tif (event === null || !replayPending || replayDone) return;\n\n\t\t\t// If the server embedded a reqId, ignore responses for other requests.\n\t\t\t// Servers that don't embed reqId (old deployments) omit the field and\n"
-			},
-			{
-				"lead": "\t\t\tconst d = /** @type {any} */ (event.data);\n\t\t\tif (d != null && 'reqId' in d && d.reqId !== reqId) return;\n\n\t\t\tif (event.event === 'end') {\n\t\t\t\t// If the server's buffer was overwritten before we connected, signal\n\t\t\t\t// truncation so the app can show a warning or reload all data.\n\t\t\t\tif (d != null && d.truncated) {\n\t\t\t\t\toutput.set({ topic, event: 'truncated', data: null });\n\t\t\t\t}\n\t\t\t\treplayDone = true;\n",
-				"ours": "\t\t\tconst d = /** @type {any} */ (event.data);\n\t\t\tif (d != null && 'reqId' in d && d.reqId !== reqId) return;\n\n\t\t\tif (event.event === 'truncated') {\n\t\t\t\tif (!truncated) {\n\t\t\t\t\ttruncated = true;\n\t\t\t\t\toutput.set({ topic, event: 'truncated', data: null });\n\t\t\t\t}\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tif (event.event === 'end') {\n\t\t\t\t// If the server's buffer was overwritten before we connected, signal\n\t\t\t\t// truncation so the app can show a warning or reload all data.\n\t\t\t\tif (d != null && d.truncated && !truncated) {\n\t\t\t\t\ttruncated = true;\n\t\t\t\t\toutput.set({ topic, event: 'truncated', data: null });\n\t\t\t\t}\n\t\t\t\treplayDone = true;\n"
-			},
-			{
-				"lead": "\t\t// before open, ready() rejects - swallow the error so it does not become\n\t\t// an unhandled rejection. The store will simply receive no replay messages.\n\t\tready().then(() => {\n\t\t\tif (!cancelled) connect().send({ type: 'replay', topic, since, reqId });\n\t\t}).catch(() => {});\n\t}\n\n",
-				"ours": "\t\t// before open, ready() rejects - swallow the error so it does not become\n\t\t// an unhandled rejection. The store will simply receive no replay messages.\n\t\tready().then(() => {\n\t\t\tif (!cancelled) {\n\t\t\t\treplayPending = true;\n\t\t\t\tif (!connect().send({ type: 'replay', topic, since, reqId })) replayPending = false;\n\t\t\t}\n\t\t}).catch(() => {});\n\t}\n\n"
-			}
-		]
+		"file": "src/plugins/replay/client.js"
 	},
 	{
 		"file": "src/plugins/replay/server.d.ts",
@@ -3247,5 +3229,11 @@
 	},
 	{
 		"file": "test/client-module-stores-real.test.js"
+	},
+	{
+		"file": "test/client-recovery-window-real.test.js"
+	},
+	{
+		"file": "test/client-replay-real.test.js"
 	}
 ]

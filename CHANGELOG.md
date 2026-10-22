@@ -383,6 +383,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `close()`. Their sends, viewport reports and worker mounts stay offline until
   the app calls `connect()` again, and then use the new connection.
 
+- `onReplay()` resumes an unanswered replay after a reconnection or an
+  explicit replacement connection, asking from the last delivered replay
+  sequence under a new request id and ignoring frames for the old one. A
+  replay store created after `close()` no longer reopens the connection.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

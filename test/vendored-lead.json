@@ -64,6 +64,10 @@
 		"src/plugins/cursor/client.js": "34d06e7",
 		"test/cursor-handle.test.js": "7106fe8",
 		"src/plugins/presence/client.js": "34d06e7",
-		"test/client-module-stores-real.test.js": "b5c336f"
+		"test/client-module-stores-real.test.js": "b5c336f",
+		"src/plugins/replay/client.js": "ee186d3",
+		"src/plugins/replay/client.d.ts": "ee186d3",
+		"test/client-recovery-window-real.test.js": "ee186d3",
+		"test/client-replay-real.test.js": "ee186d3"
 	}
 }
