@@ -1800,6 +1800,9 @@
 		"file": "test/coalesced-drain-real.test.js"
 	},
 	{
+		"file": "test/coalesced-reentrant-child.test.js"
+	},
+	{
 		"file": "test/codec-relay.test.js",
 		"adaptations": [
 			{
@@ -2026,6 +2029,9 @@
 		"file": "test/fixture/src/app.html"
 	},
 	{
+		"file": "test/fixture/src/coalesced-probe.js"
+	},
+	{
 		"file": "test/fixture/src/handshake-vectors.js"
 	},
 	{
@@ -2053,13 +2059,7 @@
 		]
 	},
 	{
-		"file": "test/fixture/src/hooks.ws.js",
-		"adaptations": [
-			{
-				"lead": "export function authenticate({ cookies, headers, url, request }) {\n",
-				"ours": "export function authenticate({ cookies, headers, url, request }) {\n\tif (headers['x-auth-response'] === 'date') return new Response('dated', { headers: { date: 'Thu, 01 Jan 1970 00:00:00 GMT' } });\n\tif (headers['x-auth-response'] === 'error') {\n\t\tcookies.set('error_cookie', 'must-not-escape', { path: '/' });\n\t\treturn Response.error();\n\t}\n\tif (headers['x-auth-response'] === '304-custom') {\n\t\treturn new Response(null, { status: 304, headers: { 'content-length': headers['x-auth-length'] || 'abc' } });\n\t}\n"
-			}
-		]
+		"file": "test/fixture/src/hooks.ws.js"
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.park.js"
@@ -2260,6 +2260,9 @@
 	},
 	{
 		"file": "test/head-and-204-framing-real.test.js"
+	},
+	{
+		"file": "test/helpers/coalesced-reentrant-child.mjs"
 	},
 	{
 		"file": "test/helpers/fixture-build.js"

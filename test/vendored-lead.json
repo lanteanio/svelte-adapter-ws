@@ -159,6 +159,12 @@
 		"test/publish-serialization-real.test.js": "cf2347e",
 		"src/runtime/wire.js": "0fa9803",
 		"src/runtime/handler/wire-state.js": "0fa9803",
-		"test/wire-id-retirement-real.test.js": "0fa9803"
+		"test/wire-id-retirement-real.test.js": "0fa9803",
+		"src/runtime/utils/backpressure.js": "24e92e6",
+		"test/coalesced-drain-real.test.js": "6c8290a",
+		"test/fixture/src/hooks.ws.js": "9c74b98",
+		"test/fixture/src/coalesced-probe.js": "24e92e6",
+		"test/coalesced-reentrant-child.test.js": "24e92e6",
+		"test/helpers/coalesced-reentrant-child.mjs": "24e92e6"
 	}
 }

@@ -1,4 +1,4 @@
-import { isSet, isUint8Array } from 'node:util/types';
+import { isSet, isUint8Array, isNativeError } from 'node:util/types';
 import { completeSerializedEnvelope, envelopeData } from './runtime/utils/epoch.js';
 import { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLogicalSubscription, accountClosedLogicalSubscriptions } from './runtime/utils/ws-symbols.js';
 import { activeTraceContext, trace } from './runtime/tracing.js';
@@ -1364,6 +1364,30 @@ export async function createTestServer(options = {}) {
 		stats.bytesOut += payload.length;
 	}
 
+	const coalescedContinuationsT = new WeakSet();
+
+	/** Report a dropped entry with private identifier fields and bounded application error text. */
+	function reportCoalescedFailureT(userData, msg, key, err) {
+		try {
+			emitOperationalEvent({
+				source: 'svelte-adapter-ws',
+				component: 'runtime.websocket',
+				event: 'ws.send-coalesced.unserializable',
+				severity: 'error',
+				dataClass: 'pseudonymous',
+				message: 'A queued sendCoalesced value has no JSON form and was dropped.',
+				attributes: {
+					errorId: ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE,
+					requestId: userData[WS_PLATFORM]?.requestId ?? null,
+					key: privateValueMetadata(key, 'coalesced-key'),
+					topic: privateValueMetadata(msg.topic, 'topic'),
+					event: privateValueMetadata(msg.event, 'event'),
+					error: diagnosticError(err)
+				}
+			});
+		} catch { /* reporting must not escape drain */ }
+	}
+
 	/**
 	 * Drain one connection's pending sendCoalesced values, as production's
 	 * flushCoalescedFor does: through the outbound chokepoint, stopping on
@@ -1379,18 +1403,32 @@ export async function createTestServer(options = {}) {
 		const pending = userData[WS_COALESCED];
 		if (!pending || pending.size === 0) return;
 		let callerError = null;
-		drainCoalesced(pending, (msg) => {
-			let body;
-			try { body = JSON.stringify(msg.data ?? null); }
-			catch (err) { body = err; }
-			if (typeof body !== 'string') {
-				const err = body instanceof Error ? body : new TypeError('sendCoalesced data has no JSON form');
+		const yielded = drainCoalesced(pending, (msg, key) => {
+			let payload;
+			let failure;
+			try {
+				const body = JSON.stringify(msg.data ?? null);
+				if (typeof body === 'string') payload = msg.prefix + body + '}';
+			}
+			catch (err) { failure = err; }
+			// A serializer may have queued a newer value for this key.
+			if (pending.get(key) !== msg) return 1;
+			if (payload === undefined) {
+				const err = isNativeError(failure) ? failure : new TypeError('sendCoalesced data has no JSON form');
 				if (msg === callerEntry) callerError = err;
-				else console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE), err);
+				else reportCoalescedFailureT(userData, msg, key, err);
 				return 1;
 			}
-			return sendOutboundT(ws, '{"topic":' + esc(msg.topic) + ',"event":' + esc(msg.event) + ',"data":' + body + '}');
+			return sendOutboundT(ws, payload);
 		});
+		if (yielded && !coalescedContinuationsT.has(pending)) {
+			coalescedContinuationsT.add(pending);
+			setTimer(() => {
+				coalescedContinuationsT.delete(pending);
+				if (!wsConnections.has(ws)) { pending.clear(); return; }
+				flushCoalescedForT(ws);
+			}, 0);
+		}
 		if (callerError !== null) throw callerError;
 	}
 
@@ -2407,6 +2445,7 @@ export async function createTestServer(options = {}) {
 			let userData;
 			try { userData = ws.getUserData(); }
 			catch { closedWsAbortsT++; return; }
+			const prefix = '{"topic":' + esc(topic) + ',"event":' + esc(event) + ',"data":';
 			let pending = userData[WS_COALESCED];
 			if (!pending) {
 				pending = new Map();
@@ -2416,7 +2455,7 @@ export async function createTestServer(options = {}) {
 				const oldest = pending.keys().next().value;
 				if (oldest !== undefined) pending.delete(oldest);
 			}
-			const entry = { topic, event, data };
+			const entry = { topic, event, data, prefix };
 			pending.set(key, entry);
 			flushCoalescedForT(ws, entry);
 		},

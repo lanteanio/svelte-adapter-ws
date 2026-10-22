@@ -1199,6 +1199,66 @@ export interface Platform {
 		options?: { timeoutMs?: number }
 	): Promise<Array<{ ok: true; reply: TReply } | { ok: false; error: string }>>;
 	send(ws: WebSocket<any>, topic: string, event: string, data?: unknown, options?: { compress?: boolean; seq?: number | bigint | false | null }): number;
+	/**
+	 * Send a message to a single connection with coalesce-by-key semantics.
+	 *
+	 * Each `(ws, key)` pair holds at most one pending message. If a newer
+	 * `sendCoalesced` for the same `key` arrives before the previous frame
+	 * drains to the wire, the older one is dropped in place: latest value
+	 * wins. Insertion order is preserved across overwrites.
+	 *
+	 * Use for latest-value streams where intermediate values are noise -
+	 * price ticks, cursor positions, presence state, typing indicators,
+	 * scroll/scrub positions. For at-least-once delivery, use `send()` or
+	 * `publish()` instead.
+	 *
+	 * Serialization is deferred to the actual flush, so a stream that
+	 * overwrites the same `key` 1000 times before a single drain pays one
+	 * `JSON.stringify`, not 1000.
+	 *
+	 * A send made from inside `toJSON` queues without recursively flushing.
+	 * A newer value for the current key replaces it before its frame is sent.
+	 *
+	 * Topic and event names containing quotes, backslashes or control
+	 * characters throw before queueing, leaving any pending value unchanged.
+	 *
+	 * The flush attempts immediately and again on every drain event.
+	 * On backpressure or drop from the underlying socket, pumping stops
+	 * and resumes when the connection drains. A value JSON cannot carry
+	 * throws from this call when it flushes at once, as `send`
+	 * does; one queued behind backpressure is dropped when it drains and
+	 * reported as `ADAPTER-ERR-COALESCED-UNSERIALIZABLE` through the operational
+	 * sink event `ws.send-coalesced.unserializable`. Register
+	 * `setOperationalEventSink` from `svelte-adapter-ws/observability` to act
+	 * on its connection requestId, bounded error and private key/topic/event
+	 * references. Queued payload objects are not retained; identifier
+	 * fields use private references and bounded error text is application-provided.
+	 *
+	 * @example
+	 * ```js
+	 * // In hooks.ws.js - cursor positions during a collaborative edit.
+	 * // Each peer sees only the latest cursor for every other user;
+	 * // intermediate positions are dropped under load.
+	 * export function message(ws, { data, platform }) {
+	 *   const msg = JSON.parse(Buffer.from(data).toString());
+	 *   if (msg.event !== 'cursor') return;
+	 *   const { docId, userId } = ws.getUserData();
+	 *   for (const peer of getPeersOf(docId)) {
+	 *     platform.sendCoalesced(peer, {
+	 *       key: 'cursor:' + userId,
+	 *       topic: 'doc:' + docId,
+	 *       event: 'cursor',
+	 *       data: { userId, x: msg.data.x, y: msg.data.y }
+	 *     });
+	 *   }
+	 * }
+	 * ```
+	 *
+	 * @param ws - The WebSocket connection.
+	 * @param message - `{ key, topic, event, data }`. `key` identifies the
+	 *   coalesce slot per connection; `topic`, `event`, `data` are the
+	 *   envelope fields the client store understands.
+	 */
 	sendCoalesced(
 		ws: WebSocket<any>,
 		message: { key: string; topic: string; event: string; data?: unknown }

@@ -3,8 +3,8 @@
 Search this page with the exact stable ID, code, event, or beginning of the
 message you saw. Every operator-facing failure the runtime can emit is indexed
 here with its cause, what it means for traffic, whether anything recovers on its
-own, and what to do next: 43 entries carrying a stable ID and operator
-guidance, plus 39 indexing consequential plain console lines that never enter
+own, and what to do next: 44 entries carrying a stable ID and operator
+guidance, plus 38 indexing consequential plain console lines that never enter
 the diagnostic pipeline - each of those is printed through the registry and
 carries its stable ID tag, so the emitted text cannot drift from the prefix
 indexed here.
@@ -86,7 +86,7 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook) | `ws.open-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the open hook threw` |
 | [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook) | `ws.drain-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the drain hook threw` |
 | [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook) | `ws.close-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the close hook threw` |
-| [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable) | `ws.send-coalesced.unserializable` | `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped` |
+| [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable) | `ws.send-coalesced.unserializable` | `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket event=ws.send-coalesced.unserializable severity=error] A queued sendCoalesced value has no JSON form and was dropped.` |
 | [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the recover-on-subscribe hook threw` |
 | [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | ``[svelte-adapter-ws/runtime.websocket] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` |
 | [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument) | `ws.metrics.instrument-threw` | `[svelte-adapter-ws/runtime.websocket] a metrics instrument threw; further errors from it are suppressed` |
@@ -106,8 +106,8 @@ generate and ship their own runtime-owned references on the same release channel
 ## Emitted diagnostic event coverage
 
 This inventory is derived at generation time by scanning `src/runtime/`,
-`src/observability.js`, `src/vite.js`, and `src/testing.js` for emitted diagnostic events; the runtime emits 46 distinct events.
-The 43 indexed above carry stable IDs and full operator guidance; the remaining 3
+`src/observability.js`, `src/vite.js`, and `src/testing.js` for emitted diagnostic events; the runtime emits 47 distinct events.
+The 44 indexed above carry stable IDs and full operator guidance; the remaining 3
 are informational. That split is enforced by severity rather than by a list: an emitted event
 is exempt from the indexed reference only while every severity it is emitted at is
 informational, so promoting one to a warning or an error fails generation until it is indexed.
@@ -157,6 +157,7 @@ Indexed events:
 - `tls.swap-failed` - [ADAPTER-ERR-TLS-SWAP](#adapter-err-tls-swap)
 - `tls.watch-failed` - [ADAPTER-ERR-TLS-WATCH](#adapter-err-tls-watch)
 - `tls.watch-lost` - [ADAPTER-ERR-TLS-WATCH-LOST](#adapter-err-tls-watch-lost)
+- `ws.send-coalesced.unserializable` - [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable)
 
 Indexed console lines (no diagnostic event; the searchable key is the printed prefix and
 the stable ID tag on the line):
@@ -184,7 +185,6 @@ the stable ID tag on the line):
 - `[svelte-adapter-ws/runtime.websocket] the open hook threw` - [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook)
 - `[svelte-adapter-ws/runtime.websocket] the drain hook threw` - [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook)
 - `[svelte-adapter-ws/runtime.websocket] the close hook threw` - [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook)
-- `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped` - [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable)
 - `[svelte-adapter-ws/runtime.websocket] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
 - ``[svelte-adapter-ws/runtime.websocket] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
 - `[svelte-adapter-ws/runtime.websocket] a metrics instrument threw; further errors from it are suppressed` - [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument)
@@ -1021,11 +1021,11 @@ searchable log prefix is:
 ## `ADAPTER-ERR-COALESCED-UNSERIALIZABLE`
 
 - **Code/event:** `ws.send-coalesced.unserializable`
-- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped`
+- **Message prefix:** `[lantean/diagnostic source=svelte-adapter-ws component=runtime.websocket event=ws.send-coalesced.unserializable severity=error] A queued sendCoalesced value has no JSON form and was dropped.`
 - **Cause:** A value passed to `platform.sendCoalesced` while the connection was backpressured could not be serialized when the queue drained: a BigInt, a cycle, a `toJSON` that throws, or a value such as a function that JSON has no form for.
-- **Consequence:** That one entry is dropped and the rest of the queue for the connection still goes out. The connection stays open. A value that fails while it is flushed at once throws from the `sendCoalesced` call instead and never reaches this line.
+- **Consequence:** That one entry is dropped and the rest of the queue for the connection still goes out. The connection stays open. A value that fails while it is flushed at once throws from the `sendCoalesced` call instead and never emits this event.
 - **Automatic recovery:** None for the entry; the next value set under the same key is sent normally.
-- **Next action:** Send only JSON-serializable data, or convert it (for example a BigInt to a string) before calling sendCoalesced. The error printed with this line is the one the serializer threw.
+- **Next action:** Send only JSON-serializable data, or convert it (for example a BigInt to a string) before calling sendCoalesced. Register setOperationalEventSink from svelte-adapter-ws/observability to handle ws.send-coalesced.unserializable. Attributes contain the stable errorId, connection requestId, process-local key/topic/event references and a bounded error projection. No queued payload object is retained; identifier fields use private references, while bounded error text remains application-provided and may contain identifiers. Without a custom sink the record goes to console.
 - **Runtime help:** `docs/errors.md#adapter-err-coalesced-unserializable`
 - **Runtime sources:** [src/runtime/handler/platform.js](../src/runtime/handler/platform.js), [src/testing.js](../src/testing.js)
 

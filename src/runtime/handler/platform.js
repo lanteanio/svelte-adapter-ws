@@ -28,7 +28,7 @@ import {
 	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
-import { isUint8Array } from 'node:util/types';
+import { isUint8Array, isNativeError } from 'node:util/types';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
 import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
@@ -1763,6 +1763,7 @@ export const platform = {
 			counters.closedWsAborts++;
 			return;
 		}
+		const prefix = envelopePrefix(topic, event);
 		let pending = userData[WS_COALESCED];
 		if (!pending) {
 			pending = new Map();
@@ -1779,7 +1780,7 @@ export const platform = {
 			const oldest = pending.keys().next().value;
 			if (oldest !== undefined) pending.delete(oldest);
 		}
-		const entry = { topic, event, data };
+		const entry = { topic, event, data, prefix };
 		pending.set(key, entry);
 		flushCoalescedFor(facade, entry);
 	},
@@ -2314,6 +2315,30 @@ export const platform = {
 /** @type {((name: string) => object) | null} */
 let _topicHelperCache = null;
 
+const coalescedContinuations = new WeakSet();
+
+/** Report a dropped entry with private identifier fields and bounded application error text. */
+function reportCoalescedFailure(userData, msg, key, err) {
+	try {
+		emitOperationalEvent({
+			source: 'svelte-adapter-ws',
+			component: 'runtime.websocket',
+			event: 'ws.send-coalesced.unserializable',
+			severity: 'error',
+			dataClass: 'pseudonymous',
+			message: 'A queued sendCoalesced value has no JSON form and was dropped.',
+			attributes: {
+				errorId: ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE,
+				requestId: userData[WS_PLATFORM]?.requestId ?? null,
+				key: privateValueMetadata(key, 'coalesced-key'),
+				topic: privateValueMetadata(msg.topic, 'topic'),
+				event: privateValueMetadata(msg.event, 'event'),
+				error: diagnosticError(err)
+			}
+		});
+	} catch { /* reporting must not escape drain */ }
+}
+
 /**
  * Flush a connection's coalesced entries through the drain-aware pump.
  * Exported for the facade's drain callback.
@@ -2321,10 +2346,16 @@ let _topicHelperCache = null;
  * A value JSON cannot carry (a BigInt, a cycle, a throwing `toJSON`, a
  * function) is dropped here and the rest of the queue still goes out. When
  * the value is the one the caller of `sendCoalesced` just set, the flush is
- * running inside that call, so the caller gets the TypeError exactly as
- * `send` would give it. Any other failing entry was set while the socket was
- * backpressured and is being flushed from the drain callback, where a throw
- * would end the process, so it is reported instead.
+ * running inside that call, so the caller gets the serializer's native error,
+ * or a TypeError for any other thrown value, exactly as `send` would. Any
+ * other failing entry was set while the socket was backpressured and is being
+ * flushed from the drain callback, where a throw would end the process, so it
+ * is reported through the operational sink instead.
+ *
+ * A serializer that queues again only enqueues: the active drain sends the
+ * newer value for the key and never the superseded one. Repeated requeues
+ * yield after bounded work and continue on a timer while the connection
+ * stays open.
  *
  * @param {object} facade
  * @param {object} [callerEntry] the entry the calling `sendCoalesced` just set
@@ -2338,20 +2369,25 @@ export function flushCoalescedFor(facade, callerEntry) {
 	assert(pending instanceof Map, 'coalesce.pending-type', null);
 	let aborted = false;
 	let callerError = null;
-	drainCoalesced(pending, (msg) => {
+	const yielded = drainCoalesced(pending, (msg, key) => {
 		if (aborted) return 2;
 		assert(typeof msg.topic === 'string', 'coalesce.entry-topic-type', null);
 		assert(typeof msg.event === 'string', 'coalesce.entry-event-type', null);
-		let body;
-		try { body = JSON.stringify(msg.data ?? null); }
-		catch (err) { body = err; }
-		if (typeof body !== 'string') {
-			const err = body instanceof Error ? body : new TypeError('sendCoalesced data has no JSON form');
+		let payload;
+		let failure;
+		try {
+			const body = JSON.stringify(msg.data ?? null);
+			if (typeof body === 'string') payload = msg.prefix + body + '}';
+		}
+		catch (err) { failure = err; }
+		// A serializer may have queued a newer value for this key.
+		if (pending.get(key) !== msg) return 1;
+		if (payload === undefined) {
+			const err = isNativeError(failure) ? failure : new TypeError('sendCoalesced data has no JSON form');
 			if (msg === callerEntry) callerError = err;
-			else console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.COALESCED_UNSERIALIZABLE), err);
+			else reportCoalescedFailure(ud, msg, key, err);
 			return 1;
 		}
-		const payload = envelopePrefix(msg.topic, msg.event) + body + '}';
 		let result;
 		try { result = /** @type {any} */ (facade).send(payload, false, false); }
 		catch {
@@ -2367,6 +2403,14 @@ export function flushCoalescedFor(facade, callerEntry) {
 		return result;
 	});
 	if (aborted) pending.clear();
+	else if (yielded && !coalescedContinuations.has(pending)) {
+		coalescedContinuations.add(pending);
+		setTimer(() => {
+			coalescedContinuations.delete(pending);
+			if (!wsConnections.has(facade)) { pending.clear(); return; }
+			flushCoalescedFor(facade);
+		}, 0);
+	}
 	if (callerError !== null) throw callerError;
 }
 

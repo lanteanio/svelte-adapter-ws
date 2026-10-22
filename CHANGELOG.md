@@ -542,6 +542,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The smooth client paints the frame that ends a local correction or sweep, so a
   locally driven entity comes to rest on its settled position.
 
+- `sendCoalesced` drops and reports every thrown serialization value, including
+  strings and null, and keeps a thrown native error's identity when it throws to
+  the caller; any other thrown value reaches the caller as a TypeError. Values
+  flushed immediately still throw to their caller.
+
+- `sendCoalesced` rejects invalid topic and event names before queueing, even on
+  a backpressured socket, and preserves an existing value for the same key.
+
+- `sendCoalesced` contains reentrant sends from `toJSON`, discards superseded
+  frames before sending, retains newer queued values when a send meets
+  backpressure, and bounds repeated requeues per pass, continuing on a later
+  turn while the connection stays open.
+
+- A queued `sendCoalesced` value that cannot be serialized is reported through
+  the operational sink as `ws.send-coalesced.unserializable` with the stable
+  `ADAPTER-ERR-COALESCED-UNSERIALIZABLE` id, the connection requestId, private
+  references for key, topic and event, and bounded error details, instead of a
+  plain console line. Without a custom sink the record still prints to console.
+
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.
