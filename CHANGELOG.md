@@ -330,6 +330,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Throttling preserves finite retry budgets. A throttling response now advances
+  only the reconnect delay while the finite retry budget counts actual attempts,
+  so a client with a small `maxReconnectAttempts` value can retry after a
+  temporary rate limit instead of immediately exhausting attempts that it never
+  made. Authentication and socket-opening attempts each remain bounded at
+  fifteen seconds; there is no overall reconnect deadline.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

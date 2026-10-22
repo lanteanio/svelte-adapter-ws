@@ -43,6 +43,9 @@
 		"test/smooth-wire-view.test.js": "69338d9",
 		"test/response-framing-real.test.js": "9a6a5d3",
 		"test/fixture/src/hooks.ws.response-framing.js": "9a6a5d3",
-		"test/fixture/src/routes/response-framing/+server.js": "9a6a5d3"
+		"test/fixture/src/routes/response-framing/+server.js": "9a6a5d3",
+		"src/client.js": "9681fd4",
+		"src/client.d.ts": "9681fd4",
+		"test/client-throttle-budget.test.js": "9681fd4"
 	}
 }
