@@ -60,22 +60,22 @@ for (const enabled of [false, true]) it(`carries all lifecycle and publish debug
   ws.send(JSON.stringify({ type: 'actions' }));
   await receive(frame => frame.event === 'done');
   const closed = once(ws, 'close'); ws.close(1000); await closed;
-  await vi.waitFor(() => expect(log.mock.calls.some(call => call[0] === '[ws] close code=%d connections=%d')).toBe(enabled));
-  const calls = log.mock.calls.filter(call => typeof call[0] === 'string' && call[0].startsWith('[ws]'));
+  await vi.waitFor(() => expect(log.mock.calls.some(call => call[0] === '[svelte-adapter-ws/runtime.websocket] close code=%d connections=%d')).toBe(enabled));
+  const calls = log.mock.calls.filter(call => typeof call[0] === 'string' && call[0].startsWith('[svelte-adapter-ws/runtime.websocket]'));
   if (!enabled) { expect(calls).toEqual([]); return; }
   expect(calls).toHaveLength(8);
   const named = prefix => calls.find(call => call[0].startsWith(prefix));
-  expect(named('[ws] open')).toEqual(['[ws] open connections=%d session=%s', 1, welcome.sessionId]);
-  expect(named('[ws] hello')).toEqual(['[ws] hello caps=%o', ['debug:wire', 'batch']]);
-  expect(named('[ws] resume')).toEqual(['[ws] resume sessionId=%s', welcome.sessionId]);
-  expect(named('[ws] ingress-bind')).toEqual(['[ws] ingress-bind for unregistered kind=%s (kept on JSON fallback)', 'unknown-debug']);
-  expect(named('[ws] close')).toEqual(['[ws] close code=%d connections=%d', 1000, 0]);
-  const publish = named('[ws] publish ');
-  expect(publish).toEqual(['[ws] publish topicRef=%s eventRef=%s bytes=%d delivered=%s', expect.stringMatching(/^topic:/), expect.stringMatching(/^event:/), expect.any(Number), true]);
+  expect(named('[svelte-adapter-ws/runtime.websocket] open')).toEqual(['[svelte-adapter-ws/runtime.websocket] open connections=%d session=%s', 1, welcome.sessionId]);
+  expect(named('[svelte-adapter-ws/runtime.websocket] hello')).toEqual(['[svelte-adapter-ws/runtime.websocket] hello caps=%o', ['debug:wire', 'batch']]);
+  expect(named('[svelte-adapter-ws/runtime.websocket] resume')).toEqual(['[svelte-adapter-ws/runtime.websocket] resume sessionId=%s', welcome.sessionId]);
+  expect(named('[svelte-adapter-ws/runtime.websocket] ingress-bind')).toEqual(['[svelte-adapter-ws/runtime.websocket] ingress-bind for unregistered kind=%s (kept on JSON fallback)', 'unknown-debug']);
+  expect(named('[svelte-adapter-ws/runtime.websocket] close')).toEqual(['[svelte-adapter-ws/runtime.websocket] close code=%d connections=%d', 1000, 0]);
+  const publish = named('[svelte-adapter-ws/runtime.websocket] publish ');
+  expect(publish).toEqual(['[svelte-adapter-ws/runtime.websocket] publish topicRef=%s eventRef=%s bytes=%d delivered=%s', expect.stringMatching(/^topic:/), expect.stringMatching(/^event:/), expect.any(Number), true]);
   expect(publish[3]).toBeGreaterThan(0);
-  expect(named('[ws] publishWire')).toEqual(['[ws] publishWire topicRef=%s eventRef=%s payloadBytes=%d', publish[1], expect.stringMatching(/^event:/), 3]);
-  expect(named('[ws] publishBatched')).toEqual(['[ws] publishBatched events=%d single-topic=%s fanoutTopicRef=%s delivered=%s', 2, true, publish[1], true]);
-  expect(JSON.stringify(calls.filter(call => call[0].startsWith('[ws] publish')))).not.toContain('debug-topic');
+  expect(named('[svelte-adapter-ws/runtime.websocket] publishWire')).toEqual(['[svelte-adapter-ws/runtime.websocket] publishWire topicRef=%s eventRef=%s payloadBytes=%d', publish[1], expect.stringMatching(/^event:/), 3]);
+  expect(named('[svelte-adapter-ws/runtime.websocket] publishBatched')).toEqual(['[svelte-adapter-ws/runtime.websocket] publishBatched events=%d single-topic=%s fanoutTopicRef=%s delivered=%s', 2, true, publish[1], true]);
+  expect(JSON.stringify(calls.filter(call => call[0].startsWith('[svelte-adapter-ws/runtime.websocket] publish')))).not.toContain('debug-topic');
  } finally {
   ws?.terminate(); await runtime?.close(); payload.cleanup(); log.mockRestore();
   if (previous === undefined) delete process.env.WS_DEBUG; else process.env.WS_DEBUG = previous;

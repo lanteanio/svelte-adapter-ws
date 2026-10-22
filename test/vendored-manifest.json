@@ -998,6 +998,10 @@
 			{
 				"lead": "\t// heapUsed against the V8 limit, rss against the cgroup limit - because\n\t// the kernel's OOM killer charges the whole resident set, never the JS\n\t// heap alone.\n\tconst heapUsedRatio = memoryWall.ratio(mem);\n\tconst memoryMB = mem.rss / (1024 * 1024);\n\t// Both retained for the metrics hook. Resident memory is process-wide\n\t// (worker threads share one address space); the wall ratio's heap arm is\n\t// per-isolate while its rss arm is that same process-wide value, so\n\t// workers report identically whenever the container wall dominates.\n\tcounters.lastHeapUsedRatio = heapUsedRatio;\n\tcounters.lastResidentBytes = mem.rss;\n\n\t// Kernel signals for this window. Null per source when unavailable; the\n",
 				"ours": "\t// heapUsed against the V8 limit, rss against the cgroup limit - because\n\t// the kernel's OOM killer charges the whole resident set, never the JS\n\t// heap alone.\n\tconst measuredHeapUsedRatio = memoryWall.measure(mem);\n\tconst heapUsedRatio = measuredHeapUsedRatio ?? 0;\n\tconst memoryMB = mem.rss / (1024 * 1024);\n\t// Both retained for the metrics hook. Resident memory is process-wide\n\t// (worker threads share one address space); the wall ratio's heap arm is\n\t// per-isolate while its rss arm is that same process-wide value, so\n\t// workers report identically whenever the container wall dominates.\n\tcounters.lastHeapUsedRatio = heapUsedRatio;\n\tcounters.lastMeasuredHeapUsedRatio = measuredHeapUsedRatio;\n\tcounters.memoryWallPermanent = memoryWall.hasEngineLimit();\n\tcounters.lastResidentBytes = mem.rss;\n\n\t// Kernel signals for this window. Null per source when unavailable; the\n"
+			},
+			{
+				"lead": "\n\tconsole.warn('[ws] publishBatched frame is ' + size + ' bytes (>' + BATCH_FRAME_WARN_BYTES +",
+				"ours": "\n\tconsole.warn('[svelte-adapter-ws/runtime.websocket] publishBatched frame is ' + size + ' bytes (>' + BATCH_FRAME_WARN_BYTES +"
 			}
 		]
 	},
@@ -1043,7 +1047,25 @@
 		"file": "src/runtime/handler/wire-fanout.js"
 	},
 	{
-		"file": "src/runtime/handler/wire-state.js"
+		"file": "src/runtime/handler/wire-state.js",
+		"adaptations": [
+			{
+				"lead": "\n\t\t\tif (wsDebug) console.error('[ws] wire.state.onAttach threw for', wire.capability, err);",
+				"ours": "\n\t\t\tif (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onAttach threw for', wire.capability, err);"
+			},
+			{
+				"lead": "\n\t\t\tif (wsDebug) console.error('[ws] wire.state.onDetach threw', err);",
+				"ours": "\n\t\t\tif (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onDetach threw', err);"
+			},
+			{
+				"lead": "\n\tif (wsDebug) console.log('[ws] wire degraded to JSON for %s (frame dropped by backpressure)', capability);",
+				"ours": "\n\tif (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] wire degraded to JSON for %s (frame dropped by backpressure)', capability);"
+			},
+			{
+				"lead": "\n\t\t\t\tif (wsDebug) console.error('[ws] wire.state.onDetach threw', err);",
+				"ours": "\n\t\t\t\tif (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onDetach threw', err);"
+			}
+		]
 	},
 	{
 		"file": "src/runtime/invariants.js",
@@ -1746,6 +1768,22 @@
 			{
 				"lead": "\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, {\n\t\t\t\t\t\t\t\t\t\t\tsessionId: msg.sessionId,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenSeqs: resumeSeqsV,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenEpochs,\n\t\t\t\t\t\t\t\t\t\t\tplatform: wrapped.getUserData()[WS_PLATFORM]\n\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t} catch (err) {\n",
 				"ours": "\t\t\t\t\t\t\t\t\t\tawait userHandlers.resume(wrapped, {\n\t\t\t\t\t\t\t\t\t\t\tsessionId: msg.sessionId,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenSeqs: resumeSeqsV,\n\t\t\t\t\t\t\t\t\t\t\tlastSeenEpochs: resumeEpochsV,\n\t\t\t\t\t\t\t\t\t\t\tplatform: wrapped.getUserData()[WS_PLATFORM]\n\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t} catch (err) {\n"
+			},
+			{
+				"lead": "\n\t\t\tconsole.error('[ws] subscribe hook threw:', err);",
+				"ours": "\n\t\t\tconsole.error('[svelte-adapter-ws/runtime.websocket] subscribe hook threw:', err);"
+			},
+			{
+				"lead": "\n\t\t\tconsole.error('[ws] subscribeBatch hook threw:', err);",
+				"ours": "\n\t\t\tconsole.error('[svelte-adapter-ws/runtime.websocket] subscribeBatch hook threw:', err);"
+			},
+			{
+				"lead": "\n\t\t\tconsole.error('[ws] subscribeBatch result read threw:', err);",
+				"ours": "\n\t\t\tconsole.error('[svelte-adapter-ws/runtime.websocket] subscribeBatch result read threw:', err);"
+			},
+			{
+				"lead": "\n\t\t\t\t\t\tconsole.error('[ws] dev connection error:', err);",
+				"ours": "\n\t\t\t\t\t\tconsole.error('[svelte-adapter-ws/runtime.websocket] dev connection error:', err);"
 			}
 		]
 	},
@@ -2122,7 +2160,17 @@
 		"file": "test/error-registry-claims.test.js"
 	},
 	{
-		"file": "test/error-registry-hook-crash.test.js"
+		"file": "test/error-registry-hook-crash.test.js",
+		"adaptations": [
+			{
+				"lead": "\n\t\t\t\texpect(String(line[0]).startsWith('[ws] the open hook threw')).toBe(true);",
+				"ours": "\n\t\t\t\texpect(String(line[0]).startsWith('[svelte-adapter-ws/runtime.websocket] the open hook threw')).toBe(true);"
+			},
+			{
+				"lead": "\n\t\t\t\texpect(String(line[0]).startsWith('[ws] the close hook threw')).toBe(true);",
+				"ours": "\n\t\t\t\texpect(String(line[0]).startsWith('[svelte-adapter-ws/runtime.websocket] the close hook threw')).toBe(true);"
+			}
+		]
 	},
 	{
 		"file": "test/error-registry-resume-divergence.test.js"
@@ -2750,7 +2798,13 @@
 		"file": "test/relay-spill-policy.test.js"
 	},
 	{
-		"file": "test/relay-spill-quarantine-policy.test.js"
+		"file": "test/relay-spill-quarantine-policy.test.js",
+		"adaptations": [
+			{
+				"lead": "\n\t\t\t'[primary] relay spill quarantining worker=7 reason=age droppedBytes=4096 pendingAgeMs=5001'",
+				"ours": "\n\t\t\t'[svelte-adapter-ws/runtime.primary] relay spill quarantining worker=7 reason=age droppedBytes=4096 pendingAgeMs=5001'"
+			}
+		]
 	},
 	{
 		"file": "test/replay.test.js"

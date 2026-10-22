@@ -55,9 +55,9 @@ for (const enabled of [false, true]) {
 				await vi.waitFor(() => expect(frames.filter(frame => frame.ref === ref)).toHaveLength(topics.length));
 				expect(frames.filter(frame => frame.ref === ref && frame.topic === 'batch-denied'))
 					.toEqual([expect.objectContaining({ type: 'subscribe-denied', reason: 'FORBIDDEN' })]);
-				const batchLines = log.mock.calls.filter(call => call[0] === '[ws] subscribe-batch count=%d');
+				const batchLines = log.mock.calls.filter(call => call[0] === '[svelte-adapter-ws/runtime.websocket] subscribe-batch count=%d');
 				expect(batchLines).toHaveLength(enabled ? ref - 1 : 0);
-				if (enabled) expect(batchLines.at(-1)).toEqual(['[ws] subscribe-batch count=%d', expected]);
+				if (enabled) expect(batchLines.at(-1)).toEqual(['[svelte-adapter-ws/runtime.websocket] subscribe-batch count=%d', expected]);
 			}
 		} finally {
 			ws?.terminate();

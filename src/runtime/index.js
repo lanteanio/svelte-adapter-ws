@@ -548,7 +548,7 @@ if (is_primary) {
 	const { bootTimeoutMs: WORKER_BOOT_TIMEOUT_MS, clamped: _boot_timeout_clamped } = resolveBootTimeout(_boot_timeout_raw, WORKER_BOOT_TIMEOUT_FLOOR_MS);
 	if (_boot_timeout_clamped) {
 		console.warn(
-			`[primary] WORKER_BOOT_TIMEOUT_MS=${_boot_timeout_raw}ms is below the ${WORKER_BOOT_TIMEOUT_FLOOR_MS}ms floor ` +
+			`[svelte-adapter-ws/runtime.primary] WORKER_BOOT_TIMEOUT_MS=${_boot_timeout_raw}ms is below the ${WORKER_BOOT_TIMEOUT_FLOOR_MS}ms floor ` +
 			`(two heartbeat intervals) and would risk false-killing a healthy slow boot; using ${WORKER_BOOT_TIMEOUT_FLOOR_MS}ms.`
 		);
 	}
@@ -588,7 +588,7 @@ if (is_primary) {
 	 */
 	function primaryHardExit(code) {
 		if (workers.size > 0) {
-			console.error(`[primary] hard exit with ${workers.size} live worker(s); SIGKILL for a clean teardown (orchestrator respawns).`);
+			console.error(`[svelte-adapter-ws/runtime.primary] hard exit with ${workers.size} live worker(s); SIGKILL for a clean teardown (orchestrator respawns).`);
 			process.kill(process.pid, 'SIGKILL');
 		} else {
 			process.exit(code);
@@ -607,7 +607,7 @@ if (is_primary) {
 		sweepWorkerHealth(workers, t, { steadyTimeoutMs: HEARTBEAT_TIMEOUT_MS, bootTimeoutMs: WORKER_BOOT_TIMEOUT_MS }, {
 			escalate: (worker, meta, verdict) => {
 				console.error(
-					`[primary] Worker ${meta.threadId} (${meta.slot.role}#${meta.slot.index}) ${verdict.reason}, asking it to exit...`
+					`[svelte-adapter-ws/runtime.primary] Worker ${meta.threadId} (${meta.slot.role}#${meta.slot.index}) ${verdict.reason}, asking it to exit...`
 				);
 				requestWorkerExit(worker, 1);
 			},
@@ -619,7 +619,7 @@ if (is_primary) {
 		// leaves a slot stranded; this only fires against a future regression,
 		// and it skips still-booting slots so it never double-spawns.
 		const backfilled = restartSupervisor.reconcile();
-		if (backfilled > 0) console.error(`[primary] reconciled ${backfilled} stranded worker slot(s)`);
+		if (backfilled > 0) console.error(`[svelte-adapter-ws/runtime.primary] reconciled ${backfilled} stranded worker slot(s)`);
 	}, HEARTBEAT_INTERVAL_MS);
 	if (heartbeatSweep && heartbeatSweep.unref) heartbeatSweep.unref();
 
@@ -918,7 +918,7 @@ if (is_primary) {
 					if (restart_on_state_divergence) {
 						for (const [w] of workers) {
 							if (minoritySet.has(w.threadId)) {
-								console.error('[primary] asking minority worker %d to exit to re-converge (RESTART_ON_STATE_DIVERGENCE=1)', w.threadId);
+								console.error('[svelte-adapter-ws/runtime.primary] asking minority worker %d to exit to re-converge (RESTART_ON_STATE_DIVERGENCE=1)', w.threadId);
 								requestWorkerExit(w, 1);
 							}
 						}
@@ -944,12 +944,12 @@ if (is_primary) {
 				// names ITSELF, so there is no majority to weigh and no way to act
 				// on the wrong worker. Only a thread id and a frame count crossed
 				// the boundary.
-				console.error('[primary] relay-gap worker=%d frames=%d', msg.threadId, msg.count);
+				console.error('[svelte-adapter-ws/runtime.primary] relay-gap worker=%d frames=%d', msg.threadId, msg.count);
 				// Same action gate as a divergence, for the same reason: the worker
 				// is missing state its siblings have, and a restart is what re-syncs
 				// it. Off by default - logged and counted, never auto-killed.
 				if (restart_on_state_divergence) {
-					console.error('[primary] asking worker %d to exit to re-sync after a relay gap (RESTART_ON_STATE_DIVERGENCE=1)', msg.threadId);
+					console.error('[svelte-adapter-ws/runtime.primary] asking worker %d to exit to re-sync after a relay gap (RESTART_ON_STATE_DIVERGENCE=1)', msg.threadId);
 					requestWorkerExit(worker, 1);
 				}
 			} else if (msg.type === 'metrics-request') {
@@ -1142,8 +1142,8 @@ if (is_primary) {
 	const primaryTlsLedger = createTlsDegradedLedger({
 		health: primaryTlsHealth,
 		onRecovered: (was, still) => {
-			if (still === null) console.log(`[tls] primary certificate read recovered (was: ${was})`);
-			else console.log(`[tls] primary certificate read recovered (was: ${was}); still degraded: ${still}`);
+			if (still === null) console.log(`[svelte-adapter-ws/runtime.tls] primary certificate read recovered (was: ${was})`);
+			else console.log(`[svelte-adapter-ws/runtime.tls] primary certificate read recovered (was: ${was}); still degraded: ${still}`);
 		},
 		armSentinel: () => primaryTlsArmSentinel(),
 		disarmSentinel: primaryTlsDisarm
@@ -1210,7 +1210,7 @@ if (is_primary) {
 				}
 			});
 			primaryCertWatcher.start();
-			console.log(`[tls] primary watching ${dirname(ssl_cert)} for certificate renewals (cluster broadcast reload)`);
+			console.log(`[svelte-adapter-ws/runtime.tls] primary watching ${dirname(ssl_cert)} for certificate renewals (cluster broadcast reload)`);
 		} catch (err) {
 			primaryCertWatcher = null;
 			console.error(adapterConsoleLine(ADAPTER_ERROR_IDS.TLS_PRIMARY_WATCH), err && err.message ? err.message : err);
@@ -1266,14 +1266,14 @@ if (is_primary) {
 		for (const [worker] of workers) {
 			try { worker.postMessage({ type: 'drain' }); } catch { /* worker already exiting */ }
 		}
-		console.log(`[primary] Readiness now reports NOT ready on ${workers.size} worker(s); still accepting.`);
+		console.log(`[svelte-adapter-ws/runtime.primary] Readiness now reports NOT ready on ${workers.size} worker(s); still accepting.`);
 
 		// Step 2: keep accepting connections until the load balancer has had
 		// time to remove this pod from rotation (Kubernetes rolling updates).
 		// SHUTDOWN_DELAY_MS=0 (default) skips this and is correct for non-k8s
 		// deploys.
 		if (shutdown_delay > 0) {
-			console.log(`[primary] Waiting ${shutdown_delay}ms for load balancer drain...`);
+			console.log(`[svelte-adapter-ws/runtime.primary] Waiting ${shutdown_delay}ms for load balancer drain...`);
 			await new Promise((resolve) => setTimer(resolve, shutdown_delay));
 		}
 
@@ -1306,7 +1306,7 @@ if (is_primary) {
 			}, shutdown_timeout * 1000 + WORKER_EXIT_GRACE_MS);
 			if (t && t.unref) t.unref();
 		} else {
-			console.log('[primary] SHUTDOWN_TIMEOUT=0: no shutdown budget - workers exit when their own teardown finishes, however long that takes.');
+			console.log('[svelte-adapter-ws/runtime.primary] SHUTDOWN_TIMEOUT=0: no shutdown budget - workers exit when their own teardown finishes, however long that takes.');
 		}
 	}
 

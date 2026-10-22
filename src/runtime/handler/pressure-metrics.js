@@ -117,7 +117,7 @@ export function warnLargeBatchFrame(size) {
 	const t = now();
 	if (t - lastBatchOversizeWarnAt < 60000) return;
 	lastBatchOversizeWarnAt = t;
-	console.warn('[ws] publishBatched frame is ' + size + ' bytes (>' + BATCH_FRAME_WARN_BYTES +
+	console.warn('[svelte-adapter-ws/runtime.websocket] publishBatched frame is ' + size + ' bytes (>' + BATCH_FRAME_WARN_BYTES +
 		'). Large frames may trip per-message-deflate and surprise CPU budgets. ' +
 		'Consider chunking the batch into multiple publishBatched calls.' +
 		'\n  See: https://svti.me/publish-batched');

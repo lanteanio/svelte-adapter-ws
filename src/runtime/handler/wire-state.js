@@ -63,7 +63,7 @@ export function ensureWireState(ws, ud, wire) {
 		try {
 			state = wire.state.onAttach(ws);
 		} catch (err) {
-			if (wsDebug) console.error('[ws] wire.state.onAttach threw for', wire.capability, err);
+			if (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onAttach threw for', wire.capability, err);
 			state = null;
 		}
 		entry = { state, detach: wire.state.onDetach };
@@ -119,11 +119,11 @@ export function poisonWireState(ws, ud, capability) {
 	if (entry !== undefined && entry.poisoned === true) return;
 	if (entry && typeof entry.detach === 'function') {
 		try { entry.detach(ws, entry.state); } catch (err) {
-			if (wsDebug) console.error('[ws] wire.state.onDetach threw', err);
+			if (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onDetach threw', err);
 		}
 	}
 	m.set(capability, { state: null, detach: undefined, poisoned: true });
-	if (wsDebug) console.log('[ws] wire degraded to JSON for %s (frame dropped by backpressure)', capability);
+	if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] wire degraded to JSON for %s (frame dropped by backpressure)', capability);
 }
 
 /**
@@ -140,7 +140,7 @@ export function detachWireStates(ws, ud) {
 	for (const entry of m.values()) {
 		if (entry && typeof entry.detach === 'function') {
 			try { entry.detach(ws, entry.state); } catch (err) {
-				if (wsDebug) console.error('[ws] wire.state.onDetach threw', err);
+				if (wsDebug) console.error('[svelte-adapter-ws/runtime.websocket] wire.state.onDetach threw', err);
 			}
 		}
 	}

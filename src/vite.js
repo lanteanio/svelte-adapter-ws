@@ -1669,7 +1669,7 @@ export default function uws(options = {}) {
 			if (typeof result === 'string') return result;
 			return null;
 		} catch (err) {
-			console.error('[ws] subscribe hook threw:', err);
+			console.error('[svelte-adapter-ws/runtime.websocket] subscribe hook threw:', err);
 			return 'INTERNAL_ERROR';
 		}
 	}
@@ -1685,7 +1685,7 @@ export default function uws(options = {}) {
 		try {
 			result = await userHandlers.subscribeBatch(wrapped, topics, { platform: wrapped.getUserData()[WS_PLATFORM] });
 		} catch (err) {
-			console.error('[ws] subscribeBatch hook threw:', err);
+			console.error('[svelte-adapter-ws/runtime.websocket] subscribeBatch hook threw:', err);
 			/** @type {Record<string, string>} */
 			const failed = Object.create(null);
 			for (let i = 0; i < topics.length; i++) failed[topics[i]] = 'INTERNAL_ERROR';
@@ -1711,7 +1711,7 @@ export default function uws(options = {}) {
 				else if (typeof val === 'string') denials[topic] = val;
 			}
 		} catch (err) {
-			console.error('[ws] subscribeBatch result read threw:', err);
+			console.error('[svelte-adapter-ws/runtime.websocket] subscribeBatch result read threw:', err);
 			/** @type {Record<string, string>} */
 			const broken = Object.create(null);
 			for (let i = 0; i < topics.length; i++) broken[topics[i]] = 'INTERNAL_ERROR';
@@ -2920,7 +2920,7 @@ export default function uws(options = {}) {
 				// oversized dev frame cannot become an uncaught process exception.
 				ws.on('error', (err) => {
 					if (err?.code !== 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
-						console.error('[ws] dev connection error:', err);
+						console.error('[svelte-adapter-ws/runtime.websocket] dev connection error:', err);
 					}
 				});
 

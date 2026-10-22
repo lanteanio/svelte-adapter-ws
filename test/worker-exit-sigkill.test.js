@@ -45,7 +45,7 @@ describe('ADAPTER-ERR-WORKER-EXIT-SIGKILL', () => {
 			ADAPTER_ERROR_IDS.WORKER_EXIT_SIGKILL,
 			'7 did not exit within 5000ms; SIGKILLing the process'
 		);
-		expect(line.startsWith('[primary] worker 7 did not exit within 5000ms')).toBe(true);
+		expect(line.startsWith('[svelte-adapter-ws/runtime.primary] worker 7 did not exit within 5000ms')).toBe(true);
 		expect(line).toContain('[ADAPTER-ERR-WORKER-EXIT-SIGKILL]');
 	});
 

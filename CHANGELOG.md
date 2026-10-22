@@ -111,6 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Action:** Send one signal to allow graceful cleanup; repeat only to force termination.
   - **Compatibility:** Repeated signals now end the process rather than being ignored.
 
+- Server log lines that began with `[ws]`, `[tls]` or `[primary]` begin with `[svelte-adapter-ws/runtime.websocket]`, `[svelte-adapter-ws/runtime.tls]` or `[svelte-adapter-ws/runtime.primary]`, so a diagnostic parser elsewhere in the family no longer attributes them to `svelte-adapter-uws`; this package's `parseDiagnostic` attributes them to this adapter with the same component. The indexed message prefixes in `docs/errors.md` change with them.
+  - **Affects:** Log searches and alerts matching the bare prefixes.
+  - **Action:** Match the named prefix, or the error id the indexed lines carry.
+
 - Probe GET responses use implicit length framing; HEAD keeps its explicit body length.
 
 - Request lines retain their original boundaries across fragmented reads. Invalid

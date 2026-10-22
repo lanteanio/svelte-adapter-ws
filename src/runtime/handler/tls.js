@@ -211,7 +211,7 @@ function buildReloader(sniContexts) {
 			markTlsSwapped(ssl_cert);
 			const health = tlsReloadState();
 			console.log(
-				`[tls] renewed certificate now served (SNI: ${applied.hosts.join(', ')}; expires ${health.notAfterText ?? 'unknown'}; generation ${health.generation})`
+				`[svelte-adapter-ws/runtime.tls] renewed certificate now served (SNI: ${applied.hosts.join(', ')}; expires ${health.notAfterText ?? 'unknown'}; generation ${health.generation})`
 			);
 		} catch (err) {
 			if (err && /** @type {any} */ (err).tlsAppTouched) {

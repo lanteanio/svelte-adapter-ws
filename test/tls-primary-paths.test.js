@@ -78,7 +78,7 @@ it('the primary reads literal comma-containing certificate paths and watches onl
 	expect(observed.reads).toEqual([files.cert, files.cert]);
 	expect(observed.watches).toEqual([files.certDir]);
 	expect(observed.messages.filter(type => type === 'tls-reload')).toHaveLength(1);
-	expect(stdout.match(/\[tls\] primary watching /g)).toHaveLength(1);
+	expect(stdout.match(/\[svelte-adapter-ws\/runtime\.tls\] primary watching /g)).toHaveLength(1);
 	expect(stderr).not.toMatch(/ADAPTER-ERR-TLS-PRIMARY-(?:BOOT|RELOAD)-READ/);
 });
 

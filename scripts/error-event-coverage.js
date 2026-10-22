@@ -255,7 +255,7 @@ export function validateErrorRegistry(entries) {
 			if (entry.messagePrefix.startsWith('[' + DIAGNOSTIC_PREFIX)) {
 				errors.push(label + ': a console prefix must not claim the diagnostic line head');
 			}
-			if (!/^\[(?:svelte-adapter-ws|tls|ws|primary)\] /.test(entry.messagePrefix)) {
+			if (!/^\[svelte-adapter-ws(?:\/[a-z0-9.-]+)?\] /.test(entry.messagePrefix)) {
 				errors.push(label + ': a console prefix must open with an owned family tag');
 			}
 		} else {

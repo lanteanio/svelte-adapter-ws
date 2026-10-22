@@ -303,7 +303,7 @@ describe('native TLS', () => {
 		const lines = captureLog(() => rt.handler.reloadTls());
 		expect(rt.handler.tlsReloadState().generation).toBe(1);
 		// The default certificate changed, so the line carries its expiry.
-		expect(lines).toContain(`[tls] renewed certificate now served (SNI: other.example, alias.example; expires ${rt.handler.tlsReloadState().notAfterText}; generation 1)`);
+		expect(lines).toContain(`[svelte-adapter-ws/runtime.tls] renewed certificate now served (SNI: other.example, alias.example; expires ${rt.handler.tlsReloadState().notAfterText}; generation 1)`);
 
 		expect((await tlsGet(rt.port, '/healthz', 'other.example')).peerCert.subject.CN).toBe('sni.example');
 		expect((await tlsGet(rt.port, '/healthz', 'alias.example')).peerCert.subject.CN).toBe('sni.example');
@@ -370,7 +370,7 @@ describe('native TLS', () => {
 		const recovered = rt.handler.tlsReloadState();
 		expect(recovered.generation).toBe(1);
 		expect(recovered.degraded).toBeNull();
-		expect(logs).toContain('[tls] certificate reload recovered (was: a certificate swap failed mid-apply)');
+		expect(logs).toContain('[svelte-adapter-ws/runtime.tls] certificate reload recovered (was: a certificate swap failed mid-apply)');
 		expect((await tlsGet(rt.port, '/healthz', 'sni.example')).peerCert.subject.CN).toBe('sni.example');
 	});
 

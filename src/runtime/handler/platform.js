@@ -71,7 +71,7 @@ import { isWarmupRequest } from './warmup-registry.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 
 function logWirePublish(topic, event, payloadBytes) {
-	console.log('[ws] publishWire topicRef=%s eventRef=%s payloadBytes=%d',
+	console.log('[svelte-adapter-ws/runtime.websocket] publishWire topicRef=%s eventRef=%s payloadBytes=%d',
 		privateValueMetadata(topic, 'topic').ref,
 		privateValueMetadata(event, 'event').ref, payloadBytes);
 }
@@ -452,7 +452,7 @@ function publish(topic, event, data, options) {
 		batchRelay(topic, envelope, compress, seq);
 	}
 	if (wsDebug) {
-		console.log('[ws] publish topicRef=%s eventRef=%s bytes=%d delivered=%s',
+		console.log('[svelte-adapter-ws/runtime.websocket] publish topicRef=%s eventRef=%s bytes=%d delivered=%s',
 			privateValueMetadata(topic, 'topic').ref,
 			privateValueMetadata(event, 'event').ref,
 			envelope.length, sent || relayed);
@@ -803,7 +803,7 @@ export const platform = {
 		counters.publishOutcomeHook?.(reached);
 		if (wsDebug) {
 			const fanoutTopic = allSameTopic ? firstTopic : messages[0].topic;
-			console.log('[ws] publishBatched events=%d single-topic=%s fanoutTopicRef=%s delivered=%s',
+			console.log('[svelte-adapter-ws/runtime.websocket] publishBatched events=%d single-topic=%s fanoutTopicRef=%s delivered=%s',
 				events.length, allSameTopic,
 				fanoutTopic === null ? 'mixed' : privateValueMetadata(fanoutTopic, 'topic').ref, reached);
 		}

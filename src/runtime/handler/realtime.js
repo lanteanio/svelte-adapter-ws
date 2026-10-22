@@ -1496,7 +1496,7 @@ export async function handleUpgrade(req, socket, head) {
 			if (scope === 'loopback' || scope === 'private') {
 				warnedRateLimitProxyCollapse = true;
 				console.warn(
-					`[ws] Rejected a WebSocket upgrade (429) keyed on a ${scope} client address ` +
+					`[svelte-adapter-ws/runtime.websocket] Rejected a WebSocket upgrade (429) keyed on a ${scope} client address ` +
 					`(${clientIp}) while ${ENV_PREFIX}ADDRESS_HEADER is unset. If this server runs behind a ` +
 					'reverse proxy, load balancer, or docker userland-proxy that rewrites the ' +
 					'source address, every client shares one address and the per-IP ' +
@@ -1818,7 +1818,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	rawWs.on('pong', () => { lastActivity = monotonicNow(); });
 
 	sendControl(facade, '{"type":"welcome","sessionId":"' + sessionId + '"}');
-	if (wsDebug) console.log('[ws] open connections=%d session=%s', wsConnections.size, sessionId);
+	if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] open connections=%d session=%s', wsConnections.size, sessionId);
 
 	rawWs.on('message', (raw, isBinary) => {
 		// The message handler's own turn, on the native tier: every open HTTP
@@ -2021,7 +2021,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 					sendControl(facade, '{"type":"lease-ok"}');
 					sendControl(facade, leaseGrantFrame(grantCount, DEFAULT_GRANT.ttlMs));
 				}
-				if (wsDebug) console.log('[ws] hello caps=%o', [...caps]);
+				if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] hello caps=%o', [...caps]);
 				return;
 			}
 			if (msg.type === 'reply' && (typeof msg.ref === 'number' || typeof msg.ref === 'string')) {
@@ -2046,7 +2046,7 @@ async function handleMessage(rawWs, facade, userData, raw, isBinary) {
 				if (bindIngress(userData, facade, msg.id, msg.kind, msg.target)) {
 					sendControl(facade, ingressBoundFrame(msg.id));
 				} else if (wsDebug) {
-					console.log('[ws] ingress-bind for unregistered kind=%s (kept on JSON fallback)', msg.kind);
+					console.log('[svelte-adapter-ws/runtime.websocket] ingress-bind for unregistered kind=%s (kept on JSON fallback)', msg.kind);
 				}
 				return;
 			}
@@ -2536,7 +2536,7 @@ async function handleSubscribeBatch(rawWs, facade, userData, msg) {
 		sendSubscribed(facade, topic, ref);
 	}
 	if (batchCapture) discardResumeCapture(batchCapture);
-	if (wsDebug) console.log('[ws] subscribe-batch count=%d', subscribed);
+	if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] subscribe-batch count=%d', subscribed);
 }
 
 /**
@@ -2603,7 +2603,7 @@ async function handleWholeSessionResume(rawWs, facade, userData, msg) {
 		}
 	}
 	sendControl(facade, '{"type":"resumed"}');
-	if (wsDebug) console.log('[ws] resume sessionId=%s', msg.sessionId);
+	if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] resume sessionId=%s', msg.sessionId);
 }
 
 /**
@@ -2682,7 +2682,7 @@ function closeConnection(rawWs, facade, userData, code, reason) {
 	if (sharedCohorts) { for (const t of sharedCohorts) releaseSharedWireId(t); sharedCohorts.clear(); }
 	unregisterSocket(rawWs);
 	wsWrappers.delete(rawWs);
-	if (wsDebug) console.log('[ws] close code=%d connections=%d', code, wsConnections.size);
+	if (wsDebug) console.log('[svelte-adapter-ws/runtime.websocket] close code=%d connections=%d', code, wsConnections.size);
 }
 
 // - Authenticate preflight endpoint ------------------------------------------

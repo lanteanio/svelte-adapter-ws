@@ -68,10 +68,10 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-CLUSTER-CONFIG-MODE](#adapter-err-cluster-config-mode) | `cluster.config.invalid-mode` | `[svelte-adapter-ws] Invalid CLUSTER_MODE: '` |
 | [ADAPTER-ERR-CLUSTER-CONFIG-PORT](#adapter-err-cluster-config-port) | `cluster.config.ephemeral-port` | `[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS (each worker would bind its own kernel-assigned port, so the workers do not share one: ` |
 | [ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT](#adapter-err-cluster-config-reuseport) | `cluster.config.reuseport-unsupported` | `[svelte-adapter-ws] CLUSTER_WORKERS requires Linux (SO_REUSEPORT accept distribution is not available on ` |
-| [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read) | `tls.primary.boot-read-failed` | `[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` |
-| [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read) | `tls.primary.reload-read-failed` | `[tls] renewed certificate unreadable on the primary (workers gate on their own reads)` |
-| [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch) | `tls.primary.watch-failed` | `[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` |
-| [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost) | `tls.primary.watch-lost` | `[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` |
+| [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read) | `tls.primary.boot-read-failed` | `[svelte-adapter-ws/runtime.tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` |
+| [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read) | `tls.primary.reload-read-failed` | `[svelte-adapter-ws/runtime.tls] renewed certificate unreadable on the primary (workers gate on their own reads)` |
+| [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch) | `tls.primary.watch-failed` | `[svelte-adapter-ws/runtime.tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` |
+| [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost) | `tls.primary.watch-lost` | `[svelte-adapter-ws/runtime.tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` |
 | [ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED](#adapter-err-shutdown-listener-rejected) | `shutdown.listener-rejected` | `[svelte-adapter-ws] a sveltekit:shutdown listener rejected` |
 | [ADAPTER-ERR-SHUTDOWN-LISTENER-THREW](#adapter-err-shutdown-listener-threw) | `shutdown.listener-threw` | `[svelte-adapter-ws] a sveltekit:shutdown listener threw` |
 | [ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED](#adapter-err-shutdown-requests-dropped) | `shutdown.requests-dropped` | `[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget (` |
@@ -79,29 +79,29 @@ generate and ship their own runtime-owned references on the same release channel
 | [ADAPTER-ERR-SHUTDOWN-FAILED](#adapter-err-shutdown-failed) | `shutdown.failed` | `[svelte-adapter-ws] graceful shutdown failed` |
 | [ADAPTER-ERR-WORKER-RESTART-LIMIT](#adapter-err-worker-restart-limit) | `cluster.worker.restart-limit` | `[svelte-adapter-ws] Worker restart limit reached for ` |
 | [ADAPTER-ERR-TLS-DEGRADED-EXPIRY](#adapter-err-tls-degraded-expiry) | `tls.degraded-expiry-alert` | `[svelte-adapter-ws] [tls] certificate hot-reload is DEGRADED (` |
-| [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter) | `ws.sendto.async-filter-refused` | `[ws] platform.sendTo filter returned a Promise; treating as fail-closed.` |
-| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw) | `ws.shutdown-hook.threw` | `[ws] the WebSocket shutdown hook threw` |
-| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled) | `ws.shutdown-hook.unsettled` | `[ws] the WebSocket shutdown hook has not settled after ` |
-| [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook) | `ws.message-hook.threw` | `[ws] the message hook threw` |
-| [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook) | `ws.open-hook.threw` | `[ws] the open hook threw` |
-| [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook) | `ws.drain-hook.threw` | `[ws] the drain hook threw` |
-| [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook) | `ws.close-hook.threw` | `[ws] the close hook threw` |
-| [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable) | `ws.send-coalesced.unserializable` | `[ws] a sendCoalesced value has no JSON form and was dropped` |
-| [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[ws] the recover-on-subscribe hook threw` |
-| [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | ``[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` |
-| [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument) | `ws.metrics.instrument-threw` | `[ws] a metrics instrument threw; further errors from it are suppressed` |
-| [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled) | `ws.posture-export.disabled` | `[ws] posture export disabled: ` |
-| [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer) | `ws.posture-observer.threw` | `[ws] a posture transition handler threw` |
-| [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred) | `ws.upgrade.deferred-failed` | `[ws] a deferred upgrade failed` |
+| [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter) | `ws.sendto.async-filter-refused` | `[svelte-adapter-ws/runtime.websocket] platform.sendTo filter returned a Promise; treating as fail-closed.` |
+| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw) | `ws.shutdown-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook threw` |
+| [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled) | `ws.shutdown-hook.unsettled` | `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook has not settled after ` |
+| [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook) | `ws.message-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the message hook threw` |
+| [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook) | `ws.open-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the open hook threw` |
+| [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook) | `ws.drain-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the drain hook threw` |
+| [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook) | `ws.close-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the close hook threw` |
+| [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable) | `ws.send-coalesced.unserializable` | `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped` |
+| [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook) | `ws.recover-hook.threw` | `[svelte-adapter-ws/runtime.websocket] the recover-on-subscribe hook threw` |
+| [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape) | `ws.metrics.module-shape` | ``[svelte-adapter-ws/runtime.websocket] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` |
+| [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument) | `ws.metrics.instrument-threw` | `[svelte-adapter-ws/runtime.websocket] a metrics instrument threw; further errors from it are suppressed` |
+| [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled) | `ws.posture-export.disabled` | `[svelte-adapter-ws/runtime.websocket] posture export disabled: ` |
+| [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer) | `ws.posture-observer.threw` | `[svelte-adapter-ws/runtime.websocket] a posture transition handler threw` |
+| [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred) | `ws.upgrade.deferred-failed` | `[svelte-adapter-ws/runtime.websocket] a deferred upgrade failed` |
 | [ADAPTER-ERR-WAITING-ROOM-FALLBACK](#adapter-err-waiting-room-fallback) | `ws.waiting-room.renderer-failed` | `[svelte-adapter-ws] the waiting-room renderer failed; serving the built-in English page instead` |
-| [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape) | `ws.diagnostic.record-shape` | `[ws] operational event dropped, invalid record shape` |
-| [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[ws] diagnostic render failed: ` |
-| [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write) | `ws.diagnostic.console-write` | `[ws] diagnostic rendered but the console refused it: ` |
-| [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice) | `ws.diagnostic.sink-notice` | `[ws] operational sink failed and its failure notice could not be built: ` |
-| [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth) | `ws.resource-growth.trending` | `[ws] resource-growth auditor: ` |
-| [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine) | `cluster-relay.spill-quarantine` | `[primary] relay spill quarantining ` |
-| [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition) | `ws.protection-posture.transition` | `[ws] protection posture ` |
-| [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill) | `cluster.worker-exit-sigkill` | `[primary] worker ` |
+| [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape) | `ws.diagnostic.record-shape` | `[svelte-adapter-ws/runtime.websocket] operational event dropped, invalid record shape` |
+| [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse) | `ws.diagnostic.render-collapse` | `[svelte-adapter-ws/runtime.websocket] diagnostic render failed: ` |
+| [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write) | `ws.diagnostic.console-write` | `[svelte-adapter-ws/runtime.websocket] diagnostic rendered but the console refused it: ` |
+| [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice) | `ws.diagnostic.sink-notice` | `[svelte-adapter-ws/runtime.websocket] operational sink failed and its failure notice could not be built: ` |
+| [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth) | `ws.resource-growth.trending` | `[svelte-adapter-ws/runtime.websocket] resource-growth auditor: ` |
+| [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine) | `cluster-relay.spill-quarantine` | `[svelte-adapter-ws/runtime.primary] relay spill quarantining ` |
+| [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition) | `ws.protection-posture.transition` | `[svelte-adapter-ws/runtime.websocket] protection posture ` |
+| [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill) | `cluster.worker-exit-sigkill` | `[svelte-adapter-ws/runtime.primary] worker ` |
 
 ## Emitted diagnostic event coverage
 
@@ -166,10 +166,10 @@ the stable ID tag on the line):
 - `[svelte-adapter-ws] Invalid CLUSTER_MODE: '` - [ADAPTER-ERR-CLUSTER-CONFIG-MODE](#adapter-err-cluster-config-mode)
 - `[svelte-adapter-ws] PORT=0 cannot be combined with CLUSTER_WORKERS (each worker would bind its own kernel-assigned port, so the workers do not share one: ` - [ADAPTER-ERR-CLUSTER-CONFIG-PORT](#adapter-err-cluster-config-port)
 - `[svelte-adapter-ws] CLUSTER_WORKERS requires Linux (SO_REUSEPORT accept distribution is not available on ` - [ADAPTER-ERR-CLUSTER-CONFIG-REUSEPORT](#adapter-err-cluster-config-reuseport)
-- `[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` - [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read)
-- `[tls] renewed certificate unreadable on the primary (workers gate on their own reads)` - [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read)
-- `[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch)
-- `[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost)
+- `[svelte-adapter-ws/runtime.tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)` - [ADAPTER-ERR-TLS-PRIMARY-BOOT-READ](#adapter-err-tls-primary-boot-read)
+- `[svelte-adapter-ws/runtime.tls] renewed certificate unreadable on the primary (workers gate on their own reads)` - [ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ](#adapter-err-tls-primary-reload-read)
+- `[svelte-adapter-ws/runtime.tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH](#adapter-err-tls-primary-watch)
+- `[svelte-adapter-ws/runtime.tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)` - [ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST](#adapter-err-tls-primary-watch-lost)
 - `[svelte-adapter-ws] a sveltekit:shutdown listener rejected` - [ADAPTER-ERR-SHUTDOWN-LISTENER-REJECTED](#adapter-err-shutdown-listener-rejected)
 - `[svelte-adapter-ws] a sveltekit:shutdown listener threw` - [ADAPTER-ERR-SHUTDOWN-LISTENER-THREW](#adapter-err-shutdown-listener-threw)
 - `[svelte-adapter-ws] in-flight requests did not finish within the shutdown budget (` - [ADAPTER-ERR-SHUTDOWN-REQUESTS-DROPPED](#adapter-err-shutdown-requests-dropped)
@@ -177,29 +177,29 @@ the stable ID tag on the line):
 - `[svelte-adapter-ws] graceful shutdown failed` - [ADAPTER-ERR-SHUTDOWN-FAILED](#adapter-err-shutdown-failed)
 - `[svelte-adapter-ws] Worker restart limit reached for ` - [ADAPTER-ERR-WORKER-RESTART-LIMIT](#adapter-err-worker-restart-limit)
 - `[svelte-adapter-ws] [tls] certificate hot-reload is DEGRADED (` - [ADAPTER-ERR-TLS-DEGRADED-EXPIRY](#adapter-err-tls-degraded-expiry)
-- `[ws] platform.sendTo filter returned a Promise; treating as fail-closed.` - [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter)
-- `[ws] the WebSocket shutdown hook threw` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw)
-- `[ws] the WebSocket shutdown hook has not settled after ` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled)
-- `[ws] the message hook threw` - [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook)
-- `[ws] the open hook threw` - [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook)
-- `[ws] the drain hook threw` - [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook)
-- `[ws] the close hook threw` - [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook)
-- `[ws] a sendCoalesced value has no JSON form and was dropped` - [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable)
-- `[ws] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
-- ``[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
-- `[ws] a metrics instrument threw; further errors from it are suppressed` - [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument)
-- `[ws] posture export disabled: ` - [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled)
-- `[ws] a posture transition handler threw` - [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer)
-- `[ws] a deferred upgrade failed` - [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred)
+- `[svelte-adapter-ws/runtime.websocket] platform.sendTo filter returned a Promise; treating as fail-closed.` - [ADAPTER-ERR-SENDTO-ASYNC-FILTER](#adapter-err-sendto-async-filter)
+- `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook threw` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW](#adapter-err-ws-shutdown-hook-threw)
+- `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook has not settled after ` - [ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED](#adapter-err-ws-shutdown-hook-unsettled)
+- `[svelte-adapter-ws/runtime.websocket] the message hook threw` - [ADAPTER-ERR-MESSAGE-HOOK](#adapter-err-message-hook)
+- `[svelte-adapter-ws/runtime.websocket] the open hook threw` - [ADAPTER-ERR-OPEN-HOOK](#adapter-err-open-hook)
+- `[svelte-adapter-ws/runtime.websocket] the drain hook threw` - [ADAPTER-ERR-DRAIN-HOOK](#adapter-err-drain-hook)
+- `[svelte-adapter-ws/runtime.websocket] the close hook threw` - [ADAPTER-ERR-CLOSE-HOOK](#adapter-err-close-hook)
+- `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped` - [ADAPTER-ERR-COALESCED-UNSERIALIZABLE](#adapter-err-coalesced-unserializable)
+- `[svelte-adapter-ws/runtime.websocket] the recover-on-subscribe hook threw` - [ADAPTER-ERR-RECOVER-HOOK](#adapter-err-recover-hook)
+- ``[svelte-adapter-ws/runtime.websocket] the metrics module must export a registry object as `default`, `metrics` or `registry`; got `` - [ADAPTER-ERR-METRICS-MODULE-SHAPE](#adapter-err-metrics-module-shape)
+- `[svelte-adapter-ws/runtime.websocket] a metrics instrument threw; further errors from it are suppressed` - [ADAPTER-ERR-METRICS-INSTRUMENT](#adapter-err-metrics-instrument)
+- `[svelte-adapter-ws/runtime.websocket] posture export disabled: ` - [ADAPTER-ERR-POSTURE-EXPORT-DISABLED](#adapter-err-posture-export-disabled)
+- `[svelte-adapter-ws/runtime.websocket] a posture transition handler threw` - [ADAPTER-ERR-POSTURE-OBSERVER](#adapter-err-posture-observer)
+- `[svelte-adapter-ws/runtime.websocket] a deferred upgrade failed` - [ADAPTER-ERR-UPGRADE-DEFERRED](#adapter-err-upgrade-deferred)
 - `[svelte-adapter-ws] the waiting-room renderer failed; serving the built-in English page instead` - [ADAPTER-ERR-WAITING-ROOM-FALLBACK](#adapter-err-waiting-room-fallback)
-- `[ws] operational event dropped, invalid record shape` - [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape)
-- `[ws] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
-- `[ws] diagnostic rendered but the console refused it: ` - [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write)
-- `[ws] operational sink failed and its failure notice could not be built: ` - [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice)
-- `[ws] resource-growth auditor: ` - [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth)
-- `[primary] relay spill quarantining ` - [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine)
-- `[ws] protection posture ` - [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition)
-- `[primary] worker ` - [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill)
+- `[svelte-adapter-ws/runtime.websocket] operational event dropped, invalid record shape` - [ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE](#adapter-err-diagnostic-record-shape)
+- `[svelte-adapter-ws/runtime.websocket] diagnostic render failed: ` - [ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE](#adapter-err-diagnostic-render-collapse)
+- `[svelte-adapter-ws/runtime.websocket] diagnostic rendered but the console refused it: ` - [ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE](#adapter-err-diagnostic-console-write)
+- `[svelte-adapter-ws/runtime.websocket] operational sink failed and its failure notice could not be built: ` - [ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE](#adapter-err-diagnostic-sink-notice)
+- `[svelte-adapter-ws/runtime.websocket] resource-growth auditor: ` - [ADAPTER-ERR-RESOURCE-GROWTH](#adapter-err-resource-growth)
+- `[svelte-adapter-ws/runtime.primary] relay spill quarantining ` - [ADAPTER-ERR-RELAY-SPILL-QUARANTINE](#adapter-err-relay-spill-quarantine)
+- `[svelte-adapter-ws/runtime.websocket] protection posture ` - [ADAPTER-ERR-POSTURE-TRANSITION](#adapter-err-posture-transition)
+- `[svelte-adapter-ws/runtime.primary] worker ` - [ADAPTER-ERR-WORKER-EXIT-SIGKILL](#adapter-err-worker-exit-sigkill)
 
 ### Informational events
 
@@ -803,7 +803,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-TLS-PRIMARY-BOOT-READ`
 
 - **Code/event:** `tls.primary.boot-read-failed`
-- **Message prefix:** `[tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)`
+- **Message prefix:** `[svelte-adapter-ws/runtime.tls] boot certificate unreadable on the primary (hot-reload broadcast stays armed)`
 - **Cause:** The cluster primary could not read or parse the boot certificate while arming the hot-reload watch.
 - **Consequence:** Primary-side expiry observability starts blind: no baseline identity or expiry is recorded, so a later reload failure is reported without the number that says how urgent it is. Workers gate on their own certificate reads and keep serving; the reload broadcast stays armed.
 - **Automatic recovery:** The next reload that reads cleanly records identity and expiry.
@@ -815,7 +815,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-TLS-PRIMARY-RELOAD-READ`
 
 - **Code/event:** `tls.primary.reload-read-failed`
-- **Message prefix:** `[tls] renewed certificate unreadable on the primary (workers gate on their own reads)`
+- **Message prefix:** `[svelte-adapter-ws/runtime.tls] renewed certificate unreadable on the primary (workers gate on their own reads)`
 - **Cause:** A certificate change was seen on disk but the renewed material was unreadable or incomplete when the primary read it.
 - **Consequence:** The reload broadcast still goes out and every worker gates on its OWN read, so a primary-local failure (a read racing the renewal writer at the primary debounce instant) can leave the workers correctly swapped while only the primary is blind. What certainly failed is the primary side: no renewed identity or expiry is recorded, the primary enters the degraded TLS state with its expiry sentinel armed, and READINESS PROBES STAY GREEN. When the renewal itself is broken, every worker read fails the same way and the fleet keeps the previous certificate.
 - **Automatic recovery:** Every certificate change broadcasts again; the next change the primary reads cleanly records identity and expiry and clears the degraded state.
@@ -827,7 +827,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-TLS-PRIMARY-WATCH`
 
 - **Code/event:** `tls.primary.watch-failed`
-- **Message prefix:** `[tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)`
+- **Message prefix:** `[svelte-adapter-ws/runtime.tls] primary cert watch failed to start, cluster hot-reload disabled (server keeps running)`
 - **Cause:** The filesystem watch on the certificate directory could not start on the cluster primary, commonly a not-yet-mounted secret volume or a mistyped path.
 - **Consequence:** Cluster-wide certificate hot reload is off for the process lifetime: with no watcher on the primary, no worker is ever told to reload, so the whole fleet serves its current certificate until it expires. The primary enters the degraded TLS state; readiness probes stay green throughout.
 - **Automatic recovery:** None. The watch is not retried, so this does not resolve without a restart.
@@ -839,7 +839,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-TLS-PRIMARY-WATCH-LOST`
 
 - **Code/event:** `tls.primary.watch-lost`
-- **Message prefix:** `[tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)`
+- **Message prefix:** `[svelte-adapter-ws/runtime.tls] primary cert watch stopped after running, cluster hot-reload disabled (server keeps running)`
 - **Cause:** A watch that started successfully on the cluster primary reported a failure later - the certificate directory was removed or replaced, its permissions changed, or the platform's watch resources ran out. A redeployed secret volume that replaces the directory rather than the files in it is the usual cause.
 - **Consequence:** Cluster-wide certificate hot reload is off from that moment: with no watcher on the primary, no worker is ever told to reload, so the whole fleet serves its current certificate until it expires. The primary enters the degraded TLS state and stays there; readiness probes stay green throughout.
 - **Automatic recovery:** None. The watch is not re-armed, so this does not resolve without a restart.
@@ -936,7 +936,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-SENDTO-ASYNC-FILTER`
 
 - **Code/event:** `ws.sendto.async-filter-refused`
-- **Message prefix:** `[ws] platform.sendTo filter returned a Promise; treating as fail-closed.`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] platform.sendTo filter returned a Promise; treating as fail-closed.`
 - **Cause:** A platform.sendTo filter returned a Promise. The filter must be synchronous, because sendTo iterates every active connection in one pass.
 - **Consequence:** Every connection whose filter returns a Promise is skipped - fail-closed - on this and every later sendTo call, so the targeted delivery silently reaches nobody the filter cannot answer synchronously. The warning prints once per process.
 - **Automatic recovery:** None. The filter stays fail-closed until the code is fixed.
@@ -949,7 +949,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-WS-SHUTDOWN-HOOK-THREW`
 
 - **Code/event:** `ws.shutdown-hook.threw`
-- **Message prefix:** `[ws] the WebSocket shutdown hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook threw`
 - **Cause:** The `shutdown` export of the WebSocket handler threw synchronously or rejected while the server was closing.
 - **Consequence:** Whatever that hook was flushing did not finish - final writes, external deregistration, or draining a queue. The throw is contained and the teardown carries on regardless, so the loss is silent unless this line is read.
 - **Automatic recovery:** None. Shutdown is best-effort and proceeds without the hook.
@@ -961,7 +961,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-WS-SHUTDOWN-HOOK-UNSETTLED`
 
 - **Code/event:** `ws.shutdown-hook.unsettled`
-- **Message prefix:** `[ws] the WebSocket shutdown hook has not settled after `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the WebSocket shutdown hook has not settled after `
 - **Cause:** The `shutdown` export of the WebSocket handler was still running when the shutdown budget expired.
 - **Consequence:** The close path stops waiting and the drain proceeds anyway. The hook keeps running - user code cannot be interrupted - but nothing awaits it any more, so whether it finishes is a race against whatever ends the process next. It may well complete: under `createTestServer` the process often continues afterwards and the flush lands. What is gone is the guarantee, so a hook that prints this is one deploy timing away from losing whatever it was flushing. createTestServer prints the same line for the same hook.
 - **Automatic recovery:** None by design: the budget exists so a wedged hook cannot hold the process open.
@@ -973,7 +973,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-MESSAGE-HOOK`
 
 - **Code/event:** `ws.message-hook.threw`
-- **Message prefix:** `[ws] the message hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the message hook threw`
 - **Cause:** The application or plugin `message` hook threw or rejected while handling a client frame.
 - **Consequence:** That client's connection is closed with code 1011 and the reason `Message handler error`; the cause stays server-side and is not sent to the client. Other connections are unaffected. A client that reconnects and replays the same frame is closed again.
 - **Automatic recovery:** None for the frame. The client sees a close, and reconnection is the client library's own resume path.
@@ -985,7 +985,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-OPEN-HOOK`
 
 - **Code/event:** `ws.open-hook.threw`
-- **Message prefix:** `[ws] the open hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the open hook threw`
 - **Cause:** The application `open` hook threw, or the promise it returned rejected.
 - **Consequence:** That connection is closed with code 1011 and the reason `Open handler error`, and the `close` hook runs for it as for any other close. The cause stays server-side and is not sent to the client. Other connections are unaffected.
 - **Automatic recovery:** None for the connection. The client sees a close, and reconnecting runs `open` again.
@@ -997,7 +997,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-DRAIN-HOOK`
 
 - **Code/event:** `ws.drain-hook.threw`
-- **Message prefix:** `[ws] the drain hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the drain hook threw`
 - **Cause:** The application `drain` hook threw, or the promise it returned rejected, when uWS reported the connection's send buffer draining.
 - **Consequence:** That connection is closed with code 1011 and the reason `Drain handler error`. The cause stays server-side and is not sent to the client. Other connections are unaffected.
 - **Automatic recovery:** None for the connection. The client sees a close and reconnects.
@@ -1009,7 +1009,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-CLOSE-HOOK`
 
 - **Code/event:** `ws.close-hook.threw`
-- **Message prefix:** `[ws] the close hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the close hook threw`
 - **Cause:** The application `close` hook threw, or the promise it returned rejected.
 - **Consequence:** Only the log line. The connection was already closed, and the runtime's own teardown for it (subscriptions, counters, the live connection set) still runs.
 - **Automatic recovery:** Not needed; nothing is left half-closed.
@@ -1021,7 +1021,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-COALESCED-UNSERIALIZABLE`
 
 - **Code/event:** `ws.send-coalesced.unserializable`
-- **Message prefix:** `[ws] a sendCoalesced value has no JSON form and was dropped`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] a sendCoalesced value has no JSON form and was dropped`
 - **Cause:** A value passed to `platform.sendCoalesced` while the connection was backpressured could not be serialized when the queue drained: a BigInt, a cycle, a `toJSON` that throws, or a value such as a function that JSON has no form for.
 - **Consequence:** That one entry is dropped and the rest of the queue for the connection still goes out. The connection stays open. A value that fails while it is flushed at once throws from the `sendCoalesced` call instead and never reaches this line.
 - **Automatic recovery:** None for the entry; the next value set under the same key is sent normally.
@@ -1033,7 +1033,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-RECOVER-HOOK`
 
 - **Code/event:** `ws.recover-hook.threw`
-- **Message prefix:** `[ws] the recover-on-subscribe hook threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] the recover-on-subscribe hook threw`
 - **Cause:** The `resume` hook threw on the RECOVER-ON-SUBSCRIBE path - a client subscribing to a topic the server was asked to backfill - so the backlog that subscription should have replayed could not be produced. The same hook failing on a client resume frame is ADAPTER-ERR-RESUME-HOOK instead.
 - **Consequence:** The subscription itself still completes: the client is subscribed and receives live frames from that moment on, but the events it missed before subscribing are not delivered and no gap is reported to it. It looks like a working subscription with a hole at the start.
 - **Automatic recovery:** None. Live delivery continues; the missed range is not retried.
@@ -1045,7 +1045,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-METRICS-MODULE-SHAPE`
 
 - **Code/event:** `ws.metrics.module-shape`
-- **Message prefix:** ``[ws] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ``
+- **Message prefix:** ``[svelte-adapter-ws/runtime.websocket] the metrics module must export a registry object as `default`, `metrics` or `registry`; got ``
 - **Cause:** The export the build SELECTED from the module named by `websocket.metrics` cannot carry instrument factories. This is a statement about that one value, not about the module: the build takes the first of `default`, `metrics` and `registry` that is not nullish and forwards it without validating its shape, so a module carrying a perfectly good `metrics` registry prints this line whenever a primitive `default` sits in front of it.
 - **Consequence:** Metrics are disabled for the whole worker: no instrument is ever created, so the adapter series are ABSENT from the scrape rather than present at zero. Dashboards read as no data and alerts that fire on a threshold never fire at all.
 - **Automatic recovery:** None. The runtime keeps serving traffic with metrics off - the alternative is a boot failure naming neither metrics nor the option that caused it.
@@ -1057,7 +1057,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-METRICS-INSTRUMENT`
 
 - **Code/event:** `ws.metrics.instrument-threw`
-- **Message prefix:** `[ws] a metrics instrument threw; further errors from it are suppressed`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] a metrics instrument threw; further errors from it are suppressed`
 - **Cause:** Recording a value threw. The containment wraps the adapter's own mirror of the instrument, so the throw is usually from the registry module the `websocket.metrics` option names, but adapter code runs first on that path and a failure there surfaces the same way.
 - **Consequence:** Where the value ends up depends on which side threw. The adapter records into its own mirror BEFORE delegating, so a throw from the configured registry loses the value only from that registry's scrape - `metricsSnapshot()` still has it. Every later call is attempted again, the containment being per call, so an instrument that throws for one label set or one transient keeps recording the rest; but the failures are printed once and then suppressed, so nothing tells you whether it kept failing. A series that stops moving reads as an idle server rather than a broken instrument.
 - **Automatic recovery:** The throw is contained per call, so the request or frame that triggered it completes normally, and a transient failure self-heals on the next call.
@@ -1069,7 +1069,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-POSTURE-EXPORT-DISABLED`
 
 - **Code/event:** `ws.posture-export.disabled`
-- **Message prefix:** `[ws] posture export disabled: `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] posture export disabled: `
 - **Cause:** The posture export socket could not listen on its configured path, or its socket failed later in its life; the line says which. A stale socket file is removed automatically before every listen attempt, so the listen shape means a permission denial (including a stale path the process could not remove), a missing parent directory, or a Windows named pipe already taken.
 - **Consequence:** The worker keeps serving traffic, but nothing can read its live pressure posture over that socket: an external supervisor watching it sees a connection failure rather than a posture, and any shedding decision built on it stops updating. A failed listen never had readers to lose; a later socket error drops whichever readers were connected.
 - **Automatic recovery:** None. The export is not retried for the life of the worker.
@@ -1081,7 +1081,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-POSTURE-OBSERVER`
 
 - **Code/event:** `ws.posture-observer.threw`
-- **Message prefix:** `[ws] a posture transition handler threw`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] a posture transition handler threw`
 - **Cause:** The adapter's own protection-posture transition handler threw. It prints the posture line, then pushes the new posture to the export socket. The export push contains its own failures, so what remains is the console write.
 - **Consequence:** The posture CHANGED and the runtime is shedding or recovering as configured, but the record of it did not finish. What went missing is the posture log line, and with it the IMMEDIATE export push that follows it - a defense daemon reacting to the change does not get it at the instant of transition. The staleness that leaves is shorter than a sample, not longer: the posture advances from inside the 1 Hz pressure sampler, and that same sampler run pushes the ordinary posture heartbeat a few statements later, so an export reader carries the true posture before the tick that raised it has finished.
 - **Automatic recovery:** The heartbeat later in the SAME sampler run carries the new posture, so no export reader waits for another transition or another second; the next transition runs the handler again, since a throw does not unregister it. Only the incident-timeline console line for this transition is gone for good.
@@ -1093,7 +1093,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-UPGRADE-DEFERRED`
 
 - **Code/event:** `ws.upgrade.deferred-failed`
-- **Message prefix:** `[ws] a deferred upgrade failed`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] a deferred upgrade failed`
 - **Cause:** A WebSocket upgrade held back by the admission queue threw when it was finally completed, after the client had already passed admission.
 - **Consequence:** That one client never connects. Its response is left unfinished rather than refused, so it typically waits out its own timeout instead of seeing an error, and it retries as if the server were briefly unavailable. The admission slot it held is released, and the other upgrades in the same drain still run.
 - **Automatic recovery:** None for that connection; the client reconnects on its own schedule.
@@ -1117,7 +1117,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-DIAGNOSTIC-RECORD-SHAPE`
 
 - **Code/event:** `ws.diagnostic.record-shape`
-- **Message prefix:** `[ws] operational event dropped, invalid record shape`
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] operational event dropped, invalid record shape`
 - **Cause:** Something emitted an operational diagnostic the runtime could not build a record from - a malformed event name, an unknown severity or data class, or a bad timestamp. A field that cannot be SERIALIZED is a different, quieter failure: the renderer absorbs it by printing the envelope with the attributes stripped, so the event still appears minus its attributes and no error line prints - the render path reports only its own total collapse (see ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE).
 - **Consequence:** That diagnostic is DROPPED: it reaches neither the configured sink nor the log, so the failure it was reporting leaves no structured trace. Everything else keeps emitting normally.
 - **Automatic recovery:** None for the dropped record. Telemetry deliberately never throws, so the emitting path continued as if it had been reported.
@@ -1129,7 +1129,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-DIAGNOSTIC-RENDER-COLLAPSE`
 
 - **Code/event:** `ws.diagnostic.render-collapse`
-- **Message prefix:** `[ws] diagnostic render failed: `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] diagnostic render failed: `
 - **Cause:** Formatting an operational diagnostic threw, and formatting it again with the attributes stripped threw as well. That SECOND failure is what makes this environmental rather than a bad record: the strip leaves only fields createDiagnostic produced and validated itself, every one a bounded string or number - the message is cut to 512 characters at creation - so no record this runtime accepted can fail the retry. What can fail it is the JSON serialization the format is built on: a replaced or wrapped `JSON.stringify`, a `toJSON` added to `Object.prototype`, an instrumentation agent that patched either. A value in the ATTRIBUTES that cannot be serialized is absorbed by the retry and never reaches this line, and a console that refuses the finished text prints the diagnostic-console-write line instead.
 - **Consequence:** That diagnostic is lost. How much goes with it depends on what the serialization refuses: one that fails outright takes the whole operational stream, and one that refuses only certain shapes - a wrapper scrubbing a field, a size ceiling - takes every diagnostic matching that shape and lets the rest through. So a log that still carries other events does NOT mean this was isolated to the record named here; it means the refusal is selective. The request path is unaffected either way: the failure is contained so telemetry cannot take a worker down with it.
 - **Automatic recovery:** None for the lost record, and a later diagnostic printing normally is not recovery - under a selective refusal the ones that do not match keep working throughout, which is exactly what makes the gap easy to miss. Nothing is retried and nothing is unregistered; each event is formatted independently and meets the same serialization.
@@ -1141,7 +1141,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-DIAGNOSTIC-CONSOLE-WRITE`
 
 - **Code/event:** `ws.diagnostic.console-write`
-- **Message prefix:** `[ws] diagnostic rendered but the console refused it: `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] diagnostic rendered but the console refused it: `
 - **Cause:** The diagnostic formatted correctly and the console method carrying its severity threw when handed the finished line. The record is not the suspect here: a console replaced or wrapped by the host, or one whose write end has gone, refuses a well-formed string exactly the same way.
 - **Consequence:** That one diagnostic is lost, and so is every later one carried by the SAME console method for as long as it keeps throwing - this is a broken channel rather than a bad value, so it does not stop at the record that revealed it. The mapping is not one method per severity: debug, info, and warn ride their own methods, while error and fatal share console.error, so a broken error channel loses both and a fatal line missing from the log means console.error is broken. Severities riding other methods are unaffected, and this line itself is written through console.error, which is a different method in every case but a failing error or fatal channel.
 - **Automatic recovery:** None, and none is attempted: nothing re-routes a severity to another method, because silently moving warnings into the error stream would corrupt the log an operator reads.
@@ -1153,7 +1153,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-DIAGNOSTIC-SINK-NOTICE`
 
 - **Code/event:** `ws.diagnostic.sink-notice`
-- **Message prefix:** `[ws] operational sink failed and its failure notice could not be built: `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] operational sink failed and its failure notice could not be built: `
 - **Cause:** A configured operational event sink threw, the console fallback printed the original event in its place, and then BUILDING the record that announces the sink failure threw. Only the wall clock the notice stamps can do that: every other field is a constant or a value read off the already-validated original record, and a clock either throws or returns a timestamp the shape accepts - no clock RETURN value can be rejected. The console is not implicated: this very line is written through it.
 - **Consequence:** One record is lost, and it is the notice, not the event. The event named on this line was printed by the console fallback immediately above it, so the telemetry the sink was carrying is in the log; what is missing is the machine-readable statement that the sink is broken, which is what a collector watching for sink health would have keyed on.
 - **Automatic recovery:** None for the lost notice. The sink is not unregistered and is called again for the next event. This line is inherently intermittent: it needs the same clock to succeed for the event's own record and then fail for the notice moments later, so a clock broken outright does not keep printing it - the next emission dies earlier, at record construction, and prints the record-shape line instead.
@@ -1165,7 +1165,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-RESOURCE-GROWTH`
 
 - **Code/event:** `ws.resource-growth.trending`
-- **Message prefix:** `[ws] resource-growth auditor: `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] resource-growth auditor: `
 - **Cause:** A runtime structure the growth auditor samples has been trending upward across consecutive samples without shedding. The auditor is opt-in and off unless an audit interval is configured, so silence here means it is disabled just as often as it means nothing is growing.
 - **Consequence:** Nothing is refused - this is the early warning, and it is printed once per worker lifetime, so a trend that continues after it says nothing more. What the auditor has is a DIRECTION across consecutive samples, not a prediction: a trend that continues ends in memory pressure and eventually exhausts the heap, and one that levels off or starts shedding later never gets there. If it does continue, whether anything sheds before the end depends on configuration - the protection posture is opt-in, so on a default deployment there is no posture to raise. No worker is restarted on account of memory either, so what follows an exhausted heap is the process aborting rather than one thread being replaced.
 - **Automatic recovery:** None. The auditor observes; it does not evict.
@@ -1177,7 +1177,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-RELAY-SPILL-QUARANTINE`
 
 - **Code/event:** `cluster-relay.spill-quarantine`
-- **Message prefix:** `[primary] relay spill quarantining `
+- **Message prefix:** `[svelte-adapter-ws/runtime.primary] relay spill quarantining `
 - **Cause:** The primary could not hand relay traffic DOWN to this worker inside the worker's spill ceiling - its ring backlog crossed the byte limit, or the worker stopped making drain progress for longer than the age limit - so the primary quarantined it. This is the opposite direction from ADAPTER-ERR-RELAY-SPILL-OVERFLOW, which is a worker that could not reach the primary.
 - **Consequence:** The primary stops forwarding relay traffic to that worker and asks it to exit, so its clients are dropped and reconnect onto a sibling. Until they do, that worker's subscribers were already missing whatever the ring could not deliver. Quarantine happens once per worker - the primary does not re-evaluate it - and the line names the reason, the bytes dropped and how long the backlog had been pending.
 - **Automatic recovery:** The exit is a request, not a guarantee: quarantine posts a terminate message the quarantined worker's own event loop must process, and an AGE quarantine means exactly that loop stopped making progress. A worker that processes the request exits and the primary replaces it; one still wedged when the exit grace expires is resolved by killing the whole process for the orchestrator to respawn - the mechanism ADAPTER-ERR-WORKER-EXIT-SIGKILL documents. Either way the dropped frames are not resent, so a client that was subscribed on that worker has a hole its own resume path must fill when it reconnects.
@@ -1189,7 +1189,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-POSTURE-TRANSITION`
 
 - **Code/event:** `ws.protection-posture.transition`
-- **Message prefix:** `[ws] protection posture `
+- **Message prefix:** `[svelte-adapter-ws/runtime.websocket] protection posture `
 - **Cause:** The worker moved between protection postures - normal, elevated and siege. Normal to elevated is decided by sampled pressure holding over a configured threshold (memory, CPU quota, kernel stall time, publish rate or subscriber ratio). Elevated to siege is decided instead by the rate of capacity rejections crossing the siege rate, independently of those signals. Both directions relax after a run of quiet samples, and siege steps down to elevated rather than straight to normal. The line names the posture it left, the posture it entered, the rejection rate at that moment and the highest pressure signal.
 - **Consequence:** What the posture changes depends on which one it entered. At ELEVATED nothing is refused - the admission effect is only a wider Retry-After jitter on capacity responses that were already going out - so this line is a warning rather than an outage. It does change what the worker REPORTS, though: from here a sample reads its pressure state as active, and its reason as CAPACITY unless the underlying signal is MEMORY, which is preserved and reported as itself - so `platform.pressure`, the posture export and any onPressure listener follow the posture rather than the underlying signal, except for the one signal you would least want masked. At SIEGE the worker additionally refuses EVERY new upgrade at static-serve cost, and clients see a capacity refusal rather than an error. A worker that settles at either is running at its ceiling.
 - **Automatic recovery:** Yes, and a de-escalation prints this same line: the posture steps back down after a run of quiet samples, and both directions are dwell-gated so it cannot flap.
@@ -1201,7 +1201,7 @@ searchable log prefix is:
 ## `ADAPTER-ERR-WORKER-EXIT-SIGKILL`
 
 - **Code/event:** `cluster.worker-exit-sigkill`
-- **Message prefix:** `[primary] worker `
+- **Message prefix:** `[svelte-adapter-ws/runtime.primary] worker `
 - **Cause:** A worker was asked to exit and had not done so within the exit grace period, so the primary killed the WHOLE PROCESS with SIGKILL. A wedged worker cannot close itself, and the family resolves a wedged worker by process death rather than by terminating the one thread.
 - **Consequence:** Every worker dies, not just the wedged one: all connections drop, in-flight requests are lost, and no shutdown hook runs. The process is expected to be respawned by whatever supervises it - systemd, a container runtime, an orchestrator. Without one, the service stays down.
 - **Automatic recovery:** None inside the process. Recovery is the supervisor restarting it.

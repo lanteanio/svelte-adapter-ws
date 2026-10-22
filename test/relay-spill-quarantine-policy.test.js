@@ -50,7 +50,7 @@ describe('ADAPTER-ERR-RELAY-SPILL-QUARANTINE', () => {
 		quarantine({ reason: 'age', droppedBytes: 4096, pendingAgeMs: 5000.6 });
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toBe(
-			'[primary] relay spill quarantining worker=7 reason=age droppedBytes=4096 pendingAgeMs=5001'
+			'[svelte-adapter-ws/runtime.primary] relay spill quarantining worker=7 reason=age droppedBytes=4096 pendingAgeMs=5001'
 			+ ' [ADAPTER-ERR-RELAY-SPILL-QUARANTINE]'
 		);
 	});

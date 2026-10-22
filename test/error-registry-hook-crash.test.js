@@ -240,7 +240,7 @@ describeUWS('the hook-failure entries against the built runtime', () => {
 				expect(closed.reason).toBe('Open handler error');
 				const line = await consoleLine(error, 'ADAPTER-ERR-OPEN-HOOK');
 				expect(line, 'the indexed line is printed').toBeTruthy();
-				expect(String(line[0]).startsWith('[ws] the open hook threw')).toBe(true);
+				expect(String(line[0]).startsWith('[svelte-adapter-ws/runtime.websocket] the open hook threw')).toBe(true);
 				expect(line[1]?.message, 'printed with the original throw').toBe(cause);
 				expect(closedLanes, 'the close hook ran for the failed connection').toEqual([lane]);
 				await workerStillServes(bystander, 11);
@@ -282,7 +282,7 @@ describeUWS('the hook-failure entries against the built runtime', () => {
 				expect(await within(client.closed, 3000)).toBeTruthy();
 				const line = await consoleLine(error, 'ADAPTER-ERR-CLOSE-HOOK');
 				expect(line, 'the indexed line is printed').toBeTruthy();
-				expect(String(line[0]).startsWith('[ws] the close hook threw')).toBe(true);
+				expect(String(line[0]).startsWith('[svelte-adapter-ws/runtime.websocket] the close hook threw')).toBe(true);
 				expect(line[1]?.message, 'printed with the original throw').toBe(cause);
 				await workerStillServes(bystander, 13);
 			} finally {
