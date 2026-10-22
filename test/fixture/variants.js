@@ -66,6 +66,11 @@ export const FIXTURE_VARIANTS = {
 		handler: './src/hooks.ws.close-subscriptions.js',
 		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
 	},
+	authAbort: {
+		out: 'build-auth-abort',
+		handler: './src/hooks.ws.auth-abort.js',
+		websocket: { allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }
+	},
 	responseframing: {
 		out: 'build-response-framing',
 		handler: './src/hooks.ws.response-framing.js',

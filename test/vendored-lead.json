@@ -92,6 +92,7 @@
 		"test/fixture/src/hooks.ws.topic-stats.js": "ae6a8cd",
 		"test/topic-broadcast-stats-real.test.js": "da9d3e2",
 		"src/runtime/utils/ws-symbols.js": "9efd11a",
-		"test/subscription-accounting.test.js": "9efd11a"
+		"test/subscription-accounting.test.js": "9efd11a",
+		"test/fixture/src/hooks.ws.auth-abort.js": "4a70bca"
 	}
 }

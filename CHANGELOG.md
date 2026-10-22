@@ -429,6 +429,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
+- A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.
+
 - A request whose Content-Length lines all carry the same value reaches the
   request edge, which answers the repeated framing header with its 400 and
   closes the connection; a built asset is served. Differing values keep the

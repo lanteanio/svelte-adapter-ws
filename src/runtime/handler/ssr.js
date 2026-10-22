@@ -158,10 +158,13 @@ export function readBody(req, limit, state, res) {
 				if (preallocated) controller.enqueue(preallocated.subarray(0, size));
 				controller.close();
 			});
-			req.on('error', (err) => {
+			// A client that leaves before the body ends fails the read the way
+			// an abort does on the native tier, rather than with the parser's
+			// own reset error.
+			req.on('error', () => {
 				if (done) return;
 				done = true;
-				try { controller.error(err); } catch { /* already closed */ }
+				try { controller.error(new Error('Request aborted')); } catch { /* already closed */ }
 			});
 		},
 		cancel() {
