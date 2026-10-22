@@ -50,9 +50,13 @@
 		"test/client-managed-authority.test.js": "b5c336f",
 		"test/client-throttle-budget.test.js": "9681fd4",
 		"test/surface-policy-parity.test.js": "6360dac",
-		"src/plugins/presence/server.js": "5638d38",
-		"src/plugins/presence/server.d.ts": "aec3b9e",
+		"src/plugins/presence/server.js": "f86401c",
+		"src/plugins/presence/server.d.ts": "f86401c",
 		"test/presence-unicode-key.test.js": "aec3b9e",
-		"test/presence-key.test.js": "5638d38"
+		"test/presence-key.test.js": "5638d38",
+		"src/plugins/_shared/topic.js": "f86401c",
+		"src/plugins/cursor/server.js": "f86401c",
+		"src/plugins/cursor/server.d.ts": "f86401c",
+		"test/plugin-topic-validation.test.js": "f86401c"
 	}
 }

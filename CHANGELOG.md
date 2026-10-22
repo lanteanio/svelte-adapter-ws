@@ -364,6 +364,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selector returning an object whose prototype carries the key) no longer
   merges unrelated connections into one user.
 
+- `presence.join()` and `cursors.update()` throw `TypeError` for a topic
+  containing quotes, backslashes or control characters before retaining any
+  state, and the presence and cursor snapshot handlers ignore such a topic. A
+  publication failure on one topic no longer stops presence diffs and
+  heartbeats or the cursor flush for the other topics.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

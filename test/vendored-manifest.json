@@ -3238,5 +3238,11 @@
 	},
 	{
 		"file": "test/presence-key.test.js"
+	},
+	{
+		"file": "src/plugins/_shared/topic.js"
+	},
+	{
+		"file": "test/plugin-topic-validation.test.js"
 	}
 ]

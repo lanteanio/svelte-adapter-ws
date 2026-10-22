@@ -244,6 +244,7 @@ export interface PresenceTracker<Selected extends Record<string, any> = Record<s
 	 *   presence.join(ws, topic, platform);
 	 * }
 	 * ```
+	 * @throws {TypeError} Topic contains quotes, backslashes, or control characters.
 	 */
 	join(ws: object, topic: string, platform: Platform): void;
 
