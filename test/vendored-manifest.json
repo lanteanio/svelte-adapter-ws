@@ -3550,5 +3550,17 @@
 	},
 	{
 		"file": "test/static-text-charset-real.test.js"
+	},
+	{
+		"file": "test/static-backpressure-real.test.js"
+	},
+	{
+		"file": "test/helpers/static-backpressure-child.js",
+		"adaptations": [
+			{
+				"lead": "\t\thandler.forceCloseApp();\n",
+				"ours": "\t\t// node's shutdown closes the listener; the native close has no counterpart here.\n\t\ttry { handler.forceCloseApp(); } catch { /* already closed */ }\n"
+			}
+		]
 	}
 ]

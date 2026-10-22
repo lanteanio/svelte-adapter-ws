@@ -171,6 +171,8 @@
 		"docs/legacy-diagnostic-prefixes.v1.json": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283",
 		"scripts/generate-legacy-diagnostics.js": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283",
 		"src/runtime/utils/mime.js": "b95a911",
-		"test/static-text-charset-real.test.js": "b95a911"
+		"test/static-text-charset-real.test.js": "b95a911",
+		"test/static-backpressure-real.test.js": "3b87a98",
+		"test/helpers/static-backpressure-child.js": "b12b308"
 	}
 }
