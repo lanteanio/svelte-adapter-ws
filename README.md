@@ -182,7 +182,11 @@ server and client entry points. A plugin that joins or leaves a connection's
 topics outside the wire protocol should use `trackedSubscribe(ws, topic)` /
 `trackedUnsubscribe(ws, topic)` from `svelte-adapter-ws/subscriptions`, as the
 bundled plugins do. Calling `ws.subscribe` directly or writing the subscription
-registry by hand bypasses the worker's subscription accounting. For rollback
+registry by hand bypasses the worker's subscription accounting. These helpers
+record membership without minting an authorization grant: when a server grant
+must survive a denied wire attempt already awaiting its hook,
+`await platform.subscribe(ws, topic)` instead; once the application hook allows
+it, the grant it records survives that denial. For rollback
 after an admitted loader or setup fails, see
 [subscription rollback](./docs/subscription-lifecycle.md).
 
