@@ -916,9 +916,9 @@ Redis. Container fleets that scale by replicas need neither `reusePort` nor
 
 **Speak HTTP/1.1 to it, in origin form.** The server answers an HTTP/1.1
 request whose target is a path: a request in any other version, `OPTIONS *`,
-a target in absolute form or a tab or another control character in the
-method or the target gets
-`505` and a closed connection, as on the native tier, so nginx before 1.29.7,
+a target in absolute form or a tab or another byte below SP in the method or
+the target gets `505` and a closed connection (a DEL there gets a `400` and
+the connection stays open), as on the native tier, so nginx before 1.29.7,
 which proxies with HTTP/1.0 by default, needs `proxy_http_version 1.1;` on
 every location that proxies to it, and a load balancer's health check has to
 probe a path in HTTP/1.1. Pipelined

@@ -149,10 +149,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line like any request: behind an answer that ends the connection it goes
   unanswered, behind one still waiting the connection closes, and otherwise
   its `405` follows the answers ahead of it, and so does a `TRACK`, a
-  `TRACE` or a `CONNECT` spelled in lower case. DEL in a method receives
-  the parser's `400`. Missing Host checks apply to ordinary methods;
-  forbidden methods retain their `405`. The head is read as the native tier
-  reads it, so a bare LF or a header name that is not a token in it is a `400` at once, and a head past
+  `TRACE` or a `CONNECT` spelled in lower case. A DEL in the method or the
+  target gets the application's `400` and the connection stays open. A
+  request without exactly one `Host` gets the closing `400`, a `TRACK`, a
+  `TRACE` or a `CONNECT` too, ahead of its `405`. The head is read as the
+  native tier reads it, so a bare LF or a header name that is not a token
+  in it is a `400` at once, and a head past
   the header limit a `431`. A line with a CR before its version is held
   without an answer, unless its short suffix already rules out a supported
   version. Anything that talks
