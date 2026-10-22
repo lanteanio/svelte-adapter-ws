@@ -1,7 +1,7 @@
 import { METHODS } from 'node:http';
 import { isAscii } from 'node:buffer';
 import { endParserRefusal, httpCallbackCheckpoint } from './read-turn.js';
-import { normalizeHeaderEdges, normalizeHeaderDel, normalizeConnectionClose, restoreConnectionClose } from './header-edges.js';
+import { normalizeHeaderEdges, normalizeHeaderDel, normalizeConnectionClose, normalizeRepeatedContentLength, restoreConnectionClose } from './header-edges.js';
 import { decodeRequestHeaders } from './header-values.js';
 import { createRequestCloseController } from './request-close.js';
 import { firstHeaderValue } from '../utils/request-headers.js';
@@ -42,6 +42,21 @@ function requestLine(data, trailingBytes) {
 	return { method: data.toString('latin1', 0, methodEnd).toUpperCase(), target: data.toString('latin1', targetStart, at), end: at + VERSION.length };
 }
 
+/**
+ * @param {Buffer} part - Chunk data and possibly the two bytes after it.
+ * @param {number} at - Where those two bytes start in part, -1 when the first
+ *   of them was in an earlier read.
+ */
+function chunkDataEnd(part, at) {
+	const cr = at >= 0 && at < part.length && part[at] !== 13;
+	const lf = at + 1 < part.length && part[at + 1] !== 10;
+	if (!cr && !lf) return part;
+	const result = Buffer.from(part);
+	if (cr) result[at] = 13;
+	if (lf) result[at + 1] = 10;
+	return result;
+}
+
 /** Keep request heads intact across reads; node remains responsible for validation. */
 export function createRequestHeadExecutor(parser, socket) {
 	if (typeof executePlainHttp !== 'function') return null;
@@ -54,6 +69,7 @@ export function createRequestHeadExecutor(parser, socket) {
 	let currentAscii = true;
 	let currentConnectionValues = null;
 	let currentDelValues = null;
+	let currentLengthNames = null;
 	const closes = createRequestCloseController(socket);
 	let stopped = false;
 	let chunkSize = 0;
@@ -65,6 +81,13 @@ export function createRequestHeadExecutor(parser, socket) {
 			if (currentDelValues) {
 				for (const [index, value] of currentDelValues) {
 					if (index < req.rawHeaders.length) req.rawHeaders[index] = value;
+				}
+				req.headers = null;
+				req.headersDistinct = null;
+			}
+			if (currentLengthNames) {
+				for (const [index, name] of currentLengthNames) {
+					if (index < req.rawHeaders.length) req.rawHeaders[index] = name;
 				}
 				req.headers = null;
 				req.headersDistinct = null;
@@ -146,6 +169,9 @@ export function createRequestHeadExecutor(parser, socket) {
 						? Number(remaining < BigInt(data.length - at) ? remaining : BigInt(data.length - at))
 						: Math.min(remaining, data.length - at);
 					part = data.subarray(at, at + consumed);
+					// The native parser skips the two bytes after chunk data
+					// whatever they are; node's parser reads them as CRLF.
+					if (mode === 'chunk-data' && remaining <= consumed + 2) part = chunkDataEnd(part, Number(remaining) - 2);
 					remaining -= typeof remaining === 'bigint' ? BigInt(consumed) : consumed;
 					if (!remaining) mode = mode === 'body' ? 'head' : 'chunk-line';
 				} else if (mode === 'chunk-line' || mode === 'trailers') {
@@ -197,9 +223,13 @@ export function createRequestHeadExecutor(parser, socket) {
 						part = available.subarray(0, length);
 						currentAscii = isAscii(part);
 						part = normalizeHeaderEdges(part, currentAscii);
-						const connection = normalizeConnectionClose(part);
+						const text = part.toString('latin1');
+						const connection = normalizeConnectionClose(part, text);
 						currentConnectionValues = connection?.values || null;
 						if (connection !== null) part = connection.head;
+						const lengths = normalizeRepeatedContentLength(part, text);
+						currentLengthNames = lengths?.names || null;
+						if (lengths) part = lengths.head;
 						const del = normalizeHeaderDel(part);
 						currentDelValues = del?.values || null;
 						if (del) part = del.head;

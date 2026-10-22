@@ -316,6 +316,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
+- A request whose Content-Length lines all carry the same value reaches the
+  request edge, which answers the repeated framing header with its 400 and
+  closes the connection; a built asset is served. Differing values keep the
+  parser's 400.
+
+- Chunked request bodies skip the two bytes after each chunk's data, as the
+  native tier does, instead of refusing the request when they are not CRLF.
+
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.

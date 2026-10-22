@@ -1,9 +1,11 @@
 // Which lane refuses an ambiguously framed request, on the BUILT runtime and on
 // createTestServer, over raw sockets. node's own parser refuses most framing
-// shapes before any lane runs - an unknown or doubled coding, an empty or
-// repeated Content-Length - so a probe built on one of those passes whether a
-// lane is wired or not. Two shapes reach the runtime and are what this file
-// drives: a coding list that ENDS in chunked, which node decodes as chunked
+// shapes before any lane runs - an unknown or doubled coding, an empty
+// Content-Length or one repeated with another value - so a probe built on one
+// of those passes whether a lane is wired or not. A Content-Length repeated
+// with the same value reaches the runtime and is driven in
+// http-native-framing.test.js. Two more shapes reach it and are what this
+// file drives: a coding list that ENDS in chunked, which node decodes as chunked
 // and the one lookup in front of every lane refuses, and an EMPTY
 // Transfer-Encoding, which that lookup reads as absent and every lane that
 // builds a header set refuses. Both refusals end the connection; a repeated

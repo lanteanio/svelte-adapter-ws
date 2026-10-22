@@ -2,8 +2,8 @@
 // built runtime, because no HTTP client can be made to send these shapes.
 //
 // node's parser refuses most of these shapes itself, with a 400 and a closed
-// connection: an unknown or doubled coding, `chunked, gzip`, an empty or
-// repeated Content-Length, and a request carrying both framing headers. It
+// connection: an unknown or doubled coding, `chunked, gzip`, an empty
+// Content-Length or one repeated with another value, and a request carrying both framing headers. It
 // decodes a coding list that ENDS in chunked (`gzip, chunked`) as chunked,
 // though, and hands a request with an EMPTY Transfer-Encoding to the listener
 // as a bodyless one. A conformant intermediary in front reads the same bytes
@@ -258,8 +258,9 @@ describeUWS('ambiguous request framing at the built runtime', () => {
 			const emptyTE = await probe(port, ['GET /test.txt HTTP/1.1', 'Transfer-Encoding:'], '');
 			expect(emptyTE.statuses[0], 'an empty Transfer-Encoding on the fast path').toBe('200');
 
-			// node's own parser refuses a repeated Content-Length before any lane
-			// reads the request, on every lane alike, and closes the connection.
+			// node's own parser refuses a Content-Length repeated with another
+			// value before any lane reads the request, on every lane alike, and
+			// closes the connection.
 			const repeated = await probe(
 				port,
 				['GET /test.txt HTTP/1.1', 'Content-Length: 2', 'Content-Length: 3'],
@@ -273,8 +274,8 @@ describeUWS('ambiguous request framing at the built runtime', () => {
 			// An EMPTY Transfer-Encoding: the one lookup in front of every route
 			// reads it as absent and sees nothing wrong, so this reaches the
 			// authenticate door, which builds the header set and refuses there.
-			// A repeated Content-Length never gets that far on node, whose
-			// parser refuses it first, and a Transfer-Encoding naming a coding
+			// A Content-Length repeated with another value never gets that far
+			// on node, whose parser refuses it first, and a Transfer-Encoding naming a coding
 			// would be answered in front of the door; either would keep this
 			// case green with the door's own wiring deleted.
 			await expectRefusedAndClosed([
@@ -371,8 +372,8 @@ describeUWS('the admin lane, on a build that mounts a handler', () => {
 		// it rather than inherited. An EMPTY Transfer-Encoding is the probe,
 		// because the one lookup in front of every route reads it as absent, so
 		// this reaches the admin handler, which builds the header set and
-		// refuses there. A repeated Content-Length never gets that far on node,
-		// whose parser refuses it first, and a Transfer-Encoding naming a coding
+		// refuses there. A Content-Length repeated with another value never gets
+		// that far on node, whose parser refuses it first, and a Transfer-Encoding naming a coding
 		// would be answered in front of this lane; either would pass without
 		// the lane being wired at all.
 		//

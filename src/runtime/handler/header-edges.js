@@ -85,9 +85,54 @@ export function normalizeHeaderDel(head) {
 	return values.length ? { head: result, values } : null;
 }
 
+const CONTENT_LENGTH_LINE = /\r\ncontent-length:/gi;
+
+/**
+ * The native parser frames a body by a request's Content-Length when every
+ * Content-Length line carries the same value, and hands all of them on, so
+ * the request edge answers the repeated framing header itself. node's parser
+ * refuses any second line. Give each later line a same-width name node does
+ * not read, so the body is framed by the one value all of them agree on, and
+ * report the stand-ins so the request carries its original names again.
+ * Lines that differ keep the parser's refusal, as does a Transfer-Encoding
+ * beside them or a folded line, which node's parser refuses in any head.
+ * @param {Buffer} head
+ * @param {string} [text] - The same head decoded as latin1.
+ * @returns {{ head: Buffer, names: Array<[number, string]> } | null}
+ */
+export function normalizeRepeatedContentLength(head, text = head.toString('latin1')) {
+	CONTENT_LENGTH_LINE.lastIndex = 0;
+	if (CONTENT_LENGTH_LINE.exec(text) === null || CONTENT_LENGTH_LINE.exec(text) === null) return null;
+	let result = null;
+	let value = null;
+	const names = [];
+	let start = text.indexOf('\r\n') + 2;
+	let index = 0;
+	while (start < text.length) {
+		const end = text.indexOf('\r\n', start);
+		if (end <= start) break;
+		const colon = text.indexOf(':', start);
+		if (colon - start === 14 && colon < end && text.slice(start, colon).toLowerCase() === 'content-length') {
+			let left = colon + 1, right = end - 1;
+			while (left <= right && (text.charCodeAt(left) === 32 || text.charCodeAt(left) === 9)) left++;
+			while (right >= left && (text.charCodeAt(right) === 32 || text.charCodeAt(right) === 9)) right--;
+			const own = text.slice(left, right + 1);
+			if (value === null) value = own;
+			else {
+				if (own !== value) return null;
+				if (result === null) result = Buffer.from(head);
+				names.push([index, text.slice(start, colon)]);
+				result[start] = 126;
+			}
+		}
+		index += 2;
+		start = end + 2;
+	}
+	return result === null ? null : { head: result, names };
+}
+
 /** Keep llhttp's close flag from ending a read before its later requests. */
-export function normalizeConnectionClose(head) {
-	const text = head.toString('latin1');
+export function normalizeConnectionClose(head, text = head.toString('latin1')) {
 	if (!/\r\nconnection:[^\r\n]*(?:\r\n[\t ][^\r\n]*)*close/i.test(text)) return null;
 	const pattern = /\r\nconnection:([^\r\n]*(?:\r\n[\t ][^\r\n]*)*)/gi;
 	let result = head;

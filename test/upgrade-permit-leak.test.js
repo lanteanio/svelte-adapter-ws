@@ -171,9 +171,10 @@ describe('a refused upgrade returns the in-flight slot', () => {
 		try {
 			// A repeated singleton header is refused before the accept, on a
 			// different branch from the malformed handshakes above. Content-Type
-			// rather than Content-Length: node's own parser answers a repeated
-			// Content-Length itself, so a handshake carrying one never reaches
-			// the adapter and proves nothing about this branch.
+			// rather than Content-Length: node's own parser answers a
+			// Content-Length repeated with another value itself, so a handshake
+			// carrying one never reaches the adapter and proves nothing about
+			// this branch.
 			const dup = await rawUpgrade(rt.port, [
 				'GET /ws HTTP/1.1',
 				`Host: 127.0.0.1:${rt.port}`,
