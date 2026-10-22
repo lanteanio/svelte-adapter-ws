@@ -351,6 +351,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Managed ownership remains in force until the final holder releases the topic
   or explicit unsubscribe clears it.
 
+- **A Unicode-only presence identity key no longer blocks unrelated fields.**
+  With a key such as `用户`, trusted server updates dropped every other name
+  without ASCII letters or digits; the identity rule now reserves only the
+  configured spelling when its folded name is empty. Identity keys with a
+  nonempty lowercase ASCII letter/digit fold keep their existing alias
+  matching, the configured key itself and other reserved names remain
+  protected, and wire updates still require `clientUpdateFields`.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

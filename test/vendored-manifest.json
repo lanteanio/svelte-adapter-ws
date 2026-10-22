@@ -3232,5 +3232,8 @@
 	},
 	{
 		"file": "test/fixture/src/routes/response-framing/+server.js"
+	},
+	{
+		"file": "test/presence-unicode-key.test.js"
 	}
 ]

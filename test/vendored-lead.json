@@ -49,6 +49,9 @@
 		"src/client-connection.js": "34d06e7",
 		"test/client-managed-authority.test.js": "b5c336f",
 		"test/client-throttle-budget.test.js": "9681fd4",
-		"test/surface-policy-parity.test.js": "6360dac"
+		"test/surface-policy-parity.test.js": "6360dac",
+		"src/plugins/presence/server.js": "aec3b9e",
+		"src/plugins/presence/server.d.ts": "aec3b9e",
+		"test/presence-unicode-key.test.js": "aec3b9e"
 	}
 }
