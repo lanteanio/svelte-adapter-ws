@@ -17,11 +17,12 @@
  *
  *   - divergence at or below `errorThreshold` snaps silently - a correction
  *     too small to see needs no easing, and easing it would smear precision;
- *   - divergence above the threshold keeps the RENDERED position continuous
+ *   - ordinary divergence above the threshold keeps the RENDERED position continuous
  *     by recording the visual error as an offset that decays to zero over
  *     `smoothTimeMs`. The simulation state itself snaps to the corrected
  *     value immediately - only the pixels lag the correction, the next
- *     replay never builds on a lie.
+ *     replay never builds on a lie; blackout gaps and corrections beyond the
+ *     configured speed policy instead snap the render to authority.
  *
  * Replay re-runs commands many times, so `apply` must be pure with respect
  * to one-shot effects: `ctx.firstTime` is true only on a command's initial
@@ -94,7 +95,8 @@ function positionalError(a, b) {
  *   smoothTimeMs?: number,
  *   windowCap?: number,
  *   windowMaxAgeMs?: number,
- *   snapGapMs?: number
+ *   snapGapMs?: number,
+ *   snapSpeedPerSec?: 'auto' | number
  * }} options resolved options - validation belongs to the caller's public
  *   surface. `apply` must treat its inputs as immutable and return the next
  *   state (returning the same reference means "unchanged"). `self`, when
@@ -116,6 +118,34 @@ export function createPredictor(options) {
 	// discontinuity, not a lag error to ease across - the same threshold the
 	// remote interpolation path uses to snap a straddle instead of smearing.
 	const snapGapMs = options.snapGapMs === undefined ? 500 : options.snapGapMs;
+	const speedSnaps = options.snapSpeedPerSec !== 0;
+	const absoluteSpeed = typeof options.snapSpeedPerSec === 'number' ? options.snapSpeedPerSec / 1000 : 0;
+	// Match the remote resume ease: a correction that would move eight times
+	// faster than recent honest motion is a placement, not latency to hide.
+	// Command motion supplies a local baseline independent of ack jitter.
+	const speeds = speedSnaps ? new Float64Array(32) : null;
+	let speedCount = 0;
+	let speedCursor = 0;
+	let peakSpeed = 0;
+	let peakDirty = false;
+	const absoluteBound = absoluteSpeed * absoluteSpeed * smoothTimeMs * smoothTimeMs;
+	const peakScale = 64 * smoothTimeMs * smoothTimeMs;
+	function isSpeedJump(dx, dy) {
+		if (!speedSnaps) return false;
+		const distanceSquared = dx * dx + dy * dy;
+		if (absoluteBound > 0 && distanceSquared > absoluteBound) return true;
+		if (speedCount < 2) return false;
+		// The peak is kept current as intervals are recorded; the ring is only
+		// rescanned after a slower interval overwrote the slot holding it.
+		if (peakDirty) {
+			peakSpeed = 0;
+			for (let i = 0; i < speedCount; i++) {
+				if (speeds[i] > peakSpeed) peakSpeed = speeds[i];
+			}
+			peakDirty = false;
+		}
+		return distanceSquared > peakScale * peakSpeed;
+	}
 
 	/** Last server-acknowledged authoritative state - the replay base. */
 	let base = options.initial;
@@ -244,6 +274,9 @@ export function createPredictor(options) {
 		errY = 0;
 		errAtMono = -1;
 		clearSweep();
+		speedCount = speedCursor = 0;
+		peakSpeed = 0;
+		peakDirty = false;
 		overflowed = true;
 	}
 
@@ -299,6 +332,20 @@ export function createPredictor(options) {
 			) {
 				if (gap >= BURST_GAP_MS) {
 					gapEma = gapEma < 0 ? gap : gapEma + (gap - gapEma) * 0.2;
+				}
+				// A same-instant catch-up burst is not another measured interval;
+				// it must neither establish nor evict the motion baseline.
+				if (speeds && gap >= BURST_GAP_MS) {
+					const mx = next.x - prev.x;
+					const my = next.y - prev.y;
+					const speed = (mx * mx + my * my) / (gap * gap);
+					if (Number.isFinite(speed)) {
+						if (speed > peakSpeed) { peakSpeed = speed; peakDirty = false; }
+						else if (speed < peakSpeed && speeds[speedCursor] === peakSpeed) peakDirty = true;
+						speeds[speedCursor] = speed;
+						speedCursor = (speedCursor + 1) & 31;
+						if (speedCount < 32) speedCount++;
+					}
 				}
 				const dx = next.x - fromX;
 				const dy = next.y - fromY;
@@ -418,7 +465,11 @@ export function createPredictor(options) {
 					) {
 						errX = before.x + errX * f - next.x;
 						errY = before.y + errY * f - next.y;
-						errAtMono = monoNow;
+						if (isSpeedJump(errX, errY)) {
+							errX = errY = 0;
+							errAtMono = -1;
+							clearSweep();
+						} else errAtMono = monoNow;
 					}
 				}
 			}
@@ -448,6 +499,9 @@ export function createPredictor(options) {
 			clearSweep();
 			lastApplyMono = -1;
 			gapEma = -1;
+			speedCount = speedCursor = 0;
+			peakSpeed = 0;
+			peakDirty = false;
 			lastDivergence = 0;
 			overflowed = false;
 			// A sync already snapped state to authority; the next ack must not
@@ -570,6 +624,9 @@ export function createPredictor(options) {
 			clearSweep();
 			lastApplyMono = -1;
 			gapEma = -1;
+			speedCount = speedCursor = 0;
+			peakSpeed = 0;
+			peakDirty = false;
 			lastDivergence = 0;
 			overflowed = false;
 			// Same rationale as sync(): a post-reset ack must not read the span

@@ -818,7 +818,29 @@
 		"file": "src/plugins/smooth/interpolate.js"
 	},
 	{
-		"file": "src/plugins/smooth/predict.js"
+		"file": "src/plugins/smooth/predict.js",
+		"adaptations": [
+			{
+				"lead": "\tconst speeds = speedSnaps ? new Float64Array(32) : null;\n\tlet speedCount = 0;\n\tlet speedCursor = 0;\n\tfunction isSpeedJump(dx, dy) {\n\t\tif (!speedSnaps) return false;\n\t\tconst distanceSquared = dx * dx + dy * dy;\n\t\tconst durationSquared = smoothTimeMs * smoothTimeMs;\n\t\tif (absoluteSpeed > 0 && distanceSquared > absoluteSpeed * absoluteSpeed * durationSquared) return true;\n\t\tif (speedCount < 2) return false;\n\t\tlet peak = 0;\n\t\tfor (let i = 0; i < speedCount; i++) if (speeds[i] > peak) peak = speeds[i];\n\t\treturn distanceSquared > 64 * peak * durationSquared;\n\t}\n\n\t/** Last server-acknowledged authoritative state - the replay base. */\n",
+				"ours": "\tconst speeds = speedSnaps ? new Float64Array(32) : null;\n\tlet speedCount = 0;\n\tlet speedCursor = 0;\n\tlet peakSpeed = 0;\n\tlet peakDirty = false;\n\tconst absoluteBound = absoluteSpeed * absoluteSpeed * smoothTimeMs * smoothTimeMs;\n\tconst peakScale = 64 * smoothTimeMs * smoothTimeMs;\n\tfunction isSpeedJump(dx, dy) {\n\t\tif (!speedSnaps) return false;\n\t\tconst distanceSquared = dx * dx + dy * dy;\n\t\tif (absoluteBound > 0 && distanceSquared > absoluteBound) return true;\n\t\tif (speedCount < 2) return false;\n\t\t// The peak is kept current as intervals are recorded; the ring is only\n\t\t// rescanned after a slower interval overwrote the slot holding it.\n\t\tif (peakDirty) {\n\t\t\tpeakSpeed = 0;\n\t\t\tfor (let i = 0; i < speedCount; i++) {\n\t\t\t\tif (speeds[i] > peakSpeed) peakSpeed = speeds[i];\n\t\t\t}\n\t\t\tpeakDirty = false;\n\t\t}\n\t\treturn distanceSquared > peakScale * peakSpeed;\n\t}\n\n\t/** Last server-acknowledged authoritative state - the replay base. */\n"
+			},
+			{
+				"lead": "\t\terrAtMono = -1;\n\t\tclearSweep();\n\t\tspeedCount = speedCursor = 0;\n\t\toverflowed = true;\n\t}\n\n",
+				"ours": "\t\terrAtMono = -1;\n\t\tclearSweep();\n\t\tspeedCount = speedCursor = 0;\n\t\tpeakSpeed = 0;\n\t\tpeakDirty = false;\n\t\toverflowed = true;\n\t}\n\n"
+			},
+			{
+				"lead": "\t\t\t\t// A same-instant catch-up burst is not another measured interval;\n\t\t\t\t// it must neither establish nor evict the motion baseline.\n\t\t\t\tif (speeds && gap >= BURST_GAP_MS) {\n\t\t\t\t\tconst vx = (next.x - prev.x) / gap;\n\t\t\t\t\tconst vy = (next.y - prev.y) / gap;\n\t\t\t\t\tconst speed = vx * vx + vy * vy;\n\t\t\t\t\tif (Number.isFinite(speed)) {\n\t\t\t\t\t\tspeeds[speedCursor] = speed;\n\t\t\t\t\t\tspeedCursor = (speedCursor + 1) & 31;\n\t\t\t\t\t\tif (speedCount < 32) speedCount++;\n",
+				"ours": "\t\t\t\t// A same-instant catch-up burst is not another measured interval;\n\t\t\t\t// it must neither establish nor evict the motion baseline.\n\t\t\t\tif (speeds && gap >= BURST_GAP_MS) {\n\t\t\t\t\tconst mx = next.x - prev.x;\n\t\t\t\t\tconst my = next.y - prev.y;\n\t\t\t\t\tconst speed = (mx * mx + my * my) / (gap * gap);\n\t\t\t\t\tif (Number.isFinite(speed)) {\n\t\t\t\t\t\tif (speed > peakSpeed) { peakSpeed = speed; peakDirty = false; }\n\t\t\t\t\t\telse if (speed < peakSpeed && speeds[speedCursor] === peakSpeed) peakDirty = true;\n\t\t\t\t\t\tspeeds[speedCursor] = speed;\n\t\t\t\t\t\tspeedCursor = (speedCursor + 1) & 31;\n\t\t\t\t\t\tif (speedCount < 32) speedCount++;\n"
+			},
+			{
+				"lead": "\t\t\tlastApplyMono = -1;\n\t\t\tgapEma = -1;\n\t\t\tspeedCount = speedCursor = 0;\n\t\t\tlastDivergence = 0;\n\t\t\toverflowed = false;\n\t\t\t// A sync already snapped state to authority; the next ack must not\n",
+				"ours": "\t\t\tlastApplyMono = -1;\n\t\t\tgapEma = -1;\n\t\t\tspeedCount = speedCursor = 0;\n\t\t\tpeakSpeed = 0;\n\t\t\tpeakDirty = false;\n\t\t\tlastDivergence = 0;\n\t\t\toverflowed = false;\n\t\t\t// A sync already snapped state to authority; the next ack must not\n"
+			},
+			{
+				"lead": "\t\t\tlastApplyMono = -1;\n\t\t\tgapEma = -1;\n\t\t\tspeedCount = speedCursor = 0;\n\t\t\tlastDivergence = 0;\n\t\t\toverflowed = false;\n\t\t\t// Same rationale as sync(): a post-reset ack must not read the span\n",
+				"ours": "\t\t\tlastApplyMono = -1;\n\t\t\tgapEma = -1;\n\t\t\tspeedCount = speedCursor = 0;\n\t\t\tpeakSpeed = 0;\n\t\t\tpeakDirty = false;\n\t\t\tlastDivergence = 0;\n\t\t\toverflowed = false;\n\t\t\t// Same rationale as sync(): a post-reset ack must not read the span\n"
+			}
+		]
 	},
 	{
 		"file": "src/plugins/smooth/random.d.ts"
@@ -3016,6 +3038,9 @@
 	},
 	{
 		"file": "test/smooth-local-motion.test.js"
+	},
+	{
+		"file": "test/smooth-local-teleport-real.test.js"
 	},
 	{
 		"file": "test/smooth-noecho.test.js",

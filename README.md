@@ -238,6 +238,18 @@ remain the caller's responsibility. Higher-level consumers must forward the
 same setting to each authoritative owner, including cluster relay owners. The
 option requires no wire-format or dependency change.
 
+### Smooth local placements
+
+`createSmoothChannel` from `svelte-adapter-ws/plugins/smooth/client` applies
+`snapSpeedPerSec` to local authoritative placements as well as remote motion.
+The automatic policy snaps a correction whose speed over `smoothTimeMs` exceeds
+eight times the peak of the last 32 tick-like command intervals; before two
+measured intervals exist, only a positive numeric ceiling applies. Same-instant
+catch-up commands neither establish nor evict that history, and full sync,
+reset and prediction overflow clear it. A snap clears the correction and render
+sweep while preserving unacknowledged command replay. `snapSpeedPerSec: 0`
+disables the speed check; the separate `snapGapMs` rule still applies.
+
 ## Configuration
 
 Adapter options (`adapter({ ... })`): `out`, `precompress`, `envPrefix`,

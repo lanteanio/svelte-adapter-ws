@@ -351,6 +351,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TRACE` or `CONNECT` gets the `505` wherever it sits in the pipeline, and a
   head past node's header limit gets the native `431` page.
 
+- Local smooth reconciliation applies the existing `snapSpeedPerSec` policy to
+  authoritative placements. A correction far beyond recent commanded speed snaps
+  to the reconciled state, clearing the correction and render sweep while
+  retaining the unacknowledged replay tail; ordinary corrections still ease.
+  Full sync, reset and prediction overflow clear the recent command-speed
+  baseline, and `0` disables the check for local and remote motion.
+
+- The smooth client paints the frame that ends a local correction or sweep, so a
+  locally driven entity comes to rest on its settled position.
+
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.
