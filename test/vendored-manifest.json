@@ -1719,6 +1719,9 @@
 		"file": "test/client-import-graph.test.js"
 	},
 	{
+		"file": "test/client-managed-authority.test.js"
+	},
+	{
 		"file": "test/client-offline.test.js"
 	},
 	{
