@@ -24,6 +24,12 @@ const MAX_SSR_DEDUP = 500;
 // Responses larger than this are not shared - each waiter makes its own call.
 const MAX_SSR_DEDUP_BODY = 512 * 1024;
 
+// The native request body receive bound: the connection closes when fewer
+// than RECEIVE_REFRESH_BYTES arrive within RECEIVE_DEADLINE_MS, a minimum
+// receive throughput of 16 KiB/s.
+const RECEIVE_DEADLINE_MS = 10_000;
+const RECEIVE_REFRESH_BYTES = 160 * 1024;
+
 /**
  * @typedef {{ status: number, statusText: string, headers: [string, string][], body: Uint8Array }} SharedResponse
  */
@@ -66,6 +72,12 @@ const COMPRESSIBLE_TYPES = new Set([
  * mid-stream, where the exchange is then aborted rather than ended cleanly.
  * Receipt continues after the response so a late reader retains the complete body.
  *
+ * Receipt is bounded the native way: the connection closes when fewer than
+ * RECEIVE_REFRESH_BYTES arrive within RECEIVE_DEADLINE_MS (16 KiB/s), counted
+ * from the first pull and again from the answer, whether or not the
+ * application reads. A read still pending when the deadline closes the
+ * connection fails rather than waiting on a socket that is gone.
+ *
  * @param {import('node:http').IncomingMessage} req
  * @param {number} limit - bytes, or Infinity
  * @param {{ aborted: boolean, bodyReceived?: boolean }} state - `bodyReceived`
@@ -77,8 +89,17 @@ export function readBody(req, limit, state, res) {
 	let initialized = false;
 	let done = false;
 	let receivedSinceDeadline = 0;
-	let readByApplication = false;
 	let timer;
+	/** @type {ReadableStreamDefaultController<Uint8Array> | undefined} */
+	let stream;
+	const expire = () => {
+		timer = null;
+		if (!done) {
+			done = true;
+			try { stream?.error(new Error('Request aborted')); } catch { /* already closed */ }
+		}
+		req.socket.destroy();
+	};
 	const stopDeadline = () => {
 		if (timer) clearTimer(timer);
 		timer = null;
@@ -86,14 +107,14 @@ export function readBody(req, limit, state, res) {
 	const armDeadline = () => {
 		stopDeadline();
 		if (!req.readableEnded && !req.destroyed) {
-			timer = setTimer(() => req.socket.destroy(), 10_000);
+			timer = setTimer(expire, RECEIVE_DEADLINE_MS);
 			timer?.unref?.();
 		}
 	};
 	const contentLength = Number(req.headers['content-length']);
 	const preallocated = Number.isSafeInteger(contentLength) && contentLength >= 0 &&
 		contentLength <= 65536 && contentLength <= limit ? Buffer.alloc(contentLength) : null;
-	const body = new ReadableStream({
+	return new ReadableStream({
 		start(controller) {
 			if (state.aborted) { done = true; controller.error(new Error('Request aborted')); }
 		},
@@ -105,27 +126,19 @@ export function readBody(req, limit, state, res) {
 				return;
 			}
 			initialized = true;
+			stream = controller;
 			armDeadline();
-			const answered = () => {
-				readByApplication ||= body.locked;
-				armDeadline();
-			};
-			res?.once('finish', answered);
+			res?.once('finish', armDeadline);
 			req.once('close', () => {
 				stopDeadline();
-				res?.off('finish', answered);
+				res?.off('finish', armDeadline);
 			});
 			let size = 0;
 			req.on('data', (/** @type {Buffer} */ chunk) => {
-				// A receive deadline advances only after 160 KiB of useful body
-				// progress. Ignored bodies retain the answer's fixed deadline.
-				readByApplication ||= body.locked;
-				if (!res?.writableFinished || readByApplication) {
-					receivedSinceDeadline += chunk.byteLength;
-					if (receivedSinceDeadline >= 160 * 1024) {
-						receivedSinceDeadline = 0;
-						armDeadline();
-					}
+				receivedSinceDeadline += chunk.byteLength;
+				if (receivedSinceDeadline >= RECEIVE_REFRESH_BYTES) {
+					receivedSinceDeadline = 0;
+					armDeadline();
 				}
 				if (done || state.aborted) return;
 				size += chunk.byteLength;
@@ -157,7 +170,21 @@ export function readBody(req, limit, state, res) {
 			req.resume();
 		}
 	});
-	return body;
+}
+
+/**
+ * Bound the body of a request refused on its declared length. node discards
+ * it once the refusal is sent, and nothing reads it, so the bytes it sends
+ * never extend the connection: it closes RECEIVE_DEADLINE_MS after the
+ * refusal unless the body has ended by then.
+ *
+ * @param {import('node:http').IncomingMessage} req
+ */
+export function discardRefusedBody(req) {
+	if (req.readableEnded) return;
+	const timer = setTimer(() => req.socket.destroy(), RECEIVE_DEADLINE_MS);
+	timer?.unref?.();
+	req.once('end', () => clearTimer(timer));
 }
 
 /**
@@ -179,7 +206,7 @@ export function buildRequest(req, baseOrigin, headers, state, res) {
 	if (method !== 'GET' && method !== 'HEAD') {
 		const cl = parseInt(headers['content-length'], 10);
 		if (!isNaN(cl) && body_size_limit !== Infinity && cl > body_size_limit) {
-			readBody(req, 0, state, res);
+			discardRefusedBody(req);
 			return null;
 		}
 		body = readBody(req, body_size_limit, state, res);

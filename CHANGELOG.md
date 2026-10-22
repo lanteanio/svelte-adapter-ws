@@ -108,7 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods retain HTTP keep-alive framing.
 
 - Request bodies left unread after an answer are drained, including bodies
-  rejected by the authentication size cap, so keep-alive requests continue.
+  rejected by the authentication size cap, so keep-alive requests continue
+  while the body arrives within the receive deadline.
 
 - Full request-path and envelope-prefix caches discard their oldest half
   every 60 seconds, allowing stale entries to age out after traffic changes.
@@ -319,8 +320,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.
 
-- Incomplete request bodies close after the receive deadline; sustained application
-  reads extend it.
+- A request body that arrives slower than 16 KiB/s closes its connection. The
+  10-second receive deadline restarts for every 160 KiB the client sends and
+  again when the answer is sent, whether or not the application reads the body.
+  A body refused on its declared length closes the connection 10 seconds after
+  the 413 unless it has ended. A read still pending when the deadline closes the
+  connection rejects.
 
 - WebSockets admitted by pending upgrade hooks close cleanly during shutdown.
 

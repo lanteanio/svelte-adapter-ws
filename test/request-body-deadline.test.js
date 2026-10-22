@@ -35,7 +35,7 @@ describe.each([false, true])('request body receive deadline with TLS=%s', secure
 		for (const key of ['SSL_CERT', 'SSL_KEY', 'SSL_WATCH']) delete process.env[prefix + key];
 	});
 
-	it('bounds ignored bodies and slow readers while allowing sustained receipt past the cap', async () => {
+	it('bounds slow bodies and refused declared lengths while sustained receipt drains ignored and past-cap bodies', async () => {
 		const run = (target, fast, keepOpen = false, declared = false) => new Promise((resolve, reject) => {
 			const socket = secure ? tls.connect({ host: '127.0.0.1', port: runtime.port, rejectUnauthorized: false }) : net.connect(runtime.port, '127.0.0.1');
 			let raw = '', sent = 0, interval, started, ended = false;
@@ -67,14 +67,16 @@ describe.each([false, true])('request body receive deadline with TLS=%s', secure
 			});
 		});
 		const [ignoredFast, ignoredDrip, readingDrip, readingFast, declaredOversize] = await Promise.all([
-			run('/ignore', true), run('/ignore', false), run('/read', false), run('/read', true, true), run('/read', true, false, true)
+			run('/ignore', true, true), run('/ignore', false), run('/read', false), run('/read', true, true), run('/read', true, false, true)
 		]);
-		for (const result of [ignoredFast, ignoredDrip, readingDrip, declaredOversize]) {
+		for (const result of [ignoredDrip, readingDrip, declaredOversize]) {
 			expect(result.elapsed).toBeGreaterThanOrEqual(9000);
 			expect(result.elapsed).toBeLessThan(13000);
 			expect(result.sent).toBeGreaterThan(1);
 		}
-		expect(ignoredFast.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200']);
+		expect(ignoredFast.elapsed).toBeGreaterThanOrEqual(11000);
+		expect(ignoredFast.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200', 'HTTP/1.1 200']);
+		expect(ignoredFast.raw.endsWith('OK')).toBe(true);
 		expect(ignoredDrip.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 200']);
 		expect(readingDrip.raw).toBe('');
 		expect(declaredOversize.raw.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 413']);

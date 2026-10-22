@@ -101,7 +101,7 @@ import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_head
 import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
-import { readBody } from './ssr.js';
+import { discardRefusedBody, readBody } from './ssr.js';
 import { runUnsubscribeHook } from '../utils/unsubscribe-hook.js';
 import { runOpenHook, runDrainHook, runCloseHook } from '../utils/hook-boundary.js';
 
@@ -2743,7 +2743,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 
 	const contentLength = parseInt(headers['content-length'], 10);
 	if (!isNaN(contentLength) && contentLength > AUTH_BODY_LIMIT) {
-		readBody(req, 0, state, res);
+		discardRefusedBody(req);
 		send413(res);
 		return true;
 	}
