@@ -398,6 +398,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence under a new request id and ignoring frames for the old one. A
   replay store created after `close()` no longer reopens the connection.
 
+- Test-server wire broadcasts no longer inflate close-hook traffic counters;
+  directed sends and wire-id announcements remain counted, including with
+  outbound fault injection.
+
 - Malformed upgrades and disconnects cannot end the Vite dev server. Invalid
   WebSocket request targets receive 400, and a peer reset while the handler
   loads or its asynchronous upgrade hook runs closes only that connection,

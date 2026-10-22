@@ -84,6 +84,8 @@
 		"test/fixtures/kit3/src/socket.js": "1925f07",
 		"test/fixtures/kit3/vite.config.js": "1925f07",
 		"test/helpers/vite-dev.js": "c384a1c",
-		"test/vite-upgrade-lifetime.test.js": "c384a1c"
+		"test/vite-upgrade-lifetime.test.js": "c384a1c",
+		"test/fixture/src/hooks.ws.wire-stats.js": "8d9f1fc",
+		"test/wire-broadcast-stats-real.test.js": "8d9f1fc"
 	}
 }
