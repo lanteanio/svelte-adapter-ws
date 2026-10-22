@@ -427,6 +427,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaving the same server available for later clients without restarting the
   development process or losing other live connections.
 
+- Extra entries load through symlinked project paths. A project reached through
+  a symlink or Windows junction could import a nonexistent startup file after
+  Rollup sanitized an extra entry name; the adapter now matches entry chunks by
+  their real paths. Direct paths, startup order and generated import quoting
+  are unchanged.
+
 - A failed logger no longer lets a WebSocket hook failure escape. When an app
   or APM replaced `console.error` with a throwing function, the hook boundary
   could stop before closing the failing connection or completing close

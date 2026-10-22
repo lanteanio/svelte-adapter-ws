@@ -157,13 +157,7 @@
 		"file": "src/build-config.js"
 	},
 	{
-		"file": "src/build-rollup-lifecycle.js",
-		"adaptations": [
-			{
-				"lead": "}\n\n/**\n * The import lines that make each discovered `__` entry run at startup, by the",
-				"ours": "}\n\n/**\n * Discover plugin server entries in case-sensitive file-name order. Directory\n * enumeration differs between Unix scandir and Windows; sort before filtering.\n * @param {string[]} files\n * @param {Iterable<string>} knownFiles\n * @returns {string[]} entry names without their .js extension\n */\nexport function discoverExtraEntries(files, knownFiles) {\n\tconst known = new Set(knownFiles);\n\treturn [...files].sort()\n\t\t.filter(file => file.startsWith('__') && file.endsWith('.js') && !known.has(file))\n\t\t.map(file => file.slice(0, -3));\n}\n\n/**\n * The import lines that make each discovered `__` entry run at startup, by the"
-			}
-		]
+		"file": "src/build-rollup-lifecycle.js"
 	},
 	{
 		"file": "src/client-runtime.js"
@@ -2017,21 +2011,7 @@
 		"file": "test/error-registry-unsubscribe-hook.test.js"
 	},
 	{
-		"file": "test/extra-entry-imports.test.js",
-		"adaptations": [
-			{
-				"lead": "import { tmpdir } from 'node:os';\nimport path from 'node:path';",
-				"ours": "import { tmpdir } from 'node:os';\nimport { execFileSync } from 'node:child_process';\nimport path from 'node:path';"
-			},
-			{
-				"lead": "import { writeAndCloseRollupBundle, extraEntryImports } from '../src/build-rollup-lifecycle.js';",
-				"ours": "import { writeAndCloseRollupBundle, extraEntryImports, discoverExtraEntries } from '../src/build-rollup-lifecycle.js';"
-			},
-			{
-				"lead": "\ndescribe('extra entry imports', () => {\n\tit('imports entries whose names Rollup rewrites or that carry an apostrophe', async () => {\n\t\tconst root = mkdtempSync(path.join(tmpdir(), 'extra-entries-'));",
-				"ours": "\ndescribe('extra entry imports', () => {\n\tit('discovers mixed-case entries in file-name order without sorting its input', () => {\n\t\tconst listing = ['__b.js', '__known.js', '__a.js', '__B.js', 'x.js', '__data.json'];\n\t\texpect(discoverExtraEntries(listing, ['__known.js'])).toEqual(['__B', '__a', '__b']);\n\t\texpect(listing[0]).toBe('__b.js');\n\t});\n\tit('allows a later static entry to evaluate while the first awaits', async () => {\n\t\tconst root = mkdtempSync(path.join(tmpdir(), 'extra-entry-await-'));\n\t\tdirs.push(root);\n\t\tconst src = path.join(root, 'src');\n\t\tconst out = path.join(root, 'out');\n\t\tmkdirSync(src);\n\t\tconst marker = '__extraEntryAwaitProbe';\n\t\twriteFileSync(path.join(src, '__a.js'), `globalThis.${marker} = ['a-pre']; await new Promise(resolve => setTimeout(resolve, 20)); globalThis.${marker}.push('a-post');`);\n\t\twriteFileSync(path.join(src, '__b.js'), `globalThis.${marker}.push('b');`);\n\t\tconst names = discoverExtraEntries(['__b.js', '__a.js'], []);\n\t\tconst bundle = await rollup({ input: Object.fromEntries(names.map(name => [name, path.join(src, name + '.js')])) });\n\t\tconst written = await writeAndCloseRollupBundle(bundle, { dir: path.join(out, 'server'), format: 'esm' });\n\t\twriteFileSync(path.join(out, 'index.mjs'), extraEntryImports(written, src, names) + '\\n');\n\t\t// Native ESM is the deployment contract; Vitest's module runner serializes\n\t\t// static dependency evaluation and cannot establish sibling interleaving.\n\t\tconst output = execFileSync(process.execPath, ['--input-type=module', '-e',\n\t\t\t`await import(${JSON.stringify(pathToFileURL(path.join(out, 'index.mjs')).href)}); console.log(JSON.stringify(globalThis.${marker}));`\n\t\t], { encoding: 'utf8', windowsHide: true });\n\t\texpect(JSON.parse(output)).toEqual(['a-pre', 'b', 'a-post']);\n\t});\n\n\tit('imports entries whose names Rollup rewrites or that carry an apostrophe', async () => {\n\t\tconst root = mkdtempSync(path.join(tmpdir(), 'extra-entries-'));"
-			}
-		]
+		"file": "test/extra-entry-imports.test.js"
 	},
 	{
 		"file": "test/fatal-sites.test.js",
