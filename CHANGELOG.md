@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `examples/deployment` carries a systemd unit and a container compose file
+  with readiness, restart policy and termination grace.
+
 - Client connections expose `sendSerialized(text): boolean` for pre-encoded JSON
   text. The method reports local transport acceptance, preserves the text exactly,
   and never retains it for reconnect.
@@ -46,8 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pipelined HTTP dispatch follows application callback boundaries.** Promise
   jobs finish before the next request is considered; delayed responses close
   an unanswered pipeline. Application `Connection: close` headers retain their
-  wire value while preserving the native transport behavior. Stream teardown
-  also respects pending HTTP read buffers.
+  wire value while preserving the native transport behavior.
 
 - **Refused WebSocket handshakes keep their HTTP connection.** Safe refusals
   accept later requests and synchronous pipelines; ambiguous framing still
@@ -129,11 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line like any request: behind an answer that ends the connection it goes
   unanswered, behind one still waiting the connection closes, and otherwise
   its `405` follows the answers ahead of it, and so does a `TRACK`, a
-  `TRACE` or a `CONNECT` spelled in lower case. The request-head reader
-  normalizes methods for parsing and restores them before the method gate.
-  DEL in a method receives the parser's `400`. Missing Host checks apply
-  to ordinary methods; forbidden methods retain their `405`. The head is read as the native tier reads it, so a bare LF or a
-  header name that is not a token in it is a `400` at once, and a head past
+  `TRACE` or a `CONNECT` spelled in lower case. DEL in a method receives
+  the parser's `400`. Missing Host checks apply to ordinary methods;
+  forbidden methods retain their `405`. The head is read as the native tier
+  reads it, so a bare LF or a header name that is not a token in it is a `400` at once, and a head past
   the header limit a `431`. A line with a CR before its version is held
   without an answer, unless its short suffix already rules out a supported
   version. Anything that talks
@@ -336,7 +337,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Deferred SSR and SSE bodies flush ready first bytes before later producer work. Disconnects cancel and release response readers, including after completed POST bodies and when source cancellation never settles. Ready finite bodies retain length framing and compression.
 
-- Response streams preserve exact buffer/view bytes and UTF-8 strings in shared and direct delivery. Invalid chunks cancel their producer. Single-string bodies now qualify for dynamic compression with the existing credentialed-response protection.
+- Response streams preserve exact buffer/view bytes and UTF-8 strings. Invalid chunks cancel their producer. Single-string bodies now qualify for dynamic compression with the existing credentialed-response protection.
 
 - Static assets omit Last-Modified for future or pre-1900 file timestamps while retaining their ETag.
 - Static date preconditions accept the three HTTP date formats and ignore invalid dates, including years before 1900. Two-digit years follow the rolling 50-year boundary.
@@ -363,7 +364,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Invalid-target refusals preserve GET bodies and bodyless HEAD framing when the HTTP connection is reused.
 
-- Completed static and realtime HTTP responses that fill the response buffer for a read reach the client before a later pipelined refusal.
+- Completed static, realtime and probe responses pipelined ahead of a refused
+  request reach the client in full, even past 16 KiB in one read.
 
 - Draining changes readiness without adding a WebSocket admission refusal. Pending upgrade hooks can complete, and refused handshakes retain their HTTP connection after the listener closes.
 
@@ -405,8 +407,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The test server answers invalid admin response statuses with a clean 500,
   matching production without carrying headers from the refused response.
-
-- Large probe pipelines release completed responses when the read cork fills before a later request is refused.
 
 - Incoming header values now use the native UTF-8 string decoding before application validation; WebSocket routing retains the original key byte count.
 

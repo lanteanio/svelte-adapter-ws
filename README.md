@@ -99,7 +99,7 @@ output.
 
 ### Contributing
 
-For a repository checkout on Node 22, use npm 11.8.0 before running `npm ci`
+For a repository checkout on Node 22, use npm 11.8.0 before running `npm install`
 (`npm install -g npm@11.8.0`). The bundled npm 10 resolver can fail on this
 repository's local self-dependency. Published-package installs use the normal
 `npm install svelte-adapter-ws` command above.
