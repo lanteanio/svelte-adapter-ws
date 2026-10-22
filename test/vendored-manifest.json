@@ -1530,26 +1530,10 @@
 		"file": "src/static-scan.js"
 	},
 	{
-		"file": "src/subscriptions.d.ts",
-		"adaptations": [
-			{
-				"lead": " * @returns false when the socket was already closed.\n */\nexport function trackedUnsubscribe(ws: SubscribableConnection, topic: string): boolean;\n",
-				"ours": " * @returns false when the socket was already closed.\n */\nexport function trackedUnsubscribe(ws: SubscribableConnection, topic: string): boolean;\n\n/**\n * Release a framework's admitted membership after its loader or setup fails.\n * Removes native and logical membership, registered derived subscriptions,\n * shared-codec cohorts and the topic's publish grant, with accounted cleanup.\n * Independently pending subscribe attempts remain eligible to complete their\n * own authorization. This does not revive an attempt already revoked.\n *\n * This removes the physical membership, not an ownership reference. The caller\n * must coordinate already-completed concurrent admissions and perform its own\n * application cleanup. No application unsubscribe hook runs. For an explicit\n * unsubscribe, kick or revocation that must cancel pending attempts, use\n * `platform.unsubscribe` or `trackedUnsubscribe` instead.\n *\n * @returns true when membership or a publish grant was removed; false when\n *   already released, missing, or closed. Safe to repeat.\n */\nexport function releaseSubscription(ws: SubscribableConnection, topic: string): boolean;\n"
-			}
-		]
+		"file": "src/subscriptions.d.ts"
 	},
 	{
-		"file": "src/subscriptions.js",
-		"adaptations": [
-			{
-				"lead": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe } from './runtime/utils/ws-symbols.js';\n",
-				"ours": "// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n\nexport { trackedSubscribe, trackedUnsubscribe, releaseSubscription } from './runtime/utils/ws-symbols.js';\n"
-			},
-			{
-				"lead": "// topics outside the wire protocol - a presence join, a cursor snapshot, a\n// group lane, a plugin in another package.\n//\n// Calling `ws.subscribe` directly, or writing the connection's subscription\n// registry by hand, leaves the worker's subscription accounting behind: the\n// registry grows while the counter the consistency auditor compares it with\n// does not, which reports as `subs.total-mismatch`, and the release at close\n// then drives that counter below zero (`subs.total-negative`). These are the\n// runtime's own helpers, the ones its bundled plugins use: native membership,\n// the registry, the per-connection cap, the shared-codec cohort and the\n// accounting move together. Every slot they touch is a registered symbol or a\n// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n",
-				"ours": "// topics outside the wire protocol - a presence join, a cursor snapshot, a\n// group lane, a plugin in another package.\n//\n// Calling `ws.subscribe` directly changes native membership only: it bypasses\n// the registry used for per-connection caps and subscriber walks such as\n// publishWire. A hand-written registry entry instead raises the auditor's\n// membership count without charging the worker counter (`subs.total-mismatch`);\n// releasing that entry at close can drive the counter below zero\n// (`subs.total-negative`). These are the runtime's own helpers, the ones its\n// bundled plugins use: native membership, the registry, the per-connection\n// cap, the shared-codec cohort and the\n// accounting move together. Every slot they touch is a registered symbol or a\n// global hook, so a copy of this module loaded by another package reaches the\n// same connection state as the runtime that owns it.\n"
-			}
-		]
+		"file": "src/subscriptions.js"
 	},
 	{
 		"file": "src/testing.d.ts",

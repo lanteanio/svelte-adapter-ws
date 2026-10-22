@@ -27,6 +27,8 @@
 		"test/static-last-modified.test.js": "7106fe8",
 		"test/subscription-release-real.test.js": "7106fe8",
 		"test/vite-subscriber-walk-real.test.js": "7106fe8",
-		"test/smooth-drain-budget-real.test.js": "7106fe8"
+		"test/smooth-drain-budget-real.test.js": "7106fe8",
+		"src/subscriptions.js": "015052a",
+		"src/subscriptions.d.ts": "015052a"
 	}
 }
