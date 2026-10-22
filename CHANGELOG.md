@@ -106,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shutdown closes every WebSocket with 1001 `Server shutting down`, also when a
   reconnect dispersal window is set; the close reason was `Server draining`.
 
+- A second stop signal forces shutdown, aborts open requests, and exits with status 1 instead of waiting for unfinished teardown. Cluster workers abort their own requests before exiting.
+  - **Affects:** Operators sending repeated SIGTERM or SIGINT signals, including with SHUTDOWN_TIMEOUT=0.
+  - **Action:** Send one signal to allow graceful cleanup; repeat only to force termination.
+  - **Compatibility:** Repeated signals now end the process rather than being ignored.
+
 - Probe GET responses use implicit length framing; HEAD keeps its explicit body length.
 
 - Request lines retain their original boundaries across fragmented reads. Invalid

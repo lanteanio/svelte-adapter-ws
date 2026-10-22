@@ -184,12 +184,15 @@ if (is_primary) {
 	let primary_booted = false;
 	let fleet_spawned = false;
 	let shutting_down = false;
+	let shutdown_exit_code = 0;
 	/** @param {'SIGINT' | 'SIGTERM'} reason */
 	const onPrimarySignal = (reason) => {
-		// A signal during a shutdown already running changes nothing:
-		// graceful_shutdown returns, and the run keeps its budget.
+		// A signal during a shutdown already running forces it:
+		// graceful_shutdown hands it to force_shutdown.
 		if (primary_booted) { graceful_shutdown(reason); return; }
-		if (boot_signal) return;
+		// A second signal during boot forces the exit too. It can only arrive
+		// once the fleet exists, because the first one exits outright before.
+		if (boot_signal) { force_shutdown(); return; }
 		boot_signal = reason;
 		// Whatever happens next, this instance is going down: the workers
 		// spawned after this point must not announce it ready on the way out.
@@ -1055,7 +1058,7 @@ if (is_primary) {
 			}
 			// If shutting down and all workers have exited, exit immediately.
 			if (shutting_down && workers.size === 0) {
-				process.exit(0);
+				process.exit(shutdown_exit_code);
 			}
 		});
 
@@ -1220,9 +1223,20 @@ if (is_primary) {
 		}
 	}
 
+	function force_shutdown() {
+		shutdown_exit_code = 1;
+		shutting_down = true;
+		restartSupervisor.stopAll();
+		closePostureExport();
+		// Workers abort their in-flight requests and exit on their own. The
+		// bounded termination fallback still handles an unresponsive worker.
+		for (const [worker] of workers) requestWorkerExit(worker, 1);
+		if (workers.size === 0) process.exit(1);
+	}
+
 	/** @param {'SIGINT' | 'SIGTERM'} reason */
 	async function graceful_shutdown(reason) {
-		if (shutting_down) return;
+		if (shutting_down) { force_shutdown(); return; }
 		shutting_down = true;
 		// A worker still finishing its own boot can report `ready` after this
 		// point; the announcement is withheld from here on for the same reason
@@ -1580,9 +1594,24 @@ if (is_primary) {
 		 * @type {typeof import('./handler.js') | null}
 		 */
 		let bootHandler = null;
+		/** @type {(() => void) | null} */
+		let abortInFlight = null;
+		/** Set once a stop signal has been dispatched into the shutdown. */
+		let stopSignalled = false;
+		/**
+		 * A second stop signal ends the process now: the requests still open
+		 * have their signals aborted, and unfinished hooks and cleanup are
+		 * left behind.
+		 */
+		const forceExit = () => {
+			abortInFlight?.();
+			process.exit(1);
+		};
 		const handlerPromise = (async () => {
 			const handler = await import('./handler.js');
 			bootHandler = handler;
+			// The same instance the handler graph above loaded.
+			({ abortInFlightRequests: abortInFlight } = await import('./handler/lifecycle.js'));
 			// A signal that arrived while the module was still evaluating found
 			// no handler to flip; the state exists now, and start() has not yet
 			// decided whether to announce readiness, so this is the last moment
@@ -1607,8 +1636,8 @@ if (is_primary) {
 			process.on(signal, () => {
 				if (phase === 'boot') {
 					// The first signal is the one reported; a second during boot
-					// changes nothing about what happens next.
-					if (latchedSignal !== null) return;
+					// ends the process.
+					if (latchedSignal !== null) { forceExit(); return; }
 					latchedSignal = signal;
 					sd_ready_withheld = true;
 					// Readiness moves off 'starting' NOW, not when the boot
@@ -1619,8 +1648,11 @@ if (is_primary) {
 					beginDrainAnnounced(bootHandler);
 					return;
 				}
-				// A signal during a shutdown already running changes nothing:
-				// performShutdown returns, and the run keeps its budget.
+				// A signal during a shutdown already running ends the process.
+				// The flag covers a second signal that lands before the first has
+				// reached performShutdown.
+				if (stopSignalled || phase === 'shutting-down') { forceExit(); return; }
+				stopSignalled = true;
 				void handlerPromise.then((handler) => dispatchShutdown(signal, handler));
 			});
 		}

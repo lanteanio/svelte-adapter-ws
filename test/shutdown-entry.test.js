@@ -13,7 +13,9 @@
 //     it is;
 //   - a request still in flight has its signal aborted before the process
 //     exits, also when the sequence threw ahead of the drain that aborts it,
-//     and when fatal() or an uncaught exception ends a worker.
+//     and when fatal() or an uncaught exception ends a worker;
+//   - a second stop signal, during boot or during the shutdown, ends the
+//     process with status 1 and aborts what is still in flight.
 //
 // Windows does not deliver SIGTERM to a Node child, so a wrapper re-emits the
 // event on the child's own process object from a line on stdin; everything
@@ -163,9 +165,29 @@ function startEntry(entry, env, until) {
 	return { proc, output, ready };
 }
 
-function requestShutdown(proc) {
-	if (process.platform === 'win32') proc.stdin.write('shutdown\n');
-	else proc.kill('SIGTERM');
+function requestShutdown(proc, signal = 'SIGTERM') {
+	if (process.platform === 'win32') proc.stdin.write(signal === 'SIGTERM' ? 'shutdown\n' : 'interrupt\n');
+	else proc.kill(signal);
+}
+
+/** @param {number} port @param {string} target */
+function holdRequest(port, target) {
+	return new Promise((resolve) => {
+		const req = http.get({ host: '127.0.0.1', port, path: target }, (res) => {
+			let body = '';
+			res.on('data', (d) => { body += d; });
+			res.on('end', () => resolve(body));
+			res.on('error', () => resolve('reset'));
+		});
+		req.on('error', () => resolve('reset'));
+	});
+}
+
+/** @param {{ text: string }} output @param {string} needle */
+async function waitFor(output, needle, ms = 10000) {
+	const t0 = Date.now();
+	while (!output.text.includes(needle) && Date.now() - t0 < ms) await sleep(25);
+	expect(output.text, 'never printed: ' + needle).toContain(needle);
 }
 
 function whenExited(proc, ms) {
@@ -262,13 +284,6 @@ export class Server {
 		await sleep(300);
 		expect(output.text, 'the signal must land before the server module evaluated').not.toContain('SERVER MODULE EVALUATED');
 		requestShutdown(proc);
-		// A second signal during boot changes nothing: the first is the one
-		// reported, and the boot is not dispatched twice. Sent apart: POSIX
-		// delivers two pending signals lowest number first, SIGINT ahead of
-		// SIGTERM.
-		await sleep(50);
-		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
-		else proc.kill('SIGINT');
 
 		const code = await whenExited(proc, 20000);
 		expect(code, `the entry did not exit cleanly.\n--- server output ---\n${output.text}`).toBe(0);
@@ -278,52 +293,76 @@ export class Server {
 		expect(output.text).toContain('Readiness now reports NOT ready (draining)');
 		expect(output.text, 'a condemned boot announced itself ready').not.toContain('Ready for traffic');
 		expect(output.text).toContain('Received SIGTERM, shutting down gracefully');
-		expect(output.text, 'the second boot signal replaced the first').not.toContain('Received SIGINT');
 		expect(output.text).toContain('Shutdown complete');
 	}, 60000);
 
-	it('lets a second stop signal change nothing about the shutdown already running', async () => {
+	it('ends a shutdown latched during a slow init on a second signal, with status 1', async () => {
+		const SLOW_INIT = `
+export class Server {
+	constructor(manifest) {}
+	async init(opts) { console.log('INIT STARTED'); await new Promise((r) => setTimeout(r, 30000)); }
+	async respond(request) { return new Response('SSR', { headers: { 'content-type': 'text/html' } }); }
+}
+`;
+		const payload = buildRuntime({ serverSource: SLOW_INIT });
+		linkPackages(payload);
+		const entry = writeWrapper(payload.dir);
+		const port = await freePort();
+		const { proc, output } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '0' }, () => false);
+		await waitFor(output, 'INIT STARTED');
+		// The init runs while the handler module evaluates, so the first signal
+		// is latched with nothing to announce yet.
+		requestShutdown(proc);
+		await sleep(300);
+		const exited = whenExited(proc, 5000);
+		requestShutdown(proc, 'SIGINT');
+		expect(await exited, output.text).toBe(1);
+		expect(output.text).not.toContain('Ready for traffic');
+	}, 60000);
+
+	it.each(['SIGTERM', 'SIGINT'])('ends an unbounded shutdown on a second %s with status 1, aborting the held request', async (signal) => {
 		const payload = buildRuntime();
 		cleanups.push(() => payload.cleanup());
 		linkPackages(payload);
-		const entry = writeWrapper(payload.dir, { cleanupLog: true, markSignals: true });
+		const entry = writeWrapper(payload.dir, { cleanupLog: true });
 		const port = await freePort();
-		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '10' }, (text) => text.includes('Ready for traffic'));
+		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '0' }, (text) => text.includes('Ready for traffic'));
 		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
 
-		const held = new Promise((resolve) => {
-			const req = http.get({ host: '127.0.0.1', port, path: '/api/hold?ms=1500' }, (res) => {
-				let body = '';
-				res.on('data', (d) => { body += d; });
-				res.on('end', () => resolve(body));
-			});
-			req.on('error', () => resolve('reset'));
-		});
-		const t0 = Date.now();
-		while (!output.text.includes('[hold] holding') && Date.now() - t0 < 10000) await sleep(25);
-		expect(output.text, 'the held request never reached the server').toContain('[hold] holding');
+		// With no budget the drain waits for this request for as long as it
+		// takes, so only the second signal can end the process in time.
+		const held = holdRequest(port, '/api/hold?ms=30000');
+		await waitFor(output, '[hold] holding');
+		const first = signal === 'SIGTERM' ? 'SIGINT' : 'SIGTERM';
+		requestShutdown(proc, first);
+		await waitFor(output, `Received ${first}, shutting down gracefully`);
+		const exited = whenExited(proc, 5000);
+		requestShutdown(proc, signal);
+		expect(await exited, output.text).toBe(1);
+		expect(await held).toBe('reset');
+		expect(output.text).toContain('[hold] aborted: The server shut down before the request finished');
+		expect(output.text, 'unfinished cleanup is left behind').not.toContain('CLEANUP RAN');
+		expect(output.text).not.toContain('[hold] released');
+	}, 60000);
 
-		// The same signal again, then the other one: a listener taken off after
-		// its first signal shows on the repeat, one that treats SIGINT apart on
-		// the last.
-		const exited = whenExited(proc, 30000);
-		requestShutdown(proc);
-		await sleep(200);
-		requestShutdown(proc);
-		await sleep(200);
-		if (process.platform === 'win32') proc.stdin.write('interrupt\n');
-		else proc.kill('SIGINT');
-		expect(await exited).toBe(0);
-		expect(await held, 'the held request is answered').toBe('held');
-		/** @param {RegExp} pattern */
-		const count = (pattern) => (output.text.match(pattern) || []).length;
-		const marks = [...output.text.matchAll(/\[wrapper\] (SIGTERM|SIGINT) added=(\d+)/g)];
-		expect(marks.map((mark) => mark[1]), 'every signal arrived, in order').toEqual(['SIGTERM', 'SIGTERM', 'SIGINT']);
-		expect(marks.map((mark) => Number(mark[2]) >= 1), 'the runtime still listens').toEqual([true, true, true]);
-		expect(count(/Received SIGTERM, shutting down gracefully/g), 'one shutdown ran').toBe(1);
-		expect(output.text, 'the SIGINT started nothing').not.toContain('Received SIGINT');
-		expect(count(/CLEANUP RAN/g), 'the cleanup listeners ran once').toBe(1);
-		expect(output.text, 'the held request was not cut off').not.toContain('[hold] aborted');
+	it('ends the shutdown on two signals that land in the same turn, during the load-balancer delay', async () => {
+		const payload = buildRuntime();
+		cleanups.push(() => payload.cleanup());
+		linkPackages(payload);
+		const entry = writeWrapper(payload.dir);
+		const port = await freePort();
+		const { proc, output, ready } = startEntry(entry, { PORT: String(port), SHUTDOWN_TIMEOUT: '0', SHUTDOWN_DELAY_MS: '30000' }, (text) => text.includes('Ready for traffic'));
+		expect(await ready, 'the entry never came up: ' + output.text).toBe(true);
+		const held = holdRequest(port, '/api/hold?ms=30000');
+		await waitFor(output, '[hold] holding');
+		const exited = whenExited(proc, 5000);
+		// One write on Windows, so both signals are emitted before the first
+		// has reached the shutdown sequence.
+		if (process.platform === 'win32') proc.stdin.write('shutdown\ninterrupt\n');
+		else { proc.kill('SIGTERM'); proc.kill('SIGINT'); }
+		expect(await exited, output.text).toBe(1);
+		expect(await held).toBe('reset');
+		expect(output.text).toContain('[hold] aborted: The server shut down before the request finished');
 	}, 60000);
 
 	it('bounds the hook and the cleanup listeners by ONE budget', async () => {
@@ -369,10 +408,7 @@ const entrySource = readFileSync(fileURLToPath(new URL('../src/runtime/index.js'
 describe('a cluster primary under a second stop signal', () => {
 	const source = entrySource;
 
-	it('hands every stop signal to the one graceful shutdown', () => {
-		// The signal handler starts with the hand-off, so a signal during a
-		// shutdown already running reaches graceful_shutdown's own guard and
-		// nothing else.
+	it('hands every stop signal after boot to graceful_shutdown, which forces a second one', () => {
 		const opening = '\tconst onPrimarySignal = (reason) => {\n';
 		const start = source.indexOf(opening);
 		expect(start, 'the primary has no signal handler').toBeGreaterThan(-1);
@@ -380,9 +416,26 @@ describe('a cluster primary under a second stop signal', () => {
 		expect(end, 'the handler has no end').toBeGreaterThan(start);
 		const code = source.slice(start + opening.length, end).split('\n')
 			.map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('//'));
-		expect(code[0]).toBe('if (primary_booted) { graceful_shutdown(reason); return; }');
-		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) return;\n\t\tshutting_down = true;\n');
-		expect(guard, 'graceful_shutdown returns when one is already running').toBeGreaterThan(-1);
+		expect(code.slice(0, 2)).toEqual([
+			'if (primary_booted) { graceful_shutdown(reason); return; }',
+			'if (boot_signal) { force_shutdown(); return; }'
+		]);
+		const guard = source.indexOf('\tasync function graceful_shutdown(reason) {\n\t\tif (shutting_down) { force_shutdown(); return; }\n\t\tshutting_down = true;\n');
+		expect(guard, 'graceful_shutdown forces a shutdown already running').toBeGreaterThan(-1);
+	});
+
+	it('stops respawns, asks every worker to exit 1, and exits 1 once the fleet is gone', () => {
+		const opening = '\tfunction force_shutdown() {\n';
+		const start = source.indexOf(opening);
+		expect(start, 'the primary has no forced shutdown').toBeGreaterThan(-1);
+		const end = source.indexOf('\n\t}\n', start);
+		expect(end, 'the forced shutdown has no end').toBeGreaterThan(start);
+		const body = source.slice(start, end + 3);
+		for (const statement of ['shutdown_exit_code = 1;', 'shutting_down = true;', 'restartSupervisor.stopAll();', 'closePostureExport();',
+			'for (const [worker] of workers) requestWorkerExit(worker, 1);', 'if (workers.size === 0) process.exit(1);']) {
+			expectStatement(body, statement, 'the forced shutdown runs ' + statement);
+		}
+		expectStatement(source, 'process.exit(shutdown_exit_code);', 'the last worker exit carries the shutdown exit code');
 	});
 });
 

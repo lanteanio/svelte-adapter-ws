@@ -2538,6 +2538,14 @@
 			{
 				"lead": "describeUWS('a cluster worker drained while it is still booting'",
 				"ours": "describeSignal('a cluster worker drained while it is still booting'"
+			},
+			{
+				"lead": "\tit.each([false, true])('a second signal aborts open requests during the delay (cluster=%s)', async cluster => {",
+				"ours": "\tit.each(process.platform === 'linux' ? [false, true] : [false])('a second signal aborts open requests during the delay (cluster=%s)', async cluster => {"
+			},
+			{
+				"lead": "\t\t\t...(cluster ? { CLUSTER_WORKERS: '2', CLUSTER_MODE: 'acceptor' } : {}) };",
+				"ours": "\t\t\t...(cluster ? { CLUSTER_WORKERS: '2' } : {}) };"
 			}
 		]
 	},

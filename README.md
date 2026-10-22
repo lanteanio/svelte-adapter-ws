@@ -659,7 +659,7 @@ keeps using `ORIGIN`.
 | `ADDRESS_HEADER` / `XFF_DEPTH` | - / `1` | Client IP resolution behind proxies. |
 | `TRUSTED_PROXIES` | - | CIDR allowlist; identity headers from peers outside it are ignored. |
 | `BODY_SIZE_LIMIT` | `512K` | Request body cap (413 above it). |
-| `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own). A request still open when it runs out has its `request.signal` aborted before it is dropped. |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds for the WHOLE teardown sequence - app shutdown hooks, the WebSocket drain, then the HTTP in-flight drain share this one budget; `0` removes it (live WebSockets still drain within 30s - a socket never ends on its own), so a hook that never settles holds the process until a second stop signal or the supervisor forces it to exit. A request still open when it runs out has its `request.signal` aborted before it is dropped. |
 | `SHUTDOWN_DELAY_MS` | `0` | Readiness-flip lead time for balancers that poll. |
 | `RECONNECT_DISPERSAL_MS` | `5000` | Reconnect-advisory window at drain; `0` disables the advisory. |
 | `PROXY_PROTOCOL` | off | `1` uses the PROXY v2 source address, gated by `TRUSTED_PROXIES` when set. |
@@ -674,9 +674,13 @@ keeps using `ORIGIN`.
 | `WORKER_BOOT_TIMEOUT_MS` | `60000` | Boot deadline for a worker that stops acking liveness mid-init; `0` disables. |
 | `WS_DEBUG` | - | Set to `1` to enable structured WebSocket debug logging (open, close, subscribe, publish) |
 
-A `SIGTERM`/`SIGINT` during a shutdown already running changes nothing: that
-shutdown keeps its `SHUTDOWN_TIMEOUT` budget. Invalid cluster configurations
-refuse the boot (see Deployment).
+A second `SIGTERM` or `SIGINT` forces shutdown, including during
+initialization or the load-balancer delay. It aborts outstanding request
+signals, bypasses unfinished hooks and cleanup, and exits with status 1. In a
+cluster, workers first abort their own requests; a worker that cannot respond
+reaches the existing five-second `SIGKILL` fallback. The first signal retains
+the normal graceful shutdown behavior. Invalid cluster configurations refuse
+the boot (see Deployment).
 
 What the portability tier gives up is throughput, not features: peak HTTP and
 socket rate, idle-connection density, and large-topic JSON fan-out. What it does

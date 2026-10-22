@@ -33,6 +33,7 @@
 		"test/connection-setup-real.test.js": "4aca50aab470f8a6718863da2339bb19992a4d90",
 		"test/helpers/setup-failure-child.mjs": "4aca50aab470f8a6718863da2339bb19992a4d90",
 		"test/fixture/src/hooks.ws.setup-failure.js": "4aca50aab470f8a6718863da2339bb19992a4d90",
-		"test/vite-config-fallback.test.js": "ec85af1"
+		"test/vite-config-fallback.test.js": "ec85af1",
+		"test/lifecycle-readiness.test.js": "dac1eef"
 	}
 }
