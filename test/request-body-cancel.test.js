@@ -193,51 +193,79 @@ function walkResponses(raw) {
 }
 
 /**
- * A request with a body and a pipelined follower on ONE keep-alive connection;
- * resolves with both status lines, or rejects when the follower is never
- * answered. The follower is what shows that the rest of a let-go body was
- * drained off the socket rather than left in front of the next request.
+ * A request with a body and a follower on ONE keep-alive connection; resolves
+ * with the status of each response, read by its framing, once the server
+ * closes. With `restAfterAnswer`, the first SPLIT_AT bytes of the body go out
+ * with the head, and the rest of the body and the follower only once the first
+ * answer has arrived: the follower is then what shows that the rest of a
+ * let-go body was drained off the socket rather than left in front of the
+ * next request. Without it, everything goes out in one write.
  *
  * @param {number} port
  * @param {string} head request line and headers, no terminator
  * @param {string} body
- * @param {{ chunked?: boolean }} [opts] send the body undeclared, as one chunk
+ * @param {{ chunked?: boolean, restAfterAnswer?: boolean }} [opts] `chunked`
+ *   sends the body undeclared, as one chunk
+ * @returns {Promise<string[]>}
  */
-function withFollower(port, head, body, { chunked = false } = {}) {
+function withFollower(port, head, body, { chunked = false, restAfterAnswer = false } = {}) {
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(port, '127.0.0.1', () => {
-			const framed = chunked
-				? 'Transfer-Encoding: chunked\r\n\r\n' + body.length.toString(16) + '\r\n' + body + '\r\n0\r\n\r\n'
-				: `Content-Length: ${body.length}\r\n\r\n` + body;
-			socket.write(
-				head + `\r\nHost: 127.0.0.1:${port}\r\n` + framed +
-				`POST /alive HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`
-			);
+			const framing = chunked
+				? 'Transfer-Encoding: chunked\r\n\r\n' + body.length.toString(16) + '\r\n'
+				: `Content-Length: ${body.length}\r\n\r\n`;
+			const tail = (chunked ? '\r\n0\r\n\r\n' : '') +
+				`POST /alive HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`;
+			const start = head + `\r\nHost: 127.0.0.1:${port}\r\n` + framing;
+			if (!restAfterAnswer) {
+				socket.write(start + body + tail);
+				return;
+			}
+			socket.write(start + body.slice(0, SPLIT_AT));
+			socket.once('data', () => socket.write(body.slice(SPLIT_AT) + tail));
 		});
 		let raw = '';
-		const timer = setTimeout(() => { socket.destroy(); reject(new Error('the follower was not answered within 5 s: ' + JSON.stringify(raw.slice(0, 120)))); }, 5000);
+		const timer = setTimeout(() => { socket.destroy(); reject(new Error('the server did not close within 5 s: ' + JSON.stringify(raw.slice(0, 120)))); }, 5000);
 		socket.on('data', (chunk) => { raw += chunk.toString('latin1'); });
 		socket.on('close', () => { clearTimeout(timer); resolve(walkResponses(raw)); });
 		socket.on('error', () => {});
 	});
 }
 
+const SPLIT_AT = 1000;
+const AUTH_LATE_CANCEL = 'POST /__ws/auth HTTP/1.1\r\nx-requested-with: XMLHttpRequest\r\nx-mode: late-cancel';
+
+// The rest of a body let go of while it is still arriving is read off the
+// socket and dropped, and the connection goes on to the request behind it.
 describe('a body let go of after an await is drained, and the connection reaches its next request', () => {
 	const big = 'y'.repeat(200000);
 
 	it('on an SSR route', async () => {
-		expect(await withFollower(built.rt.port, 'POST /?mode=late-cancel HTTP/1.1', big)).toEqual(['200', '200']);
+		expect(await withFollower(built.rt.port, 'POST /?mode=late-cancel HTTP/1.1', big, { restAfterAnswer: true })).toEqual(['200', '200']);
 		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
 	});
 
 	it('on the authenticate hook', async () => {
-		expect(await withFollower(
-			built.rt.port,
-			'POST /__ws/auth HTTP/1.1\r\nx-requested-with: XMLHttpRequest\r\nx-mode: late-cancel',
-			big,
-			// Undeclared: a declared length past the cap is refused before any read.
-			{ chunked: true }
-		)).toEqual(['204', '200']);
+		// Undeclared: a declared length past the cap is refused before any read.
+		expect(await withFollower(built.rt.port, AUTH_LATE_CANCEL, big, { chunked: true, restAfterAnswer: true })).toEqual(['204', '200']);
+		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
+	});
+});
+
+// The body is read as it arrives whether or not the app is reading it, so a
+// request pipelined right behind it is parsed while the answer ahead is still
+// waiting on the app, and the connection closes with neither answered, as the
+// native tier closes it.
+describe('a request pipelined behind an answer still waiting after an await closes the connection', () => {
+	const big = 'y'.repeat(200000);
+
+	it('on an SSR route', async () => {
+		expect(await withFollower(built.rt.port, 'POST /?mode=late-cancel HTTP/1.1', big)).toEqual([]);
+		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
+	});
+
+	it('on the authenticate hook', async () => {
+		expect(await withFollower(built.rt.port, AUTH_LATE_CANCEL, big, { chunked: true })).toEqual([]);
 		expect(escaped.splice(0), 'nothing escaped the request listener').toEqual([]);
 	});
 });
