@@ -28,14 +28,4 @@ try {
 		freshPlatform: true, freshSession: true, staleMembership: false, staleCaps: false, originalMembership: true
 	});
 	console.log('USER_DATA_COPY_OK');
-}
-finally {
-	first?.close(); second?.close();
-	let deadline;
-	try {
-		await Promise.race([
-			server.stop(),
-			new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })
-		]);
-	} finally { clearTimeout(deadline); }
-}
+} finally { first?.close(); second?.close(); await server.stop(); }

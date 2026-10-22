@@ -37,13 +37,4 @@ try {
 	assert.ok(formatDiagnostic(event).startsWith(entry.messagePrefix));
 	assert.equal(records.some(record => record.event === 'ws.hook.open.failed' || record.event === 'ws.hook.close.failed'), false);
 	console.log('CONNECTION_SETUP_RECOVERED');
-} finally {
-	healthy?.close();
-	let deadline;
-	try {
-		await Promise.race([
-			server.stop(),
-			new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })
-		]);
-	} finally { clearTimeout(deadline); dispose(); }
-}
+} finally { healthy?.close(); await server.stop(); dispose(); }

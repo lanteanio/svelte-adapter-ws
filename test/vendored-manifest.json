@@ -3358,13 +3358,7 @@
 		"file": "test/fixture/src/reuse-data-handler.js"
 	},
 	{
-		"file": "test/helpers/upgrade-user-data-child.mjs",
-		"adaptations": [
-			{
-				"lead": "} finally { first?.close(); second?.close(); await server.stop(); }",
-				"ours": "}\nfinally {\n\tfirst?.close(); second?.close();\n\tlet deadline;\n\ttry {\n\t\tawait Promise.race([\n\t\t\tserver.stop(),\n\t\t\tnew Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })\n\t\t]);\n\t} finally { clearTimeout(deadline); }\n}"
-			}
-		]
+		"file": "test/helpers/upgrade-user-data-child.mjs"
 	},
 	{
 		"file": "test/upgrade-user-data-real.test.js"
@@ -3406,13 +3400,7 @@
 		"file": "test/connection-setup-real.test.js"
 	},
 	{
-		"file": "test/helpers/setup-failure-child.mjs",
-		"adaptations": [
-			{
-				"lead": "} finally { healthy?.close(); await server.stop(); dispose(); }",
-				"ours": "} finally {\n\thealthy?.close();\n\tlet deadline;\n\ttry {\n\t\tawait Promise.race([\n\t\t\tserver.stop(),\n\t\t\tnew Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('server shutdown deadline')), 5000); })\n\t\t]);\n\t} finally { clearTimeout(deadline); dispose(); }\n}"
-			}
-		]
+		"file": "test/helpers/setup-failure-child.mjs"
 	},
 	{
 		"file": "test/fixture/src/hooks.ws.setup-failure.js"

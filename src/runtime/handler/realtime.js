@@ -3135,13 +3135,13 @@ export async function drainSockets({ dispersalMs, deadlineMs, pollMs = 50, signa
 		try { /** @type {any} */ (facade).end(1001, 'Server shutting down'); } catch { /* already gone */ }
 	}
 	// Wait for the close handshakes to land, bounded by the deadline; then
-	// terminate whatever is still holding a socket open.
+	// terminate whatever is still holding a socket open. The poll timer stays
+	// referenced: once the last socket closes it can be the only handle left,
+	// and an unreferenced one would let the process exit with the shutdown
+	// still pending.
 	const start = monotonicNow();
 	while (wsConnections.size > 0 && !(signal && signal.aborted) && monotonicNow() - start < deadlineMs) {
-		await new Promise((resolve) => {
-			const timer = setTimer(resolve, pollMs);
-			if (typeof timer?.unref === 'function') timer.unref();
-		});
+		await new Promise((resolve) => { setTimer(resolve, pollMs); });
 	}
 	for (const facade of [...wsConnections]) {
 		try { /** @type {any} */ (facade).close(); } catch { /* already gone */ }

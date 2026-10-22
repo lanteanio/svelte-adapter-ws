@@ -325,6 +325,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A WebSocket whose connection setup fails after the handshake is closed with
   1011 `Connection setup failed` instead of being dropped without a close frame.
 
+- Awaiting `shutdown()` keeps the process alive until the WebSocket drain has
+  finished; the process could exit with the shutdown still pending.
+
 - Parser-level 400 and 505 responses use the native HTML body and connection-close
   framing, including HEAD requests.
 
