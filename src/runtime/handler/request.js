@@ -282,14 +282,6 @@ function serveRequest(req, res) {
 		}
 	}
 
-	// Windows: refuse a path naming an alternate data stream (`:`) or an 8.3
-	// short name (`~`), in the raw spelling and the decoded one - every lane
-	// below decodes before it opens anything.
-	if (WINDOWS && windowsReservedPath(pathname)) {
-		send400(res);
-		return;
-	}
-
 	// The fetch specification forbids CONNECT/TRACE/TRACK outright, so
 	// `new Request()` throws for them - surfaced as a generic 500 plus an
 	// error-severity log line per request, which made probing TRACE a one-line
@@ -393,6 +385,21 @@ function serveRequest(req, res) {
 		}
 	}
 
+	// On Windows, only an exact indexed asset may carry a reserved filesystem
+	// spelling such as a tilde. This lookup reads an in-memory key, never an
+	// alternate stream or an 8.3 alias. Keep it after the mount guards above:
+	// decoding a file name must not enter an adapter-owned namespace.
+	let reservedFile;
+	if (WINDOWS && windowsReservedPath(pathname)) {
+		if (isGetLike && pathname.includes('%')) {
+			reservedFile = encodedStaticEntry(pathname);
+		}
+		if (reservedFile === undefined) {
+			send400(res);
+			return;
+		}
+	}
+
 	// Prerendered pages that need decoding or trailing-slash normalization,
 	// and static assets reachable only under a percent-encoded spelling.
 	if (isGetLike) {
@@ -425,7 +432,7 @@ function serveRequest(req, res) {
 		// A static file whose name a browser percent-encodes, asked for that way:
 		// the fast path above matched the target as sent. Traced as the static
 		// answer it is, and only when there is a file to serve.
-		const encodedFile = pathname.includes('%') ? encodedStaticEntry(pathname) : undefined;
+		const encodedFile = reservedFile ?? (pathname.includes('%') ? encodedStaticEntry(pathname) : undefined);
 		if (encodedFile !== undefined) {
 			const serveEncoded = () => serveStatic(
 				res,

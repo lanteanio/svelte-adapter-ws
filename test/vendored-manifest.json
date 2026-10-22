@@ -3562,5 +3562,8 @@
 				"ours": "\t\t// node's shutdown closes the listener; the native close has no counterpart here.\n\t\ttry { handler.forceCloseApp(); } catch { /* already closed */ }\n"
 			}
 		]
+	},
+	{
+		"file": "test/static-path-index-real.test.js"
 	}
 ]

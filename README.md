@@ -813,7 +813,8 @@ HTTP/2 and the entire observability ecosystem
    JavaScript, calendar, WebVTT, and YAML; XML and RTF retain their in-band
    encoding declarations. Bodies and ranges are written as views of the
    cached buffer, so a slow reader does not retain a separate copy of the
-   unsent body. A request line carrying raw
+   unsent body. Browser-encoded names match indexed filenames, including
+   Unicode names with a tilde on Windows. A request line carrying raw
    non-ASCII bytes is refused 400 by node's own parser before any lane reads
    it: a request target is ASCII (RFC 9112 3.2) and no `node:http` option,
    the insecure parser included, admits one, where the native tier hands the
