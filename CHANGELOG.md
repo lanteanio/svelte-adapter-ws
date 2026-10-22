@@ -500,6 +500,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same connection announces a fresh ID before sending binary. The testing
   server follows the same rule.
 
+- Static plain text, CSV, Markdown, HTML, CSS, JavaScript, calendar, WebVTT, and YAML responses declare UTF-8 so non-ASCII text decodes correctly. XML and RTF retain their own encoding declarations.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.

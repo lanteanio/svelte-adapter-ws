@@ -33,10 +33,19 @@ describe('excludedDotPath', () => {
 
 describe('mimeLookup', () => {
 	it('maps common extensions', () => {
-		expect(mimeLookup('a.html')).toBe('text/html');
-		expect(mimeLookup('a.js')).toBe('text/javascript');
+		expect(mimeLookup('a.html')).toBe('text/html; charset=utf-8');
+		expect(mimeLookup('a.js')).toBe('text/javascript; charset=utf-8');
 		expect(mimeLookup('a.wasm')).toBe('application/wasm');
 		expect(mimeLookup('a.woff2')).toBe('font/woff2');
+	});
+
+	it('declares UTF-8 for text types without in-band encoding declarations', () => {
+		expect(mimeLookup('style.CSS')).toBe('text/css; charset=utf-8');
+		expect(mimeLookup('bundle.min.js')).toBe('text/javascript; charset=utf-8');
+		expect(mimeLookup('a.txt')).toBe('text/plain; charset=utf-8');
+		expect(mimeLookup('a.xml')).toBe('text/xml');
+		expect(mimeLookup('a.rtf')).toBe('text/rtf');
+		expect(mimeLookup('a.json')).toBe('application/json');
 	});
 
 	it('is case-insensitive and defaults to octet-stream', () => {

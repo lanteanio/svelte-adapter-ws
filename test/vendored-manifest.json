@@ -2939,6 +2939,10 @@
 			{
 				"lead": "\t\tentry = staticCache.get('/negotiate-probe/asset.txt');\n\t\timmutableEntry = staticCache.get(`/negotiate-immutable/${manifest.appPath}/immutable/chunk.js`);\n\t\tconfiguredEntry = staticCache.get('/negotiate-configured/asset.txt');",
 				"ours": "\t\tentry = staticCache.get('/negotiate-probe/asset.txt');\n\t\timmutableEntry = staticCache.get(`/negotiate-immutable/${appPath}/immutable/chunk.js`);\n\t\tconfiguredEntry = staticCache.get('/negotiate-configured/asset.txt');"
+			},
+			{
+				"lead": "\t\texpect(res.headers['content-type']).toBe('text/plain');\n",
+				"ours": "\t\texpect(res.headers['content-type']).toBe('text/plain; charset=utf-8');\n"
 			}
 		]
 	},
@@ -3543,5 +3547,8 @@
 	},
 	{
 		"file": "scripts/generate-legacy-diagnostics.js"
+	},
+	{
+		"file": "test/static-text-charset-real.test.js"
 	}
 ]

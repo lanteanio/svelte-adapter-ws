@@ -808,7 +808,10 @@ HTTP/2 and the entire observability ecosystem
    `Content-Disposition`), the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules, the Location percent-encoded so a route with a non-ASCII name
-   redirects to the bytes a browser sends for it. A request line carrying raw
+   redirects to the bytes a browser sends for it. Static text responses
+   declare `charset=utf-8` for plain text, CSV, Markdown, HTML, CSS,
+   JavaScript, calendar, WebVTT, and YAML; XML and RTF retain their in-band
+   encoding declarations. A request line carrying raw
    non-ASCII bytes is refused 400 by node's own parser before any lane reads
    it: a request target is ASCII (RFC 9112 3.2) and no `node:http` option,
    the insecure parser included, admits one, where the native tier hands the
