@@ -313,6 +313,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
+
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.

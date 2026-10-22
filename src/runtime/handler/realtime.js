@@ -1780,25 +1780,11 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 	// Idle reaping: ws has no built-in idle timeout, so a JS timer plus
 	// ping/pong stands in. A live peer answers the half-interval ping and the
 	// deadline never fires; a vanished peer is terminated at the timeout.
+	// Activity is tracked from here; the timer itself is armed only once the
+	// close listener that clears it is registered.
 	let lastActivity = monotonicNow();
 	/** @type {any} */
 	let idleTimer = null;
-	if (IDLE_TIMEOUT_S > 0) {
-		const halfMs = (IDLE_TIMEOUT_S * 1000) / 2;
-		idleTimer = setIntervalTimer(() => {
-			const idleFor = monotonicNow() - lastActivity;
-			// The idle tick doubles as the drain-edge backstop: a pressure
-			// episode whose last flush callback rode a callback-less write
-			// (ping, pong, close frame) is caught here within a half-interval.
-			/** @type {any} */ (facade)._checkDrain?.();
-			if (idleFor >= IDLE_TIMEOUT_S * 1000) {
-				rawWs.terminate();
-			} else if (SEND_PINGS && idleFor >= halfMs && rawWs.readyState === OPEN) {
-				try { rawWs.ping(); } catch { /* closing */ }
-			}
-		}, halfMs);
-		if (typeof idleTimer?.unref === 'function') idleTimer.unref();
-	}
 	rawWs.on('pong', () => { lastActivity = monotonicNow(); });
 
 	sendControl(facade, '{"type":"welcome","sessionId":"' + sessionId + '"}');
@@ -1835,6 +1821,25 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		);
 		closeConnection(rawWs, facade, userData, code, reason);
 	});
+
+	// Armed after the close listener: a setup throw before this point leaves
+	// no timer behind, and any later end reaches close, which clears it.
+	if (IDLE_TIMEOUT_S > 0) {
+		const halfMs = (IDLE_TIMEOUT_S * 1000) / 2;
+		idleTimer = setIntervalTimer(() => {
+			const idleFor = monotonicNow() - lastActivity;
+			// The idle tick doubles as the drain-edge backstop: a pressure
+			// episode whose last flush callback rode a callback-less write
+			// (ping, pong, close frame) is caught here within a half-interval.
+			/** @type {any} */ (facade)._checkDrain?.();
+			if (idleFor >= IDLE_TIMEOUT_S * 1000) {
+				rawWs.terminate();
+			} else if (SEND_PINGS && idleFor >= halfMs && rawWs.readyState === OPEN) {
+				try { rawWs.ping(); } catch { /* closing */ }
+			}
+		}, halfMs);
+		if (typeof idleTimer?.unref === 'function') idleTimer.unref();
+	}
 
 	// The app open hook runs LAST, with every listener armed: a throw or a
 	// rejection closes the connection with 1011, and its close path runs.
