@@ -344,6 +344,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot reappear on the new connection. Permanent close still prevents
   implicit reconnection.
 
+- Server-managed topic ownership applies even when an ordinary listener attached
+  first, and queued, retry and reconnect subscription frames respect the current
+  owner, so a frame prepared before the server claimed ownership no longer sends
+  a redundant client subscription or bypasses the topic authorization model.
+  Managed ownership remains in force until the final holder releases the topic
+  or explicit unsubscribe clears it.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

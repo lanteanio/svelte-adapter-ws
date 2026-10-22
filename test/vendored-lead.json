@@ -44,10 +44,10 @@
 		"test/response-framing-real.test.js": "9a6a5d3",
 		"test/fixture/src/hooks.ws.response-framing.js": "9a6a5d3",
 		"test/fixture/src/routes/response-framing/+server.js": "9a6a5d3",
-		"src/client.js": "bcab9ff",
-		"src/client.d.ts": "bcab9ff",
+		"src/client.js": "b5c336f",
+		"src/client.d.ts": "b5c336f",
 		"src/client-connection.js": "34d06e7",
-		"test/client-managed-authority.test.js": "9401270",
+		"test/client-managed-authority.test.js": "b5c336f",
 		"test/client-throttle-budget.test.js": "9681fd4"
 	}
 }
