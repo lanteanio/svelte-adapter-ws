@@ -100,7 +100,7 @@ import { beginResumeCapture, discardResumeCapture, flushResumeTopic, coveredSeqF
 import { bumpIn, createConnStats, setStatsEnabled } from './conn-stats.js';
 import { sendControl } from './control-egress.js';
 import { wsDebug, origin as pinnedOrigin, get_origin, host_header, protocol_header, port_header, address_header, is_tls, resolveClientIp, resolveTransportAddress, armCloseHookAccounting } from './config.js';
-import { PayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus, takesWebSocketRoute } from './http-helpers.js';
+import { isPayloadTooLargeError, upgradeTurn, endOpenTurns, missesHost, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus, takesWebSocketRoute } from './http-helpers.js';
 import { webSocketHandshakeRefusal, isWebSocketUpgradeAttempt, readRawHandshake, WEBSOCKET_VERSION } from '../utils/ws-handshake.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { discardRefusedBody, readBody } from './ssr.js';
@@ -2888,7 +2888,7 @@ export function tryAuthenticateRoute(req, res, pathname, state) {
 		.catch((err) => {
 			try { span?.recordException?.(err); } catch { /* provider gone */ }
 			if (state.aborted) return;
-			if (err instanceof PayloadTooLargeError) {
+			if (isPayloadTooLargeError(err)) {
 				send413(res);
 				return;
 			}

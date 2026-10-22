@@ -5,7 +5,7 @@ import { server } from '../_init.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { resolveRequestId } from '../utils/request-id.js';
 import { randomUuid, setTimer, clearTimer } from '../runtime.js';
-import { PayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus } from './http-helpers.js';
+import { PayloadTooLargeError, isPayloadTooLargeError, send400, send413, send500, endText, bodylessLength, stageHeaders, assertResponseStatus } from './http-helpers.js';
 import { origin, address_header, xff_depth, body_size_limit, get_origin, trusted_proxies, warnUntrustedClaim } from './config.js';
 import { platform } from './platform.js';
 import { declaresBodyPastCap, isDedupBufferable, readBodyUpTo } from './ssr-dedup.js';
@@ -786,7 +786,7 @@ async function handleSSRTraced(req, res, headers, remoteAddress, state, directAd
 	} catch (err) {
 		try { span?.recordException?.(err); } catch {}
 		if (state.aborted && !state.closedByServer) return;
-		if (err instanceof PayloadTooLargeError) {
+		if (isPayloadTooLargeError(err)) {
 			// The limit can also trip mid-stream, through a route that pipes the
 			// request body into its response: the reader rejection aborts the
 			// exchange in the stream teardown, and a 413 written there would be

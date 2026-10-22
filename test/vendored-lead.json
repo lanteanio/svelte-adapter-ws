@@ -93,6 +93,11 @@
 		"test/topic-broadcast-stats-real.test.js": "da9d3e2",
 		"src/runtime/utils/ws-symbols.js": "9efd11a",
 		"test/subscription-accounting.test.js": "9efd11a",
-		"test/fixture/src/hooks.ws.auth-abort.js": "4a70bca"
+		"test/fixture/src/hooks.ws.auth-abort.js": "4a70bca",
+		"test/fixture/src/body-cancel-probe.js": "bd56f8d",
+		"test/fixture/src/hooks.ws.body-safety.js": "bd56f8d",
+		"test/fixture/src/routes/cancel-body/+server.js": "bd56f8d",
+		"test/helpers/body-safety-child.mjs": "bd56f8d",
+		"test/request-body-cancel-real.test.js": "bd56f8d"
 	}
 }

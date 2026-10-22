@@ -17,8 +17,19 @@ import { httpReadHeld, releaseHttpReadIfFull, endParserRefusal, httpCallbackChec
 // one-line way to fill an operator's error log). They can never reach an
 // application route, so they are refused at the edge with the status the RFC
 // requires.
+const payloadTooLargeErrors = new WeakSet();
+
 export class PayloadTooLargeError extends Error {
-	constructor() { super('Payload too large'); }
+	constructor() {
+		super('Payload too large');
+		payloadTooLargeErrors.add(this);
+	}
+}
+
+/** @param {unknown} error */
+export function isPayloadTooLargeError(error) {
+	// Application throws may be revoked proxies or have hostile prototypes.
+	return typeof error === 'object' && error !== null && payloadTooLargeErrors.has(error);
 }
 
 export const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
