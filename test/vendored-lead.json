@@ -61,7 +61,9 @@
 		"src/plugins/crdt/channel.js": "eea6936",
 		"src/plugins/crdt/channel.d.ts": "eea6936",
 		"test/crdt-channel.test.js": "eea6936",
-		"src/plugins/cursor/client.js": "7106fe8",
-		"test/cursor-handle.test.js": "7106fe8"
+		"src/plugins/cursor/client.js": "34d06e7",
+		"test/cursor-handle.test.js": "7106fe8",
+		"src/plugins/presence/client.js": "34d06e7",
+		"test/client-module-stores-real.test.js": "b5c336f"
 	}
 }

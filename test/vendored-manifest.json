@@ -3244,5 +3244,8 @@
 	},
 	{
 		"file": "test/plugin-topic-validation.test.js"
+	},
+	{
+		"file": "test/client-module-stores-real.test.js"
 	}
 ]

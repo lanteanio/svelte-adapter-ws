@@ -379,6 +379,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscription and topic, so the canvas can mount again, and a stale cleanup
   from a failed mount no longer tears down a newer one.
 
+- Presence and cursor client helpers no longer reopen a connection closed with
+  `close()`. Their sends, viewport reports and worker mounts stay offline until
+  the app calls `connect()` again, and then use the new connection.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the
