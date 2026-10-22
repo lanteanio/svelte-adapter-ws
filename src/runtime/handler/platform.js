@@ -262,7 +262,7 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
 	const sendJson = () => {
 		try {
 			const r = /** @type {any} */ (facade).send(jsonEnvelope, false, compress);
-			if (direct) bumpOut(ud, jsonEnvelope);
+			if (direct && r !== 2) bumpOut(ud, jsonEnvelope);
 			return r;
 		} catch {
 			counters.closedWsAborts++;
@@ -294,7 +294,7 @@ function deliverWireToOne(facade, topic, event, data, wire, jsonEnvelope, seq, c
 	try {
 		const frame = buildBinaryFrame(schemaVersion, id, seq, payload);
 		result = /** @type {any} */ (facade).send(frame, true, compress);
-		if (direct) bumpOut(ud, frame);
+		if (direct && result !== 2) bumpOut(ud, frame);
 	} catch {
 		counters.closedWsAborts++;
 		return 3;
@@ -494,7 +494,7 @@ function send(facade, topic, event, data, options) {
 	const compress = WS_COMPRESSION_ON && (!options || options.compress !== false);
 	try {
 		const result = /** @type {any} */ (facade).send(payload, false, compress);
-		bumpOut(/** @type {any} */ (facade).getUserData(), payload);
+		if (result !== 2) bumpOut(/** @type {any} */ (facade).getUserData(), payload);
 		return result;
 	} catch {
 		// The documented tri-state collapse: a freed handle reports DROPPED so
@@ -553,7 +553,7 @@ function request(facade, event, data, options) {
 			reject(new Error(adapterErrorMessage(ADAPTER_ERROR_IDS.REQUEST_CLOSED, REQUEST_CLOSED_DETAIL.SEND_FAILED)));
 			return;
 		}
-		bumpOut(userData, payload);
+		if (entry.sent) bumpOut(userData, payload);
 	});
 }
 
@@ -1531,7 +1531,7 @@ export const platform = {
 				const d = source === null ? entries[i].data : source[i];
 				const json = envelopePrefix(topic, event) + envelopeData(d) + '}';
 				try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
-				bumpOut(ud, json);
+				if (result !== 2) bumpOut(ud, json);
 			}
 			return result;
 		};
@@ -1561,7 +1561,7 @@ export const platform = {
 				if (p == null) {
 					const json = envelopePrefix(topic, event) + envelopeData(datas[i]) + '}';
 					try { result = /** @type {any} */ (ws).send(json, false, compress); } catch { counters.closedWsAborts++; return 2; }
-					bumpOut(ud, json);
+					if (result !== 2) bumpOut(ud, json);
 					continue;
 				}
 				const id = ensureWireId(ws, ud, topic);
@@ -1571,7 +1571,7 @@ export const platform = {
 				}
 				const frame = buildBinaryFrame(schemaVersion, id, 0, p);
 				try { result = /** @type {any} */ (ws).send(frame, true, compress); } catch { counters.closedWsAborts++; return 2; }
-				bumpOut(ud, frame);
+				if (result !== 2) bumpOut(ud, frame);
 				if (result === 2) {
 					poisonWireState(ws, ud, wire.capability);
 					return sendJsonFrom(i + 1, datas, 2);
@@ -1589,7 +1589,7 @@ export const platform = {
 		const frame = buildBinaryFrame(schemaVersion, id, 0, payload);
 		let result;
 		try { result = /** @type {any} */ (ws).send(frame, true, compress); } catch { counters.closedWsAborts++; return 2; }
-		bumpOut(ud, frame);
+		if (result !== 2) bumpOut(ud, frame);
 		if (result === 2) poisonWireState(ws, ud, wire.capability);
 		return result;
 	},
@@ -1640,13 +1640,11 @@ export const platform = {
 		}
 		let count = 0;
 		for (const facade of targets) {
-			try {
-				/** @type {any} */ (facade).send(envelope, false, compress);
-				bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
-				count++;
-			} catch {
-				counters.closedWsAborts++;
-			}
+			let result;
+			try { result = /** @type {any} */ (facade).send(envelope, false, compress); }
+			catch { counters.closedWsAborts++; continue; }
+			if (result !== 2) bumpOut(/** @type {any} */ (facade).getUserData(), envelope);
+			count++;
 		}
 		// One egress charge for the delivered set. This lane never feeds the
 		// per-topic runaway stats - those keep meaning publish-family calls -
@@ -1717,8 +1715,10 @@ export const platform = {
 					if (decision && typeof (/** @type {any} */ (decision).then) === 'function') continue;
 					if (!decision) continue;
 				}
-				/** @type {any} */ (facade).send(frame, false, compress);
-				bumpOut(userData, frame);
+				// end() flushes accepted buffered outbound before the 1001 close
+				// frame. A dropped advisory is not counted.
+				const result = /** @type {any} */ (facade).send(frame, false, compress);
+				if (result !== 2) bumpOut(userData, frame);
 				if (doClose) /** @type {any} */ (facade).end(1001, 'Server draining');
 				count++;
 			} catch {
@@ -2088,15 +2088,15 @@ export const platform = {
 						const wid = ensureWireId(facade, ud, topic);
 						if (wid !== -1) {
 							const frame = buildBinaryFrame(GAME_FANOUT_SCHEMA_VERSION, wid, seq ?? 0, fanoutPayload);
-							/** @type {any} */ (facade).send(frame, true, false);
-							bumpOut(ud, frame);
+							const result = /** @type {any} */ (facade).send(frame, true, false);
+							if (result !== 2) bumpOut(ud, frame);
 							delivered++;
 							continue;
 						}
 						poisonWireState(facade, ud, GAME_FANOUT_CAP);
 					}
-					/** @type {any} */ (facade).send(env, false, false);
-					bumpOut(ud, env);
+					const result = /** @type {any} */ (facade).send(env, false, false);
+					if (result !== 2) bumpOut(ud, env);
 					delivered++;
 				} catch {
 					counters.closedWsAborts++;

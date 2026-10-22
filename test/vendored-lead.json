@@ -86,6 +86,8 @@
 		"test/helpers/vite-dev.js": "c384a1c",
 		"test/vite-upgrade-lifetime.test.js": "c384a1c",
 		"test/fixture/src/hooks.ws.wire-stats.js": "8d9f1fc",
-		"test/wire-broadcast-stats-real.test.js": "8d9f1fc"
+		"test/wire-broadcast-stats-real.test.js": "8d9f1fc",
+		"test/fixture/src/hooks.ws.dropped-stats.js": "cb3e451",
+		"test/dropped-send-stats-real.test.js": "cb3e451"
 	}
 }

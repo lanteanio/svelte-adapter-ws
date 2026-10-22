@@ -398,6 +398,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence under a new request id and ignoring frames for the old one. A
   replay store created after `close()` no longer reopens the connection.
 
+- Directed sends refused by backpressure no longer increase close-hook message
+  or byte counters. Queued frames remain counted across production and testing,
+  including wire batches, filtered sends, reconnect advice, game delivery and
+  requests.
+
 - Test-server wire broadcasts no longer inflate close-hook traffic counters;
   directed sends and wire-id announcements remain counted, including with
   outbound fault injection.
