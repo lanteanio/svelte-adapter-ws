@@ -427,6 +427,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaving the same server available for later clients without restarting the
   development process or losing other live connections.
 
+- A failed logger no longer lets a WebSocket hook failure escape. When an app
+  or APM replaced `console.error` with a throwing function, the hook boundary
+  could stop before closing the failing connection or completing close
+  cleanup; logging failures are now contained while normal hook failure
+  handling continues. Hook failures keep their existing 1011 close codes and
+  reasons, and a failed close hook still allows connection cleanup.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.

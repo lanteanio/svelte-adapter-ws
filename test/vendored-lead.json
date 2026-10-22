@@ -123,6 +123,12 @@
 		"src/runtime/utils/subscribe-policy.js": "5a14b77",
 		"test/projection-denylist-corpus.test.js": "5a14b77",
 		"test/request-body-delayed-real.test.js": "5a14b77",
-		"test/fixture/src/routes/delayed-body-read/+server.js": "5a14b77"
+		"test/fixture/src/routes/delayed-body-read/+server.js": "5a14b77",
+		"src/runtime/utils/hook-boundary.js": "36e71f9",
+		"test/control-egress.test.js": "36e71f9",
+		"test/error-registry-hook-crash.test.js": "36e71f9",
+		"test/fixture/src/hooks.ws.hookcrash.js": "36e71f9",
+		"test/lifecycle-hook-boundary.test.js": "36e71f9",
+		"test/message-hook-containment.test.js": "36e71f9"
 	}
 }
