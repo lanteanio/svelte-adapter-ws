@@ -344,6 +344,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Non-string `envPrefix` values fail adapter configuration instead of producing different environment lookups in development and production.
 
+- On a node whose HTTP parser binding lacks `execute`, an HTTP/1.0 request
+  pipelined behind another answer gets its `505` instead of crashing the
+  process. In that mode a `505`, `400` or `431` written for a request later in
+  a read replaces the answers held from that read, an HTTP/1.0 `TRACK`,
+  `TRACE` or `CONNECT` gets the `505` wherever it sits in the pipeline, and a
+  head past node's header limit gets the native `431` page.
+
 - Membership installed by a pending subscription hook does not grant observe or recovery access until authorization succeeds. Strict subscription policy is checked again after asynchronous hooks settle.
 
 - Reused upgrade-hook data retains application fields while each connection receives fresh adapter state.

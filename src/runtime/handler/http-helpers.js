@@ -258,7 +258,8 @@ export function acceptsRequestLine(req) {
  */
 export function send505(res) {
 	if (res.headersSent) return;
-	endParserRefusal(res.socket, VERSION_505_RAW);
+	// A response queued behind another answer has no socket of its own yet.
+	endParserRefusal(res.req.socket, VERSION_505_RAW);
 }
 
 /**
@@ -638,24 +639,31 @@ const FORBIDDEN_405_RAW =
 // Native parser refusals are delimited by the connection close, including HEAD.
 export const PARSER_400_RAW = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n<h1>Bad Request</h1><hr><i>uWebSockets/20 Server</i>';
 export const VERSION_505_RAW = 'HTTP/1.1 505 HTTP Version Not Supported\r\nConnection: close\r\n\r\n<h1>HTTP Version Not Supported</h1><p>This server does not support HTTP/1.0.</p><hr><i>uWebSockets/20 Server</i>';
+export const HEADER_TOO_LARGE = 'HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n<h1>Request Header Fields Too Large</h1><hr><i>uWebSockets/20 Server</i>';
+
+// The parser errors raised inside a request line: its method, its target or
+// its version.
+const REQUEST_LINE_ERRORS = new Set(['HPE_INVALID_METHOD', 'HPE_INVALID_URL', 'HPE_INVALID_VERSION']);
 
 /**
- * Where node's parser refused a request whose line the native tier answers
- * 505 whatever else is wrong with it, see refusedRequestLine: the offset of
- * that line in the refused packet, or -1. The line is read only in the
- * connection's first read, which starts with the connection's first request
- * line; a later read can begin inside a request, and node's answer stands. A request refused behind
- * another in that read leaves the first one's line to answer for: a line the
- * native tier reads keeps node's answer, and one it does not was answered 505
- * and ended the connection before this one was read.
+ * Whether node's parser refused a request whose line the native tier answers
+ * 505 whatever else is wrong with it, see refusedRequestLine. The connection's
+ * first read starts with its first request line, which is read whatever node
+ * refused. A later line is read when node stopped inside it and the line
+ * starts in the refused packet: a read can begin inside a request, and there
+ * node's answer stands. A line the native tier refuses ahead of the one node
+ * stopped in was answered 505 and ended the connection before that one.
  *
  * @param {any} err
  * @param {any} socket
  */
-function refusedFirstLine(err, socket) {
+function refusesRequestLine(err, socket) {
 	const packet = err?.rawPacket;
-	if (!Buffer.isBuffer(packet) || socket.bytesRead !== packet.length) return -1;
-	return refusedRequestLine(packet, 0) ? 0 : -1;
+	if (!Buffer.isBuffer(packet)) return false;
+	if (socket.bytesRead === packet.length && refusedRequestLine(packet, 0)) return true;
+	if (!REQUEST_LINE_ERRORS.has(err.code) || typeof err.bytesParsed !== 'number') return false;
+	const parsed = Math.min(err.bytesParsed, packet.length);
+	return parsed > 0 && packet.lastIndexOf(10, parsed - 1) !== -1 && refusedRequestLine(packet, failingLineAt(err));
 }
 
 /**
@@ -678,19 +686,20 @@ function failingLineAt(err) {
 
 /**
  * The answer to a forbidden method once its head has ended, read as the
- * native tier reads a head: a bare LF or a header name that is not a token
- * is refused 400 at once, a head past node's header limit is 431, and an
- * ended head is 405 with a Host line and 400 without. Null while the head
- * has not ended.
+ * native tier reads a head: a request line it does not read is refused 505,
+ * a bare LF or a header name that is not a token 400 at once, a head past
+ * node's header limit is 431, and an ended head is 405 with one Host line and
+ * 400 without. Null while the head has not ended.
  *
  * @param {Buffer} head
  * @param {number} limit
  */
 function forbiddenHeadAnswer(head, limit) {
+	if (refusedRequestLine(head, 0)) return VERSION_505_RAW;
 	for (let i = head.indexOf(10); i !== -1; i = head.indexOf(10, i + 1)) {
 		if (i === 0 || head[i - 1] !== 13) return PARSER_400_RAW;
 	}
-	if (head.length > limit) return 'HTTP/1.1 431 Request Header Fields Too Large\r\nconnection: close\r\n\r\n';
+	if (head.length > limit) return HEADER_TOO_LARGE;
 	const end = head.indexOf('\r\n\r\n');
 	if (end === -1) return null;
 	let host = false;
@@ -751,27 +760,26 @@ function refusedRequestLine(packet, at) {
  * `clientError` handling answers 400 and closes.
  * The family answers the three fetch-forbidden methods alike, 405 with
  * Allow, so the raw request line is read off the failed packet and answered
- * that way. A request target with a byte outside visible ASCII, which
- * RFC 9112 does not allow and node's parser refuses before any listener runs,
- * gets the 400 every lane writes for a target it refuses, body included, or
- * for a HEAD its length alone. Ahead of both, a request line the native tier
- * does not read gets the 505 the request listener writes for one, as the
- * native tier answers the line before anything else; a CONNECT gets it too
- * unless its target is in origin form and its version HTTP/1.1. The native
- * tier reads the line, then the Host, then the method, so a CONNECT and a
- * method node's parser refuses get the 400 for a missing Host ahead of their
- * 405: node gives up on such a method before any header, so the head is read
- * on to its end here and answered then, as the native tier answers it. A
- * CONNECT reads like any request in its connection's line: behind an answer that
- * ends the connection it is dropped unanswered, behind one still waiting it
- * waits its turn and the line closes the connection if that answer is still
- * waiting then, and otherwise it is answered once every answer ahead of it
- * is on the wire.
- * Every other parser failure keeps node's own answer: 431 for a
- * header block past the limit, 408 for a request that timed out, 413 for
- * chunk extensions past the limit, 400 otherwise, written only when no
- * response is in flight on the socket, and a bare destroy for a socket that
- * is already gone.
+ * that way. Ahead of that, a request line the native tier does not read gets
+ * the 505 the request listener writes for one, as the native tier answers the
+ * line before anything else; a CONNECT gets it too unless its target is in
+ * origin form and its version HTTP/1.1. The native tier reads the line, then
+ * the Host, then the method, so a CONNECT and a method node's parser refuses
+ * get the 400 for a missing Host ahead of their 405: node gives up on such a
+ * method before any header, so the head is read on to its end here and
+ * answered then, as the native tier answers it. These refusals are written as
+ * the head is read and replace the answers held from that read. The 405 of a
+ * CONNECT or another forbidden method reads like any request in its
+ * connection's line: behind an answer that ends the connection it is dropped
+ * unanswered, behind one still waiting the line closes the connection if that
+ * answer is still waiting at its turn, and otherwise it is answered once every
+ * answer ahead of it is on the wire.
+ * Every other parser failure gets the native tier's refusal page: 431 for a
+ * header block past node's limit, and 400 otherwise, a request target node's
+ * parser refuses included. Node's status line stands for a request that timed
+ * out (408) and for chunk extensions past the limit (413). Nothing is written
+ * into a response already in flight on the socket, and a socket that is
+ * already gone is destroyed.
  *
  * Every branch ends by destroying the socket once its answer is flushed. By
  * the time node emits either event it has detached the socket from HTTP
@@ -797,25 +805,34 @@ export function refuseUnparsedForbiddenMethods(server) {
 			socket.destroy();
 			return;
 		}
+		// A line the native tier does not read and a missing Host are refused
+		// as the head is read, replacing the answers still held in that read.
+		const refusal = !acceptsRequestLine(req) ? VERSION_505_RAW : missesHost(req) ? PARSER_400_RAW : null;
+		if (refusal !== null) {
+			answerAndClose(socket, refusal);
+			return;
+		}
 		// Behind an answer that ends the connection, node has ended the socket
 		// by the time its turn comes, and nothing is written.
 		const answer = () => {
 			if (!socket.writable) socket.destroy();
-			else answerAndClose(socket, !acceptsRequestLine(req) ? VERSION_505_RAW : missesHost(req) ? PARSER_400_RAW : FORBIDDEN_405_RAW);
+			else answerAndClose(socket, FORBIDDEN_405_RAW);
 		};
 		const turn = upgradeTurn(req, socket);
 		if (turn === null) answer();
 		else turn.then((ok) => { if (ok) answer(); else socket.destroy(); });
 	});
 	/**
-	 * The 405 for a forbidden method, or the 400 for a missing Host ahead of
-	 * it, once the request's head has ended and been read as the native tier
-	 * reads it (forbiddenHeadAnswer): node's parser stopped at the method, and
-	 * reports every later read on the socket as the same error, so the rest of
-	 * the head is gathered from those reports here, bounded by node's header
-	 * size and timeout. The answer waits its turn in the connection's line
-	 * like a CONNECT's: nothing is written behind an answer still waiting, and
-	 * it follows the answers ahead of it.
+	 * The 405 for a forbidden method, or the refusal ahead of it, once the
+	 * request's head has ended and been read as the native tier reads it
+	 * (forbiddenHeadAnswer): node's parser stopped at the method, and reports
+	 * every later read on the socket as the same error, so the rest of the
+	 * head is gathered from those reports here, bounded by node's header size
+	 * and timeout. A refusal is written as the head is read, as the native
+	 * tier writes one, replacing the answers still held in that read. The 405
+	 * waits its turn in the connection's line like a CONNECT's: nothing is
+	 * written behind an answer still waiting, and it follows the answers ahead
+	 * of it.
 	 *
 	 * @param {any} socket
 	 * @param {Buffer} head
@@ -825,22 +842,24 @@ export function refuseUnparsedForbiddenMethods(server) {
 		const limit = /** @type {any} */ (server).maxHeaderSize ?? 16384;
 		/** @type {string | null} */
 		let raw = null;
-		let allowed = false;
 		const cleanup = () => { clearTimer(timer); socket[PENDING_HEAD] = undefined; };
-		const finish = () => {
-			if (raw === null || !allowed) return;
+		const answer = () => {
 			cleanup();
-			if (socket.writable) answerAndClose(socket, raw);
+			if (socket.writable) answerAndClose(socket, /** @type {string} */ (raw));
 			else socket.destroy();
 		};
 		const decide = () => {
 			if (raw !== null) return;
 			raw = forbiddenHeadAnswer(head, limit);
-			finish();
+			if (raw === null) return;
+			if (raw !== FORBIDDEN_405_RAW) { answer(); return; }
+			// The line asks of a request whether its line is read and whether
+			// it carries a Host; an ended head answered 405 has both.
+			const standIn = { socket, httpVersion: '1.1', url: '/', method: 'TRACK', headers: { host: 'x' } };
+			const turn = upgradeTurn(/** @type {any} */ (standIn), socket);
+			if (turn === null) answer();
+			else turn.then((ok) => { if (ok) answer(); else cleanup(); });
 		};
-		// What the line asks of a request: its line was read, a Host is what
-		// the head has shown so far.
-		const standIn = { socket, httpVersion: '1.1', url: '/', method: 'TRACK', headers: { get host() { return (head.toString('latin1').match(/^host:/igm)?.length ?? 0) === 1 ? 'x' : undefined; } } };
 		const timer = setTimer(() => { cleanup(); socket.destroy(); }, timeoutMs);
 		socket.once('close', cleanup);
 		socket[PENDING_HEAD] = (/** @type {Buffer} */ chunk) => {
@@ -848,15 +867,6 @@ export function refuseUnparsedForbiddenMethods(server) {
 			decide();
 		};
 		decide();
-		const turn = upgradeTurn(/** @type {any} */ (standIn), socket);
-		if (turn === null) {
-			allowed = true;
-			finish();
-		} else {
-			turn.then((ok) => {
-				if (ok) { allowed = true; finish(); } else cleanup();
-			});
-		}
 	};
 	server.on('clientError', (/** @type {any} */ err, /** @type {import('node:net').Socket} */ socket) => {
 		// More of a head whose forbidden method is waiting for its end.
@@ -882,8 +892,7 @@ export function refuseUnparsedForbiddenMethods(server) {
 		}
 		// The request line first, as on the native tier: an HTTP/1.0 TRACK or
 		// bad target is a 505.
-		const refusedAt = refusedFirstLine(err, socket);
-		if (refusedAt !== -1) {
+		if (refusesRequestLine(err, socket)) {
 			answerAndClose(socket, VERSION_505_RAW);
 			return;
 		}
@@ -897,15 +906,13 @@ export function refuseUnparsedForbiddenMethods(server) {
 			}
 		}
 		const code = err && err.code;
-		if (code === 'HPE_INVALID_URL') {
-			answerAndClose(socket, PARSER_400_RAW);
-			return;
-		}
 		const status = code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large'
 			: code === 'ERR_HTTP_REQUEST_TIMEOUT' ? '408 Request Timeout'
 				: code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW' ? '413 Content Too Large'
 					: '400 Bad Request';
-		answerAndClose(socket, status === '400 Bad Request' ? PARSER_400_RAW : 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
+		answerAndClose(socket, status === '400 Bad Request' ? PARSER_400_RAW
+			: code === 'HPE_HEADER_OVERFLOW' ? HEADER_TOO_LARGE
+				: 'HTTP/1.1 ' + status + '\r\nconnection: close\r\n\r\n');
 	});
 }
 

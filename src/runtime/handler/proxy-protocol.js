@@ -2,8 +2,9 @@
 // with node's parser, including chunked bodies and WebSocket upgrade tails.
 import { Server as HttpServer } from 'node:http';
 import { clearTimer, setTimer } from '../runtime.js';
-import { createRequestHeadExecutor, HEADER_TOO_LARGE } from './request-head.js';
-import { beginHttpRead, endHttpRead, endParserRefusal, clearHttpRead } from './read-turn.js';
+import { createRequestHeadExecutor } from './request-head.js';
+import { HEADER_TOO_LARGE } from './http-helpers.js';
+import { beginHttpRead, endHttpRead, endParserRefusal, clearHttpRead, holdNativeReads } from './read-turn.js';
 
 const SIGNATURE = Buffer.from([13, 10, 13, 10, 0, 13, 10, 81, 85, 73, 84, 10]);
 const PREFIX = SIGNATURE.subarray(0, 4);
@@ -45,7 +46,7 @@ export function installProxyProtocolSocket(socket) {
 	const parser = socket.parser;
 	if (!parser) return;
 	const heads = createRequestHeadExecutor(parser, socket);
-	if (!heads) return;
+	if (!heads) { holdNativeReads(socket); return; }
 	let boundary = true;
 	/** @type {Buffer | null} */
 	let pending = null;

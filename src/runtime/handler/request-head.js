@@ -5,13 +5,12 @@ import { normalizeHeaderEdges, normalizeHeaderDel, normalizeConnectionClose, nor
 import { decodeRequestHeaders } from './header-values.js';
 import { createRequestCloseController } from './request-close.js';
 import { firstHeaderValue } from '../utils/request-headers.js';
-import { executeAfterDeclines, executePlainHttp, PARSER_400_RAW, VERSION_505_RAW } from './http-helpers.js';
+import { executeAfterDeclines, executePlainHttp, HEADER_TOO_LARGE, PARSER_400_RAW, VERSION_505_RAW } from './http-helpers.js';
 import { setTimer, clearTimer } from '../runtime.js';
 
 const METHODS_SET = new Set(METHODS.filter(method => method !== 'CONNECT'));
 const VERSION = Buffer.from(' HTTP/1.1\r\n');
 const LIMIT = 4096;
-export const HEADER_TOO_LARGE = 'HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n<h1>Request Header Fields Too Large</h1><hr><i>uWebSockets/20 Server</i>';
 const FAST_HEADS = /^(?:(?:GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE) \/[!-~]* HTTP\/1\.1\r\n(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+:[\t -~]*\r\n)*\r\n)+$/;
 const FRAMED = /\r\n(?:content-length|transfer-encoding|upgrade):/i;
 const CONNECTION_CLOSE = /\r\nconnection:[\t ]*(?:[^\r\n]*close|[^\r\n]{5}[\t ]*\r\n)/i;

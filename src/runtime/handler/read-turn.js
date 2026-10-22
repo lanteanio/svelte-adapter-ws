@@ -58,6 +58,42 @@ export function endHttpRead(socket) {
 	if (!socket.destroyed) while (socket.writableCorked > 0) state.uncork.call(socket);
 }
 
+/**
+ * Hold each read's answers on a connection whose bytes node's parser reads
+ * natively, where the request-head reader cannot run. The hold starts with
+ * the first request head of a read and ends when node reports the read
+ * parsed, so a refusal later in the read still replaces the answers ahead
+ * of it. Only the native read path reports reads; a parser without that
+ * report is left as it is.
+ *
+ * @param {any} socket
+ */
+export function holdNativeReads(socket) {
+	const parser = socket.parser;
+	const key = parser?.constructor?.kOnExecute;
+	if (typeof key !== 'number' || parser._consumed !== true) return;
+	const onExecute = parser[key];
+	const onIncoming = parser.onIncoming;
+	if (typeof onExecute !== 'function' || typeof onIncoming !== 'function') return;
+	let held = false;
+	parser.onIncoming = function() {
+		if (!held && parser._consumed === true) {
+			held = true;
+			beginHttpRead(socket);
+		}
+		return onIncoming.apply(this, arguments);
+	};
+	parser[key] = function() {
+		try { return onExecute.apply(this, arguments); }
+		finally {
+			if (held) {
+				held = false;
+				endHttpRead(socket);
+			}
+		}
+	};
+}
+
 // The native writer uses a numeric status for application Response objects.
 export function markShortHttpStatus(res) {
 	const state = reads.get(res.socket || res.req?.socket);
