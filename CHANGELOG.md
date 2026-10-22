@@ -337,6 +337,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   made. Authentication and socket-opening attempts each remain bounded at
   fifteen seconds; there is no overall reconnect deadline.
 
+- Module-level `onRequest` handlers and pending `once` listeners follow a later
+  explicit `connect()`, so replacing a connection ended with `close()` preserves
+  listeners that are still active, while cleanup remains effective during
+  replacement, including removal triggered by a callback, and removed listeners
+  cannot reappear on the new connection. Permanent close still prevents
+  implicit reconnection.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request whose Content-Length lines all carry the same value reaches the

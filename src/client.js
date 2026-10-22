@@ -3,6 +3,7 @@ import { parseBinaryFrame, buildBinaryFrame, requestNFrame } from './runtime/wir
 import { decodeValue } from './runtime/wire-value.js';
 import { now, monotonicNow, setTimer, setIntervalTimer, clearTimer, clearIntervalTimer, microtask, nextReconnectDelay, dispersedReconnectDelay } from './client-runtime.js';
 import { formatDiagnostic } from './runtime/diagnostic-format.js';
+import { clientConnection } from './client-connection.js';
 
 /** @type {ReturnType<typeof createConnection> | null} */
 let singleton = null;
@@ -12,6 +13,8 @@ let singletonCreatedBy = '';
 let singletonClosed = false;
 /** @type {Set<(connection: ReturnType<typeof createConnection>) => void>} */
 const connectionFollowers = new Set();
+/** @type {(() => void) | null} */
+let stopModuleRequest = null;
 
 /**
  * Client-side binary wire codecs, keyed by topic-name prefix. A plugin (e.g.
@@ -215,6 +218,8 @@ function ensureConnection(options, explicit = false) {
 	}
 	return singleton;
 }
+
+clientConnection.get = ensureConnection;
 
 /**
  * Follow explicit replacement without adding another writable store to dispatch.
@@ -488,7 +493,8 @@ function failureDiagnosticText(diagnosticReason) {
  *
  * Only one handler may be installed at a time. Calling `onRequest`
  * again replaces the previous handler. Returns an unsubscribe function
- * that clears the handler if it is still the active one. With no
+ * that clears the handler if it is still the active one. The module handler
+ * follows an explicit connect() after close(). With no
  * handler installed, incoming request frames are dropped and the
  * server's awaiting Promise times out.
  *
@@ -496,7 +502,26 @@ function failureDiagnosticText(diagnosticReason) {
  * @returns {() => void}
  */
 export function onRequest(handler) {
-	return ensureConnection().onRequest(handler);
+	stopModuleRequest?.();
+	let stop = () => {};
+	let active = true;
+	function follow(connection) {
+		if (!active || singleton !== connection) return;
+		stop();
+		stop = connection.onRequest(handler);
+	}
+	const cleanup = () => {
+		if (!active) return;
+		active = false;
+		connectionFollowers.delete(follow);
+		stop();
+		if (stopModuleRequest === cleanup) stopModuleRequest = null;
+	};
+	stopModuleRequest = cleanup;
+	const connection = ensureConnection();
+	connectionFollowers.add(follow);
+	follow(connection);
+	return cleanup;
 }
 
 /**
@@ -841,6 +866,7 @@ export function count(topic, initial = 0) {
 
 /**
  * Wait for a specific event on a topic. Resolves once and unsubscribes.
+ * Follows an explicit connect() after close() until resolved or timed out.
  *
  * @param {string} topic - Topic to listen on
  * @param {string} [event] - Optional event name to filter on
@@ -854,10 +880,9 @@ export function once(topic, event, options) {
 		event = undefined;
 	}
 	const timeout = options?.timeout;
-	const conn = ensureConnection();
 
 	return new Promise((resolve, reject) => {
-		const store = event !== undefined ? conn._onEvent(topic, event) : conn.on(topic);
+		const store = followStore(conn => event !== undefined ? conn._onEvent(topic, event) : conn.on(topic));
 		let settled = false;
 		let first = true;
 		let timer;
@@ -895,8 +920,6 @@ const TERMINAL_CLOSE_CODES = new Set([
 	4403, // Forbidden (custom)
 ]);
 
-// Close codes indicating server-side throttling. Reconnect is still attempted
-// but we jump ahead in the backoff curve to avoid hammering a rate-limited server.
 /**
  * A `Retry-After` value as milliseconds: delta-seconds or an HTTP date, capped
  * at five minutes so one bad header cannot park a client; 0 when absent or
@@ -921,6 +944,8 @@ function retryAfterMs(value) {
  */
 const ATTEMPT_TIMEOUT_MS = 15_000;
 
+// Close codes indicating server-side throttling. Reconnect is still attempted
+// but we jump ahead in the backoff curve to avoid hammering a rate-limited server.
 const THROTTLE_CLOSE_CODES = new Set([
 	4429, // Rate limited (custom)
 ]);

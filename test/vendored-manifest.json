@@ -166,6 +166,9 @@
 		"file": "src/client.d.ts"
 	},
 	{
+		"file": "src/client-connection.js"
+	},
+	{
 		"file": "src/client.js"
 	},
 	{
