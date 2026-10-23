@@ -6,7 +6,7 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
 import { normalizeStaticCacheControl, normalizeStaticHeaders } from './build-config.js';
-import { writeAndCloseRollupBundle, extraEntryImports } from './build-rollup-lifecycle.js';
+import { writeAndCloseRollupBundle, extraEntryImports, discoverExtraEntries } from './build-rollup-lifecycle.js';
 import { listExcludedDotPaths } from './static-scan.js';
 import {
 	assertWireSubscribeAuthorization,
@@ -908,18 +908,8 @@ export default function (opts = {}) {
 
 			// Include extra entry files written by Vite plugins (e.g. __live-registry.js).
 			// Only picks up __-prefixed files to avoid bundling SvelteKit internals.
-			const knownEntries = new Set(Object.values(input).map((f) => path.basename(f)));
-			/** @type {string[]} */
-			const extraEntries = [];
-			// Sorted, so the entries load in the same order on every filesystem: the
-			// directory listing order is the filesystem's, and NTFS and ext4 disagree.
-			for (const file of readdirSync(tmp).sort()) {
-				if (file.startsWith('__') && file.endsWith('.js') && !knownEntries.has(file)) {
-					const name = file.replace(/\.js$/, '');
-					input[name] = `${tmp}/${file}`;
-					extraEntries.push(name);
-				}
-			}
+			const extraEntries = discoverExtraEntries(readdirSync(tmp), Object.values(input).map(f => path.basename(f)));
+			for (const name of extraEntries) input[name] = `${tmp}/${name}.js`;
 
 			// Bundle the Vite output so that deployments only need their
 			// production dependencies. Anything in devDependencies gets
