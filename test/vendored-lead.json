@@ -175,6 +175,6 @@
 		"test/static-backpressure-real.test.js": "3b87a98",
 		"test/helpers/static-backpressure-child.js": "b12b308",
 		"test/admin-prefix-entry-real.test.js": "2694deb",
-		"test/static-path-index-real.test.js": "2694deb"
+		"test/static-path-index-real.test.js": "7c48234"
 	}
 }

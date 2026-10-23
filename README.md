@@ -814,7 +814,10 @@ HTTP/2 and the entire observability ecosystem
    encoding declarations. Bodies and ranges are written as views of the
    cached buffer, so a slow reader does not retain a separate copy of the
    unsent body. Browser-encoded names match indexed filenames, including
-   Unicode names with a tilde on Windows. A request line carrying raw
+   Unicode names with a tilde on Windows. Prerendered clean URLs also
+   accept a composed Unicode alias when it remains non-ASCII and does not
+   conflict with a real name; directory-style aliases keep their trailing
+   slash. A request line carrying raw
    non-ASCII bytes is refused 400 by node's own parser before any lane reads
    it: a request target is ASCII (RFC 9112 3.2) and no `node:http` option,
    the insecure parser included, admits one, where the native tier hands the
