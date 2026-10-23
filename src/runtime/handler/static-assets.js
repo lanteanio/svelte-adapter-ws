@@ -199,6 +199,97 @@ function cacheCleanPath(name, entry, directory) {
 	cleanAliases.set(composed, { entry, directory });
 }
 
+// Static bodies are written as views of the startup cache, and a plain socket
+// keeps a reference to the bytes it has not sent yet, so a reader that stops
+// reading retains no copy of them. A TLS socket instead encrypts whatever it
+// is handed into its own output buffer at once, which for a whole body would
+// hold one encrypted copy per stalled reader. So a TLS socket is handed a
+// large cached body one slice at a time, the next once the last has been
+// written; the response itself still ends at once, exactly as before.
+const STATIC_BACKPRESSURE_THRESHOLD = 64 * 1024;
+
+/** The allocations of cached bodies larger than one slice. */
+/** @type {WeakSet<ArrayBufferLike>} */
+const pacedBodies = new WeakSet();
+
+/** @param {Buffer | undefined} buffer */
+function paceLargeBody(buffer) {
+	if (buffer !== undefined && buffer.byteLength > STATIC_BACKPRESSURE_THRESHOLD) pacedBodies.add(buffer.buffer);
+}
+
+/** @param {unknown} chunk */
+function pacedChunk(chunk) {
+	return chunk instanceof Uint8Array && chunk.byteLength > STATIC_BACKPRESSURE_THRESHOLD && pacedBodies.has(chunk.buffer);
+}
+
+/**
+ * Hand a TLS socket's writes of large cached bodies over a slice at a time.
+ * Every other write passes through unchanged, as one write.
+ * @param {any} socket
+ */
+function paceSocketWrites(socket) {
+	const writeGeneric = socket._writeGeneric;
+	if (typeof writeGeneric !== 'function') return;
+	/**
+	 * @param {boolean} writev
+	 * @param {any} data
+	 * @param {string} encoding
+	 * @param {(error?: Error | null) => void} cb
+	 */
+	socket._writeGeneric = function(writev, data, encoding, cb) {
+		/** @type {{ chunk: any, encoding: string }[] | null} */
+		let entries = null;
+		if (writev) {
+			for (let i = 0; i < data.length; i++) {
+				if (pacedChunk(data[i].chunk)) { entries = data; break; }
+			}
+		} else if (pacedChunk(data)) {
+			entries = [{ chunk: data, encoding }];
+		}
+		if (entries === null) return writeGeneric.call(this, writev, data, encoding, cb);
+
+		// Each part ends with at most one slice of a paced body; the entries
+		// before it ride along, as they would have in one write.
+		/** @type {{ chunk: any, encoding: string }[][]} */
+		const parts = [];
+		/** @type {{ chunk: any, encoding: string }[]} */
+		let part = [];
+		for (const entry of entries) {
+			if (!pacedChunk(entry.chunk)) { part.push(entry); continue; }
+			const body = entry.chunk;
+			for (let offset = 0; offset < body.byteLength; offset += STATIC_BACKPRESSURE_THRESHOLD) {
+				part.push({ chunk: body.subarray(offset, offset + STATIC_BACKPRESSURE_THRESHOLD), encoding: 'buffer' });
+				parts.push(part);
+				part = [];
+			}
+		}
+		if (part.length > 0) parts.push(part);
+		let next = 0;
+		/** @param {Error | null} [error] */
+		const writeNext = (error) => {
+			if (error) { cb(error); return; }
+			if (next === parts.length) { cb(); return; }
+			const current = parts[next++];
+			if (current.length === 1 && Buffer.isBuffer(current[0].chunk)) {
+				writeGeneric.call(this, false, current[0].chunk, 'buffer', writeNext);
+				return;
+			}
+			const batch = /** @type {any} */ (current);
+			batch.allBuffers = current.every((entry) => Buffer.isBuffer(entry.chunk));
+			writeGeneric.call(this, true, batch, '', writeNext);
+		};
+		writeNext();
+	};
+}
+
+/**
+ * Pace the large cached bodies written to every connection of a TLS server.
+ * @param {import('node:https').Server} server
+ */
+export function paceStaticTlsWrites(server) {
+	server.on('secureConnection', paceSocketWrites);
+}
+
 /**
  * Load a directory into the static cache.
  * @param {string} dir
@@ -295,6 +386,9 @@ export function cacheDir(dir, urlPrefix, immutable, staticHeaders = null, static
 				entry.gzRevalidationHeadersFlat = flattenRevalidation(entry.gzHeaders);
 			}
 		}
+		paceLargeBody(entry.buffer);
+		paceLargeBody(entry.brBuffer);
+		paceLargeBody(entry.gzBuffer);
 
 		removeCleanAlias(urlPath);
 		staticCache.set(urlPath, entry);

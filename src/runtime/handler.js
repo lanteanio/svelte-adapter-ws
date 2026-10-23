@@ -25,7 +25,7 @@ import {
 	protocol_header, host_header, port_header, address_header
 } from './handler/config.js';
 import { declareSingleValuedProxyHeaders } from './utils/request-headers.js';
-import { cacheDir, clientDir, prerenderedDir, _t_static } from './handler/static-assets.js';
+import { cacheDir, clientDir, prerenderedDir, paceStaticTlsWrites, _t_static } from './handler/static-assets.js';
 import { staticCache } from './handler/state.js';
 import { handleRequest, installRealtimeRoutes } from './handler/request.js';
 import { start as lifecycleStart, shutdown as lifecycleShutdown, drain as drainRequests, closeConnections, whenAborted, beginDrain, lifecycleState, isDraining, abortInFlightRequests } from './handler/lifecycle.js';
@@ -221,6 +221,8 @@ export const server = tlsModule
 // The same routing on a node that ignores the option, before 22.21 and 24.9.
 applyShouldUpgradeCallback(server, shouldUpgradeCallback);
 installProxyProtocol(server);
+// A stalled TLS reader holds no encrypted copy of a large static body.
+if (tlsModule) paceStaticTlsWrites(server);
 // A method node's parser refuses is answered like the ones it accepts.
 refuseUnparsedForbiddenMethods(server);
 // A request's Expect is answered after its Host is checked, in its turn.

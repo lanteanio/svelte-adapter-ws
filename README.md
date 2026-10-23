@@ -817,7 +817,9 @@ HTTP/2 and the entire observability ecosystem
    JavaScript, calendar, WebVTT, and YAML; XML and RTF retain their in-band
    encoding declarations. Bodies and ranges are written as views of the
    cached buffer, so a slow reader does not retain a separate copy of the
-   unsent body. Browser-encoded names match indexed filenames, including
+   unsent body; under native TLS, which encrypts what it is handed at once,
+   a body over 64 KiB is handed to the socket one 64 KiB slice at a time as
+   the socket writes them. Browser-encoded names match indexed filenames, including
    Unicode names with a tilde on Windows. Prerendered clean URLs also
    accept a composed Unicode alias when it remains non-ASCII and does not
    conflict with a real name; directory-style aliases keep their trailing

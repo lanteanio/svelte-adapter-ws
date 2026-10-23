@@ -506,6 +506,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - On Windows, an encoded GET or HEAD for an indexed static file whose name holds a tilde and characters browsers percent-encode, such as `Übersicht~v2.pdf`, serves that exact file from the startup cache; it was refused as a possible short name. Unindexed short names and alternate streams still receive 400, as do encoded entries into reserved adapter paths.
 
+- Large static responses resume from the shared cache under socket backpressure, avoiding a full unsent-body copy for every slow reader while preserving complete ranges and encoded bytes. Under native TLS a body over 64 KiB is handed to the socket one slice at a time, so a stalled reader no longer holds an encrypted copy of the whole body.
+
 - Static plain text, CSV, Markdown, HTML, CSS, JavaScript, calendar, WebVTT, and YAML responses declare UTF-8 so non-ASCII text decodes correctly. XML and RTF retain their own encoding declarations.
 
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
