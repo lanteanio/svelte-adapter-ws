@@ -3531,5 +3531,11 @@
 	},
 	{
 		"file": "test/helpers/send-wire-batch-payload-runner.js"
+	},
+	{
+		"file": "test/wire-codec-payload.test.js"
+	},
+	{
+		"file": "test/helpers/wire-codec-payload-runner.js"
 	}
 ]

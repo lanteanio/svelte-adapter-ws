@@ -1921,6 +1921,7 @@ export async function createTestServer(options = {}) {
 						if (wireStatePoisonedT(ud, wire.capability)) { sendWireFanoutT(ws, env); delivered = true; continue; }
 						if (!sharedEncoded) { sharedPayload = wire.encode(event, data, null); sharedEncoded = true; }
 						if (sharedPayload == null) { sendWireFanoutT(ws, env); delivered = true; continue; }
+						if (!isUint8Array(sharedPayload)) throw new TypeError('wire.encode must return Uint8Array or null');
 						const id = ensureWireIdT(ws, ud, topic);
 						if (id === -1) {
 							// Dropped wire-id announce: JSON for this frame + poison.
@@ -1937,6 +1938,7 @@ export async function createTestServer(options = {}) {
 					} else {
 						const payload = wire.encode(event, data, state);
 						if (payload == null) { sendWireFanoutT(ws, env); delivered = true; continue; }
+						if (!isUint8Array(payload)) throw new TypeError('wire.encode must return Uint8Array or null');
 						const sv = typeof state.schemaVersion === 'number' ? state.schemaVersion : wire.schemaVersion;
 						const id = ensureWireIdT(ws, ud, topic);
 						if (id === -1) {
@@ -2316,6 +2318,7 @@ export async function createTestServer(options = {}) {
 			if (payload == null) {
 				return sendOutboundT(ws, envelope(topic, event, data, seq));
 			}
+			if (!isUint8Array(payload)) throw new TypeError('wire.encode must return Uint8Array or null');
 			const id = ensureWireIdT(ws, ud, topic);
 			if (id === -1) {
 				// Dropped wire-id announce: JSON for this frame + poison.

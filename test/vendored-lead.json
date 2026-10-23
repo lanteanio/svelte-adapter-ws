@@ -151,6 +151,9 @@
 		"src/sim.d.ts": "87052aa",
 		"test/response-read-deadline.test.js": "87052aa",
 		"test/send-wire-batch-payload.test.js": "93e6a65",
-		"test/helpers/send-wire-batch-payload-runner.js": "93e6a65"
+		"test/helpers/send-wire-batch-payload-runner.js": "93e6a65",
+		"src/runtime/handler/wire-fanout.js": "1eeadb5",
+		"test/wire-codec-payload.test.js": "1eeadb5",
+		"test/helpers/wire-codec-payload-runner.js": "1eeadb5"
 	}
 }

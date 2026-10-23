@@ -471,6 +471,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback and codec exceptions propagate unchanged. A failure on a later entry
   leaves earlier entries sent.
 
+- Wire sends and publishes reject invalid codec payloads before binary
+  admission. A codec returning an object announced a wire id before frame
+  construction failed; an array or string could instead be coerced into
+  unintended bytes, so `sendWire`, `publishWire` and `publishWireBatch` now
+  throw `TypeError` for a non-nullish result that is not a `Uint8Array`, on the
+  production runtime and under `createTestServer`. Valid bytes, `Buffer`, views
+  from another realm and nullish fallback keep their behavior; earlier
+  deliveries and publish bookkeeping are not rolled back. On the production
+  runtime an exception thrown by a codec's `encode` from `sendWire` or a
+  stateful `publishWire` now propagates to the caller instead of degrading that
+  frame to JSON, and a connection whose `onAttach` returned null receives the
+  codec's baseline binary encoding instead of JSON, as under `createTestServer`.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.
