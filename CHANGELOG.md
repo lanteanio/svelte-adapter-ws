@@ -281,8 +281,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than written beside that length, on the SSR lane, the authenticate
   endpoint, the admin lane and `createTestServer`'s admin mirror alike. A
   stream that enqueues strings or ArrayBuffers is written like one that
-  enqueues bytes, except that a whole body of one string chunk goes out
-  uncompressed, as the native tier sends it.
+  enqueues bytes.
 - **A malformed WebSocket handshake is refused with `400`, and an unsupported
   version with `426`.** One rule now applies on the runtime, `createTestServer`
   and `vite dev`, as on the family's native tier: `400` unless there is exactly
