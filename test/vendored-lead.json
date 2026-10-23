@@ -107,6 +107,8 @@
 		"test/fixture/src/handshake-vectors.js": "afbd07e",
 		"test/handshake-header-parity.test.js": "afbd07e",
 		"test/upgrade-response-handshake-real.test.js": "afbd07e",
-		"test/upgrade-response-handshake.test.js": "afbd07e"
+		"test/upgrade-response-handshake.test.js": "afbd07e",
+		"test/upgrade-required-real.test.js": "990fabd",
+		"test/ws-handshake-real.test.js": "990fabd"
 	}
 }

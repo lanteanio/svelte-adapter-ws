@@ -1322,7 +1322,7 @@ export async function handleUpgrade(req, socket, head) {
 		: webSocketHandshakeRefusal(readRawHandshake(req.rawHeaders));
 	if (handshakeRefusal !== null) {
 		noteUpgradeRejection(undefined, 'malformed_handshake', req);
-		if (handshakeRefusal === 426) refuseUpgrade(socket, 426, 'Upgrade Required', [['Sec-WebSocket-Version', WEBSOCKET_VERSION]]);
+		if (handshakeRefusal === 426) refuseUpgrade(socket, 426, 'Upgrade Required', [['Upgrade', 'websocket'], ['Connection', 'Upgrade'], ['Sec-WebSocket-Version', WEBSOCKET_VERSION]]);
 		else refuseUpgrade(socket, 400, 'Bad Request');
 		return;
 	}
@@ -3064,7 +3064,7 @@ export function serveWsPathGet(req, res, pathname, search) {
 	// a browser 'upgrade required' and then refuse the upgrade it just asked
 	// for. At normal and elevated the live gate stays the source of truth.
 	if (postureLevel() !== 'siege' && admission.hasCapacity()) {
-		endText(res, 426, { 'content-type': 'text/plain' }, 'WebSocket upgrade required');
+		endText(res, 426, { upgrade: 'websocket', connection: 'Upgrade', 'content-type': 'text/plain' }, 'WebSocket upgrade required');
 		return true;
 	}
 	if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {

@@ -3281,6 +3281,8 @@ export async function createTestServer(options = {}) {
 				res.cork(() => {
 					if (handshakeRefusal === 426) {
 						res.writeStatus('426 Upgrade Required');
+						res.writeHeader('upgrade', 'websocket');
+						res.writeHeader('connection', 'Upgrade');
 						res.writeHeader('sec-websocket-version', WEBSOCKET_VERSION);
 						res.writeHeader('content-type', 'text/plain');
 						res.end('Upgrade Required');
@@ -4420,6 +4422,8 @@ export async function createTestServer(options = {}) {
 			if (!atCapacity) {
 				res.cork(() => {
 					res.writeStatus('426 Upgrade Required');
+					res.writeHeader('upgrade', 'websocket');
+					res.writeHeader('connection', 'Upgrade');
 					res.writeHeader('content-type', 'text/plain');
 					res.end('WebSocket upgrade required');
 				});

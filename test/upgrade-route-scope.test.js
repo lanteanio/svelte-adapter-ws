@@ -367,7 +367,7 @@ for (const { name, build } of UPGRADE_OPTION_MODES) describe(`on ${name}`, () =>
 			expect(upgrade?.status).toBe('426');
 			expect(upgrade?.body).toBe('WebSocket upgrade required');
 			expect(upgrade?.lines.filter((l) => !l.startsWith('date:'))).toEqual([
-				'content-type: text/plain', 'content-length: 26', 'connection: keep-alive', 'keep-alive: timeout=5'
+				'upgrade: websocket', 'connection: upgrade', 'content-type: text/plain', 'content-length: 26'
 			]);
 			expect(poll?.status).toBe('200');
 			expect(room?.status).toBe('200');

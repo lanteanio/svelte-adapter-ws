@@ -437,6 +437,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Date` is reserved for the server in WebSocket handshake headers: `upgradeResponse()` rejects it case-insensitively, and the runtime's own pre-write check refuses it with the hook-error 500. The 101 and every refusal on the WebSocket path carry the server's own `Date`, in production and in `createTestServer`.
 
+- Every `426` from production, `createTestServer` and Vite development, including the plain-navigation `426` on the WebSocket path, carries `Upgrade: websocket` and `Connection: Upgrade`.
+
 - A request whose Content-Length lines all carry the same value reaches the
   request edge, which answers the repeated framing header with its 400 and
   closes the connection; a built asset is served. Differing values keep the
