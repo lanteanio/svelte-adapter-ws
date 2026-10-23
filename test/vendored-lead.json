@@ -145,6 +145,10 @@
 		"test/vite-grant-conjunct.test.js": "1a74816",
 		"test/tracing.test.js": "1a74816",
 		"test/tracing-platform.test.js": "1a74816",
-		"test/tracing-build-real.test.js": "1a74816"
+		"test/tracing-build-real.test.js": "1a74816",
+		"src/runtime/runtime.js": "87052aa",
+		"src/runtime/sim-core.js": "87052aa",
+		"src/sim.d.ts": "87052aa",
+		"test/response-read-deadline.test.js": "87052aa"
 	}
 }

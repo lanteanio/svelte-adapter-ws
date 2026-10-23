@@ -457,6 +457,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   async work and suppresses the connection fallback. Development and testing
   expose the same context boundary.
 
+- A custom runtime environment whose timers supply `setImmediate` without
+  `clearImmediate` no longer has its handles passed to Node's canceller; the
+  optional `RuntimeEnv.timers.clearImmediate` cancels a check-phase callback.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.

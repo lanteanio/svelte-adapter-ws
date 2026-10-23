@@ -112,7 +112,13 @@ export function setRuntimeEnv(env, opts) {
 	current = Object.freeze({
 		clock: Object.freeze({ ...defaultEnv.clock, ...(env && env.clock) }),
 		rng: Object.freeze({ ...defaultEnv.rng, ...(env && env.rng) }),
-		timers: Object.freeze({ ...defaultEnv.timers, ...(env && env.timers) }),
+		timers: Object.freeze({
+			...defaultEnv.timers,
+			...(env && env.timers),
+			// A custom immediate handle does not belong to Node's canceller.
+			// Older schedulers may let the harmless released callback run once.
+			clearImmediate: env?.timers?.clearImmediate ?? (env?.timers?.setImmediate ? () => {} : defaultEnv.timers.clearImmediate)
+		}),
 		tz: env && Object.prototype.hasOwnProperty.call(env, 'tz') ? env.tz : defaultEnv.tz
 	});
 	return current;

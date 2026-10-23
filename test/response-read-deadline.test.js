@@ -2,8 +2,32 @@ import { afterEach, expect, it } from 'vitest';
 import { readReady, releaseReadAllowance } from '../src/runtime/handler/response-read.js';
 import { readBodyUpTo } from '../src/runtime/handler/ssr-dedup.js';
 import { resetRuntimeEnv, setRuntimeEnv } from '../src/runtime/runtime.js';
+import { createScheduler, createSeededRng } from '../src/runtime/sim-core.js';
 
 afterEach(() => resetRuntimeEnv());
+
+it('accepts custom immediate schedulers without a cancellation method', async () => {
+	let callback;
+	setRuntimeEnv({ timers: { setImmediate(fn) { callback = fn; return Object.freeze({ custom: true }); } } });
+	const deferred = Promise.withResolvers();
+	const active = readReady({ read: () => deferred.promise });
+	await Promise.resolve();
+	deferred.resolve({ done: true });
+	expect(await active).toEqual({ done: true });
+	expect(() => callback()).not.toThrow();
+});
+
+it('removes the deadline from the deterministic scheduler after a ready read', async () => {
+	const scheduler = createScheduler();
+	setRuntimeEnv(scheduler.buildEnv(createSeededRng(1)));
+	const deferred = Promise.withResolvers();
+	const active = readReady({ read: () => deferred.promise });
+	await Promise.resolve();
+	expect(scheduler.pending()).toBe(1);
+	deferred.resolve({ done: true });
+	expect(await active).toEqual({ done: true });
+	expect(scheduler.pending()).toBe(0);
+});
 
 function checkQueue() {
 	const waiting = new Map();
