@@ -350,6 +350,29 @@ describe('a serializer that keeps queueing', () => {
 		}
 	});
 
+	it('sends two values per queued entry when each serializer adds a new key, then continues later', async () => {
+		const c = await connect();
+		state.wsConnections.add(c.facade);
+		try {
+			let calls = 0;
+			const chained = (n) => ({
+				toJSON() {
+					calls++;
+					if (n < 5) platform.sendCoalesced(c.facade, { key: 'chain:' + (n + 1), topic: 't', event: 'chain', data: chained(n + 1) });
+					return n;
+				}
+			});
+			platform.sendCoalesced(c.facade, { key: 'chain:0', topic: 't', event: 'chain', data: chained(0) });
+			expect(calls, 'the call serializes its own value and one added entry').toBe(2);
+			expect(c.frames.map((f) => JSON.parse(f).data)).toEqual([0, 1]);
+			expect([...c.pending().keys()]).toEqual(['chain:2']);
+			for (let turn = 0; turn < 20 && c.pending().size > 0; turn++) await new Promise((r) => setTimeout(r, 5));
+			expect(c.frames.map((f) => JSON.parse(f).data)).toEqual([0, 1, 2, 3, 4, 5]);
+		} finally {
+			state.wsConnections.delete(c.facade);
+		}
+	});
+
 	it('drops the queue when the connection is gone before the continuation runs', async () => {
 		const c = await connect();
 		const { value, seen } = requeueing(c, 1000);
