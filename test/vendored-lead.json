@@ -26,7 +26,7 @@
 		"test/static-future-mtime-real.test.js": "7106fe8",
 		"test/static-last-modified.test.js": "7106fe8",
 		"test/subscription-release-real.test.js": "7106fe8",
-		"test/vite-subscriber-walk-real.test.js": "7106fe8",
+		"test/vite-subscriber-walk-real.test.js": "da9d3e2",
 		"test/smooth-drain-budget-real.test.js": "7106fe8",
 		"src/subscriptions.js": "015052a",
 		"src/subscriptions.d.ts": "f1e2abe",
@@ -88,6 +88,8 @@
 		"test/fixture/src/hooks.ws.wire-stats.js": "8d9f1fc",
 		"test/wire-broadcast-stats-real.test.js": "8d9f1fc",
 		"test/fixture/src/hooks.ws.dropped-stats.js": "cb3e451",
-		"test/dropped-send-stats-real.test.js": "cb3e451"
+		"test/dropped-send-stats-real.test.js": "cb3e451",
+		"test/fixture/src/hooks.ws.topic-stats.js": "ae6a8cd",
+		"test/topic-broadcast-stats-real.test.js": "da9d3e2"
 	}
 }

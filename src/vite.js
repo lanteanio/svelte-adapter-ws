@@ -763,11 +763,9 @@ export default function uws(options = {}) {
 			const caps = userData[WS_CAPS];
 			if (caps && caps.has('batch')) {
 				ws.send(sharedBatchEnv);
-				bumpOutV(userData, sharedBatchEnv);
 			} else {
 				for (let i = 0; i < events.length; i++) {
 					ws.send(events[i].env);
-					bumpOutV(userData, events[i].env);
 				}
 			}
 		}
@@ -1559,7 +1557,9 @@ export default function uws(options = {}) {
 			const timeoutMs = (options && options.timeoutMs) || defaultRequestTimeoutMs;
 			const targets = [];
 			for (const [ws, topics] of subscriptions) {
-				if (topics.has(topic)) targets.push(ws);
+				if (!topics.has(topic) || ws.readyState !== 1) continue;
+				const wrapped = wsWrappers.get(ws);
+				if (wrapped) targets.push(wrapped);
 			}
 			return Promise.all(targets.map((ws) =>
 				request(ws, event, data, { timeoutMs })
@@ -1645,10 +1645,6 @@ export default function uws(options = {}) {
 	 *  still the initial load, and no previous handler exists to keep serving. */
 	let handlerEverLoaded = false;
 
-	/**
-	 * Extract handler functions from a loaded module.
-	 * @param {Record<string, any>} mod
-	 */
 	/**
 	 * @param {unknown} ref
 	 * @returns {ref is number | string}
@@ -1826,6 +1822,10 @@ export default function uws(options = {}) {
 		return true;
 	}
 
+	/**
+	 * Extract handler functions from a loaded module.
+	 * @param {Record<string, any>} mod
+	 */
 	function applyHandlers(mod) {
 		// Same refusal as the production startup: a DEFINED non-function
 		// egressTenantOf must not read as "no resolver", which would stand

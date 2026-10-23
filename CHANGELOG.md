@@ -407,6 +407,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directed sends and wire-id announcements remain counted, including with
   outbound fault injection.
 
+- Test-server topic broadcasts and packed batches also remain outside
+  close-hook traffic counters when outbound fault injection walks individual
+  subscribers; delivery, filtering, drops, and delays retain their existing
+  behavior.
+
+- In Vite development, `platform.requestTopic` sends to the open adapter sockets
+  subscribed to the topic, so subscribers that already closed are skipped, and
+  topic batch broadcasts stay out of close-hook traffic counters as they do in
+  production.
+
 - Malformed upgrades and disconnects cannot end the Vite dev server. Invalid
   WebSocket request targets receive 400, and a peer reset while the handler
   loads or its asynchronous upgrade hook runs closes only that connection,
