@@ -87,7 +87,7 @@
 		"test/vite-upgrade-lifetime.test.js": "c384a1c",
 		"test/fixture/src/hooks.ws.wire-stats.js": "8d9f1fc",
 		"test/wire-broadcast-stats-real.test.js": "8d9f1fc",
-		"test/fixture/src/hooks.ws.dropped-stats.js": "cb3e451",
+		"test/fixture/src/hooks.ws.dropped-stats.js": "0fa9803",
 		"test/dropped-send-stats-real.test.js": "cb3e451",
 		"test/fixture/src/hooks.ws.topic-stats.js": "ae6a8cd",
 		"test/topic-broadcast-stats-real.test.js": "da9d3e2",
@@ -158,6 +158,7 @@
 		"src/runtime/utils/epoch.js": "cf2347e",
 		"test/publish-serialization-real.test.js": "cf2347e",
 		"src/runtime/wire.js": "0fa9803",
-		"src/runtime/handler/wire-state.js": "0fa9803"
+		"src/runtime/handler/wire-state.js": "0fa9803",
+		"test/wire-id-retirement-real.test.js": "0fa9803"
 	}
 }

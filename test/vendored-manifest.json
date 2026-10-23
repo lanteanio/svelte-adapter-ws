@@ -3540,5 +3540,8 @@
 	},
 	{
 		"file": "test/publish-serialization-real.test.js"
+	},
+	{
+		"file": "test/wire-id-retirement-real.test.js"
 	}
 ]
