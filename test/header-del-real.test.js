@@ -68,8 +68,8 @@ describe.each(['runtime', 'tls', 'mirror'])('DEL header values on %s', surface =
 	});
 	for (const target of surface === 'mirror' ? ['/__realtime/inspect'] : ['/inspect', '/__realtime/inspect']) {
 		it.each([false, true])('preserves values and reuse at ' + target + ' with split=%s', async split => {
-			const values = ['plain', '\x7falpha', 'a\x7fb', 'alpha\x7f', '~\x7f~', '\xffa\xc3\xa9\x7fb\xff', 'again'];
-			const expected = ['plain', '\x7falpha', 'a\x7fb', 'alpha\x7f', '~\x7f~', 'a\u00e9\x7fb', 'again'];
+			const values = ['plain', '\x7falpha', 'a\x7fb', 'alpha\x7f', '~\x7f~', '\xffa\xc3\xa9\x7fb\xff', '\x7f', 'alpha\x7f\x7f', 'alpha\x7f \t', ' \t\x7falpha', 'again'];
+			const expected = ['plain', '\x7falpha', 'a\x7fb', 'alpha\x7f', '~\x7f~', 'a\u00e9\x7fb', '\x7f', 'alpha\x7f\x7f', 'alpha\x7f', '\x7falpha', 'again'];
 			const requests = values.map(value => {
 				const wire = request(target, ['X-Probe: ' + value]);
 				const cut = split ? wire.indexOf('X-Probe:') + 11 : wire.length;
