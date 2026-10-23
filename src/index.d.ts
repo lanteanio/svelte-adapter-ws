@@ -1064,13 +1064,27 @@ export interface MetricsRegistry {
  */
 export interface Platform {
 	readonly requestId: string;
+	/**
+	 * Validated W3C context for the currently active HTTP, WebSocket, RPC, bus,
+	 * or durable-work operation. Concurrent operations on one connection remain
+	 * isolated. Null when no context exists or withContext(null) clears it.
+	 */
 	readonly traceContext: TraceContext | null;
+
+	/**
+	 * Vendor-neutral trace boundary. run() creates a provider span and keeps its
+	 * context active across async work; inject() writes traceparent/tracestate to
+	 * an outbound carrier. Explicit contexts work without a configured provider;
+	 * run() then calls the callback without allocating a span.
+	 */
 	readonly trace: Readonly<{
 		readonly enabled: boolean;
 		current(): TraceContext | null;
 		extract(carrier: Headers | Record<string, unknown>): TraceContext | null;
 		inject<T extends Headers | Record<string, string>>(carrier: T, context?: TraceContext | null): T;
 		run<T>(name: string, options: TraceOperationOptions, fn: (span: TraceSpan | null) => T): T;
+		/** Activate a received context, or clear inherited context with null.
+		 * Applies across awaits and restores the caller context on return or throw. */
 		withContext<T>(context: TraceContext | null, fn: () => T): T;
 	}>;
 	publish(topic: string, event: string, data?: unknown, options?: { relay?: boolean; seq?: boolean | number | bigint | null; compress?: boolean; jitterMs?: number }): boolean;

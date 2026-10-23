@@ -139,6 +139,12 @@
 		"scripts/generate-platform-contract.js": "71debb5",
 		"docs/platform-contract.md": "71debb5",
 		"test/platform-contract.test.js": "71debb5",
-		"test/fixture/src/hooks.ws.platform-contract.js": "71debb5"
+		"test/fixture/src/hooks.ws.platform-contract.js": "71debb5",
+		"src/runtime/tracing.js": "1a74816",
+		"src/observability.d.ts": "1a74816",
+		"test/vite-grant-conjunct.test.js": "1a74816",
+		"test/tracing.test.js": "1a74816",
+		"test/tracing-platform.test.js": "1a74816",
+		"test/tracing-build-real.test.js": "1a74816"
 	}
 }

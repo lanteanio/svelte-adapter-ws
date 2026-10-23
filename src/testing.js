@@ -1,5 +1,6 @@
 import { isSet } from 'node:util/types';
 import { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLogicalSubscription, accountClosedLogicalSubscriptions } from './runtime/utils/ws-symbols.js';
+import { activeTraceContext, trace } from './runtime/tracing.js';
 import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
 import { now, monotonicNow, wallEpoch, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
@@ -1753,6 +1754,8 @@ export async function createTestServer(options = {}) {
 	}
 
 	const platform = {
+		get traceContext() { return activeTraceContext(); },
+		trace,
 		// The observer lane's deny-unwind (authorizeDerivedSubscribe) runs the
 		// app's unsubscribe hook through this slot - the shared primitive has no
 		// reference to this server's hook container. Per-platform rather than

@@ -31,7 +31,7 @@ import { parentPort } from 'node:worker_threads';
 import { collapseByCoalesceKey, drainCoalesced } from '../utils/backpressure.js';
 import { readAssertionCounts, assert, fatal } from '../utils/assertions.js';
 import { now, monotonicNow, processMonotonicNow, randomFloat, randomU32, randomUuid, randomBytes, setTimer, clearTimer } from '../runtime.js';
-import { trace, activeTraceContext } from '../tracing.js';
+import { trace, resolveTraceContext } from '../tracing.js';
 import { ADAPTER_ERROR_IDS, REQUEST_CLOSED_DETAIL, adapterConsoleLine, adapterErrorMessage } from '../error-registry.js';
 import { emitOperationalEvent, diagnosticError } from '../diagnostic.js';
 import { privateValueMetadata } from '../utils/observability-privacy.js';
@@ -1760,7 +1760,7 @@ export const platform = {
 	get connections() { return wsConnections.size; },
 
 	get traceContext() {
-		return activeTraceContext() ?? /** @type {any} */ (this).connectionTraceContext ?? null;
+		return resolveTraceContext(/** @type {any} */ (this));
 	},
 
 	trace,

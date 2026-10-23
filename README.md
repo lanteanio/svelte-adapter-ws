@@ -667,6 +667,17 @@ prerendered serving, WebSocket upgrades and per-message hooks, propagates W3C
 the active context as `platform.trace` / `platform.traceContext`. Without the
 option the tracing paths cost one boolean test.
 
+Use `platform.trace.withContext(null, fn)` for carrier-less background work.
+It clears inherited context, including the connection fallback, for the callback
+and its async descendants. A valid context activates that parent instead.
+The caller's context is restored after return, throw, or rejection. This boundary
+also works without a provider and in development and testing. Inside it,
+`current()` and `platform.traceContext` return null until a new context or span is
+activated, and `run()` starts a root operation. Providers must treat a null parent
+as a root, so an OpenTelemetry adapter extracts a carried parent into
+`ROOT_CONTEXT` and starts from `ROOT_CONTEXT` when there is none, rather than
+from `context.active()`.
+
 Set `CANONICAL_HOST_ALIASES` to comma-separated, case-insensitive exact authorities
 (such as `www.example.com,preview.example.com:8443`) to return a 308 redirect to
 `ORIGIN` before static delivery or SSR. Ports match exactly. `ORIGIN` must be an

@@ -453,6 +453,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handling continues. Hook failures keep their existing 1011 close codes and
   reasons, and a failed close hook still allows connection cleanup.
 
+- `platform.trace.withContext(null, fn)` clears inherited trace context across
+  async work and suppresses the connection fallback. Development and testing
+  expose the same context boundary.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.
