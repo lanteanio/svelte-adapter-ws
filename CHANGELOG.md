@@ -475,6 +475,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Vite development rejects authentication endpoint preflights before app-wide CORS can approve them. Exact custom auth paths retain the production `405` response without changing CORS on other routes.
 
+- A WebSocket connection whose setup fails after the upgrade never runs the
+  application `close` hook, however late in setup the failure lands, so the
+  close hook stays paired with connections whose `open` hook could run.
+
 - A request whose Content-Length lines all carry the same value reaches the
   request edge, which answers the repeated framing header with its 400 and
   closes the connection; a built asset is served. Differing values keep the

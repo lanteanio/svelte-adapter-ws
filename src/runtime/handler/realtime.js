@@ -1612,7 +1612,9 @@ export async function handleUpgrade(req, socket, head) {
 						// A failure between accept and full registration must tear
 						// the socket down completely - a half-registered connection
 						// would sit in the walks forever with no close listener to
-						// reap it.
+						// reap it. A close listener that was already armed must not run
+						// the app close hook for a connection whose open hook never ran.
+						failedOpenConnections.add(ws);
 						emitOperationalEvent({
 							source: 'svelte-adapter-ws',
 							component: 'runtime.websocket-open',
@@ -1653,6 +1655,14 @@ export async function handleUpgrade(req, socket, head) {
 	// than growing without bound.
 	if (admission.admit(acceptUpgrade) === null) rejectDeferredOverflow(headers);
 }
+
+/**
+ * Accepted sockets whose setup failed before the app open hook. Their close
+ * is setup cleanup, not a connection close, so the close hook stays paired
+ * with the open hook.
+ * @type {WeakSet<import('ws').WebSocket>}
+ */
+const failedOpenConnections = new WeakSet();
 
 /**
  * @param {import('ws').WebSocket} rawWs
@@ -1783,6 +1793,7 @@ function openConnection(rawWs, userData, requestId, connectionTraceContext = nul
 		const code = serverEnd !== null ? serverEnd.code : peerCode;
 		const reason = serverEnd !== null ? serverEnd.reason : peerReason;
 		if (idleTimer !== null) clearIntervalTimer(idleTimer);
+		if (failedOpenConnections.delete(rawWs)) return;
 		// 1000 (normal) and 1001 (going away) are the two codes a peer sends
 		// deliberately; everything else - including the 1006 a dropped TCP
 		// connection synthesizes - is an abnormal end.
