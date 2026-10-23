@@ -156,6 +156,8 @@
 		"test/wire-codec-payload.test.js": "1eeadb5",
 		"test/helpers/wire-codec-payload-runner.js": "1eeadb5",
 		"src/runtime/utils/epoch.js": "cf2347e",
-		"test/publish-serialization-real.test.js": "cf2347e"
+		"test/publish-serialization-real.test.js": "cf2347e",
+		"src/runtime/wire.js": "0fa9803",
+		"src/runtime/handler/wire-state.js": "0fa9803"
 	}
 }

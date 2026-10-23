@@ -16,7 +16,7 @@ import { stampSeq, resolveEntrySeq, resolveSendSeq, assertStampableSeq, processE
 import { createByteBudget, controlFrameBytes, MAX_CONTROL_EGRESS_BYTES, CONTROL_EGRESS_WINDOW_MS, CONTROL_FLOOD_CLOSE_CODE } from './runtime/utils/byte-budget.js';
 import { createSeqBound } from './runtime/utils/seq-bound.js';
 import { mergeSamples } from './runtime/utils/metrics-merge.js';
-import { buildBinaryFrame, allocWireId, wireIdAnnounce, createCapCounts, createLeaseState, leaseGrantFrame, leaseReportedSaturation, controlFrameTooLargeFrame, DEFAULT_GRANT } from './runtime/wire.js';
+import { buildBinaryFrame, allocWireId, retireWireId, wireIdAnnounce, createCapCounts, createLeaseState, leaseGrantFrame, leaseReportedSaturation, controlFrameTooLargeFrame, DEFAULT_GRANT } from './runtime/wire.js';
 import { createSharedWireIdTable } from './runtime/handler/shared-wire-id.js';
 import { deliverStatefulWireBatch, deliverStatelessWireFanout, encodeStatelessWirePayload } from './runtime/handler/wire-fanout.js';
 import { snapshotUpgradeHeaders, warnSetCookieOnUpgradeOnce } from './runtime/utils/upgrade-headers.js';
@@ -1532,7 +1532,10 @@ export async function createTestServer(options = {}) {
 			// budget like every other one - and a connection the budget cut is a
 			// dropped announce too (sendControlT answers 2 for both).
 			const result = sendControlT(ws, wireIdAnnounce(topic, id));
-			if (result === 2) return -1;
+			if (result === 2) {
+				retireWireId(ud, WS_TOPIC_IDS, topic);
+				return -1;
+			}
 		}
 		return id;
 	}
