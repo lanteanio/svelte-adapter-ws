@@ -1130,8 +1130,7 @@ function observeUpgradeOutcome(socket, outcome) {
  * write through - so the status line and headers are composed here.
  *
  * `extraHeaders` is either one pre-rendered header line or a list of name /
- * value pairs; a pair list supplying its own content-type wins, which is what
- * lets the capacity refusals answer with a document instead of plain text.
+ * value pairs; a pair list supplying its own content-type wins.
  *
  * @param {import('node:stream').Duplex} socket
  * @param {number} status
@@ -1140,9 +1139,8 @@ function observeUpgradeOutcome(socket, outcome) {
  * @param {boolean} [closeConnection]
  */
 function refuseUpgrade(socket, status, text, extraHeaders, closeConnection = false) {
-	// Every refusal on the WebSocket path writes through here (the waiting-room
-	// and capacity documents reach it via upgradeRefusalResponse), so this is
-	// the one place the rejected leg of the upgrade timing has to be stamped.
+	// Every refusal on the WebSocket path writes through here, so this is the
+	// one place the rejected leg of the upgrade timing has to be stamped.
 	observeUpgradeOutcome(socket, 'rejected');
 	const line = STATUS_TEXT[status] || 'Error';
 	let head = `HTTP/1.1 ${status} ${line}\r\n`;
@@ -1160,34 +1158,6 @@ function refuseUpgrade(socket, status, text, extraHeaders, closeConnection = fal
 	// Every native response carries the server's Date, a refusal included.
 	head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n'; // determinism-allow: formats the injected wall clock
 	finishUpgradeRefusal(socket, head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text, closeConnection);
-}
-
-/**
- * The response shape the shared refusal writers speak, over a raw upgrade
- * socket. sendWaitingRoomPage() and the capacity refusals are written once for
- * the whole family against a cork/writeStatus/writeHeader/end response; this
- * adapts that to the socket the upgrade listener holds, so the status line,
- * the headers and the body bytes stay identical to what the family answers.
- *
- * @param {import('node:stream').Duplex} socket
- */
-function upgradeRefusalResponse(socket) {
-	let status = 503;
-	/** @type {Array<[string, string]>} */
-	const headers = [];
-	const res = {
-		cork(fn) { fn(); return res; },
-		writeStatus(statusLine) {
-			status = Number.parseInt(String(statusLine), 10) || 503;
-			return res;
-		},
-		writeHeader(name, value) { headers.push([String(name), String(value)]); return res; },
-		end(body) {
-			refuseUpgrade(socket, status, body == null ? '' : String(body), headers);
-			return res;
-		}
-	};
-	return res;
 }
 
 /**
@@ -1334,44 +1304,10 @@ export async function handleUpgrade(req, socket, head) {
 	const cursorLaneEnabled = admission.cursorMaxConcurrent > 0;
 	const isCursor = cursorLaneEnabled && isCursorLaneUpgrade(headerValue(req, 'sec-websocket-protocol'));
 
-	// Serve an at-capacity refusal without ever consuming a gate slot. A
-	// browser navigation gets the self-polling holding page (it holds no
-	// socket); everything else keeps the 503 plus a jittered Retry-After. A
-	// cursor-lane upgrade is never a browser navigation, so it always gets the
-	// bare 503 and skips the Accept negotiation - but it backs off like every
-	// other refusal, because the condition is the same full gate.
+	// A validated WebSocket handshake always receives a retry response.
+	// Browser navigation is handled by the separate HTTP route. Every refused
+	// lane uses the posture-widened Retry-After, room or no room.
 	const serveUpgradeRefusal = () => {
-		if (WAITING_ROOM === null || isCursor) {
-			// An HTML navigation keeps a minimal document baseline even when
-			// the interactive room is disabled.
-			if (!isCursor && negotiateRejection(
-				headerValue(req, 'accept'), headerValue(req, 'upgrade')
-			) === 'html') {
-				sendWaitingRoomPage(upgradeRefusalResponse(socket), {
-					body: buildAccessibleCapacityRefusalPage(),
-					lang: 'en',
-					dir: 'ltr',
-					headers: [['retry-after', String(refusalRetryAfter())]],
-					varyAcceptLanguage: false
-				}, '503 Service Unavailable');
-				return;
-			}
-			refuseUpgrade(socket, 503, 'Server is at upgrade capacity, please retry', [
-				['retry-after', String(refusalRetryAfter())]
-			]);
-			return;
-		}
-		// One header read, no full walk on the reject path.
-		if (negotiateRejection(headerValue(req, 'accept'), headerValue(req, 'upgrade')) === 'html') {
-			// Browser navigation: serve the self-polling holding page.
-			sendWaitingRoomPage(upgradeRefusalResponse(socket), WAITING_ROOM.renderResponse(
-				undefined,
-				createWaitingRoomRequest(waitingRoomRequestFacade(req, pathname, q === -1 ? '' : url.slice(q + 1)))
-			));
-			return;
-		}
-		// WebSocket handshake / library client: the 503, refined with the
-		// jittered Retry-After.
 		refuseUpgrade(socket, 503, 'Server is at upgrade capacity, please retry', [
 			['retry-after', String(refusalRetryAfter())]
 		]);
