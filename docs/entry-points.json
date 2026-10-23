@@ -23,6 +23,12 @@
 		"stability": "supported",
 		"deprecation": "none"
 	},
+	"./platform-contract": {
+		"role": "Authoritative public platform member inventory",
+		"environment": "Universal",
+		"stability": "supported",
+		"deprecation": "none"
+	},
 	"./client": {
 		"role": "Reactive connection and topic stores",
 		"environment": "Browser",

@@ -31,6 +31,10 @@
 			"types": "./src/subscriptions.d.ts",
 			"default": "./src/subscriptions.js"
 		},
+		"./platform-contract": {
+			"types": "./src/platform-contract.d.ts",
+			"default": "./src/platform-contract.js"
+		},
 		"./client": {
 			"types": "./src/client.d.ts",
 			"default": "./src/client.js"
@@ -173,6 +177,7 @@
 		"check:determinism": "node scripts/check-determinism.js",
 		"check:errors": "node scripts/render-error-docs.js --check",
 		"check:entry-points": "node scripts/render-entry-points.js --check",
+		"check:platform-contract": "node scripts/generate-platform-contract.js --check",
 		"check:types": "node scripts/check-types.js",
 		"check:declarations": "node scripts/check-declarations.js",
 		"check:source-bytes": "node scripts/check-source-bytes.js",

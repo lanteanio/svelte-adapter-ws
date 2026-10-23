@@ -133,6 +133,12 @@
 		"src/build-rollup-lifecycle.js": "1925f07",
 		"test/extra-entry-imports.test.js": "1925f07",
 		"src/sim.js": "11404d8",
-		"test/sim-framework-assertions.test.js": "11404d8"
+		"test/sim-framework-assertions.test.js": "11404d8",
+		"src/platform-contract.js": "71debb5",
+		"src/platform-contract.d.ts": "71debb5",
+		"scripts/generate-platform-contract.js": "71debb5",
+		"docs/platform-contract.md": "71debb5",
+		"test/platform-contract.test.js": "71debb5",
+		"test/fixture/src/hooks.ws.platform-contract.js": "71debb5"
 	}
 }

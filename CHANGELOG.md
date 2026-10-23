@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SvelteKit server has initialized, so module-level environment reads see their
   values.
 
+- **Authoritative platform member inventory.** The new
+  `svelte-adapter-ws/platform-contract` entry exports `PLATFORM_MEMBERS`, a
+  generated immutable list of public platform members, and the
+  `PlatformMember` type, so extension wrappers and tests can compare their
+  supported surface against the adapter declarations without maintaining a
+  separate list that can silently omit new methods or inherited context
+  members. Additive inventory; it does not establish which optional
+  capabilities another runtime implements.
+
 - `examples/deployment` carries a systemd unit and a container compose file
   with readiness, restart policy and termination grace.
 

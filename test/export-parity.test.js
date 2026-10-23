@@ -28,9 +28,55 @@ const LEAD_META = readLeadAtPin(['package.json', 'README.md']);
 const leadPkg = LEAD_META.get('package.json');
 const leadReadme = LEAD_META.get('README.md');
 
+// A subpath the lead added after the pin is carried by vendoring both of its
+// targets at the lead revision that declares it (fileRevisions in
+// test/vendored-lead.json). Its declaration is read from the lead's package.json
+// and README at that same revision, so a carried subpath is held to the lead as
+// strictly as a pinned one, while this repository's own package.json and README
+// keep their reconciliation at the pin. A subpath whose targets are not pinned
+// to one shared revision has no lead declaration to inherit and stays invented.
+
+/** @param {string} rev @param {string} file */
+function leadFileAt(rev, file) {
+	try {
+		return execFileSync('git', ['-C', uwsRoot, 'show', `${rev}:${file}`], {
+			encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024
+		});
+	} catch {
+		return null;
+	}
+}
+
+/** @param {Record<string, string>} condition */
+function carriedRevision(condition) {
+	const revs = new Set(Object.values(condition).map((target) =>
+		LEAD.fileRevisions?.[String(target).replace(/^\.\//, '')] ?? null));
+	if (revs.size !== 1) return null;
+	const [rev] = revs;
+	return rev;
+}
+
+/** @type {Map<string, { rev: string, exports: Record<string, any>, readme: string | null }>} */
+const CARRIED = new Map();
+if (leadPkg !== null) {
+	const pinned = JSON.parse(/** @type {string} */ (leadPkg)).exports;
+	for (const [subpath, condition] of Object.entries(ours)) {
+		if (subpath in pinned) continue;
+		const rev = carriedRevision(condition);
+		if (rev === null) continue;
+		const pkg = leadFileAt(rev, 'package.json');
+		if (pkg === null) continue;
+		const exports = JSON.parse(pkg).exports;
+		if (!(subpath in exports)) continue;
+		CARRIED.set(subpath, { rev, exports, readme: leadFileAt(rev, 'README.md') });
+	}
+}
+
 function leadExports() {
 	expect(leadPkg, `lead package.json missing at ${LEAD.rev}`).not.toBe(null);
-	return JSON.parse(/** @type {string} */ (leadPkg)).exports;
+	const exports = { ...JSON.parse(/** @type {string} */ (leadPkg)).exports };
+	for (const [subpath, carried] of CARRIED) exports[subpath] = carried.exports[subpath];
+	return exports;
 }
 
 describe('declared subpaths stay inside the lead surface', () => {
@@ -168,8 +214,9 @@ describe('the entry-point catalog stays true to its sources', () => {
 
 	it('carries the lead declaration for every subpath', () => {
 		expect(leadReadme, `lead README.md missing at ${LEAD.rev}`).not.toBe(null);
-		const lead = new Map(
-			catalogRows(/** @type {string} */ (leadReadme)).map((cells) => {
+		/** @param {string} markdown */
+		const declarations = (markdown) => new Map(
+			catalogRows(markdown).map((cells) => {
 				const name = cells[0].replaceAll('`', '');
 				const subpath = name === 'svelte-adapter-uws' ? '.' : '.' + name.slice('svelte-adapter-uws'.length);
 				// The lead's Guide column links into its own README, which has
@@ -177,6 +224,11 @@ describe('the entry-point catalog stays true to its sources', () => {
 				return [subpath, { role: cells[1], environment: cells[2], stability: cells[3], deprecation: cells[5] }];
 			})
 		);
+		const lead = declarations(/** @type {string} */ (leadReadme));
+		for (const [subpath, carried] of CARRIED) {
+			expect(carried.readme, `lead README.md missing at ${carried.rev}`).not.toBe(null);
+			lead.set(subpath, declarations(/** @type {string} */ (carried.readme)).get(subpath));
+		}
 		for (const [subpath, entry] of Object.entries(meta)) {
 			expect(lead.get(subpath), `${subpath} is absent from the lead catalog`).toBeDefined();
 			expect(entry, `${subpath} declaration`).toEqual(lead.get(subpath));
