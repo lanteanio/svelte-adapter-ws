@@ -418,7 +418,7 @@ describe('cluster sequence authority policy', () => {
 		// its atomic pre-pass; the stamp and the relay filter both consume the
 		// captured values.
 		expectStatement(batch, 'assertClusterSequenceAuthorityValues(seqOption, relayOption);', 'publishBatched vets cluster sequence authority');
-		expectStatement(batch, 'const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);', 'publishBatched stamps from the captured value');
+		expectStatement(batch, 'const seq = stampSeqValue(msgSeqs[i], topicSeqs, entry.topic, seqBound);', 'publishBatched stamps from the captured value');
 		// Same reason as batch(), and here the stamping loop is what would
 		// otherwise surface a bad value - after earlier entries have advanced
 		// the topic counter for a frame the call never sends.

@@ -118,8 +118,8 @@ describe('every stamping lane records what it stamped', () => {
 
 	it('the message batch records every message it stamped', () => {
 		const body = block(platform, '\tpublishBatched(', '\n\t/**');
-		expect(body).toContain("if (typeof msgSeqs[i] === 'number' || typeof msgSeqs[i] === 'bigint') recordSeen(maxSeenSeq, m.topic, seq, seqBound);");
-		expect(body).toContain('else recordStampedSeen(maxSeenSeq, m.topic, seq, seqBound);');
+		expect(body).toContain("if (typeof msgSeqs[i] === 'number' || typeof msgSeqs[i] === 'bigint') recordSeen(maxSeenSeq, entry.topic, seq, seqBound);");
+		expect(body).toContain('else recordStampedSeen(maxSeenSeq, entry.topic, seq, seqBound);');
 	});
 
 	it('the game lane records what it stamped', () => {
