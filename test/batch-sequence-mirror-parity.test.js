@@ -221,7 +221,7 @@ async function bootDevPlatform() {
 
 	await plugin.configureServer({
 		httpServer,
-		middlewares: { use() {} },
+		middlewares: { stack: [], use() {} },
 		config: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },
 		async ssrLoadModule() { return { default: handler, ...handler }; }
 	});

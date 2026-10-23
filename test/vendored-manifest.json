@@ -1581,6 +1581,10 @@
 			{
 				"lead": "\t\t\t\t\trunCloseHook(userHandlers, wrapped, ctx);\n",
 				"ours": "\t\t\t\t\trunCloseHook(userHandlers, wrapped, ctx);\n\t\t\t\t\taccountClosedLogicalSubscriptions(subs);\n"
+			},
+			{
+				"lead": "\t\t\t\treturn;\n\t\t\t}\n\n\t\t\t// Warn if our WS path collides with the Vite HMR WebSocket path.\n\t\t\tconst hmrConfig = server.config.server?.hmr;\n\t\t\tif (hmrConfig && typeof hmrConfig === 'object' && hmrConfig.path === wsPath) {",
+				"ours": "\t\t\t\treturn;\n\t\t\t}\n\n\t\t\t// Vite installs CORS before configureServer. Insert a refusal-only\n\t\t\t// guard ahead of it through Connect's stack so auth preflights cannot\n\t\t\t// be approved by the application's broader CORS policy. Other paths\n\t\t\t// and methods keep the existing middleware order.\n\t\t\tconst refuseAuthPreflight = (req, res, next) => {\n\t\t\t\tif (req.method !== 'OPTIONS') return next();\n\t\t\t\tconst target = req.originalUrl || req.url || '';\n\t\t\t\tif (target.split('?')[0] !== wsAuthPath) return next();\n\t\t\t\tconst invalid = invalidRequestTarget(target, undefined);\n\t\t\t\tres.statusCode = invalid ? 400 : 405;\n\t\t\t\tif (!invalid) res.setHeader('allow', 'POST');\n\t\t\t\tres.setHeader('content-type', 'text/plain');\n\t\t\t\treq.resume();\n\t\t\t\tres.end(invalid ? 'Bad Request' : 'Method Not Allowed');\n\t\t\t};\n\t\t\tserver.middlewares.stack.unshift({ route: '', handle: refuseAuthPreflight });\n\n\t\t\t// Warn if our WS path collides with the Vite HMR WebSocket path.\n\t\t\tconst hmrConfig = server.config.server?.hmr;\n\t\t\tif (hmrConfig && typeof hmrConfig === 'object' && hmrConfig.path === wsPath) {"
 			}
 		]
 	},
@@ -1788,7 +1792,13 @@
 		"file": "test/client.test.js"
 	},
 	{
-		"file": "test/close-frame-real.test.js"
+		"file": "test/close-frame-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\tteardown.push(() => new Promise((r) => httpServer.close(() => r(undefined))));\n\tawait plugin.configureServer({\n\t\thttpServer,\n\t\tmiddlewares: { use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return { default: probeHandler, ...probeHandler }; }\n\t});",
+				"ours": "\tteardown.push(() => new Promise((r) => httpServer.close(() => r(undefined))));\n\tawait plugin.configureServer({\n\t\thttpServer,\n\t\tmiddlewares: { stack: [], use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return { default: probeHandler, ...probeHandler }; }\n\t});"
+			}
+		]
 	},
 	{
 		"file": "test/close-frame.test.js"
@@ -1847,6 +1857,10 @@
 			{
 				"lead": "//\n// A client names a topic in a few bytes and is answered with a whole frame.\n// Measured on this runtime: one 8,121-byte `subscribe-batch` of 1,344\n// shortest-legal topics comes back as 1,344 frames and 97,484 bytes - twelve\n// times what it cost to ask. Filling the 256-topic cap and padding the rest\n",
 				"ours": "//\n// A client names a topic in a few bytes and is answered with a whole frame.\n// Measured on this runtime: one 8,121-byte `subscribe-batch` of 1,344\n// two-to-four-character topic names from the test loop comes back as 1,344\n// frames and 97,484 bytes - twelve\n// times what it cost to ask. Filling the 256-topic cap and padding the rest\n"
+			},
+			{
+				"lead": "\t\tconst plugin = uws({ allowedOrigins: '*', handler: '/virtual-egress-handler' });\n\t\tawait plugin.configureServer({\n\t\t\thttpServer,\n\t\t\tmiddlewares: { use() {} },\n\t\t\tconfig: { root: process.cwd(), server: {}, logger: { warn() {}, info() {}, error() {} } },\n\t\t\tasync ssrLoadModule() { return { default: handler, ...handler }; }\n\t\t});",
+				"ours": "\t\tconst plugin = uws({ allowedOrigins: '*', handler: '/virtual-egress-handler' });\n\t\tawait plugin.configureServer({\n\t\t\thttpServer,\n\t\t\tmiddlewares: { stack: [], use() {} },\n\t\t\tconfig: { root: process.cwd(), server: {}, logger: { warn() {}, info() {}, error() {} } },\n\t\t\tasync ssrLoadModule() { return { default: handler, ...handler }; }\n\t\t});"
 			}
 		]
 	},
@@ -2338,7 +2352,17 @@
 		"file": "test/helpers/stop-leaked-runtimes.js"
 	},
 	{
-		"file": "test/helpers/vite-dev.js"
+		"file": "test/helpers/vite-dev.js",
+		"adaptations": [
+			{
+				"lead": " *   handler?: Record<string, Function>,\n *   ready?: Promise<unknown>,\n *   h2?: boolean,\n *   tls?: { key: string, cert: string }\n * }} [options]\n */\nexport async function bootViteDev({ pluginOptions = {}, handler = {}, ready, h2 = false, tls } = {}) {\n\t// An empty root keeps Vite's static and public-dir middlewares from serving\n\t// anything in this repository at the paths the suites probe.\n\tconst root = mkdtempSync(join(tmpdir(), 'uws-vite-dev-'));",
+				"ours": " *   handler?: Record<string, Function>,\n *   ready?: Promise<unknown>,\n *   h2?: boolean,\n *   cors?: import('vite').CorsOptions | boolean,\n *   tls?: { key: string, cert: string }\n * }} [options]\n */\nexport async function bootViteDev({ pluginOptions = {}, handler = {}, ready, h2 = false, tls, cors } = {}) {\n\t// An empty root keeps Vite's static and public-dir middlewares from serving\n\t// anything in this repository at the paths the suites probe.\n\tconst root = mkdtempSync(join(tmpdir(), 'uws-vite-dev-'));"
+			},
+			{
+				"lead": "\t\t\tclearScreen: false,\n\t\t\tappType: 'custom',\n\t\t\toptimizeDeps: { noDiscovery: true, include: [] },\n\t\t\tserver: { host: '127.0.0.1', allowedHosts: true, watch: null, hmr: false, ws: false, https: tls },\n\t\t\tplugins: [\n\t\t\t\thandlerModule(handler, ready),\n\t\t\t\tuws({ handler: '/virtual-dev-handler', ...pluginOptions }),",
+				"ours": "\t\t\tclearScreen: false,\n\t\t\tappType: 'custom',\n\t\t\toptimizeDeps: { noDiscovery: true, include: [] },\n\t\t\tserver: { host: '127.0.0.1', allowedHosts: true, watch: null, hmr: false, ws: false, https: tls, cors },\n\t\t\tplugins: [\n\t\t\t\thandlerModule(handler, ready),\n\t\t\t\tuws({ handler: '/virtual-dev-handler', ...pluginOptions }),"
+			}
+		]
 	},
 	{
 		"file": "test/host-header-proxy-real.test.js"
@@ -2394,7 +2418,13 @@
 		"file": "test/leak-detect.test.js"
 	},
 	{
-		"file": "test/lifecycle-hook-boundary.test.js"
+		"file": "test/lifecycle-hook-boundary.test.js",
+		"adaptations": [
+			{
+				"lead": "\tteardown.push(() => new Promise((r) => httpServer.close(() => r(undefined))));\n\tawait plugin.configureServer({\n\t\thttpServer,\n\t\tmiddlewares: { use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return { default: handler, ...handler }; }\n\t});",
+				"ours": "\tteardown.push(() => new Promise((r) => httpServer.close(() => r(undefined))));\n\tawait plugin.configureServer({\n\t\thttpServer,\n\t\tmiddlewares: { stack: [], use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return { default: handler, ...handler }; }\n\t});"
+			}
+		]
 	},
 	{
 		"file": "test/lifecycle-readiness.test.js",
@@ -3057,11 +3087,21 @@
 			{
 				"lead": "\t\t\t}\n\t\t}\n\t});\n\n\tit('answers 413 as the body crosses 64 KiB, before the client has sent it all', async () => {\n\t\tconst status = await new Promise((resolve, reject) => {\n\t\t\tconst session = http2Connect(`http://127.0.0.1:${server.h2Port}`);\n\t\t\tsession.once('error', reject);",
 				"ours": "\t\t\t}\n\t\t}\n\t});\n\n\tit('rejects a cookie whose Expires is not a Date over HTTP/2', async () => {\n\t\tconst res = await h2Exchange(server.h2Port, {\n\t\t\t':method': 'POST',\n\t\t\t':path': '/__ws/auth',\n\t\t\t':authority': `127.0.0.1:${server.h2Port}`,\n\t\t\t'x-requested-with': 'XMLHttpRequest',\n\t\t\t'x-refused': 'implicit-expires'\n\t\t});\n\t\texpect(res.status).toBe(500);\n\t\texpect(res.headers['set-cookie']).toBeUndefined();\n\t});\n\n\tit('answers 413 as the body crosses 64 KiB, before the client has sent it all', async () => {\n\t\tconst status = await new Promise((resolve, reject) => {\n\t\t\tconst session = http2Connect(`http://127.0.0.1:${server.h2Port}`);\n\t\t\tsession.once('error', reject);"
+			},
+			{
+				"lead": "\t\t\tif (surface.label === 'vite dev') expect(otherGet.status).toBe(APP_STATUS);\n\t\t});\n\n\t\tit('answers a declared body past 64 KiB with 413, and takes one of 64 KiB', async () => {\n\t\t\tconst over = await postBody(server.port, 64 * 1024 + 1);\n\t\t\texpect(over.status).toBe(413);",
+				"ours": "\t\t\tif (surface.label === 'vite dev') expect(otherGet.status).toBe(APP_STATUS);\n\t\t});\n\n\t\tit.each(['http://localhost:3000', 'http://127.0.0.1:3000', 'https://other.example'])('refuses auth preflight from %s', async (origin) => {\n\t\t\tfor (const [target] of ROUTED) {\n\t\t\t\tconst response = await send(server.port, target, {\n\t\t\t\t\tmethod: 'OPTIONS',\n\t\t\t\t\theaders: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'x-requested-with' }\n\t\t\t\t});\n\t\t\t\texpect(response.status, target).toBe(405);\n\t\t\t\texpect(response.headers.allow, target).toBe('POST');\n\t\t\t\texpect(response.headers['access-control-allow-origin'], target).toBeUndefined();\n\t\t\t\texpect(response.headers['access-control-allow-credentials'], target).toBeUndefined();\n\t\t\t\texpect(response.echoed, target).toBe(false);\n\t\t\t}\n\t\t});\n\n\t\tit('answers a declared body past 64 KiB with 413, and takes one of 64 KiB', async () => {\n\t\t\tconst over = await postBody(server.port, 64 * 1024 + 1);\n\t\t\texpect(over.status).toBe(413);"
 			}
 		]
 	},
 	{
-		"file": "test/vite-grant-conjunct.test.js"
+		"file": "test/vite-grant-conjunct.test.js",
+		"adaptations": [
+			{
+				"lead": "\n\tconst server = {\n\t\thttpServer,\n\t\tmiddlewares: { use() {} },\n\t\tconfig: {\n\t\t\troot: process.cwd(),\n\t\t\tlogger: { warn() {}, info() {}, error() {} },",
+				"ours": "\n\tconst server = {\n\t\thttpServer,\n\t\tmiddlewares: { stack: [], use() {} },\n\t\tconfig: {\n\t\t\troot: process.cwd(),\n\t\t\tlogger: { warn() {}, info() {}, error() {} },"
+			}
+		]
 	},
 	{
 		"file": "test/vite-max-payload.test.js"
@@ -3322,7 +3362,13 @@
 		"file": "test/subscription-release-real.test.js"
 	},
 	{
-		"file": "test/vite-subscriber-walk-real.test.js"
+		"file": "test/vite-subscriber-walk-real.test.js",
+		"adaptations": [
+			{
+				"lead": "\tserver = createServer();\n\tawait new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));\n\tawait createPlugin({ allowedOrigins: '*', handler: '/subscriber-walk' }).configureServer({\n\t\thttpServer: server, middlewares: { use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return handler; }\n\t});",
+				"ours": "\tserver = createServer();\n\tawait new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));\n\tawait createPlugin({ allowedOrigins: '*', handler: '/subscriber-walk' }).configureServer({\n\t\thttpServer: server, middlewares: { stack: [], use() {} },\n\t\tconfig: { root: process.cwd(), logger: { warn() {}, info() {}, error() {} }, server: {} },\n\t\tasync ssrLoadModule() { return handler; }\n\t});"
+			}
+		]
 	},
 	{
 		"file": "test/vite-config-fallback.test.js"
@@ -3458,5 +3504,8 @@
 	},
 	{
 		"file": "test/upgrade-required-real.test.js"
+	},
+	{
+		"file": "test/vite-auth-preflight.test.js"
 	}
 ]

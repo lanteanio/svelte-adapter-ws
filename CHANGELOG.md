@@ -439,6 +439,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Every `426` from production, `createTestServer` and Vite development, including the plain-navigation `426` on the WebSocket path, carries `Upgrade: websocket` and `Connection: Upgrade`.
 
+- Vite development rejects authentication endpoint preflights before app-wide CORS can approve them. Exact custom auth paths retain the production `405` response without changing CORS on other routes.
+
 - A request whose Content-Length lines all carry the same value reaches the
   request edge, which answers the repeated framing header with its 400 and
   closes the connection; a built asset is served. Differing values keep the
