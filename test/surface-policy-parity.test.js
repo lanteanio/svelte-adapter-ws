@@ -827,6 +827,19 @@ function importedMembershipMutators(nodes, file) {
 function subscriptionDataEscapeOffenders(nodes, imports, file = '(synthetic)') {
 	const offenders = [];
 	const allowedMutators = file === '(synthetic)' ? new Set() : importedMembershipMutators(nodes, file);
+	// A native brand check cannot inspect subscription size or decide a cap.
+	const nativeSetBrandImported = !localBindings(nodes).has('isSet') && nodes.some(({ node }) => node.type === 'ImportDeclaration' &&
+		node.source.value === 'node:util/types' && node.specifiers.some((specifier) =>
+			specifier.type === 'ImportSpecifier' && specifier.imported.name === 'isSet' && specifier.local.name === 'isSet'));
+
+	// The canonical close boundary deliberately hands the snapshot to the app.
+	// It is allowed only as a terminal statement, never as a policy result.
+	const closeBoundaryImported = file !== '(synthetic)' && !localBindings(nodes).has('runCloseHook') &&
+		nodes.some(({ node }) => node.type === 'ImportDeclaration' &&
+			resolvedImport(file, node.source.value) === realpathSync(pathOf('src/runtime/utils/hook-boundary.js')) &&
+			node.specifiers.some((specifier) => specifier.type === 'ImportSpecifier' &&
+				specifier.imported.name === 'runCloseHook' && specifier.local.name === 'runCloseHook'));
+
 	const candidateNames = new Set();
 	let changed = true;
 	while (changed) {
@@ -858,7 +871,11 @@ function subscriptionDataEscapeOffenders(nodes, imports, file = '(synthetic)') {
 				imports.get(node.callee.name) === 'deniesUngrantedObserve');
 		const canonicalMutator = node.callee?.type === 'Identifier' && SAFE_SUBSCRIPTION_CALLEES.has(node.callee.name) &&
 			(allowedMutators.has(node.callee.name) || file === 'src/runtime/utils/ws-symbols.js');
-		if (canonicalPolicy || canonicalMutator) continue;
+		const nativeSetBrand = nativeSetBrandImported && node.callee?.type === 'Identifier' && node.callee.name === 'isSet';
+		const closeBoundary = closeBoundaryImported && node.callee?.type === 'Identifier' &&
+			node.callee.name === 'runCloseHook' && node.arguments.length === 3 &&
+			ancestors[0]?.type === 'ExpressionStatement';
+		if (canonicalPolicy || canonicalMutator || nativeSetBrand || closeBoundary) continue;
 		const possible = node.arguments.some((argument) => {
 			const pending = [argument];
 			while (pending.length) {
@@ -922,7 +939,13 @@ const parsed = new Map();
 function ast(f) {
 	if (!parsed.has(f)) {
 		const nodes = nodesWithAncestors(read(f));
-		parsed.set(f, { nodes, imports: policyImports(nodes, f), locals: localBindings(nodes), reachable: reachableFunctions(nodes) });
+		let imports, locals, reachable;
+		parsed.set(f, {
+			nodes,
+			get imports() { return imports ??= policyImports(nodes, f); },
+			get locals() { return locals ??= localBindings(nodes); },
+			get reachable() { return reachable ??= reachableFunctions(nodes); }
+		});
 	}
 	return parsed.get(f);
 }
@@ -1017,6 +1040,35 @@ describe('the oracle itself rejects the padding classes found by review', () => 
 		expect(privateSubscriptionOrderOffenders(legitimate)).toEqual([]);
 		expect(capEquivalentSizeComparisonOffenders(legitimate)).toEqual([]);
 		expect(capCallContractOffenders(legitimate, imports)).toEqual([]);
+	});
+
+	it('permits only the native unshadowed Set brand check', () => {
+		const trusted = nodesWithAncestors(`
+			import { isSet } from 'node:util/types';
+			export function close(ud) { return isSet(ud[WS_SUBSCRIPTIONS]); }
+		`);
+		expect(subscriptionDataEscapeOffenders(trusted, new Map())).toEqual([]);
+		for (const source of [
+			`import { isSet } from './private-cap.js'; export function close(ud) { return isSet(ud[WS_SUBSCRIPTIONS]); }`,
+			`function isSet(value) { return value.size < 20; } export function close(ud) { return isSet(ud[WS_SUBSCRIPTIONS]); }`,
+			`import { isSet } from 'node:util/types'; export function close(ud, isSet) { return isSet(ud[WS_SUBSCRIPTIONS]); }`,
+			`import { isSet as inspect } from 'node:util/types'; export function close(ud) { return inspect(ud[WS_SUBSCRIPTIONS]); }`
+		]) expect(subscriptionDataEscapeOffenders(nodesWithAncestors(source), new Map())).not.toEqual([]);
+	});
+
+	it('permits only a terminal call to the canonical unshadowed close boundary', () => {
+		const file = 'src/testing.js';
+		const trusted = `import { runCloseHook } from './runtime/utils/hook-boundary.js';`;
+		const body = `const ctx = { subscriptions: ud[WS_SUBSCRIPTIONS] }; runCloseHook(handler, ws, ctx);`;
+		expect(subscriptionDataEscapeOffenders(nodesWithAncestors(`${trusted} export function close(ud) { ${body} }`), new Map(), file)).toEqual([]);
+		for (const source of [
+			`import { runCloseHook } from './runtime/utils/subscribe-policy.js'; export function close(ud) { ${body} }`,
+			`function runCloseHook(a, b, ctx) { return ctx.subscriptions.size < 20; } export function close(ud) { ${body} }`,
+			`${trusted} export function close(ud, runCloseHook) { ${body} }`,
+			`${trusted} export function close(ud) { if (runCloseHook(handler, ws, { subscriptions: ud[WS_SUBSCRIPTIONS] })) return 'RATE_LIMITED'; }`,
+			`${trusted} export function close(ud) { return runCloseHook(handler, ws, { subscriptions: ud[WS_SUBSCRIPTIONS] }); }`,
+			`import { runCloseHook as inspect } from './runtime/utils/hook-boundary.js'; export function close(ud) { inspect(handler, ws, { subscriptions: ud[WS_SUBSCRIPTIONS] }); }`
+		]) expect(subscriptionDataEscapeOffenders(nodesWithAncestors(source), new Map(), file)).not.toEqual([]);
 	});
 
 	it('rejects object laundering and opaque helper escapes of the live Set or its size', () => {
@@ -1206,11 +1258,16 @@ describe('every socket surface routes its subscribe decisions through the shared
 	// denial provenance in ws-symbols.js itself, and trackedUnsubscribe
 	// tombstones there. The per-surface rows cannot see it, so it is counted
 	// where it lives.
+	// Each single wire lane also settles three held/recover refusals: the
+	// held authority check, cancelled recovery, and the post-resume recheck.
+	// The test server final gate now settles without granting, as production
+	// does; the dev lane keeps that refusal in its shared landing branch.
 	const ENROLMENT = [
 		{ fn: 'beginPendingSubscribe', production: 3, testing: 3, dev: 3, shared: 1 },
-		{ fn: 'settlePendingSubscribe', production: 7, testing: 6, dev: 6, shared: 1 },
+		// Each surface also settles a denial when strict policy arms during awaited resume.
+		{ fn: 'settlePendingSubscribe', production: 7, testing: 7, dev: 7, shared: 1 },
 		{ fn: 'settleHeldSubscribe', production: 4, testing: 4, dev: 4, shared: 1 },
-		{ fn: 'settleDeniedSubscribe', production: 3, testing: 3, dev: 3, shared: 1 },
+		{ fn: 'settleDeniedSubscribe', production: 6, testing: 6, dev: 6, shared: 1 },
 		{ fn: 'tombstonePendingSubscribe', production: 2, testing: 2, dev: 2, shared: 1 }
 	];
 	const KEY = {
@@ -1363,16 +1420,15 @@ describe('no surface re-derives a decision the policy owns', () => {
 		});
 	}
 
-	it('no shipped module reconstructs the cap through a folded size comparison', () => {
-		const offenders = CAP_DECISION_FILES.flatMap((file) =>
-			capEquivalentSizeComparisonOffenders(ast(file).nodes, file, SUBSCRIPTION_CAP));
+	it.each(CAP_DECISION_FILES)('%s does not reconstruct the cap through a folded size comparison', (file) => {
+		const offenders = capEquivalentSizeComparisonOffenders(ast(file).nodes, file, SUBSCRIPTION_CAP);
 		expect(
 			offenders,
 			`a helper rebuilt the subscription-cap decision under a constant expression: ${offenders.join(', ')}`
 		).toEqual([]);
 	});
 
-	it('no shipped module holds a private ordered decision on subscription membership size', () => {
+	it.each(CAP_DECISION_FILES)('%s has no private ordered decision on subscription membership size', (file) => {
 		// The surface-scoped rule above cannot see a helper the surface hands
 		// its userData to: `const ud = ws.getUserData()` then
 		// `ud[WS_SUBSCRIPTIONS].size >= 500` in any src file was invisible to
@@ -1380,8 +1436,7 @@ describe('no surface re-derives a decision the policy owns', () => {
 		// and the escape tracker has no CallExpression branch). This rule is
 		// threshold-agnostic and repo-wide, so a private cap of ANY value in
 		// ANY shipped module is an offense, wherever the Set came from.
-		const offenders = CAP_DECISION_FILES.flatMap((file) =>
-			privateSubscriptionOrderOffenders(ast(file).nodes, file));
+		const offenders = privateSubscriptionOrderOffenders(ast(file).nodes, file);
 		expect(
 			offenders,
 			`a shipped module compares WS_SUBSCRIPTIONS size outside exceedsSubscriptionCap: ${offenders.join(', ')}`

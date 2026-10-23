@@ -3100,10 +3100,6 @@
 			{
 				"lead": "\t'src/runtime/handler/subscribe-hooks.js',\n",
 				"ours": ""
-			},
-			{
-				"lead": "\t'addLogicalSubscription',\n\t'removeLogicalSubscription',\n\t'accountClosedLogicalSubscriptions',\n\t'deniesUngrantedObserve'\n]);\n\n",
-				"ours": "\t'addLogicalSubscription',\n\t'removeLogicalSubscription',\n\t'accountClosedLogicalSubscriptions',\n\t// Registry lifetime reads only the canonical settled WeakSet, never a cap.\n\t'isSettledSubscriptionRegistry',\n\t'deniesUngrantedObserve'\n]);\n\n"
 			}
 		]
 	},
