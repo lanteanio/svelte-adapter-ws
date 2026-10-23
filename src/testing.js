@@ -557,7 +557,7 @@ function createNodeApp() {
 		}
 		if (!hasType) head += 'Content-Type: text/plain\r\n';
 		// As production: a refusal carries the server's Date too.
-		head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n';
+		head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n'; // determinism-allow: formats the injected wall clock
 		try {
 			socket.write(head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text);
 		} catch { /* peer already gone */ }
@@ -768,7 +768,7 @@ function createNodeApp() {
 			wss.on('headers', (headers, req) => {
 				const extra = upgradeExtraHeaders.get(req);
 				if (extra) for (const [name, value] of extra) headers.push(`${name}: ${value}`);
-				headers.push('Date: ' + new Date(wallEpoch()).toUTCString());
+				headers.push('Date: ' + new Date(wallEpoch()).toUTCString()); // determinism-allow: formats the injected wall clock
 			});
 			return app;
 		},

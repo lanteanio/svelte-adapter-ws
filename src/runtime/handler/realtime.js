@@ -1056,7 +1056,7 @@ wss.on('headers', (headers, req) => {
 			}
 		}
 	}
-	headers.push('Date: ' + new Date(wallEpoch()).toUTCString());
+	headers.push('Date: ' + new Date(wallEpoch()).toUTCString()); // determinism-allow: formats the injected wall clock
 });
 
 /**
@@ -1158,7 +1158,7 @@ function refuseUpgrade(socket, status, text, extraHeaders, closeConnection = fal
 	}
 	if (!hasType) head += 'Content-Type: text/plain\r\n';
 	// Every native response carries the server's Date, a refusal included.
-	head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n';
+	head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n'; // determinism-allow: formats the injected wall clock
 	finishUpgradeRefusal(socket, head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text, closeConnection);
 }
 
