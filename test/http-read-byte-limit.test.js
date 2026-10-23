@@ -24,11 +24,12 @@ const serverSource = `export class Server {
 }`;
 
 // The release boundary includes response headers and HTTP body framing.
-// User-supplied Date/uWebSockets fields do not replace the automatic fields.
+// A user-supplied uWebSockets field does not replace the automatic one, and a
+// user-supplied Date is dropped for the single automatic Date field.
 const cases = [
  ['fixed', 16218, false, false], ['fixed', 16219, true, false],
  ['fixed', 16055, false, true], ['fixed', 16056, true, true],
- ['custom', 16140, false, false], ['custom', 16141, true, false],
+ ['custom', 16177, false, false], ['custom', 16178, true, false],
  ['stream', 16192, false, false], ['stream', 16193, true, false]
 ];
 
