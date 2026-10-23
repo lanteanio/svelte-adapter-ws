@@ -90,6 +90,8 @@
 		"test/fixture/src/hooks.ws.dropped-stats.js": "cb3e451",
 		"test/dropped-send-stats-real.test.js": "cb3e451",
 		"test/fixture/src/hooks.ws.topic-stats.js": "ae6a8cd",
-		"test/topic-broadcast-stats-real.test.js": "da9d3e2"
+		"test/topic-broadcast-stats-real.test.js": "da9d3e2",
+		"src/runtime/utils/ws-symbols.js": "9efd11a",
+		"test/subscription-accounting.test.js": "9efd11a"
 	}
 }

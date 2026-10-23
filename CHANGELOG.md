@@ -412,6 +412,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscribers; delivery, filtering, drops, and delays retain their existing
   behavior.
 
+- `createTestServer` and Vite development subscription registries no longer
+  charge or release a production worker's subscription total when both are
+  loaded in one process; their memberships settle with the connection on close.
+
 - In Vite development, `platform.requestTopic` sends to the open adapter sockets
   subscribed to the topic, so subscribers that already closed are skipped, and
   topic batch broadcasts stay out of close-hook traffic counters as they do in

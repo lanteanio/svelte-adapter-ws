@@ -1201,26 +1201,6 @@
 			{
 				"lead": " * assignment and pays nothing. The declaration cannot ride the upgrade object\n * instead - uWS copies that object into its own with `[[Set]]`, so a slot\n * declared there is intercepted on the way across and arrives absent.\n",
 				"ours": " * assignment and pays nothing.\n"
-			},
-			{
-				"lead": "export const WS_COHORT_JOIN = Symbol.for('adapter-uws.platform.cohort-join');\nexport const WS_COHORT_LEAVE = Symbol.for('adapter-uws.platform.cohort-leave');\n\n// Logical-subscription accounting has a duplicated-bundle constraint: the\n// bundler gives a plugin package and the runtime SEPARATE instances of this\n// module, while every copy mutates the same connection Set. One slot on\n",
-				"ours": "export const WS_COHORT_JOIN = Symbol.for('adapter-uws.platform.cohort-join');\nexport const WS_COHORT_LEAVE = Symbol.for('adapter-uws.platform.cohort-leave');\n\n// Each surface owns its membership accounting. Returns null for a closed\n// handle, otherwise whether native/logical membership was removed.\nexport const WS_RELEASE_MEMBERSHIP = Symbol.for('adapter-uws.platform.release-membership');\n\n// Logical-subscription accounting has a duplicated-bundle constraint: the\n// bundler gives a plugin package and the runtime SEPARATE instances of this\n// module, while every copy mutates the same connection Set. One slot on\n"
-			},
-			{
-				"lead": "\treturn ok;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n",
-				"ours": "\treturn ok;\n}\n\n/**\n * Remove admitted membership without cancelling independent subscribe awaits.\n * Framework rollback owns its application cleanup and does not run the app's\n * unsubscribe hook. Explicit revocation still uses trackedUnsubscribe or\n * platform.unsubscribe, which advance the pending attempt's epoch.\n * @param {any} ws\n * @param {string} topic\n * @returns {boolean} whether any membership or publish grant was removed\n */\nexport function releaseSubscription(ws, topic) {\n\tlet ud;\n\ttry { ud = ws.getUserData(); } catch { return false; }\n\tconst subs = ud[WS_SUBSCRIPTIONS];\n\tif (!(subs instanceof Set) || isSettledSubscriptionRegistry(subs)) return false;\n\tlet removed = releaseMembership(ws, ud, topic);\n\tfor (const prefix of _derivedTopicPrefixes) {\n\t\tif (topic.startsWith(prefix)) continue;\n\t\tif (releaseMembership(ws, ud, prefix + topic)) removed = true;\n\t}\n\treturn removed;\n}\n\n/** @param {any} ws @param {any} ud @param {string} topic */\nfunction releaseMembership(ws, ud, topic) {\n\t// Withdraw completed authority without changing the epoch that an\n\t// independently pending authorization must present when it lands.\n\tconst pending = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\tif (pending) pending.granted = false;\n\tconst release = ud[WS_PLATFORM]?.[WS_RELEASE_MEMBERSHIP];\n\tlet removed;\n\tif (typeof release === 'function') {\n\t\tremoved = release(ws, ud, topic);\n\t\tif (removed === null) return false;\n\t} else {\n\t\ttry { ws.unsubscribe(topic); } catch { return false; }\n\t\tremoved = removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);\n\t}\n\tif (ud[WS_PUBLISH_GRANT] === topic) {\n\t\tud[WS_PUBLISH_GRANT] = undefined;\n\t\tremoved = true;\n\t}\n\tud[WS_PLATFORM]?.[WS_COHORT_LEAVE]?.(ws, ud, topic);\n\treturn removed;\n}\n\n/**\n * Topic prefixes under which a plugin establishes a DERIVED subscription on a\n * connection's behalf: presence's `__presence:<topic>` roster tap and cursor's\n"
-			},
-			{
-				"lead": "// '__subscriptions') prevents collisions with arbitrary user upgrade\n// hook returns: a user that does `return { __subscriptions: ... }`\n// from upgrade() can no longer clobber the adapter's tracking, and\n// Object.keys / JSON.stringify / spread on userData skip these slots\n// so they do not leak into client serializations.\n//\n// The symbols use Symbol.for(...) so handler.js, vite.js, and testing.js\n",
-				"ours": "// '__subscriptions') prevents collisions with arbitrary user upgrade\n// hook returns: a user that does `return { __subscriptions: ... }`\n// from upgrade() can no longer clobber the adapter's tracking, and\n// Object.keys and JSON.stringify skip these slots. Object spread copies\n// enumerable symbols, so upgrade returns must discard old connection slots.\n//\n// The symbols use Symbol.for(...) so handler.js, vite.js, and testing.js\n"
-			},
-			{
-				"lead": "\tWS_CONTROL_BUDGET\n]);\n\n/**\n * Write a slot onto an object the application can reach, without consulting\n * the prototype chain. For the one-off targets - `globalThis`, a hook function\n",
-				"ours": "\tWS_CONTROL_BUDGET\n]);\n\nconst connectionSlotSet = new Set(CONNECTION_SLOTS);\n\n/**\n * Copy application-owned upgrade data without carrying another connection's\n * adapter state. Skip reserved keys before reading their values, and leave the\n * source object untouched. Application string and Symbol keys remain enumerable.\n *\n * @param {object | null | undefined} source\n * @returns {Record<string | symbol, any>}\n */\nexport function copyUpgradeUserData(source) {\n\tconst copy = {};\n\tfor (const key of Reflect.ownKeys(source ?? {})) {\n\t\tif (connectionSlotSet.has(key) || !Object.prototype.propertyIsEnumerable.call(source, key)) continue;\n\t\tdefineSlot(copy, key, source[key]);\n\t}\n\treturn copy;\n}\n\n/**\n * Write a slot onto an object the application can reach, without consulting\n * the prototype chain. For the one-off targets - `globalThis`, a hook function\n"
-			},
-			{
-				"lead": "\treturn ud[WS_PENDING_SUBSCRIBES_TOTAL] ?? 0;\n}\n\n/**\n * Open an in-flight subscribe for `topic`, returning the token the landing\n * must present to {@link settlePendingSubscribe}. The token is the topic's\n",
-				"ours": "\treturn ud[WS_PENDING_SUBSCRIBES_TOTAL] ?? 0;\n}\n\n/**\n * A hook may install membership before its authorization settles. Until a\n * successful attempt confirms it, that membership is not a server grant.\n * @param {any} ud\n * @param {string} topic\n * @returns {boolean}\n */\nexport function membershipUnconfirmed(ud, topic) {\n\tif (ud[WS_PENDING_SUBSCRIBES_TOTAL] === 0) return false;\n\tconst entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\treturn entry !== undefined && !entry.granted;\n}\n\n/**\n * Read the held landing's verdict without settling the attempt. Recovery must\n * establish this authority before handing message history to the resume hook.\n * @param {any} ud\n * @param {string} topic\n * @param {number} token\n * @returns {boolean}\n */\nexport function heldLandingWouldAck(ud, topic, token) {\n\tconst entry = ud[WS_PENDING_SUBSCRIBES]?.get(topic);\n\treturn !entry || entry.epoch === token || entry.granted === true;\n}\n\n/**\n * The wire grant gate accepts a completed grant, or the current attempt's\n * plugin-owned join. An ordinary hook install cannot mint a server grant.\n * @param {any} ud\n * @param {string} topic\n * @param {number} token\n * @returns {boolean}\n */\nexport function heldSubscribeIsAuthorized(ud, topic, token) {\n\treturn !membershipUnconfirmed(ud, topic)\n\t\t|| (isPluginOwnedTopic(topic) && heldLandingWouldAck(ud, topic, token));\n}\n\n/**\n * Open an in-flight subscribe for `topic`, returning the token the landing\n * must present to {@link settlePendingSubscribe}. The token is the topic's\n"
 			}
 		]
 	},
@@ -1565,6 +1545,42 @@
 			{
 				"lead": "\t\treturn true;\n\t}\n\n\tfunction applyHandlers(mod) {\n",
 				"ours": "\t\treturn true;\n\t}\n\n\t/**\n\t * Extract handler functions from a loaded module.\n\t * @param {Record<string, any>} mod\n\t */\n\tfunction applyHandlers(mod) {\n"
+			},
+			{
+				"lead": "import { isSet } from 'node:util/types';\nimport path from 'node:path';\n",
+				"ours": "import { isSet } from 'node:util/types';\nimport { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLogicalSubscription, accountClosedLogicalSubscriptions } from './runtime/utils/ws-symbols.js';\nimport path from 'node:path';\n"
+			},
+			{
+				"lead": "\t\t\tws.subscribe(topic);\n\t\t\tsubs.add(topic);\n\t\t\treturn null;\n",
+				"ours": "\t\t\tws.subscribe(topic);\n\t\t\taddLogicalSubscription(subs, topic);\n\t\t\treturn null;\n"
+			},
+			{
+				"lead": "\t\t\tws.unsubscribe(topic);\n\t\t\tsubs.delete(topic);\n\t\t\trunUnsubscribeHook(",
+				"ours": "\t\t\tws.unsubscribe(topic);\n\t\t\tremoveLogicalSubscription(subs, topic);\n\t\t\trunUnsubscribeHook("
+			},
+			{
+				"lead": "\t\t\t\tuserData[WS_SUBSCRIPTIONS] = new Set();\n",
+				"ours": "\t\t\t\tuserData[WS_SUBSCRIPTIONS] = createUnaccountedSubscriptionRegistry();\n"
+			},
+			{
+				"lead": "\t\t\t\t\tsubscriptions.get(ws)?.delete(topic);\n\t\t\t\t\treturn ud[WS_SUBSCRIPTIONS].delete(topic);\n",
+				"ours": "\t\t\t\t\tsubscriptions.get(ws)?.delete(topic);\n\t\t\t\t\treturn removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\tsubscriptions.get(ws)?.add(msg.topic);\n\t\t\t\t\t\t\t\tsubs.add(msg.topic);\n",
+				"ours": "\t\t\t\t\t\t\t\tsubscriptions.get(ws)?.add(msg.topic);\n\t\t\t\t\t\t\t\taddLogicalSubscription(subs, msg.topic);\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\tuudV?.[WS_SUBSCRIPTIONS]?.delete(msg.topic);\n",
+				"ours": "\t\t\t\t\t\t\t\tconst wireSubs = uudV?.[WS_SUBSCRIPTIONS];\n\t\t\t\t\t\t\t\tif (wireSubs) removeLogicalSubscription(wireSubs, msg.topic);\n"
+			},
+			{
+				"lead": "\t\t\t\t\t\t\t\t\tsubs?.add(topic);\n\t\t\t\t\t\t\t\t\tudSubs.add(topic);\n",
+				"ours": "\t\t\t\t\t\t\t\t\tsubs?.add(topic);\n\t\t\t\t\t\t\t\t\taddLogicalSubscription(udSubs, topic);\n"
+			},
+			{
+				"lead": "\t\t\t\t\trunCloseHook(userHandlers, wrapped, ctx);\n",
+				"ours": "\t\t\t\t\trunCloseHook(userHandlers, wrapped, ctx);\n\t\t\t\t\taccountClosedLogicalSubscriptions(subs);\n"
 			}
 		]
 	},

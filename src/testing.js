@@ -1,4 +1,5 @@
 import { isSet } from 'node:util/types';
+import { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLogicalSubscription, accountClosedLogicalSubscriptions } from './runtime/utils/ws-symbols.js';
 import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
 import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
@@ -1782,7 +1783,7 @@ export async function createTestServer(options = {}) {
 		// WS_COHORT_JOIN.
 		[WS_RELEASE_MEMBERSHIP](ws, ud, topic) {
 			try { ws.unsubscribe(topic); } catch { return null; }
-			return ud[WS_SUBSCRIPTIONS].delete(topic);
+			return removeLogicalSubscription(ud[WS_SUBSCRIPTIONS], topic);
 		},
 		[WS_COHORT_JOIN](ws, ud, topic) {
 			if (sharedTopicsT.has(topic)) joinCohortT(ws, ud, topic, sharedTopicsT.get(topic));
@@ -2610,7 +2611,7 @@ export async function createTestServer(options = {}) {
 			if (!settlePendingSubscribe(ud, topic, token, true)) return 'FORBIDDEN';
 			try { ws.subscribe(topic); }
 			catch { closedWsAbortsT++; return null; }
-			subs.add(topic);
+			addLogicalSubscription(subs, topic);
 			if (sharedTopicsT.has(topic)) joinCohortT(ws, ws.getUserData(), topic, sharedTopicsT.get(topic));
 			return null;
 		},
@@ -2692,7 +2693,7 @@ export async function createTestServer(options = {}) {
 			if (!(subs instanceof Set) || !subs.has(topic)) return cancelledInFlight;
 			try { ws.unsubscribe(topic); }
 			catch { closedWsAbortsT++; return false; }
-			subs.delete(topic);
+			removeLogicalSubscription(subs, topic);
 			if (sharedTopicsT.has(topic)) leaveCohortT(ws, ws.getUserData(), topic);
 			runUnsubscribeHook(handler.unsubscribe, ws, topic, { platform: ud[WS_PLATFORM] });
 			return true;
@@ -3639,7 +3640,7 @@ export async function createTestServer(options = {}) {
 				fatal(permitRestored, 'ws.connection-permit-carrier', null);
 				if (!permitRestored) return;
 			}
-			userData[WS_SUBSCRIPTIONS] = new Set();
+			userData[WS_SUBSCRIPTIONS] = createUnaccountedSubscriptionRegistry();
 			// Promote the upgrade-time requestId into a per-connection platform
 			// clone and drop the carry slot, as the production handler does.
 			const wsPlatform = Object.create(platform);
@@ -3923,7 +3924,7 @@ export async function createTestServer(options = {}) {
 							}
 							try { ws.subscribe(msg.topic); }
 							catch { if (_cap) discardResumeCaptureT(_cap); closedWsAbortsT++; return; }
-							subs.add(msg.topic);
+							addLogicalSubscription(subs, msg.topic);
 							if (_cap) flushResumeTopicT(_cap, msg.topic, coveredSeqForT(_covered, msg.topic));
 							if (sharedTopicsT.has(msg.topic)) joinCohortT(ws, ws.getUserData(), msg.topic, sharedTopicsT.get(msg.topic));
 							sendSubscribedT(ws, msg.topic, ref);
@@ -3941,7 +3942,8 @@ export async function createTestServer(options = {}) {
 							// delivering private fan-out (and cursor keeps accepting writes).
 							releaseDerivedSubscriptions(ws, msg.topic);
 							ws.unsubscribe(msg.topic);
-							ws.getUserData()[WS_SUBSCRIPTIONS]?.delete(msg.topic);
+							const wireSubs = ws.getUserData()[WS_SUBSCRIPTIONS];
+							if (wireSubs) removeLogicalSubscription(wireSubs, msg.topic);
 							// Read access gone means write access gone, as production and the
 							// platform.unsubscribe above both do.
 							const udWireUnsub = ws.getUserData();
@@ -4169,7 +4171,7 @@ export async function createTestServer(options = {}) {
 								}
 								try { ws.subscribe(topic); }
 								catch { closedWsAbortsT++; continue; }
-								udSubs.add(topic);
+								addLogicalSubscription(udSubs, topic);
 								if (_batchCap) {
 									// Batch: honor only a per-topic map watermark; a bare number is ambiguous
 									// across topics (it would apply one floor to all and could wrongly skip a
@@ -4360,6 +4362,7 @@ export async function createTestServer(options = {}) {
 				// those connections; the finally cleanup still runs.
 				if (ud[WS_SESSION_ID] !== undefined) runCloseHook(handler, ws, ctx);
 			} finally {
+				accountClosedLogicalSubscriptions(subs);
 				if (ud[WS_CONNECTION_PERMIT]) {
 					ud[WS_CONNECTION_PERMIT] = undefined;
 					admission.releaseConnection();
