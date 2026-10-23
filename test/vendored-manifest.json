@@ -3537,5 +3537,8 @@
 	},
 	{
 		"file": "test/helpers/wire-codec-payload-runner.js"
+	},
+	{
+		"file": "test/publish-serialization-real.test.js"
 	}
 ]

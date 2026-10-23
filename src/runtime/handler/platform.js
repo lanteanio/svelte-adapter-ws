@@ -24,7 +24,7 @@ import {
 } from '../utils/subscribe-policy.js';
 import { isValidWireTopic, createTopicHelperCache } from '../utils/topic.js';
 import {
-	completeEnvelope, completeGameEnvelope, envelopeData, createHlc, stampSeqValue,
+	completeEnvelope, completeSerializedEnvelope, completeGameEnvelope, envelopeData, createHlc, stampSeqValue,
 	resolveEntrySeq, resolveSendSeq, assertStampableSeq, topicEpochValue, mintTopicEpoch, overrideTopicEpoch, wrapBatchEnvelope
 } from '../utils/epoch.js';
 import { parentPort } from 'node:worker_threads';
@@ -374,6 +374,9 @@ function publish(topic, event, data, options) {
 			!admitPublishEgress(topic, egressTenant, 1, recipients)) return false;
 	}
 
+	// Serialize before stamping: a refused value must not consume a sequence
+	// number or raise the recovery watermark for a frame that never existed.
+	const body = envelopePrefix(topic, event) + envelopeData(data);
 	const seq = stampSeqValue(seqOption, topicSeqs, topic, seqBound);
 	// Track the highest observed seq for this topic. An explicit numeric
 	// authority takes the monotone-max guard, because several workers can
@@ -390,7 +393,7 @@ function publish(topic, event, data, options) {
 	// the window). The window is carried verbatim - NOT a server-rolled offset,
 	// which would defer every subscriber of this one frame identically.
 	const jitterMs = typeof jitterOption === 'number' && jitterOption > 0 ? jitterOption : null;
-	const envelope = completeEnvelope(envelopePrefix(topic, event), data, seq, jitterMs);
+	const envelope = completeSerializedEnvelope(body, seq, jitterMs);
 	fatal(envelope.length > 0, 'envelope.empty', null);
 	// The one egress charge for this logical publish: per-topic runaway
 	// stats, worker window counters, and the ceiling account. Wire bytes are
@@ -720,29 +723,34 @@ export const platform = {
 		// seq) and a shared batch frame for cap-able subscribers.
 		/** @type {Array<{ topic: string, env: string, seq: number | null }>} */
 		const events = new Array(messages.length);
+		// A later serialization failure refuses the whole shared frame. Prepare
+		// every body before any entry advances its topic's sequence or seen mark.
 		for (let i = 0; i < messages.length; i++) {
 			const m = messages[i];
+			const topic = m.topic;
+			events[i] = { topic, env: envelopePrefix(topic, m.event) + envelopeData(m.data), seq: null };
+		}
+		for (let i = 0; i < events.length; i++) {
+			const entry = events[i];
 			counters.publishCountWindow++;
-			const seq = stampSeqValue(msgSeqs[i], topicSeqs, m.topic, seqBound);
+			const seq = stampSeqValue(msgSeqs[i], topicSeqs, entry.topic, seqBound);
 			// See publish(): the compare-free record for the monotonic in-memory
 			// counter, the monotone-max guard for an explicit numeric seq.
 			if (seq !== null) {
-				if (typeof msgSeqs[i] === 'number' || typeof msgSeqs[i] === 'bigint') recordSeen(maxSeenSeq, m.topic, seq, seqBound);
-				else recordStampedSeen(maxSeenSeq, m.topic, seq, seqBound);
+				if (typeof msgSeqs[i] === 'number' || typeof msgSeqs[i] === 'bigint') recordSeen(maxSeenSeq, entry.topic, seq, seqBound);
+				else recordStampedSeen(maxSeenSeq, entry.topic, seq, seqBound);
 			}
-			events[i] = {
-				topic: m.topic,
-				env: completeEnvelope(envelopePrefix(m.topic, m.event), m.data, seq, null),
-				seq
-			};
+			const env = completeSerializedEnvelope(entry.env, seq);
+			entry.env = env;
+			entry.seq = seq;
 			// One egress charge per logical publish: each batched event is one,
 			// priced at its own envelope's UTF-8 bytes times the shared
 			// recipient set. The batch frame's wrapper bytes are uncharged
 			// overhead, so a tenant pays the same for N events whether the
 			// runtime batches them or not.
-			chargePublishEgress(m.topic,
-				gateArmed ? (allSameTopic ? egressTenant : resolvePublishTenant(m.topic)) : null,
-				1, recipients, events[i].env.length, chargeableBytes(events[i].env, recipients));
+			chargePublishEgress(entry.topic,
+				gateArmed ? (allSameTopic ? egressTenant : resolvePublishTenant(entry.topic)) : null,
+				1, recipients, env.length, chargeableBytes(env, recipients));
 		}
 		// Cross-worker relay: one frame carrying the pre-built per-event
 		// envelopes. The receiving worker re-runs the fast/slow detection

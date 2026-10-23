@@ -484,6 +484,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame to JSON, and a connection whose `onAttach` returned null receives the
   codec's baseline binary encoding instead of JSON, as under `createTestServer`.
 
+- `platform.publish` and `platform.publishBatched` serialize the payload before
+  stamping a sequence number. A value the envelope cannot carry (a `BigInt`,
+  function, symbol, cycle or throwing `toJSON`) still throws `TypeError`, but no longer consumes a
+  seq or raises the topic's recovery watermark, so the next publish carries the
+  next contiguous seq. A batch whose later entry is refused stamps none of its
+  entries. Applies on the production runtime and under `createTestServer`.
+
 - A WebSocket connection whose setup fails after the upgrade no longer leaves its idle-timeout timer running.
 
 - A request body read that a client abandons partway through, in an `authenticate` hook or an SSR route, rejects with the `Request aborted` error, as on the native tier, instead of the parser's `aborted` reset error.
