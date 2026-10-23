@@ -13,3 +13,5 @@ coverage
 *.log
 source
 test/.tmp-adapt-*/
+test/fixtures/*/build
+!test/fixtures/kit3/package-lock.json

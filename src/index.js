@@ -466,15 +466,16 @@ export function renderRefusedDotfileWarning(refused) {
  * @param {string} outfile - destination in the build temp dir
  */
 async function esbuildServerModule(builder, entry, outfile) {
+	const kitConfig = builder.config.paths ? builder.config : builder.config.kit;
 	const esbuild = await importFromApp('esbuild');
 	const { loadEnv } = await importFromApp('vite');
-	const libDir = path.resolve(builder.config.kit.files?.lib || 'src/lib');
-	const publicPrefix = builder.config.kit.env?.publicPrefix ?? 'PUBLIC_';
+	const libDir = path.resolve(kitConfig.files?.lib || 'src/lib');
+	const publicPrefix = kitConfig.env?.publicPrefix ?? 'PUBLIC_';
 	const allEnv = loadEnv('production', process.cwd(), '');
-	const version = builder.config.kit.version?.name ?? '';
+	const version = kitConfig.version?.name ?? '';
 	/** @type {Record<string, string>} */
 	const aliasMap = { '$lib': libDir };
-	const kitAliases = builder.config.kit.alias;
+	const kitAliases = kitConfig.alias;
 	if (kitAliases) {
 		for (const [key, value] of Object.entries(kitAliases)) {
 			if (!(key in aliasMap)) aliasMap[key] = path.resolve(value);
@@ -720,6 +721,7 @@ export default function (opts = {}) {
 		websocketMetrics: websocket?.metrics ?? null,
 
 		async adapt(builder) {
+			const kitConfig = builder.config.paths ? builder.config : builder.config.kit;
 			const tmp = builder.getBuildDirectory('adapter-ws');
 
 			builder.rimraf(out);
@@ -727,8 +729,8 @@ export default function (opts = {}) {
 			builder.mkdirp(tmp);
 
 			builder.log.minor('Copying assets');
-			builder.writeClient(`${out}/client${builder.config.kit.paths.base}`);
-			builder.writePrerendered(`${out}/prerendered${builder.config.kit.paths.base}`);
+			builder.writeClient(`${out}/client${kitConfig.paths.base}`);
+			builder.writePrerendered(`${out}/prerendered${kitConfig.paths.base}`);
 
 			if (precompress) {
 				builder.log.minor('Compressing assets');
@@ -742,12 +744,22 @@ export default function (opts = {}) {
 
 			builder.writeServer(tmp);
 
+			if (typeof builder.generateServerInstance === 'function') {
+				builder.generateServerInstance(`${tmp}/manifest.js`, { serverDirectory: tmp });
+			} else {
+				writeFileSync(`${tmp}/manifest.js`, [
+					"import { Server } from './index.js';",
+					`const manifest = ${builder.generateManifest({ relativePath: './' })};`,
+					'export const server = new Server(manifest);'
+				].join('\n\n'));
+			}
 			writeFileSync(
 				`${tmp}/manifest.js`,
 				[
-					`export const manifest = ${builder.generateManifest({ relativePath: './' })};`,
+					readFileSync(`${tmp}/manifest.js`, 'utf8'),
+					`export const appPath = ${JSON.stringify(builder.getAppPath())};`,
 					`export const prerendered = new Set(${JSON.stringify(builder.prerendered.paths)});`,
-					`export const base = ${JSON.stringify(builder.config.kit.paths.base)};`
+					`export const base = ${JSON.stringify(kitConfig.paths.base)};`
 				].join('\n\n')
 			);
 
@@ -987,7 +999,7 @@ export default function (opts = {}) {
 			// dot-path in the output would 404 in production with nothing saying
 			// why. Say so here, where the file is still in front of the developer.
 			if (!staticDotfiles) {
-				const outBase = builder.config.kit.paths.base;
+				const outBase = kitConfig.paths.base;
 				const refused = [...new Set([
 					...listExcludedDotPaths(`${out}/client${outBase}`),
 					...listExcludedDotPaths(`${out}/prerendered${outBase}`)
@@ -1076,7 +1088,6 @@ export default function (opts = {}) {
 			builder.copy(runtimeDir, out, {
 				replace: {
 					MANIFEST: './server/manifest.js',
-					SERVER: './server/index.js',
 					KIT_NODE: './server/kit-node.js',
 					WS_HANDLER: './server/ws-handler.js',
 					METRICS_REGISTRY: './server/metrics-registry.js',

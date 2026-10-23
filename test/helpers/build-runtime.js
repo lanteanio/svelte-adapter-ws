@@ -231,7 +231,6 @@ export function buildRuntime(options = {}) {
 	// build boots; a test that needs a different value overrides per key.
 	const replace = {
 		MANIFEST: './server/manifest.js',
-		SERVER: './server/index.js',
 		KIT_NODE: './server/kit-node.js',
 		WS_HANDLER: './server/ws-handler.js',
 		METRICS_REGISTRY: './server/metrics-registry.js',
@@ -291,7 +290,9 @@ export function buildRuntime(options = {}) {
 		path.join(dir, 'server', 'manifest.js'),
 		options.manifestSource ??
 			[
-				"export const manifest = { appPath: '_app' };",
+				"import { Server } from './index.js';",
+				"export const server = new Server({ appPath: '_app' });",
+				"export const appPath = '_app';",
 				"export const prerendered = new Set(['/about', '/docs']);",
 				"export const base = '';"
 			].join('\n')

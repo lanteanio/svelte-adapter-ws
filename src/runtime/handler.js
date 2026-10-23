@@ -1,6 +1,6 @@
 // The runtime aggregator the process entry imports. Module evaluation order
-// here is the boot sequence: the SvelteKit Server initializes first (_init.js
-// populates the $env proxies before anything app-authored evaluates), then
+// here is the boot sequence: the SvelteKit Server initializes first (the
+// bridges evaluate app-authored modules only after _init.js has run), then
 // configuration is validated, the static index is built, and the node server
 // is constructed around the request handler.
 

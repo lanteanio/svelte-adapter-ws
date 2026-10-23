@@ -114,6 +114,7 @@ function makeBuilder() {
 			return [];
 		},
 		generateManifest: () => "{ appPath: '_app', mimeTypes: {}, assets: new Set([]) }",
+		getAppPath: () => '_app',
 		prerendered: { paths: ['/about'] },
 		compress: async () => {},
 		hasServerInstrumentationFile: () => false,

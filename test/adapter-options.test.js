@@ -65,6 +65,7 @@ async function adaptWebsocket(websocket) {
 			return [];
 		},
 		generateManifest: () => "{ appPath: '_app', mimeTypes: {}, assets: new Set([]) }",
+		getAppPath: () => '_app',
 		prerendered: { paths: [] },
 		compress: async () => {},
 		hasServerInstrumentationFile: () => false,

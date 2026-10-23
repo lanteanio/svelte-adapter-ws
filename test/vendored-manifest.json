@@ -1521,6 +1521,26 @@
 			{
 				"lead": "\n\t\t\t\t\t\tconsole.error('[ws] dev connection error:', err);",
 				"ours": "\n\t\t\t\t\t\tconsole.error('[svelte-adapter-ws/runtime.websocket] dev connection error:', err);"
+			},
+			{
+				"lead": "\t/** @type {import('vite').ViteDevServer | null} */\n\tlet viteServer = null;\n\n\t/** @type {string | null} Resolved absolute path of the WS handler file */",
+				"ours": "\t/** @type {import('vite').ViteDevServer | null} */\n\tlet viteServer = null;\n\tlet loadDevModule;\n\n\t/** @type {string | null} Resolved absolute path of the WS handler file */"
+			},
+			{
+				"lead": "\tasync function adapterHandlerOption(root, resolved) {\n\t\tfor (const plugin of resolved?.plugins ?? []) {\n\t\t\tconst adapter = plugin?.api?.options?.kit?.adapter;\n\t\t\tif (adapter?.name !== 'adapter-ws') continue;\n\t\t\tconst handler = adapter.websocketHandler;",
+				"ours": "\tasync function adapterHandlerOption(root, resolved) {\n\t\tfor (const plugin of resolved?.plugins ?? []) {\n\t\t\tconst config = plugin?.api?.options;\n\t\t\tconst adapter = config?.adapter ?? config?.kit?.adapter;\n\t\t\tif (adapter?.name !== 'adapter-ws') continue;\n\t\t\tconst handler = adapter.websocketHandler;"
+			},
+			{
+				"lead": "\t\t\t// separate `client` and `ssr` environments; `env.isSsrBuild`\n\t\t\t// in `config()` is `false` even during the SSR build, so we\n\t\t\t// detect SSR via `resolved.build.ssr` instead.\n\t\t\tif (resolved.build?.ssr) {\n\t\t\t\tssrRoot = resolved.root || process.cwd();\n\t\t\t\tconst adapterOption = await adapterHandlerOption(ssrRoot, resolved);",
+				"ours": "\t\t\t// separate `client` and `ssr` environments; `env.isSsrBuild`\n\t\t\t// in `config()` is `false` even during the SSR build, so we\n\t\t\t// detect the legacy SSR build or the shared server environment.\n\t\t\t// Kit 3 builds both environments from one resolved config.\n\t\t\tif (resolved.build?.ssr || (resolved.command === 'build' && resolved.environments?.ssr)) {\n\t\t\t\tssrRoot = resolved.root || process.cwd();\n\t\t\t\tconst adapterOption = await adapterHandlerOption(ssrRoot, resolved);"
+			},
+			{
+				"lead": "\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// The metrics registry, on the same mechanism as the handler and for\n\t\t\t// the same reason: an option named on the adapter must mean the same\n\t\t\t// thing in dev as it does in the build. Failures here are contained -\n\t\t\t// a broken metrics module must not stop a dev server from serving -\n\t\t\t// and reported through the same indexed line the build path uses.\n\t\t\tif (adapterOption.metrics) {\n\t\t\t\tconst metricsPath = path.resolve(adapterOption.metrics);\n\t\t\t\ttry {\n\t\t\t\t\tconst ns = await server.ssrLoadModule(metricsPath);\n\t\t\t\t\tconst picked = ns.default ?? ns.metrics ?? ns.registry ?? null;\n\t\t\t\t\tif (picked !== null && typeof picked !== 'object' && typeof picked !== 'function') {\n\t\t\t\t\t\tconsole.error(adapterConsoleLine(\n\t\t\t\t\t\t\tADAPTER_ERROR_IDS.METRICS_MODULE_SHAPE,\n\t\t\t\t\t\t\t` got ${typeof picked} from ${JSON.stringify(adapterOption.metrics)}`\n\t\t\t\t\t\t));\n\t\t\t\t\t} else {\n\t\t\t\t\t\tdevMetricsRegistry = picked;\n\t\t\t\t\t}\n\t\t\t\t} catch (err) {\n\t\t\t\t\tconsole.error('[adapter-ws] metrics module load error detail:', err);\n\t\t\t\t}\n\t\t\t}\n\n\t\t\thandlerReady = (async () => {\n\t\t\t\tif (!resolvedHandler) return;\n\t\t\t\tresolvedHandlerPath = resolvedHandler.path;\n\t\t\t\ttry {\n\t\t\t\t\tconst mod = await server.ssrLoadModule(resolvedHandler.path);\n\t\t\t\t\thandlerFailed = false;\n\t\t\t\t\tapplyHandlers(mod);",
+				"ours": "\t\t\tconst resolvedHandler = await discoverHandler(root, server.config, adapterOption);\n\n\t\t\t// Kit 3 serves routes through the runnable SSR environment. Its legacy\n\t\t\t// ssrLoadModule graph is separate, so using it would duplicate shared state.\n\t\t\tconst useEnvironmentRunner = (server.config.plugins ?? []).some(plugin => plugin?.api?.options?.adapter?.name === 'adapter-ws');\n\t\t\tconst environmentReady = useEnvironmentRunner && !server.httpServer.listening\n\t\t\t\t? new Promise(resolve => server.httpServer.once('listening', resolve))\n\t\t\t\t: Promise.resolve();\n\t\t\tloadDevModule = async (id) => {\n\t\t\t\tawait environmentReady;\n\t\t\t\treturn useEnvironmentRunner ? server.environments.ssr.runner.import(id) : server.ssrLoadModule(id);\n\t\t\t};\n\n\t\t\thandlerReady = (async () => {\n\t\t\t\t// The metrics registry, on the same mechanism as the handler and for\n\t\t\t\t// the same reason: an option named on the adapter must mean the same\n\t\t\t\t// thing in dev as it does in the build. Failures here are contained -\n\t\t\t\t// a broken metrics module must not stop a dev server from serving -\n\t\t\t\t// and reported through the same indexed line the build path uses.\n\t\t\t\tif (adapterOption.metrics) {\n\t\t\t\t\tconst metricsPath = path.resolve(adapterOption.metrics);\n\t\t\t\t\ttry {\n\t\t\t\t\t\tconst ns = await loadDevModule(metricsPath);\n\t\t\t\t\t\tconst picked = ns.default ?? ns.metrics ?? ns.registry ?? null;\n\t\t\t\t\t\tif (picked !== null && typeof picked !== 'object' && typeof picked !== 'function') {\n\t\t\t\t\t\t\tconsole.error(adapterConsoleLine(\n\t\t\t\t\t\t\t\tADAPTER_ERROR_IDS.METRICS_MODULE_SHAPE,\n\t\t\t\t\t\t\t\t` got ${typeof picked} from ${JSON.stringify(adapterOption.metrics)}`\n\t\t\t\t\t\t\t));\n\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\tdevMetricsRegistry = picked;\n\t\t\t\t\t\t}\n\t\t\t\t\t} catch (err) {\n\t\t\t\t\t\tconsole.error('[adapter-ws] metrics module load error detail:', err);\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\tif (!resolvedHandler) return;\n\t\t\t\tresolvedHandlerPath = resolvedHandler.path;\n\t\t\t\ttry {\n\t\t\t\t\tconst mod = await loadDevModule(resolvedHandler.path);\n\t\t\t\t\thandlerFailed = false;\n\t\t\t\t\tapplyHandlers(mod);"
+			},
+			{
+				"lead": "\t\t\t// cached module instantly when nothing was invalidated, so this is cheap.\n\t\t\t// We compare function references to detect actual changes.\n\t\t\thandlerReady = server.ssrLoadModule(resolvedHandlerPath).then(async (mod) => {\n\t\t\t\tconst recovered = handlerFailed;\n\t\t\t\thandlerFailed = false;",
+				"ours": "\t\t\t// cached module instantly when nothing was invalidated, so this is cheap.\n\t\t\t// We compare function references to detect actual changes.\n\t\t\thandlerReady = loadDevModule(resolvedHandlerPath).then(async (mod) => {\n\t\t\t\tconst recovered = handlerFailed;\n\t\t\t\thandlerFailed = false;"
 			}
 		]
 	},
@@ -2872,6 +2892,22 @@
 			{
 				"lead": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity - and the substring test would have served brotli anyway.\n",
 				"ours": "\t\t// Only a brotli sibling is indexed here, so a refusal of brotli leaves\n\t\t// identity.\n"
+			},
+			{
+				"lead": "\t\tconst { staticCache } = await import('./fixture/build/handler/state.js');\n\t\tconst { manifest } = await import('./fixture/build/manifest-bridge.js');\n",
+				"ours": "\t\tconst { staticCache } = await import('./fixture/build/handler/state.js');\n\t\tconst { appPath } = await import('./fixture/build/manifest-bridge.js');\n"
+			},
+			{
+				"lead": "\n\t\tconst immutableRel = path.join(manifest.appPath, 'immutable', 'chunk.js');\n\t\tfs.mkdirSync(path.dirname(path.join(tmpDir, immutableRel)), { recursive: true });",
+				"ours": "\n\t\tconst immutableRel = path.join(appPath, 'immutable', 'chunk.js');\n\t\tfs.mkdirSync(path.dirname(path.join(tmpDir, immutableRel)), { recursive: true });"
+			},
+			{
+				"lead": "\t\tcacheDir(tmpDir, '/negotiate-immutable', true, null, [{\n\t\t\tpattern: `/${manifest.appPath}/immutable/`,\n\t\t\tcacheControl: 'no-store'",
+				"ours": "\t\tcacheDir(tmpDir, '/negotiate-immutable', true, null, [{\n\t\t\tpattern: `/${appPath}/immutable/`,\n\t\t\tcacheControl: 'no-store'"
+			},
+			{
+				"lead": "\t\tentry = staticCache.get('/negotiate-probe/asset.txt');\n\t\timmutableEntry = staticCache.get(`/negotiate-immutable/${manifest.appPath}/immutable/chunk.js`);\n\t\tconfiguredEntry = staticCache.get('/negotiate-configured/asset.txt');",
+				"ours": "\t\tentry = staticCache.get('/negotiate-probe/asset.txt');\n\t\timmutableEntry = staticCache.get(`/negotiate-immutable/${appPath}/immutable/chunk.js`);\n\t\tconfiguredEntry = staticCache.get('/negotiate-configured/asset.txt');"
 			}
 		]
 	},
@@ -2889,6 +2925,18 @@
 			{
 				"lead": "\t\texpect(serve({ headOnly: true, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t});\n\n\tit('an immutable entry ignores preconditions entirely, exactly as before the date validator', () => {\n\t\texpect(serve({ entry: immutableEntry, ifModifiedSince: LATER }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: 'W/\"stranger\"' }).status).toBe('200 OK');\n\t});\n\n\tit('a configured last-modified cannot displace the file time', () => {\n",
 				"ours": "\t\texpect(serve({ headOnly: true, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t});\n\n\tit('an immutable entry ignores absent date validators but evaluates entity conditions', () => {\n\t\texpect(serve({ entry: immutableEntry, ifModifiedSince: LATER }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: 'W/\"stranger\"' }).status).toBe('412 Precondition Failed');\n\t\texpect(serve({ entry: immutableEntry, ifMatch: '*' }).status).toBe('200 OK');\n\t\texpect(serve({ entry: immutableEntry, ifNoneMatch: '*' }).status).toBe('304 Not Modified');\n\t});\n\n\tit('a configured last-modified cannot displace the file time', () => {\n"
+			},
+			{
+				"lead": "\t\tconst { staticCache } = await import('./fixture/build/handler/state.js');\n\t\tconst { manifest } = await import('./fixture/build/manifest-bridge.js');\n\t\tstaticPreconditions = mod.staticPreconditions;",
+				"ours": "\t\tconst { staticCache } = await import('./fixture/build/handler/state.js');\n\t\tconst { appPath } = await import('./fixture/build/manifest-bridge.js');\n\t\tstaticPreconditions = mod.staticPreconditions;"
+			},
+			{
+				"lead": "\n\t\tconst immutableRel = path.join(manifest.appPath, 'immutable', 'pin.js');\n\t\tfs.mkdirSync(path.dirname(path.join(tmpDir, immutableRel)), { recursive: true });",
+				"ours": "\n\t\tconst immutableRel = path.join(appPath, 'immutable', 'pin.js');\n\t\tfs.mkdirSync(path.dirname(path.join(tmpDir, immutableRel)), { recursive: true });"
+			},
+			{
+				"lead": "\t\tfracEntry = staticCache.get('/precond/doc-frac.txt');\n\t\timmutableEntry = staticCache.get(`/precond-immutable/${manifest.appPath}/immutable/pin.js`);\n\t\toverrideEntry = staticCache.get('/precond-override/doc.txt');",
+				"ours": "\t\tfracEntry = staticCache.get('/precond/doc-frac.txt');\n\t\timmutableEntry = staticCache.get(`/precond-immutable/${appPath}/immutable/pin.js`);\n\t\toverrideEntry = staticCache.get('/precond-override/doc.txt');"
 			}
 		]
 	},
@@ -3255,5 +3303,35 @@
 	},
 	{
 		"file": "test/client-replay-real.test.js"
+	},
+	{
+		"file": "test/fixtures/kit3/package.json"
+	},
+	{
+		"file": "test/fixtures/kit3/smoke.mjs"
+	},
+	{
+		"file": "test/fixtures/kit3/src/app.html"
+	},
+	{
+		"file": "test/fixtures/kit3/src/env.js"
+	},
+	{
+		"file": "test/fixtures/kit3/src/metrics.js"
+	},
+	{
+		"file": "test/fixtures/kit3/src/routes/+page.svelte"
+	},
+	{
+		"file": "test/fixtures/kit3/src/routes/counter/+server.js"
+	},
+	{
+		"file": "test/fixtures/kit3/src/shared.js"
+	},
+	{
+		"file": "test/fixtures/kit3/src/socket.js"
+	},
+	{
+		"file": "test/fixtures/kit3/vite.config.js"
 	}
 ]

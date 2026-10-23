@@ -32,7 +32,9 @@ beforeAll(async () => {
 			'prerendered/żółw/index.html': '<html>żółw index</html>'
 		},
 		manifestSource: [
-			"export const manifest = { appPath: '_app' };",
+			"import { Server } from './index.js';",
+			"export const server = new Server({ appPath: '_app' });",
+			"export const appPath = '_app';",
 			"export const prerendered = new Set(['/about', '/docs', '/café', '/über', '/łódź', '/żółw']);",
 			"export const base = '';"
 		].join('\n')

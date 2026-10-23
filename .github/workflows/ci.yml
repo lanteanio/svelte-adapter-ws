@@ -96,3 +96,33 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Restart after a wedged worker and a primary kill
         run: npm run drill:respawner
+
+  kit3:
+    name: SvelteKit 3 application (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install npm
+        run: npm install --global npm@11.8.0 --no-audit --no-fund
+      - name: Install project dependencies
+        run: npm install --no-audit --no-fund
+      - name: Install the locked SvelteKit 3 application
+        working-directory: test/fixtures/kit3
+        run: npm ci --install-links
+      - name: Build the SvelteKit 3 application
+        working-directory: test/fixtures/kit3
+        run: npm run build
+      - name: Exercise SvelteKit 3 production HTTP and WebSocket shared state
+        working-directory: test/fixtures/kit3
+        run: npm run smoke
+      - name: Exercise SvelteKit 3 development HTTP and WebSocket shared state
+        working-directory: test/fixtures/kit3
+        run: npm run smoke:dev

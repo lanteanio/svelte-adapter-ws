@@ -106,6 +106,23 @@ repository's local self-dependency. Published-package installs use the normal
 
 ## Usage
 
+SvelteKit 2 and 3 are supported. On SvelteKit 3, pass the adapter to
+`sveltekit()` in the Vite configuration:
+
+```js
+// vite.config.js
+import adapter from 'svelte-adapter-ws';
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+	plugins: [sveltekit({ adapter: adapter() })]
+});
+```
+
+An existing SvelteKit 2 project keeps its two-file configuration and replaces
+the adapter in `svelte.config.js`:
+
 ```js
 // svelte.config.js
 import adapter from 'svelte-adapter-ws';

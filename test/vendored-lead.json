@@ -68,6 +68,20 @@
 		"src/plugins/replay/client.js": "ee186d3",
 		"src/plugins/replay/client.d.ts": "ee186d3",
 		"test/client-recovery-window-real.test.js": "ee186d3",
-		"test/client-replay-real.test.js": "ee186d3"
+		"test/client-replay-real.test.js": "ee186d3",
+		"src/runtime/manifest-bridge.js": "1925f07",
+		"src/runtime/metrics-bridge.js": "1925f07",
+		"src/runtime/waiting-room-renderer-bridge.js": "1925f07",
+		"src/runtime/ws-handler-bridge.js": "1925f07",
+		"test/fixtures/kit3/package.json": "1925f07",
+		"test/fixtures/kit3/smoke.mjs": "1925f07",
+		"test/fixtures/kit3/src/app.html": "1925f07",
+		"test/fixtures/kit3/src/env.js": "1925f07",
+		"test/fixtures/kit3/src/metrics.js": "1925f07",
+		"test/fixtures/kit3/src/routes/+page.svelte": "1925f07",
+		"test/fixtures/kit3/src/routes/counter/+server.js": "1925f07",
+		"test/fixtures/kit3/src/shared.js": "1925f07",
+		"test/fixtures/kit3/src/socket.js": "1925f07",
+		"test/fixtures/kit3/vite.config.js": "1925f07"
 	}
 }

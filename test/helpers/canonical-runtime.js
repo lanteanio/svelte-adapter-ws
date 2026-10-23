@@ -8,7 +8,7 @@ export async function startRealRuntime({ variant, env }) {
 	const payload = buildRuntime({
 		replace: { ENV_PREFIX: JSON.stringify(prefix), HEALTH_CHECK_PATH: JSON.stringify(variant === 'canonicalhost' ? '/alive-canonical' : '/healthz'), READINESS_CHECK_PATH: JSON.stringify(variant === 'canonicalhost' ? '/ready-canonical' : '/readyz') },
 		files: { 'client/test.txt': 'static control', 'prerendered/pages/prerendered/caf\u00e9.html': 'prerendered control' },
-		manifestSource: "export const manifest = { appPath: '_app' }; export const prerendered = new Set(['/prerendered/caf\u00e9']); export const base = '';",
+		manifestSource: "import { Server } from './index.js'; export const server = new Server({ appPath: '_app' }); export const appPath = '_app'; export const prerendered = new Set(['/prerendered/caf\u00e9']); export const base = '';",
 		serverSource: `export class Server {
 			async init() {}
 			async respond(request) {

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SvelteKit 3 build and development support. The peer range accepts
+  `@sveltejs/kit` 3, the adapter can be passed to `sveltekit()` in the Vite
+  configuration, and SvelteKit 3 builds use the builder-generated server
+  instance while development loads the WebSocket handler and metrics module
+  through the Vite SSR environment runner, so HTTP routes and WebSocket hooks
+  share one module graph. SvelteKit 2 keeps its existing builder and dev APIs.
+  User WebSocket, metrics and waiting-room modules now evaluate after the
+  SvelteKit server has initialized, so module-level environment reads see their
+  values.
+
 - `examples/deployment` carries a systemd unit and a container compose file
   with readiness, restart policy and termination grace.
 
