@@ -90,7 +90,7 @@ describe('SvelteKit 3 development server', () => {
 		const answer = (id) => (String(id).includes('virtual-metrics-registry') ? { default: registry } : handlerModule);
 		const viteServer = {
 			httpServer: server,
-			middlewares: { use() {} },
+			middlewares: { use() {}, stack: [] },
 			config: {
 				root: process.cwd(),
 				logger: { warn() {}, info() {}, error() {} },
