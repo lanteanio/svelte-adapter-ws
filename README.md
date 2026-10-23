@@ -805,7 +805,11 @@ HTTP/2 and the entire observability ecosystem
    preconditions (a 304 repeats the representation's 200 header fields,
    every configured `staticHeaders` entry included, except what describes the
    body: `Content-Type`, `Content-Length`, `Content-Encoding` and
-   `Content-Disposition`), the dotfile refusal with its
+   `Content-Disposition`; `If-None-Match` uses weak comparison, so the
+   selected tag matches with or without its `W/` prefix, including in a
+   list, while `If-Match` keeps the exact-issued-validator policy: a
+   complete tag issued for any coding succeeds, removing `W/` does not),
+   the dotfile refusal with its
    `.well-known` carve-out, and the prerendered trailing-slash alias and 308
    rules, the Location percent-encoded so a route with a non-ASCII name
    redirects to the bytes a browser sends for it. Static text responses
