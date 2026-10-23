@@ -1778,11 +1778,18 @@ export const platform = {
 		// is the most stale value to lose).
 		if (pending.size >= MAX_COALESCED_KEYS_PER_CONNECTION && !pending.has(key)) {
 			const oldest = pending.keys().next().value;
-			if (oldest !== undefined) pending.delete(oldest);
+			if (oldest !== undefined) {
+				pending.delete(oldest);
+				if (pending === singleFlushPending) { singleFlushEvicted = true; singleFlushTouched = true; }
+			}
 		}
 		const entry = { topic, event, data, prefix };
 		pending.set(key, entry);
-		flushCoalescedFor(facade, entry);
+		if (pending.size === 1 && singleFlushPending === null && coalescedDrainDepth === 0) {
+			flushSingleCoalesced(facade, userData, pending, key, entry);
+		} else {
+			flushCoalescedFor(facade, entry);
+		}
 	},
 
 	/**
@@ -2317,6 +2324,35 @@ let _topicHelperCache = null;
 
 const coalescedContinuations = new WeakSet();
 
+/**
+ * The queue a single-entry flush is draining without drainCoalesced, or null.
+ * A flush reached for it from inside its own serializer only enqueues, as a
+ * nested drainCoalesced of an active queue does.
+ */
+let singleFlushPending = null;
+
+/**
+ * drainCoalesced calls in progress. While any runs, sendCoalesced takes the
+ * drainCoalesced flush, so a drain of the same queue further up the stack is
+ * seen there and a nested call only enqueues.
+ */
+let coalescedDrainDepth = 0;
+
+/** Set when sendCoalesced evicts from the queue the single-entry flush is draining. */
+let singleFlushEvicted = false;
+
+/**
+ * Set when anything queues into, or evicts from, the queue the single-entry
+ * flush is draining. Every such change goes through sendCoalesced, which
+ * ends in flushCoalescedFor, so while this is clear the queue holds exactly
+ * what the flush last saw and the lookups that detect a replacement can be
+ * skipped.
+ */
+let singleFlushTouched = false;
+
+/** writeCoalesced's result when the socket threw on send. */
+const COALESCED_ABORTED = -1;
+
 /** Report a dropped entry with private identifier fields and bounded application error text. */
 function reportCoalescedFailure(userData, msg, key, err) {
 	try {
@@ -2337,6 +2373,45 @@ function reportCoalescedFailure(userData, msg, key, err) {
 			}
 		});
 	} catch { /* reporting must not escape drain */ }
+}
+
+/**
+ * Serialize one queued entry and write it. Returns the transport's send
+ * status, 1 for a value a serializer superseded or a reported failure,
+ * COALESCED_ABORTED when the socket threw, or the error to throw to the
+ * caller whose own value failed.
+ * @returns {number | Error}
+ */
+function writeCoalesced(facade, ud, pending, msg, key, callerEntry) {
+	assert(typeof msg.topic === 'string', 'coalesce.entry-topic-type', null);
+	assert(typeof msg.event === 'string', 'coalesce.entry-event-type', null);
+	let payload;
+	let failure;
+	try {
+		const body = JSON.stringify(msg.data ?? null);
+		if (typeof body === 'string') payload = msg.prefix + body + '}';
+	}
+	catch (err) { failure = err; }
+	// A serializer may have queued a newer value for this key.
+	if ((pending !== singleFlushPending || singleFlushTouched) && pending.get(key) !== msg) return 1;
+	if (payload === undefined) {
+		const err = isNativeError(failure) ? failure : new TypeError('sendCoalesced data has no JSON form');
+		if (msg === callerEntry) return err;
+		reportCoalescedFailure(ud, msg, key, err);
+		return 1;
+	}
+	let result;
+	try { result = /** @type {any} */ (facade).send(payload, false, false); }
+	catch {
+		// Socket closed mid-drain. There will be no further drain to retry
+		// on, so the rest of the buffer is dropped: the drain treats this as
+		// enqueued (0), which removes the entry and halts, and the flush then
+		// clears the rest.
+		counters.closedWsAborts++;
+		return COALESCED_ABORTED;
+	}
+	if (result !== 2) bumpOut(ud, payload);
+	return result;
 }
 
 /**
@@ -2367,41 +2442,96 @@ export function flushCoalescedFor(facade, callerEntry) {
 	const pending = ud[WS_COALESCED];
 	if (!pending || pending.size === 0) return;
 	assert(pending instanceof Map, 'coalesce.pending-type', null);
+	if (pending === singleFlushPending) { singleFlushTouched = true; return; }
 	let aborted = false;
 	let callerError = null;
-	const yielded = drainCoalesced(pending, (msg, key) => {
-		if (aborted) return 2;
-		assert(typeof msg.topic === 'string', 'coalesce.entry-topic-type', null);
-		assert(typeof msg.event === 'string', 'coalesce.entry-event-type', null);
-		let payload;
-		let failure;
-		try {
-			const body = JSON.stringify(msg.data ?? null);
-			if (typeof body === 'string') payload = msg.prefix + body + '}';
-		}
-		catch (err) { failure = err; }
-		// A serializer may have queued a newer value for this key.
-		if (pending.get(key) !== msg) return 1;
-		if (payload === undefined) {
-			const err = isNativeError(failure) ? failure : new TypeError('sendCoalesced data has no JSON form');
-			if (msg === callerEntry) callerError = err;
-			else reportCoalescedFailure(ud, msg, key, err);
-			return 1;
-		}
-		let result;
-		try { result = /** @type {any} */ (facade).send(payload, false, false); }
-		catch {
-			// Socket closed mid-drain. There will be no further drain to
-			// retry on, so the rest of the buffer is dropped: returning 0
-			// removes this entry and halts the loop, and the clear below
-			// wipes the rest.
-			counters.closedWsAborts++;
+	let yielded;
+	coalescedDrainDepth++;
+	try {
+		yielded = drainCoalesced(pending, (msg, key) => {
+			if (aborted) return 2;
+			const outcome = writeCoalesced(facade, ud, pending, msg, key, callerEntry);
+			if (typeof outcome !== 'number') { callerError = outcome; return 1; }
+			if (outcome !== COALESCED_ABORTED) return outcome;
 			aborted = true;
 			return 0;
+		});
+	} finally {
+		coalescedDrainDepth--;
+	}
+	settleCoalescedFlush(facade, pending, aborted, yielded, callerError);
+}
+
+/**
+ * The flush for the common `sendCoalesced` call: the queue holds only the
+ * entry that call just set, and no flush of any queue is running. It applies
+ * drainCoalesced's rules without its iterator: the same send statuses, the
+ * same handling of a serializer that replaces or adds entries, and the same
+ * bound of two sends per queued entry. Entries a serializer adds are then
+ * visited in queue order, past the first entry's own slot, exactly as
+ * drainCoalesced's iteration reaches them.
+ */
+function flushSingleCoalesced(facade, ud, pending, firstKey, firstEntry) {
+	singleFlushPending = pending;
+	singleFlushEvicted = false;
+	singleFlushTouched = false;
+	let aborted = false;
+	let callerError = null;
+	let yielded = false;
+	try {
+		let remaining = 2;
+		let key = firstKey;
+		let first = firstEntry;
+		/** @type {IterableIterator<[any, any]> | null} */
+		let rest = null;
+		drain: for (;;) {
+			let value = first;
+			let retried = false;
+			for (;;) {
+				if (remaining-- === 0) { yielded = true; break drain; }
+				let result;
+				if (aborted) result = 2;
+				else {
+					const outcome = writeCoalesced(facade, ud, pending, value, key, firstEntry);
+					if (typeof outcome !== 'number') { callerError = outcome; result = 1; }
+					else if (outcome === COALESCED_ABORTED) { aborted = true; result = 0; }
+					else result = outcome;
+				}
+				if (result === 2) { yielded = false; break drain; }
+				if (!singleFlushTouched || Object.is(pending.get(key), value)) {
+					pending.delete(key);
+					if (result === 0) { yielded = false; break drain; }
+					break;
+				}
+				if (result === 0) { yielded = false; break drain; }
+				if (!pending.has(key)) break;
+				if (retried) { yielded = true; break; }
+				retried = true;
+				value = pending.get(key);
+			}
+			if (rest === null) {
+				if (pending.size === 0) break;
+				// Continue past the first entry's slot. That slot is still
+				// live only if the first key is present and was never removed
+				// - the drain's own delete is followed by nothing that could
+				// add it back, and an eviction takes the oldest entry, which
+				// is this one while it is live.
+				rest = pending.entries();
+				if (!singleFlushEvicted && pending.has(firstKey)) rest.next();
+			}
+			const step = rest.next();
+			if (step.done) break;
+			key = step.value[0];
+			first = step.value[1];
 		}
-		if (result !== 2) bumpOut(ud, payload);
-		return result;
-	});
+	} finally {
+		singleFlushPending = null;
+	}
+	settleCoalescedFlush(facade, pending, aborted, yielded, callerError);
+}
+
+/** Drop an aborted queue, schedule a yielded one's continuation, throw the caller's own failure. */
+function settleCoalescedFlush(facade, pending, aborted, yielded, callerError) {
 	if (aborted) pending.clear();
 	else if (yielded && !coalescedContinuations.has(pending)) {
 		coalescedContinuations.add(pending);

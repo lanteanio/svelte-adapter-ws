@@ -270,6 +270,37 @@ describe('coalesced serialization boundaries', () => {
 		expect(c.pending().size).toBe(0);
 	});
 
+	it('only enqueues a send made from a serializer the drain is running, even when it leaves one entry', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const c = await connect();
+		let armed = false;
+		/** @type {unknown} */
+		let inner = 'not called';
+		c.hold();
+		platform.sendCoalesced(c.facade, { key: 'same', topic: 't', event: 'older', data: { toJSON() {
+			if (armed) {
+				armed = false;
+				try {
+					platform.sendCoalesced(c.facade, { key: 'same', topic: 't', event: 'latest', data: { n: 1n } });
+					inner = null;
+				} catch (err) {
+					inner = err;
+				}
+			}
+			return 1;
+		} } });
+		expect(c.pending().size).toBe(1);
+		c.release();
+		armed = true;
+		expect(() => flushCoalescedFor(c.facade)).not.toThrow();
+		expect(inner, 'the nested call returns without flushing').toBeNull();
+		expect(c.frames).toEqual([]);
+		expect(c.pending().size).toBe(0);
+		const errors = reported(error);
+		expect(errors, 'the drain reports the replacement it could not serialize').toHaveLength(1);
+		expect(errors[0].name).toBe('TypeError');
+	});
+
 	it('classifies a thrown proxy without consulting its prototype', async () => {
 		const c = await connect();
 		let traps = 0;
