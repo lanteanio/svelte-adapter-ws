@@ -1039,21 +1039,24 @@ export const wss = new WebSocketServer({
 
 // Custom 101 headers (the upgradeResponse contract): ws emits a 'headers'
 // event before writing the handshake; a per-request map carries the app's
-// validated headers into it.
+// validated headers into it. The server's own Date goes after them, as the
+// native tier writes it, which is why an application may not supply one.
 /** @type {WeakMap<import('node:http').IncomingMessage, Record<string, string>>} */
 const upgradeExtraHeaders = new WeakMap();
 wss.on('headers', (headers, req) => {
 	const extra = upgradeExtraHeaders.get(req);
-	if (!extra) return;
-	for (const [name, value] of Object.entries(extra)) {
-		// An array value (several Set-Cookie lines) writes one header LINE per
-		// element - joining them would corrupt every cookie after the first.
-		if (Array.isArray(value)) {
-			for (const item of value) headers.push(`${name}: ${item}`);
-		} else {
-			headers.push(`${name}: ${value}`);
+	if (extra) {
+		for (const [name, value] of Object.entries(extra)) {
+			// An array value (several Set-Cookie lines) writes one header LINE per
+			// element - joining them would corrupt every cookie after the first.
+			if (Array.isArray(value)) {
+				for (const item of value) headers.push(`${name}: ${item}`);
+			} else {
+				headers.push(`${name}: ${value}`);
+			}
 		}
 	}
+	headers.push('Date: ' + new Date(wallEpoch()).toUTCString());
 });
 
 /**
@@ -1154,6 +1157,8 @@ function refuseUpgrade(socket, status, text, extraHeaders, closeConnection = fal
 		}
 	}
 	if (!hasType) head += 'Content-Type: text/plain\r\n';
+	// Every native response carries the server's Date, a refusal included.
+	head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n';
 	finishUpgradeRefusal(socket, head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text, closeConnection);
 }
 

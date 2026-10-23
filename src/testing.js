@@ -1,7 +1,7 @@
 import { isSet } from 'node:util/types';
 import { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLogicalSubscription, accountClosedLogicalSubscriptions } from './runtime/utils/ws-symbols.js';
 import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
-import { now, monotonicNow, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
+import { now, monotonicNow, wallEpoch, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
@@ -556,6 +556,8 @@ function createNodeApp() {
 			head += `${name}: ${value}\r\n`;
 		}
 		if (!hasType) head += 'Content-Type: text/plain\r\n';
+		// As production: a refusal carries the server's Date too.
+		head += 'Date: ' + new Date(wallEpoch()).toUTCString() + '\r\n';
 		try {
 			socket.write(head + `Content-Length: ${Buffer.byteLength(text)}\r\n\r\n` + text);
 		} catch { /* peer already gone */ }
@@ -762,10 +764,11 @@ function createNodeApp() {
 					return first === undefined ? false : first;
 				}
 			});
+			// Mirrors production: the server's own Date follows the app's headers.
 			wss.on('headers', (headers, req) => {
 				const extra = upgradeExtraHeaders.get(req);
-				if (!extra) return;
-				for (const [name, value] of extra) headers.push(`${name}: ${value}`);
+				if (extra) for (const [name, value] of extra) headers.push(`${name}: ${value}`);
+				headers.push('Date: ' + new Date(wallEpoch()).toUTCString());
 			});
 			return app;
 		},

@@ -2263,6 +2263,9 @@
 		"file": "test/groups.test.js"
 	},
 	{
+		"file": "test/handshake-header-parity.test.js"
+	},
+	{
 		"file": "test/harness-metrics-surface.test.js",
 		"adaptations": [
 			{
@@ -3021,6 +3024,18 @@
 	},
 	{
 		"file": "test/upgrade-carry-real.test.js"
+	},
+	{
+		"file": "test/upgrade-response-handshake-real.test.js"
+	},
+	{
+		"file": "test/upgrade-response-handshake.test.js",
+		"adaptations": [
+			{
+				"lead": "let uWS;\ntry {\n\tuWS = (await import('uWebSockets.js')).default;\n} catch {\n\tuWS = null;\n}\nconst describeUWS = uWS ? describe : describe.skip;\n",
+				"ours": "// createTestServer runs on node:http here, so every case runs.\nconst describeUWS = describe;\n"
+			}
+		]
 	},
 	{
 		"file": "test/version-info.test.js",

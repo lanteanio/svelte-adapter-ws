@@ -3,6 +3,7 @@
 // Sec-WebSocket-Accept on every upgrade and negotiates the two
 // Sec-WebSocket-* offers, so an app value goes out BESIDE the server's line
 // and a conforming client refuses the doubled handshake with nothing logged.
+// Date is the server's too: it writes its own after the app's headers.
 // The shared predicate refuses those names the way it refuses an unsafe
 // byte, case-insensitively, and still accepts any other token.
 
@@ -10,9 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { findUnsafeUpgradeHeader, HANDSHAKE_OWNED_HEADER_NAMES } from '../src/runtime/utils/upgrade-headers.js';
 
 describe('handshake-owned header names on a custom 101', () => {
-	it('names the five headers the server writes or negotiates', () => {
+	it('names the six headers the server writes or negotiates', () => {
 		expect([...HANDSHAKE_OWNED_HEADER_NAMES]).toEqual([
-			'connection', 'upgrade', 'sec-websocket-accept', 'sec-websocket-extensions', 'sec-websocket-protocol'
+			'connection', 'upgrade', 'sec-websocket-accept', 'sec-websocket-extensions', 'sec-websocket-protocol', 'date'
 		]);
 		expect(Object.isFrozen(HANDSHAKE_OWNED_HEADER_NAMES)).toBe(true);
 	});

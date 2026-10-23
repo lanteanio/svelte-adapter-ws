@@ -101,6 +101,12 @@
 		"test/request-body-cancel-real.test.js": "bd56f8d",
 		"src/runtime/cookies.js": "a3760f5",
 		"test/fixture/src/hooks.ws.cookie-safety.js": "a3760f5",
-		"test/cookie-safety-real.test.js": "a3760f5"
+		"test/cookie-safety-real.test.js": "a3760f5",
+		"src/runtime/utils/upgrade-headers.js": "afbd07e",
+		"src/upgrade-response.d.ts": "afbd07e",
+		"test/fixture/src/handshake-vectors.js": "afbd07e",
+		"test/handshake-header-parity.test.js": "afbd07e",
+		"test/upgrade-response-handshake-real.test.js": "afbd07e",
+		"test/upgrade-response-handshake.test.js": "afbd07e"
 	}
 }

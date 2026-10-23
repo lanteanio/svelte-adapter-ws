@@ -435,6 +435,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Cookies set from an `authenticate` hook, in production and in Vite development, refuse unpaired UTF-16 surrogates in the name, an unencoded value, the domain and the path, and accept only a finite native `Date` as `expires`, formatted through the native Date method so an overridden or duck-typed `toUTCString()` cannot supply header bytes. Such a cookie fails the hook with a 500 before any cookie is written.
 
+- `Date` is reserved for the server in WebSocket handshake headers: `upgradeResponse()` rejects it case-insensitively, and the runtime's own pre-write check refuses it with the hook-error 500. The 101 and every refusal on the WebSocket path carry the server's own `Date`, in production and in `createTestServer`.
+
 - A request whose Content-Length lines all carry the same value reaches the
   request edge, which answers the repeated framing header with its 400 and
   closes the connection; a built asset is served. Differing values keep the
