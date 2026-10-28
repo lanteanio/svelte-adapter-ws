@@ -235,17 +235,21 @@ export function emitOperationalEvent(input) {
 }
 
 const LEGACY_PREFIXES = new Map([
+	['svelte-adapter-bunserve', ['svelte-adapter-bunserve', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
+	['adapter-bunserve', ['svelte-adapter-bunserve', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
 	['svelte-adapter-ws', ['svelte-adapter-ws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
 	['adapter-ws', ['svelte-adapter-ws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
-	['adapter-ws/assert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'warn']],
-	['adapter-ws/fatal', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'fatal']],
-	['adapter-ws/devAssert', ['svelte-adapter-ws', 'runtime.assertion', 'invariant.violated', 'error']],
-	['adapter-ws/testing', ['svelte-adapter-ws', 'runtime.testing', 'diagnostic.legacy', 'warn']],
-	['adapter-ws/relay-gap', ['svelte-adapter-ws', 'runtime.relay-gap', 'diagnostic.legacy', 'error']],
-	['ws', ['svelte-adapter-ws', 'runtime.websocket', 'diagnostic.legacy', 'warn']],
-	['tls', ['svelte-adapter-ws', 'runtime.tls', 'diagnostic.legacy', 'warn']],
-	['primary', ['svelte-adapter-ws', 'runtime.primary', 'diagnostic.legacy', 'warn']],
-	['pressure', ['svelte-adapter-ws', 'runtime.pressure', 'diagnostic.legacy', 'warn']],
+	['svelte-adapter-uws',['svelte-adapter-uws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
+	['adapter-uws', ['svelte-adapter-uws', 'runtime.adapter', 'diagnostic.legacy', 'warn']],
+	['adapter-uws/assert', ['svelte-adapter-uws', 'runtime.assertion', 'invariant.violated', 'warn']],
+	['adapter-uws/fatal', ['svelte-adapter-uws', 'runtime.assertion', 'invariant.violated', 'fatal']],
+	['adapter-uws/devAssert', ['svelte-adapter-uws', 'runtime.assertion', 'invariant.violated', 'error']],
+	['adapter-uws/testing', ['svelte-adapter-uws', 'runtime.testing', 'diagnostic.legacy', 'warn']],
+	['adapter-uws/relay-gap', ['svelte-adapter-uws', 'runtime.relay-gap', 'diagnostic.legacy', 'error']],
+	['ws', ['svelte-adapter-uws', 'runtime.websocket', 'diagnostic.legacy', 'warn']],
+	['tls', ['svelte-adapter-uws', 'runtime.tls', 'diagnostic.legacy', 'warn']],
+	['primary', ['svelte-adapter-uws', 'runtime.primary', 'diagnostic.legacy', 'warn']],
+	['pressure', ['svelte-adapter-uws', 'runtime.pressure', 'diagnostic.legacy', 'warn']],
 	['extensions', ['svelte-adapter-uws-extensions', 'runtime.extensions', 'diagnostic.legacy', 'warn']],
 	['extensions/assert', ['svelte-adapter-uws-extensions', 'runtime.assertion', 'invariant.violated', 'warn']],
 	['extensions/fatal', ['svelte-adapter-uws-extensions', 'runtime.assertion', 'invariant.violated', 'fatal']],
@@ -261,6 +265,47 @@ const LEGACY_PREFIXES = new Map([
 	['realtime/assert', ['svelte-realtime', 'runtime.assertion', 'invariant.violated', 'warn']],
 	['realtime/fatal', ['svelte-realtime', 'runtime.assertion', 'invariant.violated', 'fatal']]
 ]);
+
+// Prefix families tried in order when no exact prefix matches. `{n}` in the
+// component is the pattern's capture group n, and the result must be a
+// dot-name. These lines take the caller's default severity.
+const LEGACY_FAMILY_EVENT = 'diagnostic.legacy';
+const LEGACY_PREFIX_FAMILIES = [
+	[/^svelte-adapter-uws\/(.+)$/, 'svelte-adapter-uws', '{1}'],
+	[/^svelte-adapter-bunserve\/(.+)$/, 'svelte-adapter-bunserve', '{1}'],
+	[/^svelte-adapter-ws\/(.+)$/, 'svelte-adapter-ws', '{1}'],
+	[/^worker \d+$/, 'svelte-adapter-uws', 'runtime.worker'],
+	[/^group .+$/, 'svelte-adapter-uws', 'plugins.groups'],
+	[/^(redis|postgres)\/([a-z0-9._-]+)$/, 'svelte-adapter-uws-extensions', 'runtime.{1}.{2}']
+];
+
+/**
+ * The legacy prefixes parseDiagnostic attributes during the compatibility
+ * window, as plain data. docs/legacy-diagnostic-prefixes.v1.json is generated
+ * from it, so another package can compare its own table with this one.
+ */
+export function legacyDiagnosticPrefixes() {
+	return {
+		schemaVersion: 1,
+		prefixes: [...LEGACY_PREFIXES].map(([prefix, [source, component, event, severity]]) => ({
+			prefix, source, component, event, severity
+		})),
+		families: LEGACY_PREFIX_FAMILIES.map(([pattern, source, component]) => ({
+			pattern: pattern.source, source, component, event: LEGACY_FAMILY_EVENT, severity: null
+		}))
+	};
+}
+
+/** @param {string} prefix @param {string} defaultSeverity */
+function legacyFamilyFields(prefix, defaultSeverity) {
+	for (const [pattern, source, template] of LEGACY_PREFIX_FAMILIES) {
+		const match = pattern.exec(prefix);
+		if (match === null) continue;
+		const component = template.replace(/\{(\d)\}/g, (_, group) => match[Number(group)]);
+		if (isDiagnosticDotName(component)) return [source, component, LEGACY_FAMILY_EVENT, defaultSeverity];
+	}
+	return undefined;
+}
 
 function canonicalRecord(line) {
 	const close = line.indexOf(']');
@@ -294,20 +339,7 @@ function canonicalRecord(line) {
 function legacyRecord(line, defaultSeverity) {
 	const match = /^\[([^\]]+)\]\s*(.*)$/.exec(line);
 	if (!match) return null;
-	let fields = LEGACY_PREFIXES.get(match[1]);
-	if (!fields && match[1].startsWith('svelte-adapter-ws/')) {
-		const component = match[1].slice('svelte-adapter-ws/'.length);
-		if (isDiagnosticDotName(component)) fields = ['svelte-adapter-ws', component, 'diagnostic.legacy', defaultSeverity];
-	}
-	if (!fields && /^worker \d+$/.test(match[1])) {
-		fields = ['svelte-adapter-ws', 'runtime.worker', 'diagnostic.legacy', defaultSeverity];
-	}
-	if (!fields && /^group .+$/.test(match[1])) {
-		fields = ['svelte-adapter-ws', 'plugins.groups', 'diagnostic.legacy', defaultSeverity];
-	}
-	if (!fields && /^(redis|postgres)\/[a-z0-9._-]+$/.test(match[1])) {
-		fields = ['svelte-adapter-uws-extensions', `runtime.${match[1].replace('/', '.')}`, 'diagnostic.legacy', defaultSeverity];
-	}
+	let fields = LEGACY_PREFIXES.get(match[1]) ?? legacyFamilyFields(match[1], defaultSeverity);
 	if (!fields) return null;
 
 	let message = match[2];

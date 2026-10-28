@@ -6,6 +6,8 @@ import {
 	parseDiagnostic,
 	setOperationalEventSink
 } from '../src/observability.js';
+import { readFileSync } from 'node:fs';
+import { legacyDiagnosticPrefixes } from '../src/runtime/diagnostic.js';
 
 afterEach(() => {
 	setOperationalEventSink(null);
@@ -106,19 +108,19 @@ describe('cross-package diagnostic contract', () => {
 	});
 
 	it.each([
-		['[adapter-ws] startup warning', 'svelte-adapter-ws', 'runtime.adapter'],
-		['[adapter-ws/assert] {"category":"ws.shape"}', 'svelte-adapter-ws', 'runtime.assertion'],
-		['[adapter-ws/fatal] {"category":"ws.shape"}', 'svelte-adapter-ws', 'runtime.assertion'],
-		['[adapter-ws/devAssert] shape mismatch', 'svelte-adapter-ws', 'runtime.assertion'],
-		['[svelte-adapter-ws] authenticate failed', 'svelte-adapter-ws', 'runtime.adapter'],
-		['[adapter-ws/testing] upgrade failed', 'svelte-adapter-ws', 'runtime.testing'],
-		['[adapter-ws/relay-gap] lost frames', 'svelte-adapter-ws', 'runtime.relay-gap'],
-		['[ws] protection posture normal -> elevated', 'svelte-adapter-ws', 'runtime.websocket'],
-		['[tls] certificate reload failed', 'svelte-adapter-ws', 'runtime.tls'],
-		['[primary] worker restart limit reached', 'svelte-adapter-ws', 'runtime.primary'],
-		['[worker 3] shutdown hook failed', 'svelte-adapter-ws', 'runtime.worker'],
-		['[pressure] listener failed', 'svelte-adapter-ws', 'runtime.pressure'],
-		['[group lobby] onJoin failed', 'svelte-adapter-ws', 'plugins.groups'],
+		['[adapter-uws] startup warning', 'svelte-adapter-uws', 'runtime.adapter'],
+		['[adapter-uws/assert] {"category":"ws.shape"}', 'svelte-adapter-uws', 'runtime.assertion'],
+		['[adapter-uws/fatal] {"category":"ws.shape"}', 'svelte-adapter-uws', 'runtime.assertion'],
+		['[adapter-uws/devAssert] shape mismatch', 'svelte-adapter-uws', 'runtime.assertion'],
+		['[svelte-adapter-uws] authenticate failed', 'svelte-adapter-uws', 'runtime.adapter'],
+		['[adapter-uws/testing] upgrade failed', 'svelte-adapter-uws', 'runtime.testing'],
+		['[adapter-uws/relay-gap] lost frames', 'svelte-adapter-uws', 'runtime.relay-gap'],
+		['[ws] protection posture normal -> elevated', 'svelte-adapter-uws', 'runtime.websocket'],
+		['[tls] certificate reload failed', 'svelte-adapter-uws', 'runtime.tls'],
+		['[primary] worker restart limit reached', 'svelte-adapter-uws', 'runtime.primary'],
+		['[worker 3] shutdown hook failed', 'svelte-adapter-uws', 'runtime.worker'],
+		['[pressure] listener failed', 'svelte-adapter-uws', 'runtime.pressure'],
+		['[group lobby] onJoin failed', 'svelte-adapter-uws', 'plugins.groups'],
 		['[extensions] postgres idle client error', 'svelte-adapter-uws-extensions', 'runtime.extensions'],
 		['[extensions/assert] {"category":"redis.state"}', 'svelte-adapter-uws-extensions', 'runtime.assertion'],
 		['[extensions/fatal] {"category":"redis.state"}', 'svelte-adapter-uws-extensions', 'runtime.assertion'],
@@ -138,6 +140,85 @@ describe('cross-package diagnostic contract', () => {
 		['[realtime/fatal] {"category":"client.state"}', 'svelte-realtime', 'runtime.assertion']
 	])('parses the legacy compatibility window: %s', (line, source, component) => {
 		expect(parseDiagnostic(line)).toMatchObject({ format: 'legacy', record: { source, component } });
+	});
+
+	it.each([
+		['svelte-adapter-bunserve', 'runtime.adapter', 'warn'],
+		['adapter-bunserve', 'runtime.adapter', 'warn'],
+		['svelte-adapter-bunserve/runtime.worker', 'runtime.worker', 'error']
+	])('attributes the Bun adapter legacy prefix %s', (prefix, component, severity) => {
+		expect(parseDiagnostic(`[${prefix}] listener failed`, { defaultSeverity: 'error' })).toMatchObject({
+			format: 'legacy', record: {
+				source: 'svelte-adapter-bunserve', component, severity,
+				event: 'diagnostic.legacy', message: 'listener failed', attributes: { legacyPrefix: prefix }
+			}
+		});
+	});
+
+	it.each(['', 'runtime..worker', 'runtime/worker', 'runtime worker'])(
+		'rejects an invalid Bun legacy component %s', (component) => {
+			expect(parseDiagnostic(`[svelte-adapter-bunserve/${component}] listener failed`)).toBeNull();
+		}
+	);
+
+	it.each([
+		['svelte-adapter-ws', 'runtime.adapter', 'warn'],
+		['adapter-ws', 'runtime.adapter', 'warn'],
+		['svelte-adapter-ws/runtime.worker', 'runtime.worker', 'error'],
+		['svelte-adapter-ws/runtime.tls', 'runtime.tls', 'error']
+	])('attributes the ws adapter legacy prefix %s', (prefix, component, severity) => {
+		expect(parseDiagnostic(`[${prefix}] listener failed`, { defaultSeverity: 'error' })).toMatchObject({
+			format: 'legacy', record: {
+				source: 'svelte-adapter-ws', component, severity,
+				event: 'diagnostic.legacy', message: 'listener failed', attributes: { legacyPrefix: prefix }
+			}
+		});
+	});
+
+	it.each([
+		'svelte-adapter-wsx', 'adapter-wsx', 'adapter-ws/runtime.worker', 'svelte-adapter-ws/',
+		'svelte-adapter-ws/tls', 'svelte-adapter-ws/runtime..worker', 'svelte-adapter-ws/runtime/worker', 'svelte-adapter-ws/runtime worker'
+	])('rejects the near-miss ws adapter prefix %s', (prefix) => {
+		expect(parseDiagnostic(`[${prefix}] listener failed`)).toBeNull();
+	});
+
+	it('attributes bare ws, tls, primary and pressure lines to svelte-adapter-uws', () => {
+		for (const prefix of ['ws', 'tls', 'primary', 'pressure']) {
+			expect(parseDiagnostic(`[${prefix}] listener failed`)?.record.source, prefix).toBe('svelte-adapter-uws');
+		}
+	});
+
+	it('publishes the legacy prefix table that parseDiagnostic applies', () => {
+		const published = JSON.parse(readFileSync(new URL('../docs/legacy-diagnostic-prefixes.v1.json', import.meta.url), 'utf8'));
+		expect(published, 'run node scripts/generate-legacy-diagnostics.js').toEqual(legacyDiagnosticPrefixes());
+		expect(published.schemaVersion).toBe(1);
+		const seen = new Set();
+		for (const row of published.prefixes) {
+			expect(seen.has(row.prefix), row.prefix).toBe(false);
+			seen.add(row.prefix);
+			expect(parseDiagnostic(`[${row.prefix}] listener failed`), row.prefix).toMatchObject({
+				format: 'legacy',
+				record: { source: row.source, component: row.component, event: row.event, severity: row.severity }
+			});
+		}
+		// One line per family, keyed by the published pattern: a family row the
+		// parser no longer applies, or a new one without a sample, fails here.
+		const samples = {
+			'^svelte-adapter-uws\\/(.+)$': ['svelte-adapter-uws/runtime.listener', 'runtime.listener'],
+			'^svelte-adapter-bunserve\\/(.+)$': ['svelte-adapter-bunserve/runtime.listener', 'runtime.listener'],
+			'^svelte-adapter-ws\\/(.+)$': ['svelte-adapter-ws/runtime.listener', 'runtime.listener'],
+			'^worker \\d+$': ['worker 7', 'runtime.worker'],
+			'^group .+$': ['group lobby', 'plugins.groups'],
+			'^(redis|postgres)\\/([a-z0-9._-]+)$': ['postgres/notify', 'runtime.postgres.notify']
+		};
+		expect(published.families.map(family => family.pattern)).toEqual(Object.keys(samples));
+		for (const family of published.families) {
+			const [prefix, component] = samples[family.pattern];
+			expect(new RegExp(family.pattern).test(prefix), family.pattern).toBe(true);
+			expect(parseDiagnostic(`[${prefix}] listener failed`, { defaultSeverity: 'error' }), prefix).toMatchObject({
+				format: 'legacy', record: { source: family.source, component, event: family.event, severity: 'error' }
+			});
+		}
 	});
 
 	it('rejects unknown and prefix/record disagreement', () => {

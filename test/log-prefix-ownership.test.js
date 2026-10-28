@@ -11,7 +11,7 @@ import { parseDiagnostic } from '../src/observability.js';
 import { ADAPTER_ERROR_REGISTRY, adapterConsoleLine } from '../src/runtime/error-registry.js';
 
 const srcRoot = fileURLToPath(new URL('../src/', import.meta.url));
-const BARE = /(['"`])\[(ws|tls|primary|pressure)\] /;
+const BARE = /(['"`])\[(ws|tls|primary|pressure|adapter-ws\/testing)\] /;
 
 /** @param {string} dir @returns {string[]} */
 function sources(dir) {
@@ -40,7 +40,8 @@ describe('server log prefixes', () => {
 	it.each([
 		['svelte-adapter-ws/runtime.websocket', 'runtime.websocket'],
 		['svelte-adapter-ws/runtime.tls', 'runtime.tls'],
-		['svelte-adapter-ws/runtime.primary', 'runtime.primary']
+		['svelte-adapter-ws/runtime.primary', 'runtime.primary'],
+		['svelte-adapter-ws/runtime.testing', 'runtime.testing']
 	])('attributes [%s] lines to this adapter', (prefix, component) => {
 		expect(parseDiagnostic(`[${prefix}] listener failed`, { defaultSeverity: 'warn' })).toMatchObject({
 			format: 'legacy',

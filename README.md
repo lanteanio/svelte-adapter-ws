@@ -81,6 +81,15 @@ does not resolve, or if this package declares a subpath the lead does not.
 | `svelte-adapter-ws/plugins/webhooks` | SSRF-gated webhook delivery | Node runtime | supported | none |
 <!-- public-entry-points:end -->
 
+`parseDiagnostic` from `svelte-adapter-ws/observability` recognizes the shared
+legacy prefix inventory in [docs/legacy-diagnostic-prefixes.v1.json](docs/legacy-diagnostic-prefixes.v1.json).
+Named `[svelte-adapter-ws]`, `[adapter-ws]`, and
+`[svelte-adapter-ws/<component>]` lines identify this adapter. Bare `[ws]`,
+`[tls]`, `[primary]`, `[pressure]`, `[worker N]`, and `[group <name>]` lines
+identify `svelte-adapter-uws` under that shared compatibility grammar,
+regardless of which adapter parses them. Canonical diagnostic records carry
+an explicit `source` and do not depend on legacy prefix attribution.
+
 `createTestServer` from `svelte-adapter-ws/testing` answers unmatched HTTP routes
 with `404 File Not Found` and an HTML body, including on HEAD. Without an
 admission limit, a plain GET to the WebSocket path uses the same answer.

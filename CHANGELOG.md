@@ -352,6 +352,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Legacy diagnostic parsing preserves package identity across ws, uWS, Bun,
+  extensions, and realtime prefixes. Named ws prefixes identify this adapter;
+  bare ws, tls, primary, pressure, worker, and group prefixes retain the uWS
+  compatibility identity. The complete shared prefix inventory is packaged as
+  `docs/legacy-diagnostic-prefixes.v1.json`.
+
 - Throttling preserves finite retry budgets. A throttling response now advances
   only the reconnect delay while the finite retry budget counts actual attempts,
   so a client with a small `maxReconnectAttempts` value can retry after a

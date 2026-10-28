@@ -612,7 +612,7 @@ function createNodeApp() {
 		// closes are the receiver cap doing its job, not an error to log.
 		rawWs.on('error', (err) => {
 			if (err?.code !== 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
-				console.error('[adapter-ws/testing] connection error:', err);
+				console.error('[svelte-adapter-ws/runtime.testing] connection error:', err);
 			}
 		});
 		const wrapper = wrapServerSocket(rawWs, userData);
@@ -655,7 +655,7 @@ function createNodeApp() {
 				: Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
 			const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 			Promise.resolve(behavior.message?.(wrapper, ab, !!isBinary)).catch((err) => {
-				console.error('[adapter-ws/testing] message handling failed:', err);
+				console.error('[svelte-adapter-ws/runtime.testing] message handling failed:', err);
 			});
 		});
 
@@ -706,7 +706,7 @@ function createNodeApp() {
 				if (typeof behavior.upgrade === 'function') behavior.upgrade(res, req, {});
 				else res.upgrade({}, '', '', '', {});
 			} catch (err) {
-				console.error('[adapter-ws/testing] upgrade dispatch threw:', err);
+				console.error('[svelte-adapter-ws/runtime.testing] upgrade dispatch threw:', err);
 				res.end('Internal Server Error');
 			}
 		};
@@ -2474,7 +2474,7 @@ export async function createTestServer(options = {}) {
 					if (!sendToAsyncWarnedT) {
 						sendToAsyncWarnedT = true;
 						console.error(
-							'[adapter-ws/testing] platform.sendTo filter returned a Promise; treating as fail-closed.\n' +
+							'[svelte-adapter-ws/runtime.testing] platform.sendTo filter returned a Promise; treating as fail-closed.\n' +
 							'  Resolve filter inputs into userData from your `upgrade` hook so the\n' +
 							'  filter can read them synchronously.\n' +
 							'  See: https://svti.me/sendto-async'
@@ -4222,7 +4222,7 @@ export async function createTestServer(options = {}) {
 										platform: ws.getUserData()[WS_PLATFORM]
 									});
 								} catch (err) {
-									console.error('[adapter-ws/testing] resume hook threw:', err);
+									console.error('[svelte-adapter-ws/runtime.testing] resume hook threw:', err);
 								}
 							}
 							sendControlT(ws, '{"type":"resumed"}');

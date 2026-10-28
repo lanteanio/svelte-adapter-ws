@@ -1,0 +1,252 @@
+{
+	"schemaVersion": 1,
+	"prefixes": [
+		{
+			"prefix": "svelte-adapter-bunserve",
+			"source": "svelte-adapter-bunserve",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-bunserve",
+			"source": "svelte-adapter-bunserve",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "svelte-adapter-ws",
+			"source": "svelte-adapter-ws",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-ws",
+			"source": "svelte-adapter-ws",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "svelte-adapter-uws",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-uws",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.adapter",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-uws/assert",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-uws/fatal",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "fatal"
+		},
+		{
+			"prefix": "adapter-uws/devAssert",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "error"
+		},
+		{
+			"prefix": "adapter-uws/testing",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.testing",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "adapter-uws/relay-gap",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.relay-gap",
+			"event": "diagnostic.legacy",
+			"severity": "error"
+		},
+		{
+			"prefix": "ws",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.websocket",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "tls",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.tls",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "primary",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.primary",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "pressure",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.pressure",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "extensions",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.extensions",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "extensions/assert",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "warn"
+		},
+		{
+			"prefix": "extensions/fatal",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "fatal"
+		},
+		{
+			"prefix": "extensions/devAssert",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "error"
+		},
+		{
+			"prefix": "redis",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.redis",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "redis replay",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.redis.replay",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "redis stream replay",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.redis.stream-replay",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "postgres",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.postgres",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "postgres replay",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.postgres.replay",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "postgres tasks",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.postgres.tasks",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "publish-rate",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.redis.publish-rate",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "svelte-realtime",
+			"source": "svelte-realtime",
+			"component": "runtime.realtime",
+			"event": "diagnostic.legacy",
+			"severity": "warn"
+		},
+		{
+			"prefix": "realtime/assert",
+			"source": "svelte-realtime",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "warn"
+		},
+		{
+			"prefix": "realtime/fatal",
+			"source": "svelte-realtime",
+			"component": "runtime.assertion",
+			"event": "invariant.violated",
+			"severity": "fatal"
+		}
+	],
+	"families": [
+		{
+			"pattern": "^svelte-adapter-uws\\/(.+)$",
+			"source": "svelte-adapter-uws",
+			"component": "{1}",
+			"event": "diagnostic.legacy",
+			"severity": null
+		},
+		{
+			"pattern": "^svelte-adapter-bunserve\\/(.+)$",
+			"source": "svelte-adapter-bunserve",
+			"component": "{1}",
+			"event": "diagnostic.legacy",
+			"severity": null
+		},
+		{
+			"pattern": "^svelte-adapter-ws\\/(.+)$",
+			"source": "svelte-adapter-ws",
+			"component": "{1}",
+			"event": "diagnostic.legacy",
+			"severity": null
+		},
+		{
+			"pattern": "^worker \\d+$",
+			"source": "svelte-adapter-uws",
+			"component": "runtime.worker",
+			"event": "diagnostic.legacy",
+			"severity": null
+		},
+		{
+			"pattern": "^group .+$",
+			"source": "svelte-adapter-uws",
+			"component": "plugins.groups",
+			"event": "diagnostic.legacy",
+			"severity": null
+		},
+		{
+			"pattern": "^(redis|postgres)\\/([a-z0-9._-]+)$",
+			"source": "svelte-adapter-uws-extensions",
+			"component": "runtime.{1}.{2}",
+			"event": "diagnostic.legacy",
+			"severity": null
+		}
+	]
+}

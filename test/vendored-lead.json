@@ -165,6 +165,10 @@
 		"test/fixture/src/hooks.ws.js": "9c74b98",
 		"test/fixture/src/coalesced-probe.js": "24e92e6",
 		"test/coalesced-reentrant-child.test.js": "24e92e6",
-		"test/helpers/coalesced-reentrant-child.mjs": "24e92e6"
+		"test/helpers/coalesced-reentrant-child.mjs": "24e92e6",
+		"src/runtime/diagnostic.js": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283",
+		"test/diagnostic-format.test.js": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283",
+		"docs/legacy-diagnostic-prefixes.v1.json": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283",
+		"scripts/generate-legacy-diagnostics.js": "01278ed8aae0c3f2cc04de6623baf1d0be4ad283"
 	}
 }
