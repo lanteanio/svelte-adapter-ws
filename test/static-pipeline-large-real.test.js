@@ -1,4 +1,4 @@
-// Static answers larger than one 64 KiB slice reach TLS sockets a slice at
+// Static answers larger than one 1 MiB slice reach TLS sockets a slice at
 // a time, while the response is ended in its original request turn. Requests
 // pipelined behind it are served, a pipelined refusal follows it, and a
 // closing request still closes after it. Pinned over TCP and TLS.
@@ -10,7 +10,7 @@ import { buildRuntime, bootRuntime } from './helpers/build-runtime.js';
 import { rawConversation } from './helpers/raw-http.js';
 
 const small = 'small static answer';
-const large = 'L'.repeat(256 * 1024 + 7);
+const large = 'L'.repeat(2 * 1024 * 1024 + 7);
 const bad = 'GET /bad HTTP/1.0\r\nHost: localhost\r\n\r\n';
 const request = (/** @type {string} */ target, headers = '', method = 'GET') =>
 	`${method} ${target} HTTP/1.1\r\nHost: localhost\r\n${headers}\r\n`;

@@ -1,5 +1,5 @@
 // A TLS socket encrypts everything it is handed into its own output buffer at
-// once, so the static lane hands a TLS socket a cached body larger than 64 KiB
+// once, so the static lane hands a TLS socket a cached body larger than 1 MiB
 // one slice at a time, the next once the socket has written the last. Every
 // other write passes through as it was. Drives the built runtime's
 // paceStaticTlsWrites with a stand-in socket that records each write it is
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { buildFixtureOnce } from './helpers/fixture-build.js';
 
-const SLICE = 64 * 1024;
+const SLICE = 1024 * 1024;
 const SIZE = 4 * SLICE + 123;
 
 /**

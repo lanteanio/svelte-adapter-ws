@@ -206,7 +206,8 @@ function cacheCleanPath(name, entry, directory) {
 // hold one encrypted copy per stalled reader. So a TLS socket is handed a
 // large cached body one slice at a time, the next once the last has been
 // written; the response itself still ends at once, exactly as before.
-const STATIC_BACKPRESSURE_THRESHOLD = 64 * 1024;
+// One MiB amortizes TLS callbacks while keeping each socket's encrypted backlog bounded.
+const STATIC_BACKPRESSURE_THRESHOLD = 1024 * 1024;
 
 /** The allocations of cached bodies larger than one slice. */
 /** @type {WeakSet<ArrayBufferLike>} */
