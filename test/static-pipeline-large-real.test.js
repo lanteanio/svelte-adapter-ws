@@ -1,9 +1,7 @@
-// Static answers larger than one 64 KiB slice are handed to the socket a
-// slice at a time. While the client keeps reading, the socket takes every
-// slice before the handler returns, so the answer ends in its own turn as a
-// single end() would: requests pipelined behind it are served, a pipelined
-// refusal follows it, and a closing request still closes after it. Pinned on
-// the built runtime over TCP and TLS.
+// Static answers larger than one 64 KiB slice reach TLS sockets a slice at
+// a time, while the response is ended in its original request turn. Requests
+// pipelined behind it are served, a pipelined refusal follows it, and a
+// closing request still closes after it. Pinned over TCP and TLS.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';

@@ -4,6 +4,10 @@
 // static lane hands it over a slice per writable socket instead. The built
 // runtime runs in a child process with the fixture certificate, as the plain
 // suite in test/static-backpressure-real.test.js runs it without one.
+//
+// The stalled readers keep their connections alive: behind a closing request
+// the encrypted copy does not show in the server's resident memory, so a
+// closing reader could not tell a paced lane from an unpaced one.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -53,25 +57,36 @@ function response(port, method, headers = {}) {
 }
 
 /**
- * A TLS reader that pauses as soon as it has the response head.
+ * A TLS reader that pauses as soon as it has the response head. Its answer is
+ * complete when the declared length has arrived, or cut short when the
+ * connection ends first.
  * @param {number} port
  * @param {string} coding
  * @param {string} range
+ * @param {boolean} [close] send `Connection: close`
  * @returns {Promise<{ socket: import('node:tls').TLSSocket, status: number, headers: Record<string, string>, resume: () => Promise<{ length: number, hash: string }> }>}
  */
-function hold(port, coding = 'identity', range = 'bytes=0-') {
+function hold(port, coding = 'identity', range = 'bytes=0-', close = false) {
 	return new Promise((resolve, reject) => {
 		const socket = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false, highWaterMark: 1024 }, () => {
-			socket.write('GET /large-static/media.bin HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAccept-Encoding: ' + coding + '\r\nRange: ' + range + '\r\n\r\n');
+			socket.write('GET /large-static/media.bin HTTP/1.1\r\nHost: 127.0.0.1\r\n' + (close ? 'Connection: close\r\n' : '') + 'Accept-Encoding: ' + coding + '\r\nRange: ' + range + '\r\n\r\n');
 		});
 		const hash = createHash('sha256');
 		let length = 0;
 		/** @type {Buffer | null} */
 		let headerBytes = Buffer.alloc(0);
 		let headed = false;
+		let expected = -1;
+		let finished = false;
 		/** @type {(value: { length: number, hash: string }) => void} */
-		let finish = () => {};
-		const done = new Promise((resolveDone) => { finish = resolveDone; });
+		let settle = () => {};
+		const done = new Promise((resolveDone) => { settle = resolveDone; });
+		/** @param {string} [result] */
+		const finish = (result) => {
+			if (finished) return;
+			finished = true;
+			settle({ length, hash: result ?? hash.digest('hex') });
+		};
 		socket.setTimeout(15000, () => socket.destroy(new Error('held response timed out')));
 		socket.on('error', reject);
 		socket.on('data', (chunk) => {
@@ -89,13 +104,16 @@ function hold(port, coding = 'identity', range = 'bytes=0-') {
 				chunk = headerBytes.subarray(end + 4);
 				headerBytes = null;
 				headed = true;
+				expected = Number(headers['content-length']);
 				socket.pause();
 				resolve({ socket, status: Number(lines[0].split(' ')[1]), headers, resume: () => { socket.resume(); return done; } });
 			}
+			if (finished) return;
 			length += chunk.length;
 			hash.update(chunk);
+			if (length >= expected) finish();
 		});
-		socket.on('end', () => finish({ length, hash: hash.digest('hex') }));
+		socket.on('close', () => finish(''));
 	});
 }
 
@@ -181,12 +199,13 @@ describe('large static response backpressure over TLS', () => {
 		expect(healthy.hash).toBe(digest(bodies.identity.subarray(17, 1031)));
 	}, 30000);
 
-	it.each(['identity', 'br'])('resumes paused %s bytes over TLS without loss or duplication', async (coding) => {
-		const peer = await hold(port, coding, 'bytes=113-');
+	it.each([['identity', false], ['br', false], ['identity', true]])('resumes paused %s bytes over TLS without loss or duplication, closing=%s', async (coding, close) => {
+		const peer = await hold(port, coding, 'bytes=113-', close);
 		sockets.add(peer.socket);
 		expect(peer.status).toBe(206);
 		await delay(50);
 		const received = await peer.resume();
+		peer.socket.destroy();
 		sockets.delete(peer.socket);
 		const expected = bodies[coding].subarray(113);
 		expect(received.length).toBe(expected.length);

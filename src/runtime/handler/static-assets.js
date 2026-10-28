@@ -265,18 +265,31 @@ function paceSocketWrites(socket) {
 		}
 		if (part.length > 0) parts.push(part);
 		let next = 0;
+		let writing = false;
+		let waiting = false;
+		let settled = false;
 		/** @param {Error | null} [error] */
 		const writeNext = (error) => {
-			if (error) { cb(error); return; }
-			if (next === parts.length) { cb(); return; }
-			const current = parts[next++];
-			if (current.length === 1 && Buffer.isBuffer(current[0].chunk)) {
-				writeGeneric.call(this, false, current[0].chunk, 'buffer', writeNext);
-				return;
+			if (settled) return;
+			if (error) { settled = true; cb(error); return; }
+			waiting = false;
+			// A socket may complete a write synchronously. Let this loop
+			// advance it without growing the stack for every body slice.
+			if (writing) return;
+			writing = true;
+			while (!waiting && !settled) {
+				if (next === parts.length) { settled = true; cb(); break; }
+				const current = parts[next++];
+				waiting = true;
+				if (current.length === 1 && Buffer.isBuffer(current[0].chunk)) {
+					writeGeneric.call(this, false, current[0].chunk, 'buffer', writeNext);
+				} else {
+					const batch = /** @type {any} */ (current);
+					batch.allBuffers = current.every((entry) => Buffer.isBuffer(entry.chunk));
+					writeGeneric.call(this, true, batch, '', writeNext);
+				}
 			}
-			const batch = /** @type {any} */ (current);
-			batch.allBuffers = current.every((entry) => Buffer.isBuffer(entry.chunk));
-			writeGeneric.call(this, true, batch, '', writeNext);
+			writing = false;
 		};
 		writeNext();
 	};

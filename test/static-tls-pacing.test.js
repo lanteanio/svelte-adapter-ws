@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { buildFixtureOnce } from './helpers/fixture-build.js';
 
 const SLICE = 64 * 1024;
@@ -21,8 +22,9 @@ const SIZE = 4 * SLICE + 123;
 /**
  * A server with one paced connection whose writes complete only on demand.
  * @param {(server: any) => void} pace
+ * @param {(cb: (error?: Error | null) => void) => void} [complete]
  */
-function pacedSocket(pace) {
+function pacedSocket(pace, complete) {
 	/** @type {{ writev: boolean, data: any, encoding: string, cb: (error?: Error | null) => void }[]} */
 	const calls = [];
 	const socket = {
@@ -34,6 +36,7 @@ function pacedSocket(pace) {
 		 */
 		_writeGeneric(writev, data, encoding, cb) {
 			calls.push({ writev, data: writev ? data.map((/** @type {any} */ entry) => entry.chunk) : data, encoding, cb });
+			complete?.(cb);
 		}
 	};
 	const server = new EventEmitter();
@@ -66,6 +69,8 @@ describe('TLS writes of large cached static bodies are paced', () => {
 	let body;
 	/** @type {Buffer} */
 	let small;
+	/** @type {Buffer[]} */
+	let compressed;
 
 	beforeAll(async () => {
 		expect(buildFixtureOnce(), 'fixture build must succeed for this integration test').toBe(true);
@@ -73,10 +78,16 @@ describe('TLS writes of large cached static bodies are paced', () => {
 		const { staticCache } = await import('./fixture/build/handler/state.js');
 		pace = assets.paceStaticTlsWrites;
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-static-tls-pacing-'));
-		fs.writeFileSync(path.join(dir, 'large.bin'), randomBytes(SIZE));
+		const bytes = Buffer.concat([randomBytes(2 * SLICE), Buffer.alloc(SIZE - 2 * SLICE)]);
+		fs.writeFileSync(path.join(dir, 'large.bin'), bytes);
 		fs.writeFileSync(path.join(dir, 'slice.bin'), randomBytes(SLICE));
+		fs.writeFileSync(path.join(dir, 'large.bin.br'), brotliCompressSync(bytes));
+		fs.writeFileSync(path.join(dir, 'large.bin.gz'), gzipSync(bytes));
 		assets.cacheDir(dir, '/tls-pacing', false);
-		body = staticCache.get('/tls-pacing/large.bin').buffer;
+		const entry = staticCache.get('/tls-pacing/large.bin');
+		body = entry.buffer;
+		compressed = [entry.brBuffer, entry.gzBuffer];
+		for (const encoded of compressed) expect(encoded?.byteLength).toBeGreaterThan(SLICE);
 		small = staticCache.get('/tls-pacing/slice.bin').buffer;
 		expect(body.byteLength).toBe(SIZE);
 	}, 400000);
@@ -99,6 +110,56 @@ describe('TLS writes of large cached static bodies are paced', () => {
 		expect(done).toBe(1);
 		expect(calls.every((call) => !call.writev && call.encoding === 'buffer')).toBe(true);
 		expectSlices(calls.map((call) => call.data), body, 0);
+	});
+
+	it.each([['br', 0], ['gzip', 1]])('paces the cached %s representation', (_coding, index) => {
+		const { socket, calls } = pacedSocket(pace);
+		const bytes = compressed[Number(index)];
+		let done = 0;
+		socket._writeGeneric(false, bytes, 'buffer', () => done++);
+		while (done === 0) calls.at(-1)?.cb();
+		expect(calls).toHaveLength(Math.ceil(bytes.byteLength / SLICE));
+		expectSlices(calls.map((call) => call.data), bytes, 0);
+	});
+
+	it('drains synchronous completions without nesting socket writes', () => {
+		let depth = 0;
+		let maximum = 0;
+		const { socket, calls } = pacedSocket(pace, (cb) => {
+			depth++;
+			maximum = Math.max(maximum, depth);
+			cb();
+			depth--;
+		});
+		let done = 0;
+		socket._writeGeneric(false, body, 'buffer', () => done++);
+		expect(maximum).toBe(1);
+		expect(done).toBe(1);
+		expectSlices(calls.map((call) => call.data), body, 0);
+	});
+
+	it('resumes synchronous slices after an asynchronous completion', () => {
+		let writes = 0;
+		const { socket, calls } = pacedSocket(pace, (cb) => {
+			if (++writes !== 3) cb();
+		});
+		let done = 0;
+		socket._writeGeneric(false, body, 'buffer', () => done++);
+		expect(calls).toHaveLength(3);
+		expect(done).toBe(0);
+		calls[2].cb();
+		expect(done).toBe(1);
+		expectSlices(calls.map((call) => call.data), body, 0);
+	});
+
+	it('reports a synchronous write failure once and stops', () => {
+		const failure = new Error('write EPIPE');
+		const { socket, calls } = pacedSocket(pace, (cb) => cb(failure));
+		/** @type {(Error | null | undefined)[]} */
+		const results = [];
+		socket._writeGeneric(false, body, 'buffer', (error) => results.push(error));
+		expect(calls).toHaveLength(1);
+		expect(results).toEqual([failure]);
 	});
 
 	it('paces a range of a cached body', () => {
@@ -133,7 +194,10 @@ describe('TLS writes of large cached static bodies are paced', () => {
 		const foreign = Buffer.alloc(SIZE);
 		socket._writeGeneric(false, foreign, 'buffer', callback);
 		socket._writeGeneric(false, 'text', 'utf8', callback);
-		expect(calls.map((call) => call.data)).toEqual([small, foreign, 'text']);
+		expect(calls).toHaveLength(3);
+		expect(calls[0].data === small).toBe(true);
+		expect(calls[1].data === foreign).toBe(true);
+		expect(calls[2].data).toBe('text');
 		expect(calls.every((call) => call.cb === callback)).toBe(true);
 	});
 
