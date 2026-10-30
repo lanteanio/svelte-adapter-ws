@@ -670,6 +670,12 @@ export const FIXTURE_VARIANTS = {
 			}
 		}
 	},
+	// WebSocket and auth endpoints moved off their defaults on the adapter.
+	routeconfig: {
+		out: 'build-route-config',
+		handler: './src/hooks.ws.route-config.js',
+		websocket: { path: '/socket', authPath: '/api/ws-auth', allowedOrigins: '*', authPathRateLimit: 0, upgradeRateLimit: 100 }
+	},
 	// Probes spelled with an escape and with router syntax inside a segment,
 	// for the catch-all's guard against other spellings of a mounted path.
 	mountspelling: {

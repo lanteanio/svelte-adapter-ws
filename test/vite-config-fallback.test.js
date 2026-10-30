@@ -39,6 +39,19 @@ function connect(port, origin) {
 }
 
 describe('adapter configuration fallback', () => {
+	it('refuses unreadable configuration instead of dropping its restrictions', async () => {
+		const scratch = resolve('test-results');
+		mkdirSync(scratch, { recursive: true });
+		configRoot = mkdtempSync(join(scratch, 'vite-fallback-'));
+		writeFileSync(join(configRoot, 'svelte.config.mjs'), "throw new Error('Configuration unavailable');\n");
+		httpServer = createServer();
+		await expect(uws().configureServer({
+			httpServer,
+			middlewares: { stack: [], use() {} },
+			config: { root: configRoot, server: {}, plugins: [], logger: { warn() {}, info() {}, error() {} } }
+		})).rejects.toThrow('Could not read svelte.config.mjs to resolve adapter WebSocket configuration');
+	});
+
 	it('loads handler, metrics and origin prefix from the config without a plugin API', async () => {
 		const scratch = resolve('test-results');
 		mkdirSync(scratch, { recursive: true });

@@ -9,6 +9,7 @@
 // registered under it.
 
 import http from 'node:http';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import adapter from '../src/index.js';
 import uws from '../src/vite.js';
@@ -274,9 +275,22 @@ describe('dev plugin options', () => {
 		expect(() => uws({ handler: '/x', path: 'ws', authPath: '/__uws/dashboard' })).toThrow("websocket.path must be a path string starting with '/'");
 	});
 
-	it('checks the default endpoints against the dashboard', () => {
-		expect(() => uws({ dashboard: { path: '/__ws' } }))
-			.toThrow(/websocket\.authPath \("\/__ws\/auth"\) sits at or under the uws\(\) dev plugin option dashboard\.path/);
+	const kitConfig = (adapterFields) => ({
+		root: path.join(process.cwd(), 'test'),
+		build: { ssr: true },
+		plugins: [{
+			name: 'vite-plugin-sveltekit-setup',
+			api: { options: { kit: { adapter: { name: 'adapter-ws', websocketHandler: './test/vite.test.js', ...adapterFields } } } }
+		}]
+	});
+
+	it('checks the adapter-declared endpoints once it reads them', async () => {
+		await expect(uws({ dashboard: { path: '/__ws' } }).configResolved(kitConfig({})))
+			.rejects.toThrow(/websocket\.authPath \("\/__ws\/auth"\) sits at or under the uws\(\) dev plugin option dashboard\.path/);
+		await expect(uws().configResolved(kitConfig({ websocketPath: '/w s' })))
+			.rejects.toThrow(/websocket\.path contains U\+0020/);
+		await expect(uws().configResolved(kitConfig({ websocketAuthPath: '/auth%c3%bc' })))
+			.rejects.toThrow(/websocket\.authPath writes an escape in lowercase hex/);
 	});
 });
 

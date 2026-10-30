@@ -330,6 +330,11 @@ own path options. The `uws()` dev plugin applies it to its `path` and
 escapes; since the dashboard answers every path beneath it, neither endpoint
 may sit at or under it.
 
+Vite reads `websocket.path` and `websocket.authPath` from the adapter,
+including through a wrapper adapter. If the `uws()` plugin also names either
+path, the values must agree. An unreadable fallback SvelteKit configuration
+stops startup instead of dropping its paths or environment prefix.
+
 `websocket.maxTopicSeqEntries` (default `1000000`) caps the per-topic sequence
 registry. Past the cap the least recently published unprotected topic is
 evicted and its high-water number carried forward, so a re-published topic

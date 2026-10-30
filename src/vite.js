@@ -220,8 +220,8 @@ export default function uws(options = {}) {
 		);
 	}
 
-	const wsPath = options.path || '/ws';
-	const wsAuthPath = options.authPath || '/__ws/auth';
+	let wsPath = options.path ?? '/ws';
+	let wsAuthPath = options.authPath ?? '/__ws/auth';
 	// The dev dashboard is on by default (loopback-gated below); `false`
 	// disables it, an object customizes the mount path. A misshaped value
 	// throws rather than warning, because a typo'd shape here would silently
@@ -243,6 +243,35 @@ export default function uws(options = {}) {
 	// A trailing slash is dropped, as for adminPath: the dashboard answers the
 	// path and the paths under it, and the page builds its links on it.
 	const dashboardPath = options.dashboard === false ? null : (dashboardOptions.path || '/__uws/dashboard').replace(/\/+$/, '');
+	function useAdapterPaths(adapterOption) {
+		const endpoint = (name, configured, fallback) => {
+			const own = options[name];
+			if (own != null && configured != null && own !== configured) {
+				throw new Error(`[adapter-ws] uws({ ${name}: ${JSON.stringify(own)} }) disagrees with websocket.${name}: ${JSON.stringify(configured)}. Name it once on the adapter to use the same path in development and production.`);
+			}
+			const value = own ?? configured ?? fallback;
+			if (typeof value !== 'string' || !value.startsWith('/')) {
+				throw new TypeError(`websocket.${name} must be a path string starting with '/'`);
+			}
+			assertMountPath(`websocket.${name}`, value, TypeError);
+			return value;
+		};
+		wsPath = endpoint('path', adapterOption.path, '/ws');
+		wsAuthPath = endpoint('authPath', adapterOption.authPath, '/__ws/auth');
+		if (wsAuthPath === wsPath) throw new Error('websocket.authPath must differ from websocket.path');
+		if (dashboardPath !== null &&
+			(dashboardPath === wsPath.replace(/\/+$/, '') || dashboardPath === wsAuthPath.replace(/\/+$/, ''))) {
+			throw new TypeError('the uws() dev plugin option dashboard.path collides with the WebSocket or auth path');
+		}
+		assertDevMounts([['websocket.path', wsPath], ['websocket.authPath', wsAuthPath]]);
+	}
+	// The dashboard answers its path and every path under it, so neither
+	// endpoint may sit beneath it.
+	/** @param {Array<[string, string]>} endpoints */
+	function assertDevMounts(endpoints) {
+		if (dashboardPath === null) return;
+		assertDistinctMounts(endpoints, [['the uws() dev plugin option dashboard.path', dashboardPath]], TypeError);
+	}
 	for (const name of ['path', 'authPath']) {
 		const value = options[name];
 		if (value == null) continue;
@@ -254,15 +283,10 @@ export default function uws(options = {}) {
 			throw new TypeError('the uws() dev plugin option dashboard.path collides with the WebSocket or auth path');
 		}
 	}
-	if (dashboardPath !== null &&
-		(dashboardPath === wsPath.replace(/\/+$/, '') || dashboardPath === wsAuthPath.replace(/\/+$/, ''))) {
-		throw new TypeError('the uws() dev plugin option dashboard.path collides with the WebSocket or auth path');
-	}
-	// The dashboard answers its path and every path under it, so neither
-	// endpoint may sit beneath it.
-	if (dashboardPath !== null) {
-		assertDistinctMounts([['websocket.path', wsPath], ['websocket.authPath', wsAuthPath]], [['the uws() dev plugin option dashboard.path', dashboardPath]], TypeError);
-	}
+	// The endpoints the plugin names itself; the adapter's are checked once read.
+	assertDevMounts(/** @type {Array<[string, string]>} */ (['path', 'authPath']
+		.filter((name) => options[name] != null)
+		.map((name) => ['websocket.' + name, options[name]])));
 	// One source of truth for both the actual ws receiver cap and the value app
 	// code reads from platform. Production uses the same 1 MiB default.
 	const MAX_PAYLOAD_LENGTH_V = options.maxPayloadLength ?? DEFAULT_MAX_PAYLOAD_LENGTH;
@@ -1924,18 +1948,22 @@ export default function uws(options = {}) {
 	 *
 	 * @param {string} root
 	 * @param {{ plugins?: Array<any> } | null | undefined} resolved
-	 * @returns {Promise<{ handler: string | null, metrics: string | null, envPrefix: string, from: string | null, configName: string | null }>}
+	 * @returns {Promise<{ handler: string | null, metrics: string | null, path: string | null, authPath: string | null, envPrefix: string, from: string | null, configName: string | null }>}
 	 */
 	async function adapterHandlerOption(root, resolved) {
+		const ownsConfiguration = adapter => adapter?.name === 'adapter-ws' ||
+			(adapter != null && Object.hasOwn(adapter, 'websocketPath') && Object.hasOwn(adapter, 'websocketAuthPath'));
 		for (const plugin of resolved?.plugins ?? []) {
 			const config = plugin?.api?.options;
 			const adapter = config?.adapter ?? config?.kit?.adapter;
-			if (adapter?.name !== 'adapter-ws') continue;
+			if (!ownsConfiguration(adapter)) continue;
 			const handler = adapter.websocketHandler;
 			const metrics = adapter.websocketMetrics;
 			return {
 				handler: typeof handler === 'string' && handler ? handler : null,
 				metrics: typeof metrics === 'string' && metrics ? metrics : null,
+				path: adapter.websocketPath ?? null,
+				authPath: adapter.websocketAuthPath ?? null,
 				envPrefix: typeof adapter.envPrefix === 'string' ? adapter.envPrefix : '',
 				from: 'websocket.handler in SvelteKit config',
 				configName: 'SvelteKit config'
@@ -1952,21 +1980,23 @@ export default function uws(options = {}) {
 				// API path above to avoid evaluating app config twice.
 				const mod = await import(pathToFileURL(full).href);
 				const adapter = mod?.default?.kit?.adapter;
-				if (adapter?.name !== 'adapter-ws') return { handler: null, metrics: null, envPrefix: '', from: null, configName: null };
+				if (!ownsConfiguration(adapter)) return { handler: null, metrics: null, path: null, authPath: null, envPrefix: '', from: null, configName: null };
 				const handler = adapter.websocketHandler;
 				const metrics = adapter.websocketMetrics;
 				return {
 					handler: typeof handler === 'string' && handler ? handler : null,
 					metrics: typeof metrics === 'string' && metrics ? metrics : null,
+					path: adapter.websocketPath ?? null,
+					authPath: adapter.websocketAuthPath ?? null,
 					envPrefix: typeof adapter.envPrefix === 'string' ? adapter.envPrefix : '',
 					from: `websocket.handler in ${name}`,
 					configName: name
 				};
-			} catch {
-				return { handler: null, metrics: null, envPrefix: '', from: null, configName: null };
+			} catch (cause) {
+				throw new Error(`[adapter-ws] Could not read ${name} to resolve adapter WebSocket configuration.`, { cause });
 			}
 		}
-		return { handler: null, metrics: null, envPrefix: '', from: null, configName: null };
+		return { handler: null, metrics: null, path: null, authPath: null, envPrefix: '', from: null, configName: null };
 	}
 
 	/**
@@ -2111,6 +2141,7 @@ export default function uws(options = {}) {
 			if (resolved.build?.ssr || (resolved.command === 'build' && resolved.environments?.ssr)) {
 				ssrRoot = resolved.root || process.cwd();
 				const adapterOption = await adapterHandlerOption(ssrRoot, resolved);
+				useAdapterPaths(adapterOption);
 				ssrHandler = await discoverHandler(ssrRoot, resolved, adapterOption);
 				// Resolved from the process cwd, NOT the Vite root, for the same
 				// reason as the handler above: the adapter's esbuild fallback
@@ -2244,6 +2275,10 @@ export default function uws(options = {}) {
 				return;
 			}
 
+			const root = server.config.root;
+			const adapterOption = await adapterHandlerOption(root, server.config);
+			useAdapterPaths(adapterOption);
+
 			// Vite installs CORS before configureServer. Insert a refusal-only
 			// guard ahead of it through Connect's stack so auth preflights cannot
 			// be approved by the application's broader CORS policy. Other paths
@@ -2315,7 +2350,6 @@ export default function uws(options = {}) {
 				}
 			});
 			viteServer = server;
-			const root = server.config.root;
 
 			// Load the user's WebSocket handler via Vite's ssrLoadModule (handles
 			// TS/aliases/etc.). Resolution goes through the SAME resolver the SSR
@@ -2326,7 +2360,6 @@ export default function uws(options = {}) {
 			// authorization hooks and ship another. A misconfiguration throws here
 			// and aborts dev startup, which is the point: it is the same error the
 			// build raises, surfaced at the earliest moment an app can see it.
-			const adapterOption = await adapterHandlerOption(root, server.config);
 			PINNED_ORIGIN_V = parse_origin(process.env[adapterOption.envPrefix + 'ORIGIN'] || undefined);
 			const resolvedHandler = await discoverHandler(root, server.config, adapterOption);
 

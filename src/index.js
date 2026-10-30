@@ -791,6 +791,8 @@ export default function (opts = {}) {
 		// adapter runs, so without this the plugin could not see the adapter's
 		// choice and would bundle whatever auto-discovery found instead.
 		websocketHandler: websocket?.handler ?? null,
+		websocketPath: websocket?.path ?? null,
+		websocketAuthPath: websocket?.authPath ?? null,
 
 		// Same contract for the metrics registry. The plugin emits the module as
 		// a chunk of the app's own SSR build, which is what makes the registry

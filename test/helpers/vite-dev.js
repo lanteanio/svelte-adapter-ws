@@ -42,10 +42,11 @@ export const APP_STATUS = 299;
  *   ready?: Promise<unknown>,
  *   h2?: boolean,
  *   cors?: import('vite').CorsOptions | boolean,
- *   tls?: { key: string, cert: string }
+ *   tls?: { key: string, cert: string },
+ *   adapter?: Record<string, unknown>
  * }} [options]
  */
-export async function bootViteDev({ pluginOptions = {}, handler = {}, ready, h2 = false, tls, cors } = {}) {
+export async function bootViteDev({ pluginOptions = {}, handler = {}, ready, h2 = false, tls, cors, adapter } = {}) {
 	// An empty root keeps Vite's static and public-dir middlewares from serving
 	// anything in this repository at the paths the suites probe.
 	const root = mkdtempSync(join(tmpdir(), 'uws-vite-dev-'));
@@ -73,6 +74,7 @@ export async function bootViteDev({ pluginOptions = {}, handler = {}, ready, h2 
 			server: { host: '127.0.0.1', allowedHosts: true, watch: null, hmr: false, ws: false, https: tls, cors },
 			plugins: [
 				handlerModule(handler, ready),
+				...(adapter === undefined ? [] : [kitConfig(adapter)]),
 				uws({ handler: '/virtual-dev-handler', ...pluginOptions }),
 				appStandIn()
 			]
@@ -126,6 +128,10 @@ function handlerModule(handler, ready) {
 			}
 		}
 	};
+}
+
+function kitConfig(adapter) {
+	return { name: 'test-kit-config', api: { options: { kit: { adapter } } } };
 }
 
 /** @returns {import('vite').Plugin} */

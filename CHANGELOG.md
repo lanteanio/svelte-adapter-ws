@@ -372,6 +372,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Vite uses the adapter's WebSocket and authentication paths and rejects
+  conflicting or unreadable configuration at startup.
+
 - Legacy diagnostic parsing preserves package identity across ws, uWS, Bun,
   extensions, and realtime prefixes. Named ws prefixes identify this adapter;
   bare ws, tls, primary, pressure, worker, and group prefixes retain the uWS
