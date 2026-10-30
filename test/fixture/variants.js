@@ -669,6 +669,15 @@ export const FIXTURE_VARIANTS = {
 				waitingRoom: { renderer: './src/waiting-room.renderer.js' }
 			}
 		}
+	},
+	// Probes spelled with an escape and with router syntax inside a segment,
+	// for the catch-all's guard against other spellings of a mounted path.
+	mountspelling: {
+		out: 'build-mount-spelling',
+		handler: null,
+		healthCheckPath: '/gesundheit-pr%C3%BCfung',
+		readinessCheckPath: '/status:ready',
+		websocket: { allowedOrigins: '*', upgradeRateLimit: 100 }
 	}
 };
 

@@ -122,6 +122,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Mounted paths (`healthCheckPath`, `readinessCheckPath`, `websocket.path`,
+  `authPath`, `adminPath`, `waitingRoom.path`, `waitingRoom.admitCheckPath`,
+  the dev dashboard path and the matching `createTestServer` options) are
+  refused when the config is read unless spelled the way a client sends them,
+  since a mount is matched on the target as sent: the WHATWG URL spelling with
+  uppercase escapes, and no segment starting with `:` or `*`, which the router
+  reads as a parameter or wildcard. The error names the spelling to use, such
+  as `/pr%C3%BCfung` for `/prüfung`; a literal `%` is written `%25`, and a tab,
+  line feed or carriage return, which the URL parser removes, is refused
+  outright. The admin prefix and the dashboard path take no escapes, and their
+  error lists the plain ASCII they may use. Two exact mounts with one spelling,
+  and an exact mount at or under the admin prefix or the dev dashboard, are
+  refused too. The catch-all now also refuses other spellings of an escaped
+  mount (a lowercase escape, the raw character, a data request), as it does
+  for plain ones, judged by the decoded path: a target that only decodes to
+  the escaped spelling, such as `%2520` next to a `%20` mount, still reaches
+  the app. A `healthCheckPath` of `null` or `''` mounts no liveness route, as
+  `false` does. The `websocket` path checks now run when the adapter is
+  created instead of after bundling.
+
 - `runSim` reports framework assertions that fired during a run, including
   ones the scenario swallowed, as invariant violations named by category with
   their count, in category order, for single-worker and cluster runs.

@@ -302,6 +302,34 @@ target carrying a byte outside visible ASCII or a `#`, which RFC 9112 does not
 allow in a request line: send such characters percent-encoded, as browsers
 and HTTP libraries do.
 
+Because a mount is matched as sent, every mounted path (`healthCheckPath`,
+`readinessCheckPath`, `websocket.path`, `websocket.authPath`,
+`websocket.adminPath`, `waitingRoom.path` and `waitingRoom.admitCheckPath`)
+must be spelled the way a client sends it: the WHATWG URL spelling browsers,
+fetch and the `ws` client produce, with uppercase escapes. Write
+`/gesundheit-pr%C3%BCfung` rather than `/gesundheit-prüfung`, `/a%20b` rather
+than `/a b`, and a literal `%` as `%25`; a raw character clients encode, an
+escape in lowercase hex, an escape of a character clients send as it is
+(`%70`, `%2F`), a `%` that starts no escape, a tab, line feed or carriage
+return (which the URL parser drops, so no spelling can carry one), a `.` or
+`..` segment or a `\` fails the build with an error naming the option and the
+spelling to use. A segment may not start with `:` or `*`, which the router
+reads as a parameter and a wildcard; inside a segment both are plain
+characters (`/v1/items:get`). `websocket.adminPath` takes no escapes at all,
+because the guard that keeps encoded spellings out of the admin prefix reads
+ASCII escapes only: spell it with letters, digits and
+`- . _ ~ ! $ & ' ( ) * + , ; = : @ | [ ]`. Two exact mounts may not share a
+spelling and no mount may sit at or under `websocket.adminPath`, which answers
+every path beneath it; exact mounts may nest, and `/healthz` and `/healthz/`
+are two routes. A mount that is not in use - the WebSocket paths with
+`websocket: false`, the admin prefix when disabled, the waiting-room pages
+without an admission ceiling, a `healthCheckPath` of `false`, `null` or `''` -
+is not checked for overlaps. `createTestServer` applies the same rule to its
+own path options. The `uws()` dev plugin applies it to its `path` and
+`authPath`, and to `dashboard.path`, which like `websocket.adminPath` takes no
+escapes; since the dashboard answers every path beneath it, neither endpoint
+may sit at or under it.
+
 `websocket.maxTopicSeqEntries` (default `1000000`) caps the per-topic sequence
 registry. Past the cap the least recently published unprotected topic is
 evicted and its high-water number carried forward, so a re-published topic
@@ -657,7 +685,9 @@ with an app route), or **`false`** to disable the auto-mount entirely - for apps
 that mount the `admin` handler themselves through a SvelteKit `+server.js` route
 (with their own middleware), so there is no second adapter-owned mount point. It
 must be an absolute path differing from `websocket.path` and
-`websocket.authPath`; an invalid value fails the build. The `svelte-realtime`
+`websocket.authPath`, spelled as [every mounted path](#configuration) is but
+without escapes, with no other adapter mount at or beneath it; an invalid value
+fails the build. The `svelte-realtime`
 admin handler is mount-prefix agnostic, so the path is configured here in one
 place.
 

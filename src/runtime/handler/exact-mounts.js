@@ -13,6 +13,33 @@
 const exactMounts = new Set();
 
 /**
+ * The exact mounts spelled with percent-escapes, by their decoded reading.
+ * A mount is matched only in its written spelling, while SvelteKit's router
+ * reads the decoded path, so any other spelling decoding onto it - lowercase
+ * hex, a raw character the escape stands for - would reach the app as the
+ * mounted path. Kept apart from `exactMounts`, which the catch-all also reads
+ * after its own ASCII decode: an escaped spelling there would match a target
+ * that only decodes to that spelling (`%2520` to `%20`), a different path.
+ * Empty unless a mount carries an escape, so a request pays for the lookup
+ * only on a deployment that has one.
+ * @type {Map<string, string>}
+ */
+const escapedMounts = new Map();
+
+const ESCAPE_RUN = /(?:%[0-9A-Fa-f]{2})+/g;
+
+/**
+ * `path` with each run of escapes decoded where it forms UTF-8 text, and left
+ * as written where it does not, so a malformed escape does not hide the rest.
+ * @param {string} path
+ */
+function decodedReading(path) {
+	return path.replace(ESCAPE_RUN, (run) => {
+		try { return decodeURIComponent(run); } catch { return run; }
+	});
+}
+
+/**
  * The page path SvelteKit answers `path` for. A route-resolution request
  * (`/__route.js`) and a data request (`/__data.json`, `.html__data.json`) are
  * answered for the page in front of the suffix, and a data request for a page
@@ -45,7 +72,8 @@ function kitPagePath(path, query) {
 
 /** @param {string} path a path the adapter answers ahead of the catch-all */
 export function addExactMount(path) {
-	exactMounts.add(path);
+	if (path.includes('%')) escapedMounts.set(decodedReading(path), path);
+	else exactMounts.add(path);
 }
 
 /**
@@ -55,11 +83,32 @@ export function addExactMount(path) {
  * router as the mounted path. The raw spelling itself reaches the catch-all
  * only for a method the mount does not answer, and goes on to the app.
  *
- * @param {string} path  the raw target, or a resolved or decoded reading of it
+ * A mount spelled with escapes is judged by decoded readings instead. Without
+ * one that costs one size check; with one, a page carrying no escape is its own
+ * decoded reading and costs one lookup.
+ *
+ * @param {string} path  the raw target or its resolved reading
  * @param {string} raw  the raw target
  * @param {string} [query]  the raw query, which carries a data request's trailing slash
  */
 export function entersExactMount(path, raw, query) {
 	const page = kitPagePath(path, query);
+	if (page !== raw && exactMounts.has(page)) return true;
+	if (escapedMounts.size === 0) return false;
+	const mount = escapedMounts.get(page.includes('%') ? decodedReading(page) : page);
+	return mount !== undefined && mount !== raw;
+}
+
+/**
+ * `entersExactMount` for the catch-all's ASCII-decoded reading, which is
+ * checked against the plain mounts only: decoding it again for an escaped
+ * mount would read `%2520` as a space.
+ *
+ * @param {string} decoded  an ASCII-decoded reading of the raw target
+ * @param {string} raw  the raw target
+ * @param {string} [query]  the raw query
+ */
+export function entersPlainMount(decoded, raw, query) {
+	const page = kitPagePath(decoded, query);
 	return page !== raw && exactMounts.has(page);
 }

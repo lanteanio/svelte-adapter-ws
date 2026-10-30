@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { validateHeaderValue } from 'node:http';
+import { assertMountPath, assertDistinctMounts } from './runtime/utils/mount-path.js';
 import { parseCookies, createCookies } from './runtime/cookies.js';
 import { parse_origin, esc, isValidWireTopic, createScopedTopic, createTopicHelperCache, resolveRequestId, completeEnvelope, completeGameEnvelope, wrapBatchEnvelope, collapseByCoalesceKey, nextTopicSeq, stampSeq, resolveEntrySeq, resolveSendSeq, throwInvalidSeq, createHlc, processEpoch, topicEpochValue, mintTopicEpoch, isAuthOriginAccepted, isOriginAllowed, assert, WS_SUBSCRIPTIONS, WS_PUBLISH_GRANT, WS_SESSION_ID, WS_PENDING_REQUESTS, WS_STATS, WS_PLATFORM, CARRY_REQUEST_ID, WS_CAPS, WS_ATTRIBUTION, WS_LEASE, WS_CONTROL_BUDGET, declareConnectionSlots, copyUpgradeUserData, MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_PENDING_SUBSCRIBES_PER_CONNECTION, MAX_PENDING_REQUESTS_PER_CONNECTION, PUBLISH_WARN_DEDUP_MAX } from './runtime/utils.js';
 import { createLeaseState, leaseGrantFrame, leaseReportedSaturation, controlFrameTooLargeFrame, DEFAULT_GRANT } from './runtime/wire.js';
@@ -238,12 +239,29 @@ export default function uws(options = {}) {
 		// would point them off-machine.
 		throw new TypeError('the uws() dev plugin option dashboard.path must be a local pathname starting with a single "/"');
 	}
+	if (dashboardOptions.path !== undefined) assertMountPath('the uws() dev plugin option dashboard.path', dashboardOptions.path, TypeError, { prefix: true });
 	// A trailing slash is dropped, as for adminPath: the dashboard answers the
 	// path and the paths under it, and the page builds its links on it.
 	const dashboardPath = options.dashboard === false ? null : (dashboardOptions.path || '/__uws/dashboard').replace(/\/+$/, '');
+	for (const name of ['path', 'authPath']) {
+		const value = options[name];
+		if (value == null) continue;
+		if (typeof value !== 'string' || !value.startsWith('/')) {
+			throw new TypeError(`websocket.${name} must be a path string starting with '/'`);
+		}
+		assertMountPath(`websocket.${name}`, value, TypeError);
+		if (dashboardPath !== null && dashboardPath === value.replace(/\/+$/, '')) {
+			throw new TypeError('the uws() dev plugin option dashboard.path collides with the WebSocket or auth path');
+		}
+	}
 	if (dashboardPath !== null &&
 		(dashboardPath === wsPath.replace(/\/+$/, '') || dashboardPath === wsAuthPath.replace(/\/+$/, ''))) {
 		throw new TypeError('the uws() dev plugin option dashboard.path collides with the WebSocket or auth path');
+	}
+	// The dashboard answers its path and every path under it, so neither
+	// endpoint may sit beneath it.
+	if (dashboardPath !== null) {
+		assertDistinctMounts([['websocket.path', wsPath], ['websocket.authPath', wsAuthPath]], [['the uws() dev plugin option dashboard.path', dashboardPath]], TypeError);
 	}
 	// One source of truth for both the actual ws receiver cap and the value app
 	// code reads from platform. Production uses the same 1 MiB default.

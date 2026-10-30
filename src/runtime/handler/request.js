@@ -19,7 +19,7 @@ import { adminMounted } from './admin.js';
 import { windowsReservedPath } from '../utils/windows-path.js';
 import { invalidRequestTarget } from '../utils/request-target.js';
 import { canonicalRedirectEnabled, tryCanonicalHostRedirect } from './canonical-host.js';
-import { addExactMount, entersExactMount } from './exact-mounts.js';
+import { addExactMount, entersExactMount, entersPlainMount } from './exact-mounts.js';
 
 // Read once: the platform does not change under a running process.
 const WINDOWS = process.platform === 'win32';
@@ -67,7 +67,7 @@ let realtimeRoutes = null;
 
 // The probes are matched exactly as spelled, like every path the realtime
 // routes add below; see exact-mounts.js.
-if (HEALTH_CHECK_PATH !== false) addExactMount(HEALTH_CHECK_PATH);
+if (HEALTH_CHECK_PATH) addExactMount(HEALTH_CHECK_PATH);
 if (READINESS_CHECK_PATH !== false) addExactMount(READINESS_CHECK_PATH);
 
 /** @param {NonNullable<typeof realtimeRoutes>} routes */
@@ -196,7 +196,7 @@ function serveRequest(req, res) {
 		// probing with HEAD gets no size at all when the header is absent.
 		// The length is the only header written: the family's probes carry no
 		// content-type.
-		if (HEALTH_CHECK_PATH !== false && pathname === HEALTH_CHECK_PATH) {
+		if (HEALTH_CHECK_PATH && pathname === HEALTH_CHECK_PATH) {
 			if (method === 'HEAD') res.setHeader('content-length', '2');
 			res.end('OK');
 			return;
@@ -378,7 +378,7 @@ function serveRequest(req, res) {
 			// SvelteKit answers such a path 400 itself, but only after the app's
 			// `handle` hook has run on it.
 			const decodedPath = resolved.replace(ASCII_ESCAPE, asciiFromEscape);
-			if (entersExactMount(decodedPath, pathname, query) || (guardsPrefix && decodedPath.startsWith(ADMIN_PREFIX))) {
+			if (entersPlainMount(decodedPath, pathname, query) || (guardsPrefix && decodedPath.startsWith(ADMIN_PREFIX))) {
 				send400(res);
 				return;
 			}

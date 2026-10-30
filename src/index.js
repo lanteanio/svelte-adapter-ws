@@ -21,6 +21,7 @@ import {
 } from './config-guards.js';
 import { normalizeMessageAdmission } from './runtime/utils/message-admission.js';
 import { compileAccessibleWaitingRoomTemplate } from './runtime/utils/waiting-room-template.js';
+import { assertMountPath, assertDistinctMounts } from './runtime/utils/mount-path.js';
 
 const runtimeDir = fileURLToPath(new URL('./runtime', import.meta.url).href);
 
@@ -551,6 +552,19 @@ export default function (opts = {}) {
 		);
 	}
 
+	const tracingOption = opts.tracing;
+	if (tracingOption != null && (typeof tracingOption !== 'string' || tracingOption.trim() === '')) {
+		throw new Error(
+			"tracing must be a non-empty module path string (e.g. './src/lib/server/tracing.js') " +
+			'whose default or named tracing export implements startSpan(name, options).'
+		);
+	}
+	const tracingPath = typeof tracingOption === 'string' ? tracingOption.trim() : null;
+
+	// `false` disables the liveness route, and so do `null` and `''`, which the
+	// runtime has always read as no route at all.
+	const healthCheckMounted = healthCheckPath !== false && healthCheckPath !== null && healthCheckPath !== '';
+	if (healthCheckMounted) assertMountPath('healthCheckPath', healthCheckPath);
 	// Readiness probe path (distinct from the `healthCheckPath` liveness probe):
 	// reports 503 once graceful shutdown begins so a load balancer drains the
 	// instance. Default `/readyz`; set `false` to disable. Validated here so a
@@ -563,6 +577,7 @@ export default function (opts = {}) {
 				`got ${JSON.stringify(readinessCheckPath)}.`
 			);
 		}
+		assertMountPath('readinessCheckPath', readinessCheckPath);
 		if (healthCheckPath !== false && readinessCheckPath === healthCheckPath) {
 			throw new Error(
 				`readinessCheckPath ('${readinessCheckPath}') must differ from healthCheckPath ('${healthCheckPath}') - ` +
@@ -571,20 +586,33 @@ export default function (opts = {}) {
 		}
 	}
 
-	const tracingOption = opts.tracing;
-	if (tracingOption != null && (typeof tracingOption !== 'string' || tracingOption.trim() === '')) {
-		throw new Error(
-			"tracing must be a non-empty module path string (e.g. './src/lib/server/tracing.js') " +
-			'whose default or named tracing export implements startSpan(name, options).'
-		);
-	}
-	const tracingPath = typeof tracingOption === 'string' ? tracingOption.trim() : null;
-
 	// Normalize websocket config: true -> {}, false/undefined -> null
 	const websocket =
 		opts.websocket === true
 			? {}
 			: opts.websocket || null;
+
+	// Validate `staticHeaders` eagerly so a misshaped value fails before any
+	// build work. The reserved-key warning needs builder.log, so it is emitted
+	// inside adapt(); the throw-on-bad-shape path runs here at factory time.
+	const staticHeadersResult = normalizeStaticHeaders(opts.staticHeaders);
+	const staticCacheControl = normalizeStaticCacheControl(opts.staticCacheControl);
+
+	if (opts.staticDotfiles !== undefined && typeof opts.staticDotfiles !== 'boolean') {
+		// JSON.stringify throws on a BigInt and erases functions and Symbols;
+		// String() throws on a null-prototype object. The tag form renders any
+		// object, String() everything else.
+		const shown = typeof opts.staticDotfiles === 'object' && opts.staticDotfiles !== null
+			? Object.prototype.toString.call(opts.staticDotfiles)
+			: String(opts.staticDotfiles);
+		throw new Error(
+			`staticDotfiles must be a boolean - got ${shown} (${typeof opts.staticDotfiles}). ` +
+			'The default (false) refuses every dot-segment static path, except that a ' +
+			'top-level .well-known/ keeps serving its own non-dot files; true indexes ' +
+			'and serves them all.'
+		);
+	}
+	const staticDotfiles = opts.staticDotfiles === true;
 
 	if (websocket) {
 		for (const key of UNSHIPPED_WEBSOCKET_KEYS) {
@@ -595,22 +623,6 @@ export default function (opts = {}) {
 					'option, or use svelte-adapter-uws, where it is supported.'
 				);
 			}
-		}
-		if (websocket.handler != null && typeof websocket.handler !== 'string') {
-			throw new Error(
-				`websocket.handler must be a path string (e.g. './src/lib/server/ws.js') - ` +
-				`got ${JSON.stringify(websocket.handler)}.`
-			);
-		}
-		if (websocket.metrics != null && typeof websocket.metrics !== 'string') {
-			throw new Error(
-				"websocket.metrics must be a module path string (e.g. './src/lib/server/metrics.js') " +
-				'whose default export is your registry. Passing a live registry object no longer works: ' +
-				'adapter options are serialized into the build, so a live object never reached the ' +
-				'production runtime. Move `export const metrics = createMetrics()` into its own module, ' +
-				'point `websocket.metrics` at that path, and read the populated registry at runtime via ' +
-				'`platform.metrics` (e.g. in a /metrics +server.js route). See the README metrics section.'
-			);
 		}
 		// The holding page an operator supplies, judged here rather than at
 		// boot: a renderer is a module PATH (a live function cannot survive the
@@ -639,6 +651,96 @@ export default function (opts = {}) {
 		if (typeof waitingRoomTemplate === 'string') {
 			compileAccessibleWaitingRoomTemplate(waitingRoomTemplate);
 		}
+		if (websocket.handler != null && typeof websocket.handler !== 'string') {
+			throw new Error(
+				`websocket.handler must be a path string (e.g. './src/lib/server/ws.js') - ` +
+				`got ${JSON.stringify(websocket.handler)}.`
+			);
+		}
+	}
+
+	// Every path the adapter mounts, checked when the config is read so a
+	// misspelled mount fails `vite dev` and the build alike, before any bundling.
+	const wsPath = websocket?.path ?? '/ws';
+	if (wsPath[0] !== '/') {
+		throw new Error(
+			`websocket.path must start with '/' - got '${wsPath}'. Use '/${wsPath}' instead.`
+		);
+	}
+	const wsAuthPath = websocket?.authPath ?? '/__ws/auth';
+	if (wsAuthPath[0] !== '/') {
+		throw new Error(
+			`websocket.authPath must start with '/' - got '${wsAuthPath}'. Use '/${wsAuthPath}' instead.`
+		);
+	}
+	if (wsAuthPath === wsPath) {
+		throw new Error(
+			`websocket.authPath ('${wsAuthPath}') must differ from websocket.path ('${wsPath}').`
+		);
+	}
+	// Admin / observability route prefix. The adapter auto-mounts the WS
+	// handler's `admin(request)` export here (before the SSR catch-all)
+	// when it is exported. Default `/__realtime`; set a string to relocate
+	// it; set `false` to disable the auto-mount entirely (e.g. when mounting
+	// it yourself via a SvelteKit `+server.js` route with your own
+	// middleware). The realtime admin handler is mount-prefix agnostic, so a
+	// custom path is configured in this one place.
+	let adminPath = websocket?.adminPath;
+	if (adminPath === undefined || adminPath === null) adminPath = '/__realtime';
+	if (adminPath !== false) {
+		if (typeof adminPath !== 'string' || adminPath[0] !== '/') {
+			throw new Error(
+				`websocket.adminPath must be an absolute path string starting with '/' ` +
+				`(e.g. '/__realtime'), or false to disable the auto-mounted admin route - ` +
+				`got ${JSON.stringify(adminPath)}.`
+			);
+		}
+		adminPath = adminPath.replace(/\/+$/, '');
+		if (adminPath === '') {
+			throw new Error(
+				`websocket.adminPath cannot be '/' or empty - use a non-root prefix like '/__realtime', or false to disable.`
+			);
+		}
+		if (adminPath === wsPath || adminPath === wsAuthPath) {
+			throw new Error(
+				`websocket.adminPath ('${adminPath}') must differ from websocket.path ('${wsPath}') and websocket.authPath ('${wsAuthPath}').`
+			);
+		}
+	}
+	if (websocket?.metrics != null && typeof websocket.metrics !== 'string') {
+		throw new Error(
+			"websocket.metrics must be a module path string (e.g. './src/lib/server/metrics.js') " +
+			'whose default export is your registry. Passing a live registry object no longer works: ' +
+			'adapter options are serialized into the build, so a live object never reached the ' +
+			'production runtime. Move `export const metrics = createMetrics()` into its own module, ' +
+			'point `websocket.metrics` at that path, and read the populated registry at runtime via ' +
+			'`platform.metrics` (e.g. in a /metrics +server.js route). See the README metrics section.'
+		);
+	}
+	// The characters of every mounted path, then their overlaps. Without
+	// WebSockets only the probes are mounted; the waiting-room pages only
+	// while an admission ceiling engages the room, with the runtime's defaults.
+	assertMountPath('websocket.path', wsPath);
+	assertMountPath('websocket.authPath', wsAuthPath);
+	if (adminPath !== false) assertMountPath('websocket.adminPath', adminPath, Error, { prefix: true });
+	/** @type {Array<[string, string]>} */
+	const exactMounts = websocket !== null ? [['websocket.path', wsPath], ['websocket.authPath', wsAuthPath]] : [];
+	if (healthCheckMounted) exactMounts.push(['healthCheckPath', healthCheckPath]);
+	if (readinessCheckPath !== false) exactMounts.push(['readinessCheckPath', readinessCheckPath]);
+	const admissionOption = websocket?.upgradeAdmission;
+	const waitingRoomOption = admissionOption?.waitingRoom;
+	if (admissionOption && (admissionOption.maxConcurrent > 0 || admissionOption.maxConnections > 0 || admissionOption.perTickBudget > 0) &&
+		waitingRoomOption !== false) {
+		const room = waitingRoomOption && typeof waitingRoomOption === 'object' ? waitingRoomOption : {};
+		const roomPath = room.path ?? '/__waiting-room';
+		const admitCheckPath = room.admitCheckPath ?? '/__admit-check';
+		assertMountPath('websocket.upgradeAdmission.waitingRoom.path', roomPath);
+		assertMountPath('websocket.upgradeAdmission.waitingRoom.admitCheckPath', admitCheckPath);
+		exactMounts.push(['websocket.upgradeAdmission.waitingRoom.path', roomPath], ['websocket.upgradeAdmission.waitingRoom.admitCheckPath', admitCheckPath]);
+	}
+	assertDistinctMounts(exactMounts, websocket !== null && adminPath !== false ? [['websocket.adminPath', adminPath]] : []);
+
+	if (websocket) {
 		// A misshaped ceiling must fail at the factory, before any build work:
 		// a typo'd egress key would otherwise leave that ceiling silently open
 		// while the operator believes it is enforced. The seq-registry cap
@@ -677,28 +779,6 @@ export default function (opts = {}) {
 			computeWorkers = w.compute;
 		}
 	}
-
-	// Validate `staticHeaders` eagerly so a misshaped value fails before any
-	// build work. The reserved-key warning needs builder.log, so it is emitted
-	// inside adapt(); the throw-on-bad-shape path runs here at factory time.
-	const staticHeadersResult = normalizeStaticHeaders(opts.staticHeaders);
-	const staticCacheControl = normalizeStaticCacheControl(opts.staticCacheControl);
-
-	if (opts.staticDotfiles !== undefined && typeof opts.staticDotfiles !== 'boolean') {
-		// JSON.stringify throws on a BigInt and erases functions and Symbols;
-		// String() throws on a null-prototype object. The tag form renders any
-		// object, String() everything else.
-		const shown = typeof opts.staticDotfiles === 'object' && opts.staticDotfiles !== null
-			? Object.prototype.toString.call(opts.staticDotfiles)
-			: String(opts.staticDotfiles);
-		throw new Error(
-			`staticDotfiles must be a boolean - got ${shown} (${typeof opts.staticDotfiles}). ` +
-			'The default (false) refuses every dot-segment static path, except that a ' +
-			'top-level .well-known/ keeps serving its own non-dot files; true indexes ' +
-			'and serves them all.'
-		);
-	}
-	const staticDotfiles = opts.staticDotfiles === true;
 
 	return {
 		name: 'adapter-ws',
@@ -1010,52 +1090,6 @@ export default function (opts = {}) {
 			}
 
 			// WebSocket path config, serialized as globals for the runtime.
-			const wsPath = websocket?.path ?? '/ws';
-			if (wsPath[0] !== '/') {
-				throw new Error(
-					`websocket.path must start with '/' - got '${wsPath}'. Use '/${wsPath}' instead.`
-				);
-			}
-			const wsAuthPath = websocket?.authPath ?? '/__ws/auth';
-			if (wsAuthPath[0] !== '/') {
-				throw new Error(
-					`websocket.authPath must start with '/' - got '${wsAuthPath}'. Use '/${wsAuthPath}' instead.`
-				);
-			}
-			if (wsAuthPath === wsPath) {
-				throw new Error(
-					`websocket.authPath ('${wsAuthPath}') must differ from websocket.path ('${wsPath}').`
-				);
-			}
-			// Admin / observability route prefix. The adapter auto-mounts the WS
-			// handler's `admin(request)` export here (before the SSR catch-all)
-			// when it is exported. Default `/__realtime`; set a string to relocate
-			// it; set `false` to disable the auto-mount entirely (e.g. when mounting
-			// it yourself via a SvelteKit `+server.js` route with your own
-			// middleware). The realtime admin handler is mount-prefix agnostic, so a
-			// custom path is configured in this one place.
-			let adminPath = websocket?.adminPath;
-			if (adminPath === undefined || adminPath === null) adminPath = '/__realtime';
-			if (adminPath !== false) {
-				if (typeof adminPath !== 'string' || adminPath[0] !== '/') {
-					throw new Error(
-						`websocket.adminPath must be an absolute path string starting with '/' ` +
-						`(e.g. '/__realtime'), or false to disable the auto-mounted admin route - ` +
-						`got ${JSON.stringify(adminPath)}.`
-					);
-				}
-				adminPath = adminPath.replace(/\/+$/, '');
-				if (adminPath === '') {
-					throw new Error(
-						`websocket.adminPath cannot be '/' or empty - use a non-root prefix like '/__realtime', or false to disable.`
-					);
-				}
-				if (adminPath === wsPath || adminPath === wsAuthPath) {
-					throw new Error(
-						`websocket.adminPath ('${adminPath}') must differ from websocket.path ('${wsPath}') and websocket.authPath ('${wsAuthPath}').`
-					);
-				}
-			}
 			const wsOpts = serializeWsOptions(websocket, adminPath);
 
 			// Loud on unknown websocket.* keys: options are serialized into the

@@ -4,6 +4,7 @@ import { createUnaccountedSubscriptionRegistry, addLogicalSubscription, removeLo
 import { activeTraceContext, trace } from './runtime/tracing.js';
 import { installProxyProtocol } from './runtime/handler/proxy-protocol.js';
 import { now, monotonicNow, wallEpoch, setTimer, clearTimer, randomUuid } from './runtime/runtime.js';
+import { assertMountPath, assertDistinctMounts } from './runtime/utils/mount-path.js';
 import { parseCookies } from './runtime/cookies.js';
 import { collectRequestHeaders, framingRefusal, isFramingHeader } from './runtime/utils/request-headers.js';
 import { runUnsubscribeHook } from './runtime/utils/unsubscribe-hook.js';
@@ -805,6 +806,47 @@ function createNodeApp() {
 }
 
 /**
+ * `false` disables the liveness route, and `null` and `''` read the same
+ * way, as the adapter reads them.
+ * @param {unknown} value
+ */
+function probeMounted(value) {
+	return value !== false && value !== null && value !== '';
+}
+
+/**
+ * Refuse the mounts the adapter build refuses: a path no client can request
+ * as spelled, or two mounts claiming the same requests.
+ *
+ * @param {unknown} wsPath
+ * @param {unknown} adminPath
+ * @param {unknown} healthCheckPath
+ * @param {unknown} readinessCheckPath
+ * @param {any} upgradeAdmission
+ */
+function assertTestServerMounts(wsPath, adminPath, healthCheckPath, readinessCheckPath, upgradeAdmission) {
+	/** @type {Array<[string, string]>} */
+	const exact = [];
+	for (const [option, value] of [['wsPath', wsPath], ['healthCheckPath', healthCheckPath], ['readinessCheckPath', readinessCheckPath]]) {
+		if (option === 'healthCheckPath' ? !probeMounted(value) : option === 'readinessCheckPath' && value === false) continue;
+		assertMountPath('the createTestServer option ' + option, value, TypeError);
+		exact.push(['the createTestServer option ' + option, /** @type {string} */ (value)]);
+	}
+	const room = upgradeAdmission?.waitingRoom;
+	if (upgradeAdmission && (upgradeAdmission.maxConcurrent > 0 || upgradeAdmission.maxConnections > 0 || upgradeAdmission.perTickBudget > 0) && room !== false) {
+		const cfg = room && typeof room === 'object' ? room : {};
+		for (const [key, fallback] of [['path', '/__waiting-room'], ['admitCheckPath', '/__admit-check']]) {
+			const option = 'the createTestServer option upgradeAdmission.waitingRoom.' + key;
+			const value = cfg[key] ?? fallback;
+			assertMountPath(option, value, TypeError);
+			exact.push([option, value]);
+		}
+	}
+	if (adminPath !== false) assertMountPath('the createTestServer option adminPath', adminPath, TypeError, { prefix: true });
+	assertDistinctMounts(exact, adminPath !== false ? [['the createTestServer option adminPath', /** @type {string} */ (adminPath)]] : [], TypeError);
+}
+
+/**
  * Create a lightweight test server backed by a real node:http + ws server.
  *
  * Starts on a random port and provides a Platform-compatible API for
@@ -852,6 +894,7 @@ export async function createTestServer(options = {}) {
 	// test suite can never certify a config the production build rejects.
 	assertSharedOptionValues(options, (key) => `the createTestServer option ${key}`);
 	const { port = 0, wsPath = '/ws', handler = {}, upgradeAdmission, messageAdmission: messageAdmissionOptions, protection, metrics, adminPath = '/__realtime', readinessCheckPath = '/readyz', healthCheckPath = '/healthz', primaryInit } = options;
+	assertTestServerMounts(wsPath, adminPath, healthCheckPath, readinessCheckPath, upgradeAdmission);
 	// Read with `??`, not as a destructuring default. Every other surface folds
 	// `null` into the default - assertProtectiveNumber returns early for it as an
 	// absent value, and the adapter and Vite both use `??`. A destructuring
@@ -4628,7 +4671,7 @@ export async function createTestServer(options = {}) {
 	// instance mid-shutdown), so it does NOT consult the lifecycle state.
 	// GET and HEAD, as production registers them: a HEAD-probing balancer reads
 	// the same status with no body.
-	if (healthCheckPath !== false) {
+	if (probeMounted(healthCheckPath)) {
 		const liveness = (res, req) => {
 			const headOnly = req.getMethod() === 'head';
 			res.onAborted(() => {});
